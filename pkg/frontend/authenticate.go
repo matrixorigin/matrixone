@@ -21,12 +21,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1574,8 +1574,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 
 		//step1 : check the role exists or not;
 		pu := ses.Pu
-		guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+		bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 		defer bh.Close()
 		var sql string
 		var rsset []ExecResult
@@ -1655,8 +1654,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var sql string
@@ -1751,8 +1749,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 		return err
 	}
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(du.Users))
@@ -1821,8 +1818,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 		return err
 	}
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(dr.Roles))
@@ -1899,8 +1895,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
@@ -2177,8 +2172,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//Get primary keys
@@ -2337,8 +2331,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	}
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2507,8 +2500,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	}
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -3217,8 +3209,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//step 1: The Set R1 {default role id}
@@ -3407,8 +3398,7 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	pu := ses.Pu
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -3732,8 +3722,7 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	pu := ses.Pu
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -4061,8 +4050,12 @@ func InitSysTenant(ctx context.Context) error {
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	mp, err := mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	defer mpool.DeleteMPool(mp)
+	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -4250,8 +4243,13 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	mp, err := mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	defer mpool.DeleteMPool(mp)
+
+	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -4490,10 +4488,14 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 }
 
 func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantName string) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	mp, err := mpool.NewMPool("check_user_exists", 0, mpool.NoFixed)
+	if err != nil {
+		return false, err
+	}
+	defer mpool.DeleteMPool(mp)
 
 	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
-	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckUser)
+	rsset, err := executeSQLInBackgroundSession(ctx, mp, pu, sqlForCheckUser)
 	if err != nil {
 		return false, err
 	}
@@ -4529,9 +4531,13 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	}
 
 	pu := config.GetParameterUnit(ctx)
+	mp, err := mpool.NewMPool("init_user", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	defer mpool.DeleteMPool(mp)
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -4730,8 +4736,11 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	}
 	pu := config.GetParameterUnit(ctx)
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	mp, err := mpool.NewMPool("init_role", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

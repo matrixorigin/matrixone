@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -41,7 +42,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 type Options func(*service)
@@ -86,7 +86,7 @@ func NewService(
 		},
 	}
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
@@ -193,8 +193,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
 	s.cancelMoServerFunc = cancelMoServerFunc
 
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-
+	mpool.InitCap(pu.SV.HostMmuLimitation)
 	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")

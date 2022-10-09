@@ -61,7 +61,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
-	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+
+	// XXX MPOOL pass in a nil mpool.
+	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
+	// this mpool will be deleted.  Maybe in the following Closed method.
+	ses := NewSession(routine.protocol, nil, rm.pu, gSysVariables)
 	ses.SetRequestContext(routine.cancelRoutineCtx)
 	routine.SetSession(ses)
 	pro.SetSession(ses)

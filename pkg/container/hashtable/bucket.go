@@ -17,10 +17,10 @@ package hashtable
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (ht *StringHashMap) InsertString40BatchInBucket(states [][3]uint64, keys []
 }
 */
 
-func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -230,7 +230,7 @@ func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zVa
 	}
 }
 
-func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(n, m); err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 	return nil
 }
 
-func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mheap.Mheap) error {
+func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(n, m); err != nil {
 		return err
 	}

@@ -319,16 +319,16 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 				bat.Shrink(nil)
 			}
 		} else {
-			sels := txn.proc.GetMheap().GetSels()
+			sels := txn.proc.Mp().GetSels()
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
 				}
 			}
 			bat.Shrink(sels)
-			txn.proc.GetMheap().PutSels(sels)
+			txn.proc.Mp().PutSels(sels)
 		}
-		vec.Free(txn.proc.GetMheap())
+		vec.Free(txn.proc.Mp())
 		bats[i] = bat
 	}
 	return bats, nil
@@ -380,7 +380,7 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	}
 
 	// use all min/max data to build []vectors.
-	buildVectors := buildVectorsByData(datas, dataTypes, proc.GetMheap())
+	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(len(columns))
 	bat.Zs = make([]int64, buildVectors[0].Length())
 	bat.Vecs = buildVectors

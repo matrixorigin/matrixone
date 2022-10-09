@@ -31,7 +31,7 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.GetMheap().GetSels()
+	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.New(typ)
 	}
@@ -95,7 +95,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.Length()
@@ -115,10 +115,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
@@ -140,13 +140,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					matched = true
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.GetMheap()); err != nil {
-								rbat.Clean(proc.GetMheap())
+							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
-							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.GetMheap()); err != nil {
-								rbat.Clean(proc.GetMheap())
+							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
@@ -161,13 +161,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					matched = true
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.GetMheap()); err != nil {
-								rbat.Clean(proc.GetMheap())
+							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
-							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.GetMheap()); err != nil {
-								rbat.Clean(proc.GetMheap())
+							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
@@ -180,13 +180,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if !matched {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
+					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
-					if err := vector.UnionNull(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
+					if err := vector.UnionNull(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 				}

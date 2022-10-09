@@ -19,12 +19,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -47,12 +45,10 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []limitTestCase{
-		newTestCase(mheap.New(gm), 8),
-		newTestCase(mheap.New(gm), 10),
-		newTestCase(mheap.New(gm), 12),
+		newTestCase(8),
+		newTestCase(10),
+		newTestCase(12),
 	}
 }
 
@@ -99,18 +95,16 @@ func TestLimit(t *testing.T) {
 				}
 			}
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []limitTestCase{
-			newTestCase(mheap.New(gm), 8),
-			newTestCase(mheap.New(gm), 10),
-			newTestCase(mheap.New(gm), 12),
+			newTestCase(8),
+			newTestCase(10),
+			newTestCase(12),
 		}
 
 		t := new(testing.T)
@@ -146,8 +140,8 @@ func BenchmarkLimit(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, limit uint64) limitTestCase {
-	proc := testutil.NewProcessWithMheap(m)
+func newTestCase(limit uint64) limitTestCase {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

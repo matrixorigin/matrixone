@@ -208,9 +208,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	// merge sort the sort key
-	node := common.GPool.Alloc(uint64(length * 4))
-	buf := node.Buf[:length]
-	defer common.GPool.Free(node)
+	node, err := common.TAEGPool.Alloc(length * 4)
+	if err != nil {
+		panic(err)
+	}
+	buf := node[:length]
+	defer common.TAEGPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	for _, vec := range vecs {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -241,7 +242,7 @@ func TestWriteAndRead(t *testing.T) {
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
-	}, true, 20, testutil.NewMheap())
+	}, true, 20, mpool.MustNewZero())
 
 	blks, err := blockWrite(ctx, bm, inputBat, testFs)
 	if err != nil {

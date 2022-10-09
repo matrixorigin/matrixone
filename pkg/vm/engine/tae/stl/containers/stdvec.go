@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
@@ -40,7 +42,7 @@ func NewStdVector[T any](opts ...*Options) *StdVector[T] {
 		}
 	}
 	if vec.alloc == nil {
-		vec.alloc = stl.DefaultAllocator
+		vec.alloc = common.TAEDefaultAllocator
 	}
 	// if capacity == 0 {
 	// 	capacity = 4
@@ -62,15 +64,18 @@ func (vec *StdVector[T]) tryExpand(capacity int) {
 	newSize := stl.SizeOfMany[T](capacity)
 	vec.capacity = capacity
 	oldn := vec.node
-	if oldn != nil && newSize <= oldn.Size() {
+	if oldn != nil && newSize <= len(oldn) {
 		return
 	} else if oldn == nil {
 		if newSize <= cap(vec.buf) {
 			return
 		}
 	}
-	newn := vec.alloc.Alloc(capacity * stl.Sizeof[T]())
-	buf := newn.GetBuf()[:0:newn.Size()]
+	newn, err := vec.alloc.Alloc(capacity * stl.Sizeof[T]())
+	if err != nil {
+		panic(err)
+	}
+	buf := newn[:0:len(newn)]
 	buf = append(buf, vec.buf...)
 	vec.buf = buf
 	vec.node = newn
@@ -89,14 +94,14 @@ func (vec *StdVector[T]) Close() {
 	vec.alloc = nil
 }
 
-func (vec *StdVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
+func (vec *StdVector[T]) GetAllocator() *mpool.MPool { return vec.alloc }
 
 func (vec *StdVector[T]) IsView() bool  { return false }
 func (vec *StdVector[T]) Length() int   { return len(vec.slice) }
 func (vec *StdVector[T]) Capacity() int { return vec.capacity }
 func (vec *StdVector[T]) Allocated() int {
 	if vec.node != nil {
-		return vec.node.Size()
+		return len(vec.node)
 	}
 	return 0
 }
@@ -204,7 +209,7 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), predictSize)
 }
 
-func (vec *StdVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
+func (vec *StdVector[T]) Clone(offset, length int, allocator ...*mpool.MPool) stl.Vector[T] {
 	opts := &Options{
 		Capacity: length,
 	}
@@ -260,7 +265,7 @@ func (vec *StdVector[T]) readBytesNotShared(bs []byte) {
 	}
 	capacity := newSize / stl.Sizeof[T]()
 	vec.tryExpand(capacity)
-	vec.buf = vec.node.GetBuf()[:newSize]
+	vec.buf = vec.node[:newSize]
 	copy(vec.buf[0:], bs)
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
@@ -310,7 +315,7 @@ func (vec *StdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	capacity := int(size) / stl.Sizeof[T]()
 	vec.tryExpand(capacity)
-	vec.buf = vec.node.GetBuf()[:size]
+	vec.buf = vec.node[:size]
 	if nr, err = r.Read(vec.buf); err != nil {
 		return
 	}
