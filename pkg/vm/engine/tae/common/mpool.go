@@ -24,11 +24,13 @@ import (
 // A few allocators for TAE
 var DefaultAllocator *mpool.MPool
 var MutMemAllocator *mpool.MPool
+var LogAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
 	DefaultAllocator = mpool.MustNewZero()
 	MutMemAllocator = mpool.MustNewZero()
+	LogAllocator = mpool.MustNewZero()
 }
 
 // dn service call this during start up, to get a real cached pool.
@@ -44,6 +46,11 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(MutMemAllocator)
 		if MutMemAllocator, err = mpool.NewMPool("tae_immutable", 0, mpool.Mid); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(LogAllocator)
+		if LogAllocator, err = mpool.NewMPool("tae_log", 0, mpool.Mid); err != nil {
 			panic(err)
 		}
 	}
