@@ -20,6 +20,10 @@ import (
 )
 
 const (
+	Row_ID = "__rowid"
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
