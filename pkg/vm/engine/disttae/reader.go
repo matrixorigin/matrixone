@@ -24,7 +24,7 @@ func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	return nil, nil
 }
 

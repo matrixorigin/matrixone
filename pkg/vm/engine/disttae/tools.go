@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -805,7 +804,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.GetMheap()); err != nil {
+			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
 					bat.Clean(proc.Mp())
 				}
@@ -862,7 +861,7 @@ func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.T
 	return blks
 }
 
-func genInsertBatch(bat *batch.Batch, m *mheap.Mheap) (*api.Batch, error) {
+func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
 	var vecs []*vector.Vector
 

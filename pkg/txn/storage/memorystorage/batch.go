@@ -373,7 +373,7 @@ func appendNamedRow(
 		if err != nil {
 			return err
 		}
-		value.AppendVector(bat.Vecs[i], handler.mp)
+		value.AppendVector(bat.Vecs[i], handler.mheap)
 	}
 	return nil
 }

@@ -56,7 +56,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		for i, name := range colNames {
 			b.Vecs[i] = vector.New(p.typsMap[name])
 		}
-		if _, err := b.Append(heap, bat); err != nil {
+		if _, err := b.Append(mp, bat); err != nil {
 			return nil, err
 		}
 

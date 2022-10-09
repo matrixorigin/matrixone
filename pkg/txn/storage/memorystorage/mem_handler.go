@@ -96,7 +96,7 @@ func NewMemHandler(
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
 		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mp:                     mp,
+		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 		idGenerator:            idGenerator,

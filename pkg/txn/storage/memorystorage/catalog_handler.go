@@ -425,7 +425,7 @@ func (c *CatalogHandler) HandlePrepare(ctx context.Context, meta txn.TxnMeta) (t
 
 func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memoryengine.ReadReq, resp *memoryengine.ReadResp) (err error) {
 	tx := c.upstream.getTx(meta)
-	resp.SetHeap(c.upstream.mp)
+	resp.SetHeap(c.upstream.mheap)
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]
