@@ -102,7 +102,7 @@ var (
 
 func init() {
 	utc = []unnestTestCase{
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, nil, 0),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, []string{`{"a": 1}`}, 0),
 		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
 	}
 }
