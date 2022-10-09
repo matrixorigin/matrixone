@@ -106,15 +106,15 @@ func (opt ViewOption) Apply(view *View) {
 }
 
 type WhereCondition interface {
-	Where() string
+	String() string
 }
 
 type View struct {
-	WhereCondition
 	Database    string
 	Table       string
 	OriginTable *Table
 	Columns     []Column
+	Condition   WhereCondition
 }
 
 func WithColumn(c Column) ViewOption {
@@ -141,7 +141,7 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
-	sb.WriteString(tbl.Where())
+	sb.WriteString(tbl.Condition.String())
 
 	return sb.String()
 }

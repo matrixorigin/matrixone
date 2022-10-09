@@ -297,26 +297,25 @@ var singleMetricTable = &inittool.Table{
 	BatchMode:        trace.FileService,
 }
 
-type View struct {
-	*inittool.View
+type ViewWhereCondition struct {
+	Table string
 }
 
-func NewMetricView(tbl string, opts ...inittool.ViewOption) *View {
-	view := &View{
-		View: &inittool.View{
-			Database:    MetricDBConst,
-			Table:       tbl,
-			OriginTable: singleMetricTable,
-			Columns:     []inittool.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
-		},
+func NewMetricView(tbl string, opts ...inittool.ViewOption) *inittool.View {
+	view := &inittool.View{
+		Database:    MetricDBConst,
+		Table:       tbl,
+		OriginTable: singleMetricTable,
+		Columns:     []inittool.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
+		Condition:   &ViewWhereCondition{Table: tbl},
 	}
 	for _, opt := range opts {
-		opt.Apply(view.View)
+		opt.Apply(view)
 	}
 	return view
 }
 
-func NewMetricViewWithLabels(tbl string, lbls []string) *View {
+func NewMetricViewWithLabels(tbl string, lbls []string) *inittool.View {
 	var options []inittool.ViewOption
 	for _, label := range lbls {
 		for _, col := range singleMetricTable.Columns {
@@ -328,20 +327,20 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *View {
 	return NewMetricView(tbl, options...)
 }
 
-func (tbl *View) Where() string {
+func (tbl *ViewWhereCondition) String() string {
 	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
 }
 
 var gView struct {
-	content map[string]*View
+	content map[string]*inittool.View
 	mu      sync.Mutex
 }
 
-func GetMetricViewWithLabels(tbl string, lbls []string) *View {
+func GetMetricViewWithLabels(tbl string, lbls []string) *inittool.View {
 	gView.mu.Lock()
 	defer gView.mu.Unlock()
 	if len(gView.content) == 0 {
-		gView.content = make(map[string]*View)
+		gView.content = make(map[string]*inittool.View)
 	}
 	view, exist := gView.content[tbl]
 	if !exist {
