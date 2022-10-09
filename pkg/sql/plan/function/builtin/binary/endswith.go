@@ -35,6 +35,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {

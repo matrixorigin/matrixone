@@ -175,9 +175,13 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err != nil {
 			return
 		}
+		defer data.Close()
 		deletes, err = aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
 		if err != nil {
 			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
 		}
 		ablockTask := NewFlushABlkTask(
 			tasks.WaitableCtx,

@@ -516,7 +516,38 @@ var operators = map[int]Functions{
 			},
 		},
 	},
-
+	REG_MATCH: {
+		Id: REG_MATCH,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.RegMatch,
+			},
+		},
+	},
+	NOT_REG_MATCH: {
+		Id: NOT_REG_MATCH,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotRegMatch,
+			},
+		},
+	},
 	OP_BIT_XOR: {
 		Id: OP_BIT_XOR,
 		Overloads: []Function{

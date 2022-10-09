@@ -167,13 +167,9 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
-	var ts types.TS
-	ts, err = node.TxnMVCCNode.ApplyCommit(index)
+	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
-	}
-	if node.chain.mvcc != nil {
-		node.chain.mvcc.SetMaxVisible(ts)
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()

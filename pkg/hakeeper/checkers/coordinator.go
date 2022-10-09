@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 // Coordinator is assumed to be used in synchronous, single-threaded context.
@@ -33,7 +35,8 @@ type Coordinator struct {
 	teardown    bool
 	teardownOps []*operator.Operator
 
-	cfg hakeeper.Config
+	cfg    hakeeper.Config
+	logger *zap.Logger
 }
 
 func NewCoordinator(cfg hakeeper.Config) *Coordinator {
@@ -41,6 +44,7 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 	return &Coordinator{
 		OperatorController: operator.NewController(),
 		cfg:                cfg,
+		logger:             logutil.GetGlobalLogger().Named("hakeeper"),
 	}
 }
 
@@ -66,7 +70,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
 
 	operators := make([]*operator.Operator, 0)
 	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, currentTick, c.logger)...)
 
 	return c.OperatorController.Dispatch(operators, logState, dnState)
 }
