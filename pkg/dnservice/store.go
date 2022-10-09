@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
@@ -114,6 +115,9 @@ func NewService(cfg *Config,
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	// start common stuff
+	common.InitTAEMPool()
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)

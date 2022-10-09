@@ -62,10 +62,10 @@ func (a *Anyvalue[T]) Merge(xIndex int64, yIndex int64, x T, y T, xEmpty bool, y
 }
 
 func (a *Anyvalue[T]) MarshalBinary() ([]byte, error) {
-	return types.EncodeBoolSlice(a.NotSet), nil
+	return types.EncodeSlice(a.NotSet), nil
 }
 
 func (a *Anyvalue[T]) UnmarshalBinary(data []byte) error {
-	a.NotSet = types.DecodeBoolSlice(data)
+	a.NotSet = types.DecodeSlice[bool](data)
 	return nil
 }

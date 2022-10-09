@@ -17,20 +17,20 @@ package process
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
 func New(
 	ctx context.Context,
-	m *mheap.Mheap,
+	m *mpool.MPool,
 	txnClient client.TxnClient,
 	txnOperator client.TxnOperator,
 	fileService fileservice.FileService,
@@ -101,19 +101,28 @@ func (proc *Process) SetQueryId(id string) {
 	proc.Id = id
 }
 
-func (proc *Process) GetMheap() *mheap.Mheap {
+// XXX MPOOL
+// Some times we call an expr eval function without a proc (test only?)
+// in that case, all expr eval code get an nil mp which is wrong.
+// so far the most cases come from
+// plan.ConstantFold -> colexec.EvalExpr, busted.
+// hack in a fall back mpool.  This is by design a Zero MP so that there
+// will not be real leaks, except we leak counters in globalStats
+var xxxProcMp = mpool.MustNewZeroWithTag("fallback_proc_mp")
+
+func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {
-		return nil
+		return xxxProcMp
 	}
 	return proc.mp
 }
 
-func (proc *Process) Mp() *mheap.Mheap {
-	return proc.GetMheap()
+func (proc *Process) Mp() *mpool.MPool {
+	return proc.GetMPool()
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
-	return proc.Lim.Size < size
+	return proc.Mp().Cap() < size
 }
 
 func (proc *Process) SetInputBatch(bat *batch.Batch) {

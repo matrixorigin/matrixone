@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -162,7 +162,7 @@ func (bat *Batch) Shrink(sels []int64) {
 	bat.Zs = bat.Zs[:len(sels)]
 }
 
-func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
+func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -232,7 +232,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	return rbat
 }
 
-func (bat *Batch) Clean(m *mheap.Mheap) {
+func (bat *Batch) Clean(m *mpool.MPool) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
@@ -265,7 +265,7 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}

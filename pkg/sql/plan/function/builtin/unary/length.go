@@ -28,7 +28,7 @@ func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	}
 	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
-		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])))
+		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])), proc.Mp())
 		return ret, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)

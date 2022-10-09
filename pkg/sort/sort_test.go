@@ -18,12 +18,10 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -40,57 +38,56 @@ type testCase struct {
 }
 
 var (
-	hm  *host.Mmu
 	tcs []testCase
 )
 
 func init() {
-	hm = host.New(1 << 30)
+	mp := mpool.MustNewZero()
 	tcs = []testCase{
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_bool, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_bool, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_bool, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_bool, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int8, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int8, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int16, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int16, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int32, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int32, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int64, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_int64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int8, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int8, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int16, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int16, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int32, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int32, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_int64, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_int64, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint8, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint8, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint16, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint16, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint32, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint32, 0, 0, 0)),
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint64, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_uint64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint8, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint8, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint16, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint16, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint32, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint32, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_uint64, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_uint64, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_float32, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_float32, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_float32, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_float32, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_float64, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_float64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_float64, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_float64, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_date, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_date, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_date, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_date, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_datetime, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_datetime, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_datetime, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_datetime, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_timestamp, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_timestamp, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_timestamp, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_timestamp, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_decimal64, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_decimal64, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_decimal64, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_decimal64, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_decimal128, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_decimal128, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0, 0)),
 
-		newTestCase(true, mheap.New(guest.New(1<<30, hm)), types.New(types.T_varchar, 0, 0, 0)),
-		newTestCase(false, mheap.New(guest.New(1<<30, hm)), types.New(types.T_varchar, 0, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_varchar, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_varchar, 0, 0, 0)),
 	}
 }
 
@@ -100,10 +97,12 @@ func TestSort(t *testing.T) {
 		for i := range os {
 			os[i] = int64(i)
 		}
+		nb0 := tc.proc.Mp().CurrNB()
 		Sort(tc.desc, false, false, os, tc.vec, nil)
 		checkResult(t, tc.desc, tc.vec, os)
+		nb1 := tc.proc.Mp().CurrNB()
+		require.Equal(t, nb0, nb1)
 		tc.vec.Free(tc.proc.Mp())
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -118,7 +117,7 @@ func BenchmarkSortInt(b *testing.B) {
 }
 
 func BenchmarkSortIntVector(b *testing.B) {
-	m := mheap.New(guest.New(1<<30, hm))
+	m := mpool.MustNewZero()
 	vec := testutil.NewInt32Vector(BenchmarkRows, types.New(types.T_int32, 0, 0, 0), m, true, nil)
 	os := make([]int64, vector.Length(vec))
 	for i := range os {
@@ -206,10 +205,10 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 	}
 }
 
-func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
+func newTestCase(desc bool, m *mpool.MPool, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
-		proc: testutil.NewProcessWithMheap(m),
+		proc: testutil.NewProcessWithMPool(m),
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
 }

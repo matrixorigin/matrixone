@@ -26,19 +26,19 @@ import (
 
 func makeInt64Vector(values []int64, nsp []uint64) *vector.Vector {
 	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_int64.ToType(), values, ns, nil)
+	vec := vector.NewWithFixed(types.T_int64.ToType(), values, ns, testutil.TestUtilMp)
 	return vec
 }
 
 func makeUint64Vector(values []uint64, nsp []uint64) *vector.Vector {
 	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_uint64.ToType(), values, ns, nil)
+	vec := vector.NewWithFixed(types.T_uint64.ToType(), values, ns, testutil.TestUtilMp)
 	return vec
 }
 
 func makeFloat64Vector(values []float64, nsp []uint64) *vector.Vector {
 	ns := nulls.Build(len(values), nsp...)
-	vec := vector.NewWithFixed(types.T_float64.ToType(), values, ns, nil)
+	vec := vector.NewWithFixed(types.T_float64.ToType(), values, ns, testutil.TestUtilMp)
 	return vec
 }
 

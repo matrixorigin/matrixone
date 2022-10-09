@@ -222,7 +222,7 @@ func TestVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		session := NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil), gSysVars)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -496,7 +496,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, nil, pu, gSysVars)
+		session := NewSession(proto, nil, pu, gSysVars)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -531,7 +531,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, eng, txnClient, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 
 		gSysVars := &GlobalSystemVariables{}
 		InitGlobalSystemVariables(gSysVars)

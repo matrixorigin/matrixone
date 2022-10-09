@@ -17,10 +17,8 @@ package testutil
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,14 +27,14 @@ const (
 )
 
 func TestNewBatch(t *testing.T) {
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	m := mpool.MustNewZero()
 	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0, 0)}, true, Rows, m)
 	bat.Clean(m)
-	require.Equal(t, int64(0), mheap.Size(m))
+	require.Equal(t, int64(0), m.CurrNB())
 }
 
 func TestVector(t *testing.T) {
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	m := mpool.MustNewZero()
 	{
 		vec := NewVector(Rows, types.New(types.T_bool, 0, 0, 0), m, true, nil)
 		vec.Free(m)
@@ -105,5 +103,5 @@ func TestVector(t *testing.T) {
 		vec := NewVector(Rows, types.New(types.T_char, 0, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
-	require.Equal(t, int64(0), mheap.Size(m))
+	require.Equal(t, int64(0), m.CurrNB())
 }

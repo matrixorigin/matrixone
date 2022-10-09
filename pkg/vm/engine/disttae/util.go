@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -186,7 +186,7 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 	}
 }
 
-func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mheap.Mheap) {
+func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
 	for i := 0; i < len(datas[depth]); i++ {
 		tmpResult[depth] = datas[depth][i]
 		if depth != len(datas)-1 {
@@ -199,7 +199,7 @@ func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vect
 	}
 }
 
-func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mheap.Mheap) []*vector.Vector {
+func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
 	vectors := make([]*vector.Vector, len(dataTypes))
 	for i, typ := range dataTypes {
 		vectors[i] = vector.New(types.T(typ).ToType())

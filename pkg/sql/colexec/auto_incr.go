@@ -19,6 +19,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -201,7 +202,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, moerr.NewInvalidInput("the auto_incr col is not integer type")
 	}
 
-	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
+	if err := updateAutoIncrTable(param, maxNum, name, param.proc.Mp()); err != nil {
 		ctx, cancel := context.WithTimeout(
 			param.ctx,
 			param.eg.Hints().CommitOrRollbackTimeout,
@@ -283,8 +284,8 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 	}
 }
 
-func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string) error {
-	bat := makeAutoIncrBatch(name, curNum, 1)
+func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
+	bat := makeAutoIncrBatch(name, curNum, 1, mp)
 	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
 		return err
@@ -296,10 +297,10 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string) error
 	return nil
 }
 
-func makeAutoIncrBatch(name string, num, step uint64) *batch.Batch {
-	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, nil)
-	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, nil)
-	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, nil)
+func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Batch {
+	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, mp)
+	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, mp)
+	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, mp)
 	bat := &batch.Batch{
 		Attrs: AUTO_INCR_TABLE_COLNAME,
 		Vecs:  []*vector.Vector{vec, vec2, vec3},
@@ -334,7 +335,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 		if rel, err = db.Relation(ctx, AUTO_INCR_TABLE); err != nil {
 			return err
 		}
-		bat := makeAutoIncrBatch(name+attr.Name, 0, 1)
+		bat := makeAutoIncrBatch(name+attr.Name, 0, 1, proc.Mp())
 		if err = rel.Write(ctx, bat); err != nil {
 			return err
 		}
@@ -360,7 +361,7 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat := makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1)
+			bat := makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1, proc.Mp())
 			if err = rel2.Delete(ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}

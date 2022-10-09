@@ -18,12 +18,12 @@ import (
 	"context"
 	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type TableReader struct {
@@ -132,7 +132,7 @@ func (t *Table) NewReader(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) (*batch.Batch, error) {
+func (t *TableReader) Read(colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
 	}

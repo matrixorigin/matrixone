@@ -36,9 +36,7 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
-	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
-	maxVisible      atomic.Value
 	appends         *txnbase.MVCCSlice
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
@@ -85,30 +83,8 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	return !n.appends.IsCommitted()
 }
 
-func (n *MVCCHandle) AddHoles(start, end int) {
-	if n.holes != nil {
-		n.holes = roaring.New()
-	}
-	n.holes.AddRange(uint64(start), uint64(end))
-}
-
-func (n *MVCCHandle) HasHole() bool {
-	return n.holes != nil && !n.holes.IsEmpty()
-}
-
-func (n *MVCCHandle) HoleCnt() int {
-	if !n.HasHole() {
-		return 0
-	}
-	return int(n.holes.GetCardinality())
-}
-
 func (n *MVCCHandle) IncChangeNodeCnt() {
 	atomic.AddUint32(&n.changes, uint32(1))
-}
-
-func (n *MVCCHandle) ResetChangeNodeCnt() {
-	atomic.StoreUint32(&n.changes, uint32(0))
 }
 
 func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
@@ -121,15 +97,6 @@ func (n *MVCCHandle) GetColumnUpdateCnt(colIdx uint16) uint32 {
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
-}
-
-func (n *MVCCHandle) SetMaxVisible(ts types.TS) {
-	n.maxVisible.Store(ts)
-}
-
-func (n *MVCCHandle) LoadMaxVisible() types.TS {
-	ts := n.maxVisible.Load().(types.TS)
-	return ts
 }
 
 func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
@@ -166,7 +133,6 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-	n.TrySetMaxVisible(deleteNode.(*DeleteNode).GetCommitTSLocked())
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -206,12 +172,6 @@ func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	an.mvcc = n
 	n.appends.InsertNode(an)
-	n.TrySetMaxVisible(an.GetCommitTS())
-}
-func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
-	if ts.Greater(n.maxVisible.Load().(types.TS)) {
-		n.maxVisible.Store(ts)
-	}
 }
 func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
