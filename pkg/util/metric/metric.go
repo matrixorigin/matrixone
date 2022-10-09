@@ -76,7 +76,7 @@ var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
-var multiTable = false // need set before initTables
+var multiTable = false // need set before newMetricFSCollector and initTables
 
 var inited uint32
 
@@ -89,6 +89,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
 	}
+	multiTable = initOpts.multiTable
 	// init global variables
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
@@ -101,7 +102,6 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// register metrics and create tables
 	registerAllMetrics()
-	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
 		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
@@ -326,7 +326,7 @@ var (
 )
 
 var singleMetricTable = &inittool.Table{
-	Database:         trace.StatsDatabase,
+	Database:         MetricDBConst,
 	Table:            `metric`,
 	Columns:          []inittool.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []inittool.Column{},
