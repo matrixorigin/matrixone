@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
