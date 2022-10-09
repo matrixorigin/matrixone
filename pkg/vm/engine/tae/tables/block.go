@@ -58,8 +58,8 @@ type statBlock struct {
 }
 
 type dataBlock struct {
-	common.RefHelper
 	*sync.RWMutex
+	common.RefHelper
 	common.ClosedState
 	meta         *catalog.BlockEntry
 	node         *appendableNode
@@ -78,21 +78,13 @@ type dataBlock struct {
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
-	indexCnt := make(map[int]int)
 	// every column has a zonemap
 	schema := meta.GetSchema()
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
-			continue
-		}
-		indexCnt[colDef.Idx] = 1
-	}
 	// ATTENTION: COMPOUNDPK
 	// pk column has another bloomfilter
 	pkIdx := -1024
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
-		indexCnt[pkIdx] += 1
 	}
 	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
