@@ -27,30 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-<<<<<<< HEAD:pkg/vm/engine/memEngine/testEngine.go
-// XXX MPOOL
 var testEngineMp = testutil.TestUtilMp
 
-func NewTestEngine() engine.Engine {
-	e := New(kv.New(), engine.Node{Id: "0", Addr: "127.0.0.1"})
-	ctx := context.TODO()
-	db, _ := e.Database(ctx, "test", nil)
-	CreateR(db)
-	CreateS(db)
-	CreateT(db)
-	CreateT1(db)
-	{ // star schema benchmark
-		CreatePart(db)
-		CreateDate(db)
-		CreateSupplier(db)
-		CreateCustomer(db)
-		CreateLineorder(db)
-	}
-	return e
-}
-
-=======
->>>>>>> upstream/main:pkg/testutil/testengine/testdata.go
 func CreateR(db engine.Database) {
 	ctx := context.TODO()
 	{
