@@ -17,8 +17,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/google/gops/agent"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"net/http"
 	"strings"
@@ -34,12 +32,6 @@ import (
 
 const InternalExecutor = "InternalExecutor"
 const FileService = "FileService"
-
-func init() {
-	if err := agent.Listen(agent.Options{}); err != nil {
-		logutil.Errorf("listen gops agent failed: %s", err)
-	}
-}
 
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)

@@ -53,6 +53,8 @@ type collectorOpts struct {
 	flushInterval time.Duration
 	// the number of goroutines to execute insert into sql, default is runtime.NumCPU()
 	sqlWorkerNum int
+	// multiTable
+	multiTable bool
 }
 
 func defaultCollectorOpts() collectorOpts {
@@ -90,6 +92,12 @@ type WithFlushInterval time.Duration
 
 func (x WithFlushInterval) ApplyTo(o *collectorOpts) {
 	o.flushInterval = time.Duration(x)
+}
+
+type ExportMultiTable bool
+
+func (x ExportMultiTable) ApplyTo(o *collectorOpts) {
+	o.multiTable = bool(x)
 }
 
 var _ MetricCollector = (*metricCollector)(nil)
@@ -263,7 +271,7 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 		opts:          initOpts,
 	}
 	pipeOpts := []bp.BaseBatchPipeOpt{bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum)}
-	if !multiTable {
+	if !initOpts.multiTable {
 		pipeOpts = append(pipeOpts,
 			bp.PipeWithBufferWorkerNum(1),
 			bp.PipeWithItemNameFormatter(func(bp.HasName) string {
@@ -291,12 +299,14 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		writerFactory: c.writerFactory,
+		multiTable:    c.opts.multiTable,
 	}
 }
 
 type mfsetCSV struct {
 	mfset
 	writerFactory export.FSWriterFactory
+	multiTable    bool
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
@@ -317,7 +327,7 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 }
 
 func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
-	if !multiTable {
+	if !s.multiTable {
 		return s.GetBatchSingleTable(buf)
 	}
 	return s.GetBatchMultiTable(buf)

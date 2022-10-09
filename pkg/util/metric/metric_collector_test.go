@@ -71,12 +71,6 @@ func TestCollectorOpts(t *testing.T) {
 	}
 }
 
-func dummyInitView(tbls []string) {
-	for _, tbl := range tbls {
-		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
-	}
-}
-
 func TestCollector(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
@@ -87,7 +81,6 @@ func TestCollector(t *testing.T) {
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
-	dummyInitView(names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
@@ -160,11 +153,16 @@ func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
+func dummyInitView(tbls []string) {
+	for _, tbl := range tbls {
+		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
+	}
+}
 
 func TestCsvFSCollector(t *testing.T) {
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
-	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(1), WithFlushInterval(8))
+	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
@@ -198,8 +196,8 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 		})
 	}()
-	M1ValuesRe := regexp.MustCompile(`m1,(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
-	M2ValuesRe := regexp.MustCompile(`m2,(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	M1ValuesRe := regexp.MustCompile(`m1,(.*[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	M2ValuesRe := regexp.MustCompile(`m2,(.*[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
 	nameAndValueCnt := func(n, s string, re *regexp.Regexp) (name string, cnt int) {
 		t.Logf("name: %s, csv: %s", n, s)
 		cnt = len(re.FindAllString(s, -1))

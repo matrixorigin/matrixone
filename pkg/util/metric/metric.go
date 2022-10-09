@@ -89,12 +89,11 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
 	}
-	multiTable = initOpts.multiTable
 	// init global variables
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
-		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval))
+		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
 	} else {
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
@@ -102,6 +101,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// register metrics and create tables
 	registerAllMetrics()
+	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
 		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
