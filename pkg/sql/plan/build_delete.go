@@ -186,8 +186,10 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 	var err error
 	isHideKeyArr := make([]bool, tableCount)
 	useKeys := make([]*ColDef, tableCount)
+	colIndex := make([]int32, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
+		colIndex[i] = int32(len(useProjectExprs))
 		useProjectExprs, useKeys[i], isHideKeyArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
@@ -220,6 +222,7 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			UseDeleteKey: useKeys[i].Name,
 			IsHideKey:    isHideKeyArr[i],
 			CanTruncate:  false,
+			ColIndex:     colIndex[i],
 		}
 	}
 	node := &Node{
@@ -253,10 +256,12 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	psNames := make(map[string]struct{})
 	for _, key := range priKeys {
 		// we will allways append pk to select item
-		psNames[key.Name] = struct{}{}
-		e := tree.SetUnresolvedName(tblName, key.Name)
-		ps = append(ps, tree.SelectExpr{Expr: e})
-		useKey = key
+		if !key.IsCPkey {
+			psNames[key.Name] = struct{}{}
+			e := tree.SetUnresolvedName(tblName, key.Name)
+			ps = append(ps, tree.SelectExpr{Expr: e})
+			useKey = key
+		}
 
 		// if key.IsCPkey {
 		// 	break
@@ -276,6 +281,7 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 			return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
 		}
 		useKey = hideKey
+		psNames[hideKey.Name] = struct{}{}
 		e := tree.SetUnresolvedName(tblName, hideKey.Name)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 		isHideKey = true

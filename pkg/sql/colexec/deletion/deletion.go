@@ -47,11 +47,11 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ctx := context.TODO()
 
 	for i := range p.DeleteCtxs {
-
+		filterColIndex := p.DeleteCtxs[i].ColIndex
 		if p.DeleteCtxs[i].IsHideKey {
 			var cnt uint64
 			tmpBat := &batch.Batch{}
-			tmpBat.Vecs = []*vector.Vector{bat.Vecs[i]}
+			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
 			tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
 
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat.GetVector(0), p.DeleteCtxs[i].UseDeleteKey)
@@ -62,7 +62,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			tmpBat.Clean(proc.Mp())
 		} else {
-			err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey)
+			err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(filterColIndex), p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				return false, err
 			}

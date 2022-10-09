@@ -88,6 +88,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
 			IsHideKey:    deleteTablesCtx.IsHideKey,
+			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
 
