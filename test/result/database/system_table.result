@@ -6,6 +6,117 @@ db
 procs_priv
 columns_priv
 tables_priv
+show columns from `user`;
+Field    Type    Null    Key    Default    Comment
+host    CHAR    NO        NULL    
+user    CHAR    NO        NULL    
+select_priv    VARCHAR    NO        NULL    
+insert_priv    VARCHAR    NO        NULL    
+update_priv    VARCHAR    NO        NULL    
+delete_priv    VARCHAR    NO        NULL    
+create_priv    VARCHAR    NO        NULL    
+drop_priv    VARCHAR    NO        NULL    
+reload_priv    VARCHAR    NO        NULL    
+shutdown_priv    VARCHAR    NO        NULL    
+process_priv    VARCHAR    NO        NULL    
+file_priv    VARCHAR    NO        NULL    
+grant_priv    VARCHAR    NO        NULL    
+references_priv    VARCHAR    NO        NULL    
+index_priv    VARCHAR    NO        NULL    
+alter_priv    VARCHAR    NO        NULL    
+show_db_priv    VARCHAR    NO        NULL    
+super_priv    VARCHAR    NO        NULL    
+create_tmp_table_priv    VARCHAR    NO        NULL    
+lock_tables_priv    VARCHAR    NO        NULL    
+execute_priv    VARCHAR    NO        NULL    
+repl_slave_priv    VARCHAR    NO        NULL    
+repl_client_priv    VARCHAR    NO        NULL    
+create_view_priv    VARCHAR    NO        NULL    
+show_view_priv    VARCHAR    NO        NULL    
+create_routine_priv    VARCHAR    NO        NULL    
+alter_routine_priv    VARCHAR    NO        NULL    
+create_user_priv    VARCHAR    NO        NULL    
+event_priv    VARCHAR    NO        NULL    
+trigger_priv    VARCHAR    NO        NULL    
+create_tablespace_priv    VARCHAR    NO        NULL    
+ssl_type    VARCHAR    NO        NULL    
+ssl_cipher    TEXT    NO        NULL    
+x509_issuer    TEXT    NO        NULL    
+x509_subject    TEXT    NO        NULL    
+max_questions    INT UNSIGNED    NO        NULL    
+max_updates    INT UNSIGNED    NO        NULL    
+max_connections    INT UNSIGNED    NO        NULL    
+max_user_connections    INT UNSIGNED    NO        NULL    
+plugin    CHAR    NO        NULL    
+authentication_string    TEXT    YES        NULL    
+password_expired    VARCHAR    NO        NULL    
+password_last_changed    TIMESTAMP    YES        NULL    
+password_lifetime    SMALLINT UNSIGNED    YES        NULL    
+account_locked    VARCHAR    NO        NULL    
+create_role_priv    VARCHAR    NO        NULL    
+drop_role_priv    VARCHAR    NO        NULL    
+password_reuse_history    SMALLINT UNSIGNED    YES        NULL    
+password_reuse_time    SMALLINT UNSIGNED    YES        NULL    
+password_require_current    VARCHAR    YES        NULL    
+user_attributes    JSON    YES        NULL    
+__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL    
+show columns from `db`;
+Field    Type    Null    Key    Default    Comment
+host    CHAR    NO        NULL    
+db    CHAR    NO        NULL    
+user    CHAR    NO        NULL    
+select_priv    VARCHAR    NO        NULL    
+insert_priv    VARCHAR    NO        NULL    
+update_priv    VARCHAR    NO        NULL    
+delete_priv    VARCHAR    NO        NULL    
+create_priv    VARCHAR    NO        NULL    
+drop_priv    VARCHAR    NO        NULL    
+grant_priv    VARCHAR    NO        NULL    
+references_priv    VARCHAR    NO        NULL    
+index_priv    VARCHAR    NO        NULL    
+alter_priv    VARCHAR    NO        NULL    
+create_tmp_table_priv    VARCHAR    NO        NULL    
+lock_tables_priv    VARCHAR    NO        NULL    
+create_view_priv    VARCHAR    NO        NULL    
+show_view_priv    VARCHAR    NO        NULL    
+create_routine_priv    VARCHAR    NO        NULL    
+alter_routine_priv    VARCHAR    NO        NULL    
+execute_priv    VARCHAR    NO        NULL    
+event_priv    VARCHAR    NO        NULL    
+trigger_priv    VARCHAR    NO        NULL    
+__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL    
+show columns from `procs_priv`;
+Field    Type    Null    Key    Default    Comment
+host    CHAR    NO        NULL    
+db    CHAR    NO        NULL    
+user    CHAR    NO        NULL    
+routine_name    CHAR    NO        NULL    
+routine_type    VARCHAR    NO        NULL    
+grantor    VARCHAR    NO        NULL    
+proc_priv    VARCHAR    NO        NULL    
+timestamp    TIMESTAMP    NO        NULL    
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL    
+show columns from `columns_priv`;
+Field    Type    Null    Key    Default    Comment
+host    CHAR    NO        NULL    
+db    CHAR    NO        NULL    
+user    CHAR    NO        NULL    
+table_name    CHAR    NO        NULL    
+column_name    CHAR    NO        NULL    
+timestamp    TIMESTAMP    NO        NULL    
+column_priv    VARCHAR    NO        NULL    
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL    
+show columns from `tables_priv`;
+Field    Type    Null    Key    Default    Comment
+host    CHAR    NO        NULL    
+db    CHAR    NO        NULL    
+user    CHAR    NO        NULL    
+table_name    CHAR    NO        NULL    
+grantor    VARCHAR    NO        NULL    
+timestamp    TIMESTAMP    NO        NULL    
+table_priv    VARCHAR    NO        NULL    
+column_priv    VARCHAR    NO        NULL    
+__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL    
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -18,3 +129,138 @@ SCHEMATA
 CHARACTER_SETS
 TRIGGERS
 TABLES
+show columns from `KEY_COLUMN_USAGE`;
+Field    Type    Null    Key    Default    Comment
+CONSTRAINT_CATALOG    VARCHAR    YES        NULL    
+CONSTRAINT_SCHEMA    VARCHAR    YES        NULL    
+CONSTRAINT_NAME    VARCHAR    YES        NULL    
+TABLE_CATALOG    VARCHAR    YES        NULL    
+TABLE_SCHEMA    VARCHAR    YES        NULL    
+TABLE_NAME    VARCHAR    YES        NULL    
+COLUMN_NAME    VARCHAR    YES        NULL    
+ORDINAL_POSITION    INT UNSIGNED    YES        NULL    
+POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED    YES        NULL    
+REFERENCED_TABLE_SCHEMA    VARCHAR    YES        NULL    
+REFERENCED_TABLE_NAME    VARCHAR    YES        NULL    
+REFERENCED_COLUMN_NAME    VARCHAR    YES        NULL    
+show columns from `COLUMNS`;
+Field    Type    Null    Key    Default    Comment
+TABLE_CATALOG    VARCHAR    YES        NULL    
+TABLE_SCHEMA    VARCHAR    YES        NULL    
+TABLE_NAME    VARCHAR    YES        NULL    
+COLUMN_NAME    VARCHAR    YES        NULL    
+ORDINAL_POSITION    INT UNSIGNED    YES        NULL    
+COLUMN_DEFAULT    TEXT    YES        NULL    
+IS_NULLABLE    VARCHAR    YES        NULL    
+DATA_TYPE    TEXT    YES        NULL    
+CHARACTER_MAXIMUM_LENGTH    BIGINT    YES        NULL    
+CHARACTER_OCTET_LENGTH    BIGINT    YES        NULL    
+NUMERIC_PRECISION    BIGINT UNSIGNED    YES        NULL    
+NUMERIC_SCALE    BIGINT UNSIGNED    YES        NULL    
+DATETIME_PRECISION    INT UNSIGNED    YES        NULL    
+CHARACTER_SET_NAME    VARCHAR    YES        NULL    
+COLLATION_NAME    VARCHAR    YES        NULL    
+COLUMN_TYPE    TEXT    YES        NULL    
+COLUMN_KEY    VARCHAR    YES        NULL    
+EXTRA    VARCHAR    YES        NULL    
+PRIVILEGES    VARCHAR    YES        NULL    
+COLUMN_COMMENT    TEXT    YES        NULL    
+GENERATION_EXPRESSION    TEXT    YES        NULL    
+SRS_ID    INT UNSIGNED    YES        NULL    
+show columns from `PROFILING`;
+Field    Type    Null    Key    Default    Comment
+QUERY_ID    INT    NO        NULL    
+SEQ    INT    NO        NULL    
+STATE    VARCHAR    NO        NULL    
+DURATION    DECIMAL64    NO        NULL    
+CPU_USER    DECIMAL64    YES        NULL    
+CPU_SYSTEM    DECIMAL64    YES        NULL    
+CONTEXT_VOLUNTARY    INT    YES        NULL    
+CONTEXT_INVOLUNTARY    INT    YES        NULL    
+BLOCK_OPS_IN    INT    YES        NULL    
+BLOCK_OPS_OUT    INT    YES        NULL    
+MESSAGES_SENT    INT    YES        NULL    
+MESSAGES_RECEIVED    INT    YES        NULL    
+PAGE_FAULTS_MAJOR    INT    YES        NULL    
+PAGE_FAULTS_MINOR    INT    YES        NULL    
+SWAPS    INT    YES        NULL    
+SOURCE_FUNCTION    VARCHAR    YES        NULL    
+SOURCE_FILE    VARCHAR    YES        NULL    
+SOURCE_LINE    INT    YES        NULL    
+show columns from `PROCESSLIST`;
+Field    Type    Null    Key    Default    Comment
+ID    BIGINT UNSIGNED    NO        NULL    
+USER    VARCHAR    NO        NULL    
+HOST    VARCHAR    NO        NULL    
+DB    VARCHAR    YES        NULL    
+COMMAND    VARCHAR    NO        NULL    
+TIME    INT    NO        NULL    
+STATE    VARCHAR    YES        NULL    
+INFO    TEXT    YES        NULL    
+show columns from `USER_PRIVILEGES`;
+Field    Type    Null    Key    Default    Comment
+GRANTEE    VARCHAR    NO        NULL    
+TABLE_CATALOG    VARCHAR    NO        NULL    
+PRIVILEGE_TYPE    VARCHAR    NO        NULL    
+IS_GRANTABLE    VARCHAR    NO        NULL    
+show columns from `SCHEMATA`;
+Field    Type    Null    Key    Default    Comment
+CATALOG_NAME    VARCHAR    YES        NULL    
+SCHEMA_NAME    VARCHAR    YES        NULL    
+DEFAULT_CHARACTER_SET_NAME    VARCHAR    YES        NULL    
+DEFAULT_COLLATION_NAME    VARCHAR    YES        NULL    
+SQL_PATH    VARCHAR    YES        NULL    
+DEFAULT_ENCRYPTION    VARCHAR    YES        NULL    
+show columns from `CHARACTER_SETS`;
+Field    Type    Null    Key    Default    Comment
+CHARACTER_SET_NAME    VARCHAR    YES        NULL    
+DEFAULT_COLLATE_NAME    VARCHAR    YES        NULL    
+DESCRIPTION    VARCHAR    YES        NULL    
+MAXLEN    INT UNSIGNED    YES        NULL    
+show columns from `TRIGGERS`;
+Field    Type    Null    Key    Default    Comment
+TRIGGER_CATALOG    VARCHAR    YES        NULL    
+TRIGGER_SCHEMA    VARCHAR    YES        NULL    
+TRIGGER_NAME    VARCHAR    YES        NULL    
+EVENT_MANIPULATION    VARCHAR    YES        NULL    
+EVENT_OBJECT_CATALOG    VARCHAR    YES        NULL    
+EVENT_OBJECT_SCHEMA    VARCHAR    YES        NULL    
+EVENT_OBJECT_TABLE    VARCHAR    YES        NULL    
+ACTION_ORDER    INT UNSIGNED    YES        NULL    
+ACTION_CONDITION    VARCHAR    YES        NULL    
+ACTION_STATEMENT    TEXT    YES        NULL    
+ACTION_ORIENTATION    VARCHAR    YES        NULL    
+ACTION_TIMING    VARCHAR    YES        NULL    
+ACTION_REFERENCE_OLD_TABLE    VARCHAR    YES        NULL    
+ACTION_REFERENCE_NEW_TABLE    VARCHAR    YES        NULL    
+ACTION_REFERENCE_OLD_ROW    VARCHAR    YES        NULL    
+ACTION_REFERENCE_NEW_ROW    VARCHAR    YES        NULL    
+CREATED    TIMESTAMP    YES        NULL    
+SQL_MODE    VARCHAR    YES        NULL    
+DEFINER    VARCHAR    YES        NULL    
+CHARACTER_SET_CLIENT    VARCHAR    YES        NULL    
+COLLATION_CONNECTION    VARCHAR    YES        NULL    
+DATABASE_COLLATION    VARCHAR    YES        NULL    
+show columns from `TABLES`;
+Field    Type    Null    Key    Default    Comment
+TABLE_CATALOG    VARCHAR    YES        NULL    
+TABLE_SCHEMA    VARCHAR    YES        NULL    
+TABLE_NAME    VARCHAR    YES        NULL    
+TABLE_TYPE    VARCHAR    YES        NULL    
+ENGINE    VARCHAR    YES        NULL    
+VERSION    INT    YES        NULL    
+ROW_FORMAT    VARCHAR    YES        NULL    
+TABLE_ROWS    BIGINT UNSIGNED    YES        NULL    
+AVG_ROW_LENGTH    BIGINT UNSIGNED    YES        NULL    
+DATA_LENGTH    BIGINT UNSIGNED    YES        NULL    
+MAX_DATA_LENGTH    BIGINT UNSIGNED    YES        NULL    
+INDEX_LENGTH    BIGINT UNSIGNED    YES        NULL    
+DATA_FREE    BIGINT UNSIGNED    YES        NULL    
+AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL    
+CREATE_TIME    TIMESTAMP    YES        NULL    
+UPDATE_TIME    DATETIME    YES        NULL    
+CHECK_TIME    DATETIME    YES        NULL    
+TABLE_COLLATION    VARCHAR    YES        NULL    
+CHECKSUM    BIGINT    YES        NULL    
+CREATE_OPTIONS    VARCHAR    YES        NULL    
+TABLE_COMMENT    TEXT    YES        NULL    

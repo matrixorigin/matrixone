@@ -1,4 +1,18 @@
 use mysql;
 show tables;
+show columns from `user`;
+show columns from `db`;
+show columns from `procs_priv`;
+show columns from `columns_priv`;
+show columns from `tables_priv`;
 use information_schema;
 show tables;
+show columns from `KEY_COLUMN_USAGE`;
+show columns from `COLUMNS`;
+show columns from `PROFILING`;
+show columns from `PROCESSLIST`;
+show columns from `USER_PRIVILEGES`;
+show columns from `SCHEMATA`;
+show columns from `CHARACTER_SETS`;
+show columns from `TRIGGERS`;
+show columns from `TABLES`;
