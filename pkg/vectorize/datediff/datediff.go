@@ -44,86 +44,84 @@ func DateDiffAllConst(lv, rv types.Date, rs []int64) []int64 {
 	return rs
 }
 
-
-
-func TimeStampDiff(unit int64, expr1, expr2 types.Datetime)(int64, error){
+func TimeStampDiff(unit int64, expr1, expr2 types.Datetime) (int64, error) {
 	return (expr2 - expr1).ConvertToInterval(types.IntervalType(unit))
 }
 
-func TimeStampDiffWithCols(units []int64, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error{
+func TimeStampDiffWithCols(units []int64, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error {
 	var unit int64
-	if len(expr1) == 1 && len(expr2) == 1{
+	if len(expr1) == 1 && len(expr2) == 1 {
 		unitsLen := len(units)
-		for i := 0; i < maxLen; i++{
-			if  determineNulls(unitsLen, 1, 1, unitNs, firstNs, secondNs, i){
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(unitsLen, 1, 1, unitNs, firstNs, secondNs, i) {
 				nulls.Add(rsNs, uint64(i))
-				continue;
+				continue
 			}
-			if unitsLen == 1{
+			if unitsLen == 1 {
 				unit = units[0]
-			}else{
+			} else {
 				unit = units[i]
 			}
 
 			res, err := TimeStampDiff(unit, expr1[0], expr2[0])
-			if err != nil{
+			if err != nil {
 				return err
 			}
 			rs[i] = res
 		}
-	}else if len(expr1) == 1{
+	} else if len(expr1) == 1 {
 		unitsLen := len(units)
-		for i := 0; i < maxLen; i++{
-			if determineNulls(unitsLen, 1, maxLen, unitNs, firstNs, secondNs, i){
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(unitsLen, 1, maxLen, unitNs, firstNs, secondNs, i) {
 				nulls.Add(rsNs, uint64(i))
-				continue;
+				continue
 			}
-			if unitsLen == 1{
+			if unitsLen == 1 {
 				unit = units[0]
-			}else{
+			} else {
 				unit = units[i]
 			}
 
 			res, err := TimeStampDiff(unit, expr1[0], expr2[i])
-			if err != nil{
+			if err != nil {
 				return err
 			}
 			rs[i] = res
 		}
-	}else if len(expr2) == 1{
+	} else if len(expr2) == 1 {
 		unitsLen := len(units)
-		for i := 0; i < maxLen; i++{
-			if  determineNulls(unitsLen, maxLen, 1, unitNs, firstNs, secondNs, i){
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(unitsLen, maxLen, 1, unitNs, firstNs, secondNs, i) {
 				nulls.Add(rsNs, uint64(i))
-				continue;
+				continue
 			}
-			if unitsLen == 1{
+			if unitsLen == 1 {
 				unit = units[0]
-			}else{
+			} else {
 				unit = units[i]
 			}
 
 			res, err := TimeStampDiff(unit, expr1[i], expr2[0])
-			if err != nil{
+			if err != nil {
 				return err
 			}
 			rs[i] = res
 		}
-	}else{
+	} else {
 		unitsLen := len(units)
-		for i := 0; i < maxLen; i++{
-			if  determineNulls(unitsLen, maxLen, maxLen, unitNs, firstNs, secondNs, i){
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(unitsLen, maxLen, maxLen, unitNs, firstNs, secondNs, i) {
 				nulls.Add(rsNs, uint64(i))
-				continue;
+				continue
 			}
-			if unitsLen == 1{
+			if unitsLen == 1 {
 				unit = units[0]
-			}else{
+			} else {
 				unit = units[i]
 			}
 
 			res, err := TimeStampDiff(unit, expr1[i], expr2[i])
-			if err != nil{
+			if err != nil {
 				return err
 			}
 			rs[i] = res

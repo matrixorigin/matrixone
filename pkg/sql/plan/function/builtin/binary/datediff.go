@@ -72,7 +72,7 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//input vectors 
+	//input vectors
 	firstVector := vectors[0]
 	secondVector := vectors[1]
 	thirdVector := vectors[2]
@@ -100,7 +100,7 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
 	err = datediff.TimeStampDiffWithCols(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, thirdVector.Nsp, resultVector.Nsp, resultValues, maxLen)
-	if err != nil{
+	if err != nil {
 		return nil, err
 	}
 	return resultVector, nil
