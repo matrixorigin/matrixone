@@ -44,22 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-<<<<<<< HEAD
-type BlockState int8
-
-// BlockState is the state of the data block, which is different from the state of the mate
-const (
-	BS_Appendable BlockState = iota
-	BS_NotAppendable
-)
-=======
-var ImmutMemAllocator stl.MemAllocator
-
-func init() {
-	ImmutMemAllocator = stl.NewSimpleAllocator()
-}
->>>>>>> main
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
