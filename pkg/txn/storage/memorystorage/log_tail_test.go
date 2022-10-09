@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +38,7 @@ func TestLogTail(t *testing.T) {
 		return time.Now().Unix()
 	}, math.MaxInt)
 	storage, err := NewMemoryStorage(
-		testutil.NewMheap(),
+		mpool.MustNewZero(),
 		SnapshotIsolation,
 		clock,
 		memoryengine.RandomIDGenerator,

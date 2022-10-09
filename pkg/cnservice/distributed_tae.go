@@ -17,11 +17,10 @@ package cnservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,12 +42,11 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	m := mheap.New(guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu))
 	txnOperator, err := pu.TxnClient.New()
 	if err != nil {
 		return err
 	}
-	proc := process.New(ctx, m, pu.TxnClient, txnOperator, pu.FileService)
+	proc := process.New(ctx, mpool.MustNewZero(), pu.TxnClient, txnOperator, pu.FileService)
 
 	// engine
 	pu.StorageEngine = disttae.New(

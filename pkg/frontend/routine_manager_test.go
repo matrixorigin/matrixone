@@ -23,21 +23,16 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
 func create_test_server() *MOServer {
 	//before anything using the configuration
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
-
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)

@@ -17,10 +17,10 @@ package hashmap
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func init() {
@@ -34,7 +34,7 @@ func init() {
 	}
 }
 
-func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mheap.Mheap) (*StrHashMap, error) {
+func NewStrMap(hasNull bool, ibucket, nbucket uint64, m *mpool.MPool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
 	if err := mp.Init(m); err != nil {
 		return nil, err

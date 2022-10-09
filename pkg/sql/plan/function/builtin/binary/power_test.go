@@ -17,6 +17,7 @@ package binary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -78,8 +79,9 @@ func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ t
 
 // Construct the vector parameter of the plus operator
 func makePowerVectors[T constraints.Integer | constraints.Float](src T, src2 T, srcScalar bool, t types.T) []*vector.Vector {
+	mp := mpool.MustNewZero()
 	vectors := make([]*vector.Vector, 2)
-	vectors[0] = vector.NewConstFixed(t.ToType(), 1, src)
-	vectors[1] = vector.NewConstFixed(t.ToType(), 1, src2)
+	vectors[0] = vector.NewConstFixed(t.ToType(), 1, src, mp)
+	vectors[1] = vector.NewConstFixed(t.ToType(), 1, src2, mp)
 	return vectors
 }

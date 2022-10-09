@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,7 +40,7 @@ type vector[T any] struct {
 	impl      internalVector
 	typ       types.Type
 	nulls     *roaring64.Bitmap
-	roStorage stl.MemNode
+	roStorage []byte
 }
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T] {
@@ -132,7 +133,7 @@ func (vec *vector[T]) Data() []byte                { return vec.impl.Data() }
 func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
-func (vec *vector[T]) CloneWindow(offset, length int, allocator ...MemAllocator) Vector {
+func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	opts := new(Options)
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
@@ -183,7 +184,7 @@ func (vec *vector[T]) Length() int    { return vec.impl.Length() }
 func (vec *vector[T]) Capacity() int  { return vec.impl.Capacity() }
 func (vec *vector[T]) Allocated() int { return vec.impl.Allocated() }
 
-func (vec *vector[T]) GetAllocator() MemAllocator { return vec.stlvec.GetAllocator() }
+func (vec *vector[T]) GetAllocator() *mpool.MPool { return vec.stlvec.GetAllocator() }
 func (vec *vector[T]) GetType() types.Type        { return vec.typ }
 func (vec *vector[T]) String() string             { return vec.impl.String() }
 func (vec *vector[T]) Close()                     { vec.impl.Close() }
@@ -318,20 +319,27 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
 	vec.releaseRoStorage()
 	stat := f.Stat()
-	var n stl.MemNode
+	var n []byte
 	var buf []byte
+	var tmpNode []byte
 	if stat.CompressAlgo() != compress.None {
 		osize := int(stat.OriginSize())
 		size := stat.Size()
-		tmpNode := vec.GetAllocator().Alloc(int(size))
+		tmpNode, err = vec.GetAllocator().Alloc(int(size))
+		if err != nil {
+			return
+		}
 		defer vec.GetAllocator().Free(tmpNode)
-		srcBuf := tmpNode.GetBuf()[:size]
+		srcBuf := tmpNode[:size]
 		if _, err = f.Read(srcBuf); err != nil {
 			return
 		}
 		if buffer == nil {
-			n = vec.GetAllocator().Alloc(osize)
-			buf = n.GetBuf()[:osize]
+			n, err = vec.GetAllocator().Alloc(osize)
+			if err != nil {
+				return
+			}
+			buf = n[:osize]
 		} else {
 			buffer.Reset()
 			if osize > buffer.Cap() {

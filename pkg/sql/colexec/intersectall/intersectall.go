@@ -37,7 +37,7 @@ func Prepare(proc *process.Process, arg any) error {
 	var err error
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.IBucket, ap.NBucket, proc.GetMheap()); err != nil {
+	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.IBucket, ap.NBucket, proc.Mp()); err != nil {
 		return err
 	}
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
@@ -124,7 +124,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 				}
 				vs, _, err := itr.Insert(i, n, bat.Vecs)
 				if err != nil {
-					bat.Clean(proc.GetMheap())
+					bat.Clean(proc.Mp())
 					return err
 				}
 				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
@@ -138,7 +138,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze) err
 					ctr.counter[v-1]++
 				}
 			}
-			bat.Clean(proc.GetMheap())
+			bat.Clean(proc.Mp())
 		}
 
 	}
@@ -222,9 +222,9 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 				}
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
-						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.GetMheap()); err != nil {
+						if err := vector.UnionBatch(outputBat.Vecs[colNum], bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 							outputBat.Clean(proc.Mp())
-							bat.Clean(proc.GetMheap())
+							bat.Clean(proc.Mp())
 							return false, err
 						}
 					}
@@ -234,7 +234,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze) (bo
 		}
 		analyzer.Output(outputBat)
 		proc.SetInputBatch(outputBat)
-		bat.Clean(proc.GetMheap())
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 }

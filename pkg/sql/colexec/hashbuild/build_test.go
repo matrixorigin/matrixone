@@ -20,11 +20,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -49,11 +49,11 @@ var (
 
 func init() {
 	tcs = []buildTestCase{
-		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
 			[]*plan.Expr{
 				newExpr(0, types.Type{Oid: types.T_int8}),
 			}),
-		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}},
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}},
 			[]*plan.Expr{
 				newExpr(0, types.Type{Oid: types.T_int8}),
 			}),
@@ -83,14 +83,14 @@ func TestBuild(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			break
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []buildTestCase{
-			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}},
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}},
 				[]*plan.Expr{
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				}),
@@ -131,8 +131,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMheap(m)
+func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

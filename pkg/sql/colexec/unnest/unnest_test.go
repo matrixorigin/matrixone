@@ -17,18 +17,17 @@ package unnest
 import (
 	"bytes"
 	"fmt"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type unnestTestCase struct {
@@ -102,16 +101,14 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	utc = []unnestTestCase{
-		newTestCase(mheap.New(gm), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, nil, 0),
-		newTestCase(mheap.New(gm), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, nil, 0),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
 	}
 }
 
-func newTestCase(m *mheap.Mheap, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
-	proc := testutil.NewProcessWithMheap(m)
+func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
+	proc := testutil.NewProcessWithMPool(m)
 	return unnestTestCase{
 		proc: proc,
 		arg: &Argument{

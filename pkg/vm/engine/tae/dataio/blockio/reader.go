@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"bytes"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -51,8 +52,8 @@ func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
 	if size == 0 {
 		return
 	}
-	node := common.GPool.Alloc(uint64(size))
-	defer common.GPool.Free(node)
+	node := mpool.TAEGPool.Alloc(size)
+	defer mpool.TAEGPool.Free(node)
 	if _, err = f.Read(node.Buf[:size]); err != nil {
 		return
 	}

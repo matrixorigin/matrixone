@@ -116,7 +116,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 
 				if v > rowcnt {
-					c.cnts = append(c.cnts, proc.GetMheap().GetSels())
+					c.cnts = append(c.cnts, proc.Mp().GetSels())
 					c.cnts[v-1] = append(c.cnts[v-1], 1)
 					rowcnt++
 				}
@@ -209,7 +209,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 func (c *container) freeContainer(proc *process.Process) {
 	if c.cnts != nil {
 		for i := range c.cnts {
-			proc.GetMheap().PutSels(c.cnts[i])
+			proc.Mp().PutSels(c.cnts[i])
 		}
 		c.cnts = nil
 	}
