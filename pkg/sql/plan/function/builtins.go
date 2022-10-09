@@ -2543,7 +2543,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
-				Fn:        binary.TimeStampDiff,
+				Fn:        multi.TimeStampDiff,
 			},
 		},
 	},
