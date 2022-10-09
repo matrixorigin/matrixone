@@ -871,6 +871,10 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 	return th.txn
 }
 
+func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	return th.txn
+}
+
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 type QueryType int

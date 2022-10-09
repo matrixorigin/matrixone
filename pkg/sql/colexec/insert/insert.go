@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -45,6 +48,35 @@ func String(_ any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, _ any) error {
 	return nil
+}
+
+func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
+	if !proc.LoadTag {
+		err := n.TargetTable.Write(ctx, bat)
+		n.Affected += uint64(len(bat.Zs))
+		return false, err
+	}
+
+	var err error
+	var txnOperator client.TxnOperator
+	txnOperator, err = proc.TxnClient.New()
+	if err != nil {
+		return false, err
+	}
+
+	err = n.TargetTable.Write(ctx, bat)
+	if err != nil {
+		if err2 := txnOperator.Rollback(ctx); err2 != nil {
+			return false, err2
+		}
+		return false, err
+	}
+	n.Affected += uint64(len(bat.Zs))
+	err = txnOperator.Commit(ctx)
+	if err != nil {
+		return false, err
+	}
+	return false, err
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
@@ -96,7 +128,5 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		}
 	}
-	err := n.TargetTable.Write(ctx, bat)
-	n.Affected += uint64(len(bat.Zs))
-	return false, err
+	return handleLoadWrite(n, proc, ctx, bat)
 }
