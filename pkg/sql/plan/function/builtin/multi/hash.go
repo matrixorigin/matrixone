@@ -37,8 +37,8 @@ func Hash(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		encodeHashKeys(keys, vecs, i, n)
 		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
 		for j := 0; j < n; j++ {
-			if err := vec.Append(int64(states[j][0]), false, proc.GetMheap()); err != nil {
-				vec.Free(proc.GetMheap())
+			if err := vec.Append(int64(states[j][0]), false, proc.Mp()); err != nil {
+				vec.Free(proc.Mp())
 				return nil, err
 			}
 		}

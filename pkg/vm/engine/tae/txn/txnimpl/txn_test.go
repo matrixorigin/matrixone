@@ -16,13 +16,14 @@ package txnimpl
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -144,8 +144,6 @@ func TestInsertNode(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	t.Log(stl.DefaultAllocator.String())
-	t.Log(tables.ImmutMemAllocator.String())
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()

@@ -87,7 +87,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	if len(bat.Vecs) == 0 {
 		return false, nil
 	}
@@ -104,7 +104,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		var err error
 
 		ctr.bat = batch.NewWithSize(0)
-		ctr.bat.Zs = proc.GetMheap().GetSels()
+		ctr.bat.Zs = proc.Mp().GetSels()
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 		for i, ag := range ap.Aggs {
@@ -114,8 +114,8 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 			}
 		}
 		for _, ag := range ctr.bat.Aggs {
-			if err := ag.Grows(1, proc.GetMheap()); err != nil {
-				ctr.bat.Clean(proc.GetMheap())
+			if err := ag.Grows(1, proc.Mp()); err != nil {
+				ctr.bat.Clean(proc.Mp())
 				return false, err
 			}
 		}
@@ -124,7 +124,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
-		ctr.bat.Clean(proc.GetMheap())
+		ctr.bat.Clean(proc.Mp())
 		return false, err
 	}
 	return false, nil
@@ -138,10 +138,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		if ctr.bat != nil {
 			if ap.NeedEval {
 				for i, agg := range ctr.bat.Aggs {
-					vec, err := agg.Eval(proc.GetMheap())
+					vec, err := agg.Eval(proc.Mp())
 					if err != nil {
 						ctr.clean()
-						ctr.bat.Clean(proc.GetMheap())
+						ctr.bat.Clean(proc.Mp())
 						return false, err
 					}
 					ctr.bat.Aggs[i] = nil
@@ -165,7 +165,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	proc.SetInputBatch(&batch.Batch{})
 	if len(ctr.aggVecs) == 0 {
@@ -183,10 +183,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	for i, expr := range ap.Exprs {
 		vec, err := colexec.EvalExpr(bat, proc, expr)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.groupVecs[j].needFree {
-					ctr.groupVecs[i].vec.Free(proc.GetMheap())
+					ctr.groupVecs[i].vec.Free(proc.Mp())
 				}
 			}
 			ctr.clean()
@@ -206,14 +206,14 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	defer func() {
 		for i := range ctr.groupVecs {
 			if ctr.groupVecs[i].needFree {
-				ctr.groupVecs[i].vec.Free(proc.GetMheap())
+				ctr.groupVecs[i].vec.Free(proc.Mp())
 			}
 		}
 	}()
 	if ctr.bat == nil {
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
-		ctr.bat.Zs = proc.GetMheap().GetSels()
+		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
@@ -242,13 +242,13 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		switch {
 		case size <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				ctr.cleanBatch(proc)
 				return false, err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				ctr.cleanBatch(proc)
 				return false, err
 			}
@@ -338,7 +338,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	}
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, ctr.groupVecs[j].vec, int64(i), cnt, ctr.inserted[:n], proc.GetMheap()); err != nil {
+			if err := vector.UnionBatch(vec, ctr.groupVecs[j].vec, int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 				return err
 			}
 		}
@@ -363,10 +363,10 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process) error {
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
-					ctr.aggVecs[i].vec.Free(proc.GetMheap())
+					ctr.aggVecs[i].vec.Free(proc.Mp())
 				}
 			}
 			return err
@@ -386,7 +386,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 func (ctr *container) freeAggVector(proc *process.Process) {
 	for i := range ctr.aggVecs {
 		if ctr.aggVecs[i].needFree {
-			ctr.aggVecs[i].vec.Free(proc.GetMheap())
+			ctr.aggVecs[i].vec.Free(proc.Mp())
 		}
 	}
 }
@@ -404,7 +404,7 @@ func (ctr *container) clean() {
 
 func (ctr *container) cleanBatch(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.GetMheap())
+		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
 	}
 }

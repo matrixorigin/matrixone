@@ -18,7 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type StringRef struct {
@@ -48,11 +48,11 @@ func init() {
 	strCellSize = int64(unsafe.Sizeof(StringHashMapCell{}))
 }
 
-func (ht *StringHashMap) Free(m *mheap.Mheap) {
+func (ht *StringHashMap) Free(m *mpool.MPool) {
 	m.Decrease(strCellSize * int64(ht.cellCnt))
 }
 
-func (ht *StringHashMap) Init(m *mheap.Mheap) error {
+func (ht *StringHashMap) Init(m *mpool.MPool) error {
 	ht.cellCntBits = kInitialCellCntBits
 	ht.cellCnt = kInitialCellCnt
 	ht.elemCnt = 0
@@ -61,7 +61,7 @@ func (ht *StringHashMap) Init(m *mheap.Mheap) error {
 	return m.Increase(kInitialCellCnt * strCellSize)
 }
 
-func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (ht *StringHashMap) InsertHashStateBatch(states [][3]uint64, values []uint6
 }
 */
 
-func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -329,7 +329,7 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) resizeOnDemand(n uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= ht.maxElemCnt {
 		return nil
