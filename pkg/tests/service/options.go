@@ -15,8 +15,9 @@
 package service
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"go.uber.org/zap/zapcore"
 
@@ -297,6 +298,11 @@ func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
 	opt.task.taskStorage = storage
 	return opt
+}
+
+// GetTxnStorageBackend returns the txn storage backend
+func (opt Options) GetTxnStorageBackend() string {
+	return opt.dn.txnStorageBackend
 }
 
 // gossipSeedNum calculates the count of gossip seed.

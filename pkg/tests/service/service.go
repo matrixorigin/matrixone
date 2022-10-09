@@ -51,6 +51,8 @@ type Cluster interface {
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
+	// Options returns the adjusted options
+	Options() Options
 
 	ClusterOperation
 	ClusterAwareness
@@ -271,7 +273,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	)
 
 	if c.clock == nil {
-		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
 	clock.SetupDefaultClock(c.clock)
 
@@ -321,6 +323,10 @@ func (c *testCluster) Start() error {
 
 	c.mu.running = true
 	return nil
+}
+
+func (c *testCluster) Options() Options {
+	return c.opt
 }
 
 func (c *testCluster) Close() error {
