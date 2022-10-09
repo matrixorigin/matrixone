@@ -3620,6 +3620,22 @@ func TestWatchDirty(t *testing.T) {
 		}
 	}()
 
+	// test race
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				close(dirtyCountCh)
+				return
+			default:
+			}
+			time.Sleep(5 * time.Millisecond)
+			watcher.Run()
+			_, _, blkCnt := watcher.DirtyCount()
+			dirtyCountCh <- blkCnt
+		}
+	}()
+
 	wg.Wait()
 	seenDirty := false
 	prevVal, prevCount := 0, 0
@@ -3653,4 +3669,57 @@ func TestWatchDirty(t *testing.T) {
 		}
 		return true, nil
 	}))
+}
+
+func TestDirtyWatchRace(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+
+	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
+
+	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher.WithDelay(10 * time.Nanosecond)
+
+	wg := &sync.WaitGroup{}
+
+	addRow := func() {
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		tbl.Append(catalog.MockBatch(schema, 1))
+		assert.NoError(t, txn.Commit())
+		wg.Done()
+	}
+
+	pool, _ := ants.NewPool(5)
+
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		pool.Submit(addRow)
+	}
+
+	// test race
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			for j := 0; j < 300; j++ {
+				time.Sleep(5 * time.Millisecond)
+				watcher.Run()
+				// tbl, seg, blk := watcher.DirtyCount()
+				// t.Logf("t%d: tbl %d, seg %d, blk %d", i, tbl, seg, blk)
+				_, _, _ = watcher.DirtyCount()
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
 }
