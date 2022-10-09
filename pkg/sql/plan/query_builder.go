@@ -2231,13 +2231,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		leftChild := builder.qry.Nodes[node.Children[0]]
 		rightChild := builder.qry.Nodes[node.Children[1]]
-		leftProjectTag := leftChild.BindingTags[0]
-		rightProjectTag := rightChild.BindingTags[0]
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftProjectTag, leftChild.ProjectList))
-			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightProjectTag, rightChild.ProjectList))
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)

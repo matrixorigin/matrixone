@@ -169,11 +169,11 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
-func replaceColRefsForSet(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = replaceColRefsForSet(arg, tag, projects)
+			exprImpl.F.Args[i] = replaceColRefsForSet(arg, projects)
 		}
 
 	case *plan.Expr_Col:
