@@ -76,6 +76,7 @@ var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
+var multiTable = false // need set before initTables
 
 var inited uint32
 
@@ -100,6 +101,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// register metrics and create tables
 	registerAllMetrics()
+	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
 		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
@@ -142,6 +144,8 @@ func StopMetricSync() {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
+	// mark inited = false
+	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
 }
 
 func mustRegiterToProm(collector prom.Collector) {
@@ -197,12 +201,19 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	}()
 
 	optFactory := trace.GetOptionFactory(batchProcessMode)
-	mustExec(singleMetricTable.ToCreateSql(true, optFactory))
 
-	buf := new(bytes.Buffer)
-	for desc := range descChan {
-		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
-		mustExec(sql)
+	if multiTable {
+		buf := new(bytes.Buffer)
+		for desc := range descChan {
+			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
+			mustExec(sql)
+		}
+	} else {
+		mustExec(singleMetricTable.ToCreateSql(true, optFactory))
+		for desc := range descChan {
+			sql := createView(desc)
+			mustExec(sql)
+		}
 	}
 
 	createCost = time.Since(instant)
@@ -211,7 +222,27 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 type optionsFactory func(db, tbl string) trace.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
-func createTableSqlFromMetricFamily(desc *prom.Desc, _ *bytes.Buffer, _ optionsFactory) string {
+func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
+	buf.Reset()
+	extra := newDescExtra(desc)
+	opts := optionsFactory(MetricDBConst, extra.fqName)
+	buf.WriteString("create ")
+	buf.WriteString(opts.GetCreateOptions())
+	buf.WriteString(fmt.Sprintf(
+		"table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20)",
+		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
+	))
+	for _, lbl := range extra.labels {
+		buf.WriteString(", `")
+		buf.WriteString(lbl.GetName())
+		buf.WriteString("` varchar(20)")
+	}
+	buf.WriteRune(')')
+	buf.WriteString(opts.GetTableOptions())
+	return buf.String()
+}
+
+func createView(desc *prom.Desc) string {
 	extra := newDescExtra(desc)
 	var labelNames = make([]string, 0, len(extra.labels))
 	for _, lbl := range extra.labels {
@@ -256,6 +287,8 @@ type InitOptions struct {
 	writerFactory export.FSWriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
+	// initSingleTable
+	multiTable bool // see WithMultiTable
 }
 
 type InitOption func(*InitOptions)
@@ -273,6 +306,12 @@ func WithWriterFactory(factory export.FSWriterFactory) InitOption {
 func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.needInitTable = init
+	})
+}
+
+func WithMultiTable(multi bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.multiTable = multi
 	})
 }
 

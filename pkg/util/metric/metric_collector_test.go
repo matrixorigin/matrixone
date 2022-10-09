@@ -71,6 +71,12 @@ func TestCollectorOpts(t *testing.T) {
 	}
 }
 
+func dummyInitView(tbls []string) {
+	for _, tbl := range tbls {
+		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
+	}
+}
+
 func TestCollector(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
@@ -81,6 +87,7 @@ func TestCollector(t *testing.T) {
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
+	dummyInitView(names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
@@ -90,7 +97,7 @@ func TestCollector(t *testing.T) {
 			}},
 			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
+					Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
 				},
 			}},
@@ -122,7 +129,7 @@ func TestCollector(t *testing.T) {
 	}
 
 	name, cnt := nameAndValueCnt(<-sqlch)
-	if name != names[0] || cnt != 3 {
+	if name != singleMetricTable.GetName() || cnt != 3 {
 		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
 	}
 
@@ -131,7 +138,7 @@ func TestCollector(t *testing.T) {
 		t.Errorf("m2 should be flushed after a period")
 	}
 	name, cnt = nameAndValueCnt(sql)
-	if name != names[1] || cnt != 2 {
+	if name != singleMetricTable.GetName() || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}
 }
@@ -164,6 +171,7 @@ func TestCsvFSCollector(t *testing.T) {
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
+	dummyInitView(names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
@@ -173,7 +181,7 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
+					Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
 				},
 			}},
@@ -190,11 +198,11 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 		})
 	}()
-	instant := time.Now()
-	valuesRe := regexp.MustCompile(`(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
-	nameAndValueCnt := func(n, s string) (name string, cnt int) {
+	M1ValuesRe := regexp.MustCompile(`m1,(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	M2ValuesRe := regexp.MustCompile(`m2,(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	nameAndValueCnt := func(n, s string, re *regexp.Regexp) (name string, cnt int) {
 		t.Logf("name: %s, csv: %s", n, s)
-		cnt = len(valuesRe.FindAllString(s, -1))
+		cnt = len(re.FindAllString(s, -1))
 		if cnt > 0 {
 			name = n
 		} else {
@@ -203,17 +211,14 @@ func TestCsvFSCollector(t *testing.T) {
 		return name, cnt
 	}
 
-	name, cnt := nameAndValueCnt(<-csvCh, <-csvCh)
-	if name != names[0] || cnt != 3 {
+	n, s := <-csvCh, <-csvCh
+	name, cnt := nameAndValueCnt(n, s, M1ValuesRe)
+	if name != singleMetricTable.GetName() || cnt != 3 {
 		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
 	}
 
-	name2, csvContent := <-csvCh, <-csvCh
-	if time.Since(instant) < 200*time.Millisecond {
-		t.Errorf("m2 should be flushed after a period")
-	}
-	name, cnt = nameAndValueCnt(name2, csvContent)
-	if name != names[1] || cnt != 2 {
+	name, cnt = nameAndValueCnt(n, s, M2ValuesRe)
+	if name != singleMetricTable.GetName() || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}
 }
