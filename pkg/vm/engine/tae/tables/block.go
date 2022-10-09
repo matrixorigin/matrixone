@@ -737,7 +737,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
-	if blk.meta.GetVisibleMetaLoc(ts) != "" {
+	if blk.meta != nil && blk.meta.GetVisibleMetaLoc(ts) != "" {
 		err = blk.pkIndex.Dedup(key)
 		if err == nil {
 			err = moerr.NewNotFound()
