@@ -2613,7 +2613,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id:%d execute statement:[%s]; with vars=[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " | "))
+	logutil.Infof("connection id:%d execute statement:[%s]; with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
 	return sql, nil
 }
 
