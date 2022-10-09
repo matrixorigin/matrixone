@@ -129,7 +129,7 @@ func TestCollector(t *testing.T) {
 	}
 
 	name, cnt := nameAndValueCnt(<-sqlch)
-	if name != singleMetricTable.GetName() || cnt != 3 {
+	if name != names[0] || cnt != 3 {
 		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
 	}
 
@@ -138,7 +138,7 @@ func TestCollector(t *testing.T) {
 		t.Errorf("m2 should be flushed after a period")
 	}
 	name, cnt = nameAndValueCnt(sql)
-	if name != singleMetricTable.GetName() || cnt != 2 {
+	if name != names[1] || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}
 }
@@ -164,7 +164,7 @@ func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 func TestCsvFSCollector(t *testing.T) {
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
-	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
+	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(1), WithFlushInterval(8))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}

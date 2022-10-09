@@ -94,9 +94,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
-		moCollector = newMetricFSCollector(initOpts.writerFactory)
+		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval))
 	} else {
-		moCollector = newMetricCollector(ieFactory)
+		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
@@ -125,6 +125,8 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		}()
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
+
+	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
 }
 
 func StopMetricSync() {
@@ -289,6 +291,8 @@ type InitOptions struct {
 	needInitTable bool // see WithInitAction
 	// initSingleTable
 	multiTable bool // see WithMultiTable
+	// exportInterval
+	exportInterval time.Duration // see WithExportInterval
 }
 
 type InitOption func(*InitOptions)
@@ -312,6 +316,12 @@ func WithInitAction(init bool) InitOption {
 func WithMultiTable(multi bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.multiTable = multi
+	})
+}
+
+func WithExportInterval(sec int) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.exportInterval = time.Second * time.Duration(sec)
 	})
 }
 
