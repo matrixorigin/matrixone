@@ -81,7 +81,9 @@ func TestAppend2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
-	beater := logtail.NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
 	beater.Start()
 	defer beater.Stop()
 	schema := catalog.MockSchemaAll(13, 3)
@@ -2694,7 +2696,9 @@ func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
-	beater := logtail.NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
 	beater.Start()
 	defer func() {
 		// sleep to see more blocks flush
@@ -3562,10 +3566,10 @@ func TestFlushUsingLogtailDirty(t *testing.T) {
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
-	// mock clock, increamental count as ts, so delay is set as 10 count
+	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	var start types.TS
-	rangeGetter := logtail.NewRangeGetter(start, opts.Clock, 10*time.Nanosecond)
-	flushOp := logtail.NewFlushOperator(logMgr, rangeGetter, tae.Catalog, visitor)
+	rangeGetter := NewRangeGetter(start, opts.Clock, 10*time.Nanosecond)
+	flushOp := NewFlushOperator(logMgr, rangeGetter, tae.Catalog, visitor)
 
 	tbl, seg, blk := flushOp.DirtyCount()
 	assert.Zero(t, blk)

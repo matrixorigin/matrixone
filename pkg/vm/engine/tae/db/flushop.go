@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logtail
+package db
 
 import (
 	"sync"
@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/tidwall/btree"
@@ -75,7 +76,7 @@ type TSRangedTree struct {
 type FlushOp struct {
 	// collect dirty
 	rangeGetter *rangeGetter
-	logtail     *LogtailMgr
+	logtail     *logtail.LogtailMgr
 
 	// consume dirty
 	catalog *catalog.Catalog
@@ -85,7 +86,7 @@ type FlushOp struct {
 	dirtyTrees *btree.Generic[*TSRangedTree]
 }
 
-func NewFlushOperator(logtail *LogtailMgr, getter *rangeGetter, catalog *catalog.Catalog, visitor catalog.Processor) *FlushOp {
+func NewFlushOperator(logtail *logtail.LogtailMgr, getter *rangeGetter, catalog *catalog.Catalog, visitor catalog.Processor) *FlushOp {
 	return &FlushOp{
 		rangeGetter: getter,
 		logtail:     logtail,
@@ -251,6 +252,7 @@ func (v *FlushDirtyVisitor) visitBlock(entry *catalog.BlockEntry) (err error) {
 	return
 }
 
+// for test
 type printUnflush struct {
 	op *FlushOp
 }
@@ -264,7 +266,7 @@ func (f *printUnflush) OnExec() {
 }
 func (f *printUnflush) OnStopped() {}
 
-func NewTestUnflushedDirtyObserver(interval time.Duration, clock clock.Clock, logtail *LogtailMgr, cat *catalog.Catalog) base.IHeartbeater {
+func NewTestUnflushedDirtyObserver(interval time.Duration, clock clock.Clock, logtail *logtail.LogtailMgr, cat *catalog.Catalog) base.IHeartbeater {
 	visitor := &catalog.LoopProcessor{}
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	var start types.TS
