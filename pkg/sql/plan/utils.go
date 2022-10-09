@@ -169,6 +169,20 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefsForSet(arg, projects)
+		}
+
+	case *plan.Expr_Col:
+		expr = DeepCopyExpr(projects[exprImpl.Col.ColPos])
+	}
+
+	return expr
+}
+
 func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
