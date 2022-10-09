@@ -137,9 +137,9 @@ worst_month(month, total, award) as
 (select month, total, "worst" from sales_by_month
 where total=(select min(total) from sales_by_month))
 select * from best_month union all select * from worst_month;
-month	total	award
-1	300	best
-3	11	worst
+month    total    award
+7    300    best
+7    11    worst
 drop table if exists sales_days;
 drop table if exists t1;
 create table t1(a int);
