@@ -192,45 +192,41 @@ func (s *mfset) IsEmpty() bool {
 // used to mitigate memory allocation
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", singleMetricTable.Database, singleMetricTable.GetName()))
-	writeValues := func(row *inittool.Row) {
-		row.ToValueString(buf)
-		buf.WriteRune(',')
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
+	lblsBuf := new(bytes.Buffer)
+	writeValues := func(t string, v float64, lbls string) {
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%q, %f", t, v))
+		buf.WriteString(lbls)
+		buf.WriteString("),")
 	}
-
-	row := singleMetricTable.GetRow()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
-
 			// reserved labels
-			row.SetVal(metricNameColumn.Name, mf.GetName())
-			row.SetVal(metricNodeColumn.Name, mf.GetNode())
-			row.SetVal(metricRoleColumn.Name, mf.GetRole())
+			lblsBuf.WriteString(fmt.Sprintf(",%q,%q", mf.GetNode(), mf.GetRole()))
 			// custom labels
 			for _, lbl := range metric.Label {
-				row.SetVal(lbl.GetName(), lbl.GetValue())
+				lblsBuf.WriteString(",\"")
+				lblsBuf.WriteString(lbl.GetValue())
+				lblsBuf.WriteRune('"')
 			}
+			lbls := lblsBuf.String()
+			lblsBuf.Reset()
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
-				writeValues(row)
+				writeValues(time, metric.Counter.GetValue(), lbls)
 			case pb.MetricType_GAUGE:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(metricCollectTimeColumn.Name, time)
-				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
-				writeValues(row)
+				writeValues(time, metric.Gauge.GetValue(), lbls)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
-					row.SetVal(metricCollectTimeColumn.Name, time)
-					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
-					writeValues(row)
+					writeValues(time, sample.GetValue(), lbls)
 				}
 			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+				panic(fmt.Sprintf("unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}
