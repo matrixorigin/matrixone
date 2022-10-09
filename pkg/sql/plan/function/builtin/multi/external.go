@@ -22,17 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type tp1 interface {
+type tpNumber interface {
 	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64 | bool | types.Date
 }
-type tp2 interface {
+type tpTime interface {
 	types.Timestamp | types.Datetime
 }
-type tp3 interface {
+type tpDecimal interface {
 	types.Decimal64 | types.Decimal128
 }
 
-func ParseCol1[T tp1](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseNumber[T tpNumber](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
 	inputVec := vectors[0]
 	outputVec := vectors[1]
@@ -54,7 +54,7 @@ func ParseCol1[T tp1](vectors []*vector.Vector, proc *process.Process, cb func(x
 	return outputVec, nil
 }
 
-func ParseCol2[T tp2](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, precision int32, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseTime[T tpTime](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, precision int32, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
 	inputVec := vectors[0]
 	outputVec := vectors[1]
@@ -76,7 +76,7 @@ func ParseCol2[T tp2](vectors []*vector.Vector, proc *process.Process, cb func(x
 	return outputVec, nil
 }
 
-func ParseCol3[T tp3](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, width int32, scale int32, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseDecimal[T tpDecimal](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, width int32, scale int32, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
 	inputVec := vectors[0]
 	outputVec := vectors[1]

@@ -175,37 +175,37 @@ func TestExternal(t *testing.T) {
 		}
 		switch id {
 		case types.T_bool:
-			bat.Vecs[i], err = ParseCol1[bool](vectors, proc, external.ParseBool)
+			bat.Vecs[i], err = ParseNumber[bool](vectors, proc, external.ParseBool)
 		case types.T_int8:
-			bat.Vecs[i], err = ParseCol1[int8](vectors, proc, external.ParseInt8)
+			bat.Vecs[i], err = ParseNumber[int8](vectors, proc, external.ParseInt8)
 		case types.T_int16:
-			bat.Vecs[i], err = ParseCol1[int16](vectors, proc, external.ParseInt16)
+			bat.Vecs[i], err = ParseNumber[int16](vectors, proc, external.ParseInt16)
 		case types.T_int32:
-			bat.Vecs[i], err = ParseCol1[int32](vectors, proc, external.ParseInt32)
+			bat.Vecs[i], err = ParseNumber[int32](vectors, proc, external.ParseInt32)
 		case types.T_int64:
-			bat.Vecs[i], err = ParseCol1[int64](vectors, proc, external.ParseInt64)
+			bat.Vecs[i], err = ParseNumber[int64](vectors, proc, external.ParseInt64)
 		case types.T_uint8:
-			bat.Vecs[i], err = ParseCol1[uint8](vectors, proc, external.ParseUint8)
+			bat.Vecs[i], err = ParseNumber[uint8](vectors, proc, external.ParseUint8)
 		case types.T_uint16:
-			bat.Vecs[i], err = ParseCol1[uint16](vectors, proc, external.ParseUint16)
+			bat.Vecs[i], err = ParseNumber[uint16](vectors, proc, external.ParseUint16)
 		case types.T_uint32:
-			bat.Vecs[i], err = ParseCol1[uint32](vectors, proc, external.ParseUint32)
+			bat.Vecs[i], err = ParseNumber[uint32](vectors, proc, external.ParseUint32)
 		case types.T_uint64:
-			bat.Vecs[i], err = ParseCol1[uint64](vectors, proc, external.ParseUint64)
+			bat.Vecs[i], err = ParseNumber[uint64](vectors, proc, external.ParseUint64)
 		case types.T_float32:
-			bat.Vecs[i], err = ParseCol1[float32](vectors, proc, external.ParseFloat32)
+			bat.Vecs[i], err = ParseNumber[float32](vectors, proc, external.ParseFloat32)
 		case types.T_float64:
-			bat.Vecs[i], err = ParseCol1[float64](vectors, proc, external.ParseFloat64)
+			bat.Vecs[i], err = ParseNumber[float64](vectors, proc, external.ParseFloat64)
 		case types.T_date:
-			bat.Vecs[i], err = ParseCol1[types.Date](vectors, proc, external.ParseDate)
+			bat.Vecs[i], err = ParseNumber[types.Date](vectors, proc, external.ParseDate)
 		case types.T_datetime:
-			bat.Vecs[i], err = ParseCol2[types.Datetime](vectors, proc, external.ParseDateTime)
+			bat.Vecs[i], err = ParseTime[types.Datetime](vectors, proc, external.ParseDateTime)
 		case types.T_timestamp:
-			bat.Vecs[i], err = ParseCol2[types.Timestamp](vectors, proc, external.ParseTimeStamp)
+			bat.Vecs[i], err = ParseTime[types.Timestamp](vectors, proc, external.ParseTimeStamp)
 		case types.T_decimal64:
-			bat.Vecs[i], err = ParseCol3[types.Decimal64](vectors, proc, external.ParseDecimal64)
+			bat.Vecs[i], err = ParseDecimal[types.Decimal64](vectors, proc, external.ParseDecimal64)
 		case types.T_decimal128:
-			bat.Vecs[i], err = ParseCol3[types.Decimal128](vectors, proc, external.ParseDecimal128)
+			bat.Vecs[i], err = ParseDecimal[types.Decimal128](vectors, proc, external.ParseDecimal128)
 		case types.T_char, types.T_varchar, types.T_blob:
 			bat.Vecs[i], err = ParseString(vectors, proc)
 		case types.T_json:
