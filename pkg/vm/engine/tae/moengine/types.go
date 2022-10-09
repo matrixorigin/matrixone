@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,15 +48,24 @@ type Txn interface {
 
 // Relation is only used by taeStorage
 type Relation interface {
+	//just for test
+	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
+
 	Write(context.Context, *batch.Batch) error
 
 	Delete(context.Context, *vector.Vector, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error
 
+	//just for test
+	TableDefs(context.Context) ([]engine.TableDef, error)
+
 	Truncate(context.Context) (uint64, error)
 
 	GetRelationID(context.Context) uint64
+	//just for test
+	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
+	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]engine.Reader, error)
 }
 
 // Database is only used by taeStorage
