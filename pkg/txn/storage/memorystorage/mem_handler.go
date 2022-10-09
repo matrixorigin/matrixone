@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MemHandler struct {
@@ -65,7 +65,7 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap                  *mheap.Mheap
+	mheap                  *mpool.MPool
 	defaultIsolationPolicy IsolationPolicy
 	clock                  clock.Clock
 	idGenerator            memoryengine.IDGenerator
@@ -85,7 +85,7 @@ type Iter[
 }
 
 func NewMemHandler(
-	mheap *mheap.Mheap,
+	mp *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
@@ -96,7 +96,7 @@ func NewMemHandler(
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
 		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mheap:                  mheap,
+		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 		idGenerator:            idGenerator,

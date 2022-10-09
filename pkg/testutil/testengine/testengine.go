@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -46,7 +46,7 @@ func New(
 	}
 
 	storage, err := memorystorage.NewMemoryStorage(
-		testutil.NewMheap(),
+		mpool.MustNewZero(),
 		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
@@ -76,7 +76,7 @@ func New(
 	e := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(
-			testutil.NewMheap(),
+			mpool.MustNewZero(),
 		),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{

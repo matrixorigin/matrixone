@@ -285,7 +285,6 @@ func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 		syncedLsn := bs.GetCurrSeqNum()
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("batchstore: try to read %d", lsn)
 				bs.syncBase.commitCond.L.Lock()
 				ver, err = bs.GetVersionByGLSN(lsn)
 				if err == nil {

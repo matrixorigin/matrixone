@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -129,7 +130,7 @@ func (win *vectorWindow[T]) GetView() VectorView {
 	}
 }
 
-func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...MemAllocator) Vector {
+func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
 }
 
@@ -152,7 +153,7 @@ func (win *vectorWindow[T]) NullMask() *roaring64.Bitmap {
 func (win *vectorWindow[T]) IsNull(i int) bool {
 	return win.ref.IsNull(i + win.offset)
 }
-func (win *vectorWindow[T]) GetAllocator() MemAllocator { return win.ref.GetAllocator() }
+func (win *vectorWindow[T]) GetAllocator() *mpool.MPool { return win.ref.GetAllocator() }
 func (win *vectorWindow[T]) GetType() types.Type        { return win.ref.GetType() }
 func (win *vectorWindow[T]) String() string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())

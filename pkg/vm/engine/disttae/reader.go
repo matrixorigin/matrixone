@@ -15,16 +15,16 @@
 package disttae
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	return nil, nil
 }
 
@@ -32,7 +32,7 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
-func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
@@ -44,7 +44,7 @@ func (r *mergeReader) Close() error {
 	return nil
 }
 
-func (r *mergeReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *mergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.rds) == 0 {
 		return nil, nil
 	}

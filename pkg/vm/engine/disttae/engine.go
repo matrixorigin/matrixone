@@ -137,7 +137,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.proc.GetMheap())
+	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.proc.GetMheap())
+			txn.writes[i][j].bat.Clean(e.proc.Mp())
 		}
 	}
 	e.Lock()

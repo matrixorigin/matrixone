@@ -68,7 +68,7 @@ type Block interface {
 	IsAppendable() bool
 	FreezeAppend()
 
-	Rows(txn txnif.AsyncTxn, coarse bool) int
+	Rows() int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any

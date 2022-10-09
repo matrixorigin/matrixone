@@ -169,6 +169,20 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefsForSet(arg, projects)
+		}
+
+	case *plan.Expr_Col:
+		expr = DeepCopyExpr(projects[exprImpl.Col.ColPos])
+	}
+
+	return expr
+}
+
 func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
@@ -479,6 +493,9 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	if !isConstant(e) {
 		return e, nil
 	}
+	// XXX MPOOL
+	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
+	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
 	vec, err := colexec.EvalExpr(bat, nil, e)
 	if err != nil {
 		return nil, err
