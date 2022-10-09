@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,9 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"testing"
 	"time"
 )
@@ -40,7 +38,7 @@ const ModuleName = "TAEHANDLE"
 
 type mockHandle struct {
 	*Handle
-	m *mheap.Mheap
+	m *mpool.MPool
 }
 
 func (h *mockHandle) HandleClose() error {
@@ -58,7 +56,7 @@ func initDB(t *testing.T, opts *options.Options) *db.DB {
 func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	tae := initDB(t, opts)
 	mh := &mockHandle{
-		m: mheap.New(guest.New(1<<20, host.New(1<<20))),
+		m: mpool.MustNewZero(),
 	}
 
 	mh.Handle = &Handle{
@@ -225,7 +223,7 @@ func genCreateDatabaseTuple(
 	userId,
 	roleId uint32,
 	name string,
-	m *mheap.Mheap) (*batch.Batch, error) {
+	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	{
@@ -273,7 +271,7 @@ func genCreateDatabaseTuple(
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 	{
@@ -384,7 +382,7 @@ func makeCreateDatabaseEntries(
 	sql string,
 	ac AccessInfo,
 	name string,
-	m *mheap.Mheap,
+	m *mpool.MPool,
 ) ([]*api.Entry, error) {
 
 	createDbBat, err := genCreateDatabaseTuple(
@@ -421,7 +419,7 @@ func makeCreateTableEntries(
 	name string,
 	dbId uint64,
 	dbName string,
-	m *mheap.Mheap,
+	m *mpool.MPool,
 	defs []engine.TableDef,
 ) ([]*api.Entry, error) {
 	comment := getTableComment(defs)
@@ -471,7 +469,7 @@ func genCreateTableTuple(
 	databaseId uint64,
 	databaseName string,
 	comment string,
-	m *mheap.Mheap) (*batch.Batch, error) {
+	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	{
