@@ -3560,18 +3560,17 @@ func TestTxnIdempotent(t *testing.T) {
 
 // insert 200 rows and do quick compaction
 // expect that there are some dirty tables at first and then zero dirty table found
-func TestFlushUsingLogtailDirty(t *testing.T) {
+func TestWatchDirty(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(logMgr, opts.Clock, tae.Catalog, visitor)
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
-	var start types.TS
-	rangeGetter := NewRangeGetter(start, opts.Clock, 10*time.Nanosecond)
-	flushOp := NewFlushOperator(logMgr, rangeGetter, tae.Catalog, visitor)
+	watcher.WithDelay(10 * time.Nanosecond)
 
-	tbl, seg, blk := flushOp.DirtyCount()
+	tbl, seg, blk := watcher.DirtyCount()
 	assert.Zero(t, blk)
 	assert.Zero(t, seg)
 	assert.Zero(t, tbl)
@@ -3615,8 +3614,8 @@ func TestFlushUsingLogtailDirty(t *testing.T) {
 			default:
 			}
 			time.Sleep(5 * time.Millisecond)
-			flushOp.Run()
-			_, _, blkCnt := flushOp.DirtyCount()
+			watcher.Run()
+			_, _, blkCnt := watcher.DirtyCount()
 			dirtyCountCh <- blkCnt
 		}
 	}()

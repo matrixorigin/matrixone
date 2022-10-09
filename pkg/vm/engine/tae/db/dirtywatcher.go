@@ -26,37 +26,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/tidwall/btree"
 )
 
 /*
 
-an application on logtail mgr: flush table data
+an application on logtail mgr: monitor dirty blocks
 
 */
 
-type rangeGetter struct {
-	sync.Mutex
-	prevStart types.TS
-	alloc     *types.TsAlloctor
-	delay     time.Duration
+type TSRangedTree struct {
+	sync.RWMutex
+	start, end types.TS
+	tree       *common.Tree
 }
 
-func NewRangeGetter(start types.TS, clock clock.Clock, delay time.Duration) *rangeGetter {
-	return &rangeGetter{
-		prevStart: start,
-		alloc:     types.NewTsAlloctor(clock),
-		delay:     delay,
+type DirtyWatcher struct {
+	// collect dirty
+	interval struct {
+		sync.Mutex
+		prevStart types.TS
+		alloc     *types.TsAlloctor
+		delay     time.Duration
 	}
+	logtail *logtail.LogtailMgr
+
+	// consume dirty
+	catalog *catalog.Catalog
+	visitor catalog.Processor
+
+	// dirty
+	dirtyTrees *btree.Generic[*TSRangedTree]
 }
 
-func (r *rangeGetter) get() (start, end types.TS) {
+func NewDirtyWatcher(logtail *logtail.LogtailMgr, clock clock.Clock, catalog *catalog.Catalog, visitor catalog.Processor) *DirtyWatcher {
+	watch := &DirtyWatcher{
+		logtail:    logtail,
+		catalog:    catalog,
+		visitor:    visitor,
+		dirtyTrees: btree.NewGeneric(func(a, b *TSRangedTree) bool { return a.start.Less(b.start) && a.end.Less(b.end) }),
+	}
+	watch.interval.alloc = types.NewTsAlloctor(clock)
+	return watch
+}
+
+func (d *DirtyWatcher) Run() {
+	start, end := d.getTimeRange()
+	// end is empty means range is invalid if considering delay
+	if end.IsEmpty() {
+		return
+	}
+	d.AppendDirty(start, end)
+	d.ScanAndUpdateDirty()
+}
+
+func (d *DirtyWatcher) WithStartTS(start types.TS) {
+	d.interval.Lock()
+	defer d.interval.Unlock()
+	d.interval.prevStart = start
+}
+
+// WithDelay to avoid waiting when get logtail dirty, Physical is nanosecond of wall time
+func (d *DirtyWatcher) WithDelay(delay time.Duration) {
+	d.interval.Lock()
+	defer d.interval.Unlock()
+	d.interval.delay = delay
+}
+
+func (d *DirtyWatcher) getTimeRange() (start, end types.TS) {
+	r := &d.interval
 	r.Lock()
 	defer r.Unlock()
 	now := r.alloc.Alloc()
-	// delay to avoid waiting when get logtail dirty, Physical is nanosecond of wall time
 	now = types.BuildTS(now.Physical()-int64(r.delay), now.Logical())
 	if now.LessEq(r.prevStart) {
 		return
@@ -67,54 +108,11 @@ func (r *rangeGetter) get() (start, end types.TS) {
 	return
 }
 
-type TSRangedTree struct {
-	sync.RWMutex
-	start, end types.TS
-	tree       *common.Tree
-}
-
-type FlushOp struct {
-	// collect dirty
-	rangeGetter *rangeGetter
-	logtail     *logtail.LogtailMgr
-
-	// consume dirty
-	catalog *catalog.Catalog
-	visitor catalog.Processor
-
-	// dirty
-	dirtyTrees *btree.Generic[*TSRangedTree]
-}
-
-func NewFlushOperator(logtail *logtail.LogtailMgr, getter *rangeGetter, catalog *catalog.Catalog, visitor catalog.Processor) *FlushOp {
-	return &FlushOp{
-		rangeGetter: getter,
-		logtail:     logtail,
-		catalog:     catalog,
-		visitor:     visitor,
-		dirtyTrees:  btree.NewGeneric(func(a, b *TSRangedTree) bool { return a.start.Less(b.start) && a.end.Less(b.end) }),
-	}
-}
-
-var _ base.IHBHandle = (*FlushOp)(nil)
-
-func (f *FlushOp) OnExec()    { f.Run() }
-func (f *FlushOp) OnStopped() {}
-
-func (f *FlushOp) Run() {
-	start, end := f.rangeGetter.get()
-	// end is empty means range is invalid if considering delay
-	if end.IsEmpty() {
-		return
-	}
-	f.AppendDirty(start, end)
-	f.TrySchedFlush()
-}
-
 // DirtyCount returns unflushed table, segment, block count
-func (f *FlushOp) DirtyCount() (tblCnt, segCnt, blkCnt int) {
+func (d *DirtyWatcher) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	merged := common.NewTree()
-	f.dirtyTrees.Scan(func(item *TSRangedTree) bool {
+	dirtyTreeCopied := d.dirtyTrees.Copy()
+	dirtyTreeCopied.Scan(func(item *TSRangedTree) bool {
 		item.RLock()
 		defer item.RUnlock()
 		merged.Merge(item.tree)
@@ -131,39 +129,42 @@ func (f *FlushOp) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	return
 }
 
-func (f *FlushOp) AppendDirty(start, end types.TS) {
-	reader := f.logtail.GetReader(start, end)
+func (d *DirtyWatcher) AppendDirty(start, end types.TS) {
+	reader := d.logtail.GetReader(start, end)
 	tree := reader.GetDirty()
 	dirty := &TSRangedTree{
 		start: start,
 		end:   end,
 		tree:  tree,
 	}
-	f.dirtyTrees.Set(dirty)
+	d.dirtyTrees.Set(dirty)
 }
 
-func (f *FlushOp) TrySchedFlush() {
+// Scan current dirty trees, remove all flushed or not found ones, and drive visitor on remaining block entries.
+func (d *DirtyWatcher) ScanAndUpdateDirty() {
 	dels := make([]*TSRangedTree, 0)
-	f.dirtyTrees.Scan(func(item *TSRangedTree) bool {
+
+	dirtyTreeCopied := d.dirtyTrees.Copy()
+	dirtyTreeCopied.Scan(func(item *TSRangedTree) bool {
 		item.Lock()
 		defer item.Unlock()
 		if item.tree.TableCount() == 0 {
 			dels = append(dels, item)
 			return true
 		}
-		if err := f.driveVisitorOnTree(f.visitor, item.tree); err != nil {
+		if err := d.driveVisitorOnTree(d.visitor, item.tree); err != nil {
 			logutil.Warnf("error: visitor on dirty tree: %v", err)
 		}
 		return true
 	})
 
 	for _, del := range dels {
-		f.dirtyTrees.Delete(del)
+		d.dirtyTrees.Delete(del)
 	}
 }
 
 // iter the tree and call visitor to process block. flushed block, empty seg and table will be removed from the tree
-func (f *FlushOp) driveVisitorOnTree(visitor catalog.Processor, tree *common.Tree) (err error) {
+func (d *DirtyWatcher) driveVisitorOnTree(visitor catalog.Processor, tree *common.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
@@ -176,7 +177,7 @@ func (f *FlushOp) driveVisitorOnTree(visitor catalog.Processor, tree *common.Tre
 			delete(tree.Tables, id)
 			return
 		}
-		if db, err = f.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
+		if db, err = d.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 				err = nil
 				delete(tree.Tables, id)
@@ -231,18 +232,18 @@ func (f *FlushOp) driveVisitorOnTree(visitor catalog.Processor, tree *common.Tre
 	return
 }
 
-type FlushDirtyVisitor struct {
+type DirtyBlockCalibrator struct {
 	*catalog.LoopProcessor
 	ckpDriver checkpoint.Driver
 }
 
-func NewFlushDirtyVisitor(ckpDriver checkpoint.Driver) *FlushDirtyVisitor {
-	v := &FlushDirtyVisitor{ckpDriver: ckpDriver}
+func NewDirtyBlockCalibrator(ckpDriver checkpoint.Driver) *DirtyBlockCalibrator {
+	v := &DirtyBlockCalibrator{ckpDriver: ckpDriver}
 	v.BlockFn = v.visitBlock
 	return v
 }
 
-func (v *FlushDirtyVisitor) visitBlock(entry *catalog.BlockEntry) (err error) {
+func (v *DirtyBlockCalibrator) visitBlock(entry *catalog.BlockEntry) (err error) {
 	data := entry.GetBlockData()
 
 	// Run calibration and estimate score for checkpoint
@@ -250,28 +251,4 @@ func (v *FlushDirtyVisitor) visitBlock(entry *catalog.BlockEntry) (err error) {
 		v.ckpDriver.EnqueueCheckpointUnit(data)
 	}
 	return
-}
-
-// for test
-type printUnflush struct {
-	op *FlushOp
-}
-
-var _ base.IHBHandle = (*printUnflush)(nil)
-
-func (f *printUnflush) OnExec() {
-	f.op.Run()
-	t, s, b := f.op.DirtyCount()
-	logutil.Infof("unflushed: %d table, %d seg, %d block", t, s, b)
-}
-func (f *printUnflush) OnStopped() {}
-
-func NewTestUnflushedDirtyObserver(interval time.Duration, clock clock.Clock, logtail *logtail.LogtailMgr, cat *catalog.Catalog) base.IHeartbeater {
-	visitor := &catalog.LoopProcessor{}
-	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
-	var start types.TS
-	rangeGetter := NewRangeGetter(start, clock, 10*time.Nanosecond)
-	flushOp := NewFlushOperator(logtail, rangeGetter, cat, visitor)
-
-	return w.NewHeartBeater(interval, &printUnflush{op: flushOp})
 }
