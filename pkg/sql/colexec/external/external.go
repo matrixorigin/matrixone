@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/external"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
@@ -276,41 +277,41 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 		switch id {
 		case types.T_bool:
-			bat.Vecs[i], err = multi.ParseBool(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[bool](vectors, proc, external.ParseBool)
 		case types.T_int8:
-			bat.Vecs[i], err = multi.ParseInt8(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[int8](vectors, proc, external.ParseInt8)
 		case types.T_int16:
-			bat.Vecs[i], err = multi.ParseInt16(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[int16](vectors, proc, external.ParseInt16)
 		case types.T_int32:
-			bat.Vecs[i], err = multi.ParseInt32(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[int32](vectors, proc, external.ParseInt32)
 		case types.T_int64:
-			bat.Vecs[i], err = multi.ParseInt64(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[int64](vectors, proc, external.ParseInt64)
 		case types.T_uint8:
-			bat.Vecs[i], err = multi.ParseUint8(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[uint8](vectors, proc, external.ParseUint8)
 		case types.T_uint16:
-			bat.Vecs[i], err = multi.ParseUint16(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[uint16](vectors, proc, external.ParseUint16)
 		case types.T_uint32:
-			bat.Vecs[i], err = multi.ParseUint32(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[uint32](vectors, proc, external.ParseUint32)
 		case types.T_uint64:
-			bat.Vecs[i], err = multi.ParseUint64(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[uint64](vectors, proc, external.ParseUint64)
 		case types.T_float32:
-			bat.Vecs[i], err = multi.ParseFloat32(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[float32](vectors, proc, external.ParseFloat32)
 		case types.T_float64:
-			bat.Vecs[i], err = multi.ParseFloat64(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol1[float64](vectors, proc, external.ParseFloat64)
+		case types.T_date:
+			bat.Vecs[i], err = multi.ParseCol1[types.Date](vectors, proc, external.ParseDate)
+		case types.T_datetime:
+			bat.Vecs[i], err = multi.ParseCol2[types.Datetime](vectors, proc, external.ParseDateTime)
+		case types.T_timestamp:
+			bat.Vecs[i], err = multi.ParseCol2[types.Timestamp](vectors, proc, external.ParseTimeStamp)
 		case types.T_decimal64:
-			bat.Vecs[i], err = multi.ParseDecimal64(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol3[types.Decimal64](vectors, proc, external.ParseDecimal64)
 		case types.T_decimal128:
-			bat.Vecs[i], err = multi.ParseDecimal128(vectors, proc)
+			bat.Vecs[i], err = multi.ParseCol3[types.Decimal128](vectors, proc, external.ParseDecimal128)
 		case types.T_char, types.T_varchar, types.T_blob:
 			bat.Vecs[i], err = multi.ParseString(vectors, proc)
 		case types.T_json:
 			bat.Vecs[i], err = multi.ParseJson(vectors, proc)
-		case types.T_date:
-			bat.Vecs[i], err = multi.ParseDate(vectors, proc)
-		case types.T_datetime:
-			bat.Vecs[i], err = multi.ParseDateTime(vectors, proc)
-		case types.T_timestamp:
-			bat.Vecs[i], err = multi.ParseTimeStamp(vectors, proc)
 		default:
 			err = moerr.NewNotSupported("the value type %d is not support now", param.Cols[i].Typ.Id)
 		}

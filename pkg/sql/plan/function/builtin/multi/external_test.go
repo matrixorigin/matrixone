@@ -16,10 +16,13 @@ package multi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/external"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -127,28 +130,26 @@ var (
 	}
 )
 
-func makeOriginBatch(attrs []string, bSize int) *batch.Batch {
+func makeOriginBatch(attrs []string, bSize int, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, attrs)
 	batchSize := bSize
 	//alloc space for vector
 	for i := 0; i < len(attrs); i++ {
 		typ := types.New(types.T_varchar, 0, 0, 0)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
 }
-func makeBatch(attrs []string, bSize int, cols []*plan.ColDef) *batch.Batch {
+func makeBatch(attrs []string, bSize int, cols []*plan.ColDef, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, attrs)
 	batchSize := bSize
 	//alloc space for vector
 	for i := 0; i < len(attrs); i++ {
 		typ := types.New(types.T(cols[i].Typ.Id), cols[i].Typ.Width, cols[i].Typ.Scale, cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -156,10 +157,11 @@ func makeBatch(attrs []string, bSize int, cols []*plan.ColDef) *batch.Batch {
 
 func TestExternal(t *testing.T) {
 	var err error
-	bat := makeBatch(atrrs, 1, cols)
-	originBat := makeOriginBatch(atrrs, 1)
+	mp := testutil.TestUtilMp
+	bat := makeBatch(atrrs, 1, cols, mp)
+	originBat := makeOriginBatch(atrrs, 1, mp)
 	for i := 0; i < len(line); i++ {
-		err = vector.SetStringAt(originBat.Vecs[i], 0, line[i], nil)
+		err = vector.SetStringAt(originBat.Vecs[i], 0, line[i], mp)
 		require.Nil(t, err)
 	}
 	for i := range cols {
@@ -173,41 +175,42 @@ func TestExternal(t *testing.T) {
 		}
 		switch id {
 		case types.T_bool:
-			bat.Vecs[i], err = ParseBool(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[bool](vectors, proc, external.ParseBool)
 		case types.T_int8:
-			bat.Vecs[i], err = ParseInt8(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[int8](vectors, proc, external.ParseInt8)
 		case types.T_int16:
-			bat.Vecs[i], err = ParseInt16(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[int16](vectors, proc, external.ParseInt16)
 		case types.T_int32:
-			bat.Vecs[i], err = ParseInt32(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[int32](vectors, proc, external.ParseInt32)
 		case types.T_int64:
-			bat.Vecs[i], err = ParseInt64(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[int64](vectors, proc, external.ParseInt64)
 		case types.T_uint8:
-			bat.Vecs[i], err = ParseUint8(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[uint8](vectors, proc, external.ParseUint8)
 		case types.T_uint16:
-			bat.Vecs[i], err = ParseUint16(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[uint16](vectors, proc, external.ParseUint16)
 		case types.T_uint32:
-			bat.Vecs[i], err = ParseUint32(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[uint32](vectors, proc, external.ParseUint32)
 		case types.T_uint64:
-			bat.Vecs[i], err = ParseUint64(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[uint64](vectors, proc, external.ParseUint64)
 		case types.T_float32:
-			bat.Vecs[i], err = ParseFloat32(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[float32](vectors, proc, external.ParseFloat32)
 		case types.T_float64:
-			bat.Vecs[i], err = ParseFloat64(vectors, proc)
+			bat.Vecs[i], err = ParseCol1[float64](vectors, proc, external.ParseFloat64)
+		case types.T_date:
+			bat.Vecs[i], err = ParseCol1[types.Date](vectors, proc, external.ParseDate)
+		case types.T_datetime:
+			bat.Vecs[i], err = ParseCol2[types.Datetime](vectors, proc, external.ParseDateTime)
+		case types.T_timestamp:
+			bat.Vecs[i], err = ParseCol2[types.Timestamp](vectors, proc, external.ParseTimeStamp)
 		case types.T_decimal64:
-			bat.Vecs[i], err = ParseDecimal64(vectors, proc)
+			bat.Vecs[i], err = ParseCol3[types.Decimal64](vectors, proc, external.ParseDecimal64)
 		case types.T_decimal128:
-			bat.Vecs[i], err = ParseDecimal128(vectors, proc)
+			bat.Vecs[i], err = ParseCol3[types.Decimal128](vectors, proc, external.ParseDecimal128)
 		case types.T_char, types.T_varchar, types.T_blob:
 			bat.Vecs[i], err = ParseString(vectors, proc)
 		case types.T_json:
 			bat.Vecs[i], err = ParseJson(vectors, proc)
-		case types.T_date:
-			bat.Vecs[i], err = ParseDate(vectors, proc)
-		case types.T_datetime:
-			bat.Vecs[i], err = ParseDateTime(vectors, proc)
-		case types.T_timestamp:
-			bat.Vecs[i], err = ParseTimeStamp(vectors, proc)
+
 		default:
 			err = moerr.NewNotSupported("the value type %d is not support now", cols[i].Typ.Id)
 		}
