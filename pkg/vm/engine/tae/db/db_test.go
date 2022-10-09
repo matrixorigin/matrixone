@@ -3620,22 +3620,6 @@ func TestWatchDirty(t *testing.T) {
 		}
 	}()
 
-	// test race
-	go func() {
-		for {
-			select {
-			case <-stopCh:
-				close(dirtyCountCh)
-				return
-			default:
-			}
-			time.Sleep(5 * time.Millisecond)
-			watcher.Run()
-			_, _, blkCnt := watcher.DirtyCount()
-			dirtyCountCh <- blkCnt
-		}
-	}()
-
 	wg.Wait()
 	seenDirty := false
 	prevVal, prevCount := 0, 0
