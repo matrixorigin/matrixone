@@ -52,6 +52,11 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 	}
 	return blk.replayImmutIndex()
 }
+func (blk *dataBlock) ReplayImmutIndex() error {
+	blk.mvcc.Lock()
+	defer blk.mvcc.Unlock()
+	return blk.replayImmutIndex()
+}
 
 // replayMutIndex load column data to memory to construct index
 func (blk *dataBlock) replayMutIndex() error {

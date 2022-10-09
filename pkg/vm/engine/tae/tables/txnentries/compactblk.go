@@ -63,6 +63,9 @@ func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
 }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().FreeData()
+	if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
+		return
+	}
 	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
 		// TODO:
 		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
