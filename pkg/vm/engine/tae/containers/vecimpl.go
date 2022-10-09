@@ -186,6 +186,11 @@ func (impl *nullableVecImpl[T]) ExtendWithOffset(o Vector, srcOff, srcLen int) {
 			offset := impl.derived.stlvec.Length()
 			for it.HasNext() {
 				pos := it.Next()
+				if pos < uint64(srcOff) {
+					continue
+				} else if pos >= uint64(srcOff+srcLen) {
+					break
+				}
 				impl.derived.nulls.Add(uint64(offset) + pos - uint64(srcOff))
 			}
 			impl.extendData(o, srcOff, srcLen)
