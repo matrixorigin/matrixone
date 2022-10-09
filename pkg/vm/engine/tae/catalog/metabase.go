@@ -222,6 +222,12 @@ func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
 }
 
 func (be *MetaBaseEntry) HasDropped() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDroppedLocked()
+}
+
+func (be *MetaBaseEntry) HasDroppedLocked() bool {
 	node := be.GetCommittedNode()
 	if node == nil {
 		return false
@@ -271,7 +277,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 	if err != nil {
 		return
 	}
-	if be.HasDropped() {
+	if be.HasDroppedLocked() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
