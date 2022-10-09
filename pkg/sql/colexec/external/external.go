@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -47,6 +48,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
+	param.records = make([][]string, param.batchSize)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -193,15 +195,14 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 	}
 }
 
-func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -227,8 +228,8 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 }
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh)
-	originBat := makeOriginBatch(param, plh)
+	bat := makeBatch(param, plh, proc.Mp())
+	originBat := makeOriginBatch(param, plh, proc.Mp())
 	var (
 		Line []string
 		err  error
@@ -260,7 +261,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for i := 0; i < len(param.Attrs); i++ {
 		id := types.T(param.Cols[i].Typ.Id)
 		nullList := param.extern.NullMap[param.Attrs[i]]
-		nullVec := vector.NewWithStrings(types.Type{Oid: types.T_varchar}, nullList, nil, proc.Mp())
+		nullVec := vector.New(types.Type{Oid: types.T_varchar, Width: 1024})
+		vector.PreAlloc(nullVec, len(nullList), len(nullList), proc.Mp())
+		for j := 0; j < len(nullList); j++ {
+			err = vector.SetStringAt(nullVec, j, nullList[j], proc.Mp())
+			if err != nil {
+				return nil, err
+			}
+		}
 		vectors := []*vector.Vector{
 			originBat.GetVector(int32(i)),
 			bat.GetVector(int32(i)),
@@ -360,6 +368,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
+	var cnt int
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
@@ -368,11 +377,12 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
-	if len(plh.simdCsvLineArray) < param.batchSize {
+	if cnt < param.batchSize {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
 		err := param.reader.Close()
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
@@ -456,15 +466,14 @@ func transJsonArray2Lines(str string, attrs []string) ([]string, error) {
 	return res, nil
 }
 
-func makeOriginBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+func makeOriginBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T_varchar, 0, 0, 0)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData

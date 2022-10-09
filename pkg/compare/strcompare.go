@@ -40,6 +40,10 @@ func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Proc
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
+	cmp := nullsCompare(c.vs[veci].Nsp, c.vs[vecj].Nsp, vi, vj, c.nullsLast)
+	if cmp != 0 {
+		return cmp
+	}
 	x := c.vs[veci].GetBytes(vi)
 	y := c.vs[vecj].GetBytes(vj)
 	if c.desc {

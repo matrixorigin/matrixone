@@ -45,6 +45,7 @@ type ExternalParam struct {
 	FileList  []string
 	batchSize int
 	reader    io.ReadCloser
+	records   [][]string
 }
 
 type Argument struct {

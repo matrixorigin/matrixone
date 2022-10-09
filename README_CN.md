@@ -149,9 +149,11 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 
 #### 使用源代码搭建
 
-**步骤 1.** 搭建Go语言环境（至少需要1.19版本）。
+**步骤 1.** 搭建Go语言环境（至少需要1.19版本）
 
-**步骤 2.** 获取MatrixOne源码，搭建MatrixOne
+**步骤 2.** 安装部署 [MySQL 客户端 8.0.30 版本](https://dev.mysql.com/downloads/installer/)
+
+**步骤 3.** 获取MatrixOne源码，搭建MatrixOne
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 

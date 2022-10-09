@@ -117,7 +117,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, moerr.NewInternalError("invalid input")
 		}
-		return vector.NewConstString(resultType, 1, resultValues[0]), nil
+		return vector.NewConstString(resultType, 1, resultValues[0], proc.Mp()), nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil

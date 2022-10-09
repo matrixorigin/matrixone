@@ -93,8 +93,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		newTableDef := &plan.TableDef{
 			Name:               node.TableDef.Name,
 			Defs:               node.TableDef.Defs,
-			Name2ColIndex:      node.TableDef.Name2ColIndex,
+			TableType:          node.TableDef.TableType,
 			Createsql:          node.TableDef.Createsql,
+			Name2ColIndex:      node.TableDef.Name2ColIndex,
+			CompositePkey:      node.TableDef.CompositePkey,
 			TableFunctionParam: node.TableDef.TableFunctionParam,
 		}
 
@@ -973,15 +975,21 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -1302,15 +1310,21 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -2214,6 +2228,36 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[1] = childID
 
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		leftChild := builder.qry.Nodes[node.Children[0]]
+		rightChild := builder.qry.Nodes[node.Children[1]]
+		var canPushDownRight []*plan.Expr
+
+		for _, filter := range filters {
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[1]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[1] = childID
+
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
@@ -2247,6 +2291,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
+
 	case plan.Node_UNNEST:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]

@@ -14,7 +14,7 @@
 
 package logservice
 
-type Marshaler interface {
+type Marshaller interface {
 	Marshal() ([]byte, error)
 }
 
@@ -22,7 +22,7 @@ type Unmarshaler interface {
 	Unmarshal([]byte) error
 }
 
-func MustMarshal(m Marshaler) []byte {
+func MustMarshal(m Marshaller) []byte {
 	data, err := m.Marshal()
 	if err != nil {
 		panic(err)

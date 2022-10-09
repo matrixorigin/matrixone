@@ -19,17 +19,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
+	"os"
+	"testing"
 )
 
 const (
@@ -50,7 +47,7 @@ var (
 	cases []externalTestCase
 )
 
-func newTestCase(gm *guest.Mmu, all bool, format, jsondata string) externalTestCase {
+func newTestCase(all bool, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,12 +68,10 @@ func newTestCase(gm *guest.Mmu, all bool, format, jsondata string) externalTestC
 }
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	cases = []externalTestCase{
-		newTestCase(gm, true, tree.CSV, ""),
-		newTestCase(gm, true, tree.JSONLINE, tree.OBJECT),
-		newTestCase(gm, true, tree.JSONLINE, tree.ARRAY),
+		newTestCase(true, tree.CSV, ""),
+		newTestCase(true, tree.JSONLINE, tree.OBJECT),
+		newTestCase(true, tree.JSONLINE, tree.ARRAY),
 	}
 }
 
@@ -261,7 +256,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh)
+		_ = makeBatch(param, plh, testutil.TestUtilMp)
 	})
 }
 

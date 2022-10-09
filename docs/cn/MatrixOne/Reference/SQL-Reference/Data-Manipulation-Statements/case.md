@@ -8,7 +8,7 @@
 
 每个 `statement_list` 可以由一个或多个语句组成，但不允许使用空。
 
-还有一个 `CASE` 操作符，它与本章 `CASE` 语句不同。参见[流控制函数](operators/flow-control-functions/case.md)。`CASE` 语句不能有 `ELSE NULL` 从句, 并且 `CASE` 语句必须以 `END CASE` 结尾。
+还有一个 `CASE` 操作符，它与本章 `CASE` 语句不同。参见[流控制函数](operators/flow-control-functions/case-when.md)。`CASE` 语句不能有 `ELSE NULL` 从句, 并且 `CASE` 语句必须以 `END CASE` 结尾。
 
 ## **语法结构**
 

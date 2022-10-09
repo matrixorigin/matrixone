@@ -23,7 +23,7 @@
 
 对MatrixOne的贡献可分为以下几类：
 
-* 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适的[issue模板](./Report-Issues.md#issue-templates)，并打上标签。
+* 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适的[issue模板](report-an-issue.md)，并打上标签。
 * 提议新的功能。请在[Feature Request](https://github.com/matrixorigin/matrixone/issues/new/choose)中描述详情并与社区中的开发人员商议。一旦我们的团队认可了您的计划，您就可以按照[工作流程](contribute-code.md#workflow)进行具体开发。
 * 实现某个功能或修复既有问题，请按照[工作流程](contribute-code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
 

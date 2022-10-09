@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -34,7 +35,7 @@ func TestDateAdd(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeDateAddVectors("2022-01-01", true, 1, types.Day),
+			vecs: makeDateAddVectors("2022-01-01", true, 1, types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "2022-01-02",
 		},
@@ -61,7 +62,7 @@ func TestDatetimeAdd(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeDatetimeAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
+			vecs: makeDatetimeAddVectors("2022-01-01 00:00:00", true, 1, types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 		},
@@ -89,28 +90,28 @@ func TestDateStringAdd(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Day),
+			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 			err:  0,
 		},
 		{
 			name: "TEST02",
-			vecs: makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
+			vecs: makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 			err:  0,
 		},
 		{
 			name: "TEST03",
-			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Second),
+			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Second, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:01",
 			err:  0,
 		},
 		{
 			name: "TEST04",
-			vecs: makeDateStringAddVectors("xxxx", true, 1, types.Second),
+			vecs: makeDateStringAddVectors("xxxx", true, 1, types.Second, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: "0001-01-01 00:00:00",
 			err:  moerr.ErrInvalidInput,
@@ -127,32 +128,32 @@ func TestDateStringAdd(t *testing.T) {
 
 }
 
-func makeDateAddVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
+func makeDateAddVectors(str string, isConst bool, num int64, unit types.IntervalType, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 
 	date, _ := types.ParseDate(str)
 
-	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date, mp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
 	return vec
 }
 
-func makeDatetimeAddVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
+func makeDatetimeAddVectors(str string, isConst bool, num int64, unit types.IntervalType, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 
 	datetime, _ := types.ParseDatetime(str, 0)
 
-	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, mp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
 	return vec
 }
 
-func makeDateStringAddVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
+func makeDateStringAddVectors(str string, isConst bool, num int64, unit types.IntervalType, mp *mpool.MPool) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, str)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
-	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
+	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, str, mp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num, mp)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit), mp)
 	return vec
 }

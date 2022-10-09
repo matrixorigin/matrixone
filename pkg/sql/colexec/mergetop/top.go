@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -104,7 +105,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			ctr.n = len(bat.Vecs)
 			ctr.poses = ctr.poses[:0]
 			for _, f := range ap.Fs {
-				vec, err := colexec.EvalExpr(bat, proc, f.E)
+				vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 				if err != nil {
 					return err
 				}
@@ -132,11 +133,18 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 				for i := range ctr.cmps {
+					var desc, nullsLast bool
 					if pos, ok := mp[i]; ok {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == colexec.Descending)
-					} else {
-						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
+						desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
+						if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+							nullsLast = false
+						} else if ap.Fs[pos].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
+							nullsLast = true
+						} else {
+							nullsLast = desc
+						}
 					}
+					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, desc, nullsLast)
 				}
 			}
 			if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
