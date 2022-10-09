@@ -268,7 +268,10 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 	}
 	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c,
 		bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum),
-		bp.PipeWithBufferWorkerNum(1))
+		bp.PipeWithBufferWorkerNum(1),
+		bp.PipeWithItemNameFormatter(func(bp.HasName) string {
+			return singleMetricTable.GetName()
+		}))
 	c.BaseBatchPipe = base
 	return c
 }

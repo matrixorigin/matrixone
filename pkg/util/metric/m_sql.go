@@ -22,7 +22,7 @@ var (
 			Help:      "Counter of executed sql statement",
 		},
 		[]string{constTenantKey, "type"},
-		true,
+		false,
 	)
 
 	TransactionErrorsFactory = NewCounterVec(
