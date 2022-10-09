@@ -33,6 +33,7 @@ type appendableNode struct {
 	block     *dataBlock
 	data      *containers.Batch
 	rows      uint32
+	prefix    []byte
 	exception *atomic.Value
 }
 
@@ -40,8 +41,9 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
-	//impl.rows = file.ReadRows(block.meta.GetMetaLoc())
 	impl.rows = 0
+	impl.prefix = block.meta.MakeKey()
+
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
@@ -59,16 +61,10 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	return impl
 }
 
-func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
-	if coarse {
-		node.block.mvcc.RLock()
-		defer node.block.mvcc.RUnlock()
-		return node.rows
-	}
-	// TODO: fine row count
-	// 1. Load txn ts zonemap
-	// 2. Calculate fine row count
-	return 0
+func (node *appendableNode) Rows() uint32 {
+	node.block.mvcc.RLock()
+	defer node.block.mvcc.RUnlock()
+	return node.rows
 }
 
 func (node *appendableNode) CheckUnloadable() bool {
@@ -202,7 +198,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.prefix, startRow, length)
 	if err != nil {
 		return
 	}
