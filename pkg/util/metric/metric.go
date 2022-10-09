@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -277,232 +276,77 @@ func WithInitAction(init bool) InitOption {
 	})
 }
 
-type MetricColumn struct {
-	Name    string
-	Type    string
-	Default string
-	Comment string
-}
-
 var (
-	metricNameColumn  = MetricColumn{`metric_name`, `VARCHAR(128)`, `unknown`, `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	collectTimeColumn = MetricColumn{`collecttime`, `DATETIME(6)`, ``, `metric data collect time`}
-	valueColumn       = MetricColumn{`value`, `DOUBLE`, `0.0`, `metric value`}
-	nodeColumn        = MetricColumn{`node`, `VARCHAR(36)`, `monolithic`, `mo node uuid`}
-	roleColumn        = MetricColumn{`role`, `VARCHAR(32)`, `monolithic`, `mo node role, like: CN, DN, LOG`}
-	accountColumn     = MetricColumn{`account`, `VARCHAR(128)`, `sys`, `account name`}
-	typeColumn        = MetricColumn{`type`, `VARCHAR(32)`, ``, `sql type, like: insert, select, ...`}
+	metricNameColumn        = inittool.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	metricCollectTimeColumn = inittool.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
+	metricValueColumn       = inittool.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
+	metricNodeColumn        = inittool.Column{Name: `node`, Type: `VARCHAR(36)`, Default: `monolithic`, Comment: `mo node uuid`}
+	metricRoleColumn        = inittool.Column{Name: `role`, Type: `VARCHAR(32)`, Default: `monolithic`, Comment: `mo node role, like: CN, DN, LOG`}
+	metricAccountColumn     = inittool.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
+	metricTypeColumn        = inittool.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
 )
 
-var _ (batchpipe.HasName) = (*MetricTable)(nil)
-
-type MetricTable struct {
-	Database         string
-	Table            string
-	Columns          []MetricColumn
-	PrimaryKeyColumn []MetricColumn
-	Engine           string
-	Comment          string
-	CSVOptions       *trace.CsvOptions
-
-	BatchMode string
-}
-
-func (tbl *MetricTable) GetName() string {
-	return tbl.Table
-}
-
-var singleMetricTable = &MetricTable{
+var singleMetricTable = &inittool.Table{
 	Database:         trace.StatsDatabase,
 	Table:            `metric`,
-	Columns:          []MetricColumn{metricNameColumn, collectTimeColumn, valueColumn, nodeColumn, roleColumn, accountColumn, typeColumn},
-	PrimaryKeyColumn: []MetricColumn{},
+	Columns:          []inittool.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
+	PrimaryKeyColumn: []inittool.Column{},
 	Engine:           "EXTERNAL",
 	Comment:          `metric data`,
 	CSVOptions:       trace.CommonCsvOptions,
 	BatchMode:        trace.FileService,
 }
 
-func (tbl *MetricTable) ToCreateSql(ifNotExists bool, factory optionsFactory) string {
-	//factory := trace.GetOptionFactory(tbl.BatchMode)
-	TableOptions := factory(tbl.Database, tbl.Table)
-
-	const newLineCharacter = ",\n"
-	sb := strings.Builder{}
-	// create table
-	sb.WriteString("CREATE ")
-	switch strings.ToUpper(tbl.Engine) {
-	case "EXTERNAL":
-		sb.WriteString(TableOptions.GetCreateOptions())
-	default:
-		panic(moerr.NewInternalError("NOT support engine: %s", tbl.Engine))
-	}
-	sb.WriteString("TABLE ")
-	if ifNotExists {
-		sb.WriteString("IF NOT EXISTS ")
-	}
-	// table name
-	sb.WriteString(fmt.Sprintf("`%s`.`%s`(", tbl.Database, tbl.Table))
-	// columns
-	for idx, col := range tbl.Columns {
-		if idx > 0 {
-			sb.WriteString(newLineCharacter)
-		}
-		sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-		if len(col.Default) > 0 {
-			sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
-		}
-		sb.WriteString(fmt.Sprintf("COMMENT %q", col.Comment))
-	}
-	// primary key
-	if len(tbl.PrimaryKeyColumn) > 0 {
-		sb.WriteString(newLineCharacter)
-		sb.WriteString("PRIMARY KEY (`")
-		for idx, col := range tbl.PrimaryKeyColumn {
-			if idx > 0 {
-				sb.WriteString(`, `)
-			}
-			sb.WriteString(fmt.Sprintf("`%s`", col.Name))
-		}
-		sb.WriteString(`)`)
-	}
-	sb.WriteString("\n)")
-	sb.WriteString(TableOptions.GetTableOptions())
-
-	return sb.String()
+type View struct {
+	*inittool.View
 }
 
-type ViewOption func(view *MetricView)
-
-func (opt ViewOption) apply(view *MetricView) {
-	opt(view)
-}
-
-type MetricView struct {
-	Database    string
-	Table       string
-	OriginTable *MetricTable
-	Columns     []MetricColumn
-}
-
-func WithColumn(c MetricColumn) ViewOption {
-	return ViewOption(func(v *MetricView) {
-		v.Columns = append(v.Columns, c)
-	})
-}
-
-func NewMetricView(tbl string, opts ...ViewOption) *MetricView {
-	view := &MetricView{
-		Database:    MetricDBConst,
-		Table:       tbl,
-		OriginTable: singleMetricTable,
-		Columns:     []MetricColumn{collectTimeColumn, valueColumn, nodeColumn, roleColumn},
+func NewMetricView(tbl string, opts ...inittool.ViewOption) *View {
+	view := &View{
+		View: &inittool.View{
+			Database:    MetricDBConst,
+			Table:       tbl,
+			OriginTable: singleMetricTable,
+			Columns:     []inittool.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
+		},
 	}
 	for _, opt := range opts {
-		opt.apply(view)
+		opt.Apply(view.View)
 	}
 	return view
 }
 
-func NewMetricViewWithLabels(tbl string, lbls []string) *MetricView {
-	var options []ViewOption
+func NewMetricViewWithLabels(tbl string, lbls []string) *View {
+	var options []inittool.ViewOption
 	for _, label := range lbls {
 		for _, col := range singleMetricTable.Columns {
 			if strings.EqualFold(label, col.Name) {
-				options = append(options, WithColumn(col))
+				options = append(options, inittool.WithColumn(col))
 			}
 		}
 	}
 	return NewMetricView(tbl, options...)
 }
 
-func (tbl *MetricView) Where() string {
+func (tbl *View) Where() string {
 	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
 }
 
-func (tbl *MetricView) ToCreateSql(ifNotExists bool) string {
-	sb := strings.Builder{}
-	// create table
-	sb.WriteString("CREATE VIEW ")
-	if ifNotExists {
-		sb.WriteString("IF NOT EXISTS ")
-	}
-	// table name
-	sb.WriteString(fmt.Sprintf("`%s`.`%s` as ", tbl.Database, tbl.Table))
-	sb.WriteString("select ")
-	// columns
-	for idx, col := range tbl.Columns {
-		if idx > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
-	}
-	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
-	sb.WriteString(tbl.Where())
-
-	return sb.String()
-}
-
-type MetricRow struct {
-	Table          *MetricTable
-	Columns        []string
-	Name2ColumnIdx map[string]int
-}
-
-func (tbl *MetricTable) GetRow() *MetricRow {
-	row := &MetricRow{
-		Table:          tbl,
-		Columns:        make([]string, len(tbl.Columns)),
-		Name2ColumnIdx: make(map[string]int),
-	}
-	for idx, col := range tbl.Columns {
-		row.Name2ColumnIdx[col.Name] = idx
-	}
-	return row
-}
-
-func (r *MetricRow) SetVal(col string, val string) {
-	if idx, exist := r.Name2ColumnIdx[col]; !exist {
-		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
-	} else {
-		r.Columns[idx] = val
-	}
-}
-
-func (r *MetricRow) SetFloat64(col string, val float64) {
-	r.SetVal(col, fmt.Sprintf("%f", val))
-}
-
-func (r *MetricRow) ToStrings() []string {
-	return r.Columns
-}
-
-func (r *MetricRow) ToValueString(buf *bytes.Buffer) {
-	buf.WriteRune('(')
-	for idx, val := range r.Columns {
-		if idx > 0 {
-			buf.WriteRune(',')
-		}
-		buf.WriteString(fmt.Sprintf(`%q`, val))
-	}
-	buf.WriteRune(')')
-}
-
-var gMetricView struct {
-	content map[string]*MetricView
+var gView struct {
+	content map[string]*View
 	mu      sync.Mutex
 }
 
-func GetMetricViewWithLabels(tbl string, lbls []string) *MetricView {
-	gMetricView.mu.Lock()
-	defer gMetricView.mu.Unlock()
-	if len(gMetricView.content) == 0 {
-		gMetricView.content = make(map[string]*MetricView)
+func GetMetricViewWithLabels(tbl string, lbls []string) *View {
+	gView.mu.Lock()
+	defer gView.mu.Unlock()
+	if len(gView.content) == 0 {
+		gView.content = make(map[string]*View)
 	}
-	view, exist := gMetricView.content[tbl]
+	view, exist := gView.content[tbl]
 	if !exist {
 		view = NewMetricViewWithLabels(tbl, lbls)
-		gMetricView.content[tbl] = view
+		gView.content[tbl] = view
 	}
 	return view
 }

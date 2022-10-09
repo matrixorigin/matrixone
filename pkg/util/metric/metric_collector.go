@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -192,7 +193,7 @@ func (s *mfset) IsEmpty() bool {
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
 	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", singleMetricTable.Database, singleMetricTable.GetName()))
-	writeValues := func(row *MetricRow) {
+	writeValues := func(row *inittool.Row) {
 		row.ToValueString(buf)
 		buf.WriteRune(',')
 	}
@@ -203,8 +204,8 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 
 			// reserved labels
 			row.SetVal(metricNameColumn.Name, mf.GetName())
-			row.SetVal(nodeColumn.Name, mf.GetNode())
-			row.SetVal(roleColumn.Name, mf.GetRole())
+			row.SetVal(metricNodeColumn.Name, mf.GetNode())
+			row.SetVal(metricRoleColumn.Name, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
 				row.SetVal(lbl.GetName(), lbl.GetValue())
@@ -213,19 +214,19 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(collectTimeColumn.Name, time)
-				row.SetFloat64(valueColumn.Name, metric.Counter.GetValue())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
 				writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(collectTimeColumn.Name, time)
-				row.SetFloat64(valueColumn.Name, metric.Gauge.GetValue())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
 				writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
-					row.SetVal(collectTimeColumn.Name, time)
-					row.SetFloat64(valueColumn.Name, sample.GetValue())
+					row.SetVal(metricCollectTimeColumn.Name, time)
+					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
 					writeValues(row)
 				}
 			default:
@@ -314,7 +315,7 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 	buf.Reset()
 	writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable)
-	writeValues := func(row *MetricRow) {
+	writeValues := func(row *inittool.Row) {
 		s.writeCsvOneLine(buf, row.ToStrings())
 	}
 
@@ -324,8 +325,8 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 
 			// reserved labels
 			row.SetVal(metricNameColumn.Name, mf.GetName())
-			row.SetVal(nodeColumn.Name, mf.GetNode())
-			row.SetVal(roleColumn.Name, mf.GetRole())
+			row.SetVal(metricNodeColumn.Name, mf.GetNode())
+			row.SetVal(metricRoleColumn.Name, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
 				row.SetVal(lbl.GetName(), lbl.GetValue())
@@ -334,19 +335,19 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(collectTimeColumn.Name, time)
-				row.SetFloat64(valueColumn.Name, metric.Counter.GetValue())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
 				writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTimeStr(metric.GetCollecttime())
-				row.SetVal(collectTimeColumn.Name, time)
-				row.SetFloat64(valueColumn.Name, metric.Gauge.GetValue())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
 				writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
-					row.SetVal(collectTimeColumn.Name, time)
-					row.SetFloat64(valueColumn.Name, sample.GetValue())
+					row.SetVal(metricCollectTimeColumn.Name, time)
+					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
 					writeValues(row)
 				}
 			default:
