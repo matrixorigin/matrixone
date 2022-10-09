@@ -20,8 +20,7 @@ import (
 )
 
 type NamedRow interface {
-	SetHandler(handler *MemHandler)
-	AttrByName(tx *Transaction, name string) (Nullable, error)
+	AttrByName(handler *MemHandler, tx *Transaction, name string) (Nullable, error)
 }
 
 type DataKey struct {
@@ -63,9 +62,9 @@ func (a DataRow) Indexes() []Tuple {
 func (a *DataRow) String() string {
 	buf := new(strings.Builder)
 	buf.WriteString("DataRow{")
-	buf.WriteString(fmt.Sprintf("key: %+v", a.key))
+	fmt.Fprintf(buf, "key: %+v", a.key)
 	for _, attr := range a.value {
-		buf.WriteString(fmt.Sprintf(", %+v", attr))
+		fmt.Fprintf(buf, ", %+v", attr)
 	}
 	buf.WriteString("}")
 	return buf.String()
@@ -90,9 +89,6 @@ type NamedDataRow struct {
 
 var _ NamedRow = new(NamedDataRow)
 
-func (n *NamedDataRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
+func (n *NamedDataRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (Nullable, error) {
 	return n.Value[n.AttrsMap[name].Order], nil
-}
-
-func (n *NamedDataRow) SetHandler(handler *MemHandler) {
 }

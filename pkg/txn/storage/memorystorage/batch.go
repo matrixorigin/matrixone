@@ -310,6 +310,21 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_TS:
+		if vec.IsScalarNull() {
+			var zero types.Rowid
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.TS)[i],
+		}
+		return
+
 	case types.T_Rowid:
 		if vec.IsScalarNull() {
 			var zero types.Rowid
@@ -352,10 +367,9 @@ func appendNamedRow(
 	bat *batch.Batch,
 	row NamedRow,
 ) error {
-	row.SetHandler(handler)
 	for i := offset; i < len(bat.Attrs); i++ {
 		name := bat.Attrs[i]
-		value, err := row.AttrByName(tx, name)
+		value, err := row.AttrByName(handler, tx, name)
 		if err != nil {
 			return err
 		}

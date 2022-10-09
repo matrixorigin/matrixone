@@ -18,11 +18,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -31,14 +29,13 @@ import (
 
 type AppendNode struct {
 	*txnbase.TxnMVCCNode
-	sync.RWMutex
 	startRow uint32
 	maxRow   uint32
 	mvcc     *MVCCHandle
 	id       *common.ID
 }
 
-func CompareAppendNode(e, o txnbase.MVCCNode) int {
+func CompareAppendNode(e, o txnif.MVCCNode) int {
 	return e.(*AppendNode).Compare(o.(*AppendNode).TxnMVCCNode)
 }
 
@@ -92,7 +89,7 @@ func NewAppendNode(
 	return n
 }
 
-func NewEmptyAppendNode() txnbase.MVCCNode {
+func NewEmptyAppendNode() txnif.MVCCNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
@@ -100,13 +97,13 @@ func NewEmptyAppendNode() txnbase.MVCCNode {
 func (node *AppendNode) String() string {
 	return node.GeneralDesc()
 }
-func (node *AppendNode) CloneAll() txnbase.MVCCNode {
+func (node *AppendNode) CloneAll() txnif.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) CloneData() txnbase.MVCCNode {
+func (node *AppendNode) CloneData() txnif.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) Update(txnbase.MVCCNode) {
+func (node *AppendNode) Update(txnif.MVCCNode) {
 	panic("todo")
 }
 func (node *AppendNode) GeneralDesc() string {
@@ -131,14 +128,6 @@ func (node *AppendNode) OnReplayCommit(ts types.TS) {
 func (node *AppendNode) GetCommitTS() types.TS {
 	return node.GetEnd()
 }
-func (node *AppendNode) IsCommitted() bool {
-	node.RLock()
-	defer node.RUnlock()
-	return node.IsCommittedLocked()
-}
-func (node *AppendNode) IsCommittedLocked() bool {
-	return node.TxnMVCCNode.IsCommitted()
-}
 func (node *AppendNode) GetStartRow() uint32 { return node.startRow }
 func (node *AppendNode) GetMaxRow() uint32 {
 	return node.maxRow
@@ -155,16 +144,12 @@ func (node *AppendNode) PrepareCommit() error {
 }
 
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
-	node.Lock()
-	defer node.Unlock()
-	if node.IsCommittedLocked() {
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
+	if node.IsCommitted() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(index)
-	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
-		node.mvcc.SetMaxVisible(node.GetEndLocked())
-	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
 	if listener == nil {
@@ -174,8 +159,8 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 }
 
 func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
@@ -244,18 +229,4 @@ func (node *AppendNode) Set1PC() {
 }
 func (node *AppendNode) Is1PC() bool {
 	return node.TxnMVCCNode.Is1PC()
-}
-func (node *AppendNode) GetEnd() types.TS {
-	node.RLock()
-	defer node.RUnlock()
-	return node.GetEndLocked()
-}
-func (node *AppendNode) GetEndLocked() types.TS {
-	return node.TxnMVCCNode.GetEnd()
-}
-
-func (node *AppendNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	node.RLock()
-	defer node.RUnlock()
-	return node.TxnMVCCNode.NeedWaitCommitting(startTS)
 }

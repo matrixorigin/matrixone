@@ -16,9 +16,9 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -155,15 +155,23 @@ func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
 	return e.impl.StartTxn(info)
 }
 
-func (e *txnEngine) GetTxnByMeta(meta txn.TxnMeta) (txn Txn, err error) {
-	return e.impl.GetTxnByMeta(meta)
+func (e *txnEngine) GetTxnByID(id []byte) (txn Txn, err error) {
+	return e.impl.GetTxn(string(id))
 }
 
-func (e *txnEngine) GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn Txn, err error) {
-	return e.impl.GetOrCreateTxnWithMeta(info, meta)
+func (e *txnEngine) GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error) {
+	return e.impl.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
 func (e *txnEngine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute
 	return
+}
+
+func (e *txnEngine) Close() (err error) {
+	return e.impl.Close()
+}
+
+func (e *txnEngine) Destroy() (err error) {
+	panic(moerr.NewNYI("Pls implement me!"))
 }

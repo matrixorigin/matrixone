@@ -97,7 +97,7 @@ func init() {
 
 func TestCompare(t *testing.T) {
 	for _, tc := range tcs {
-		c := New(tc.vecs[0].Typ, tc.desc)
+		c := New(tc.vecs[0].Typ, tc.desc, false)
 		c.Set(0, tc.vecs[0])
 		c.Set(1, tc.vecs[1])
 		err := c.Copy(0, 1, 0, 0, tc.proc)

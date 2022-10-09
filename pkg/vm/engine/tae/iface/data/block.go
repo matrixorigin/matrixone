@@ -66,7 +66,7 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
-	SetNotAppendable()
+	FreezeAppend()
 
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
@@ -90,12 +90,14 @@ type Block interface {
 
 	SetMaxCheckpointTS(ts types.TS)
 	GetMaxCheckpointTS() types.TS
-	GetMaxVisibleTS() types.TS
 
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	Close()
+	FreeData()
 	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
+	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
+	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 }
