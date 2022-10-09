@@ -51,8 +51,8 @@ type statBlock struct {
 }
 
 type dataBlock struct {
-	common.RefHelper
 	*sync.RWMutex
+	common.RefHelper
 	common.ClosedState
 	meta         *catalog.BlockEntry
 	node         *appendableNode
@@ -65,28 +65,12 @@ type dataBlock struct {
 	mvcc         *updates.MVCCHandle
 	score        *statBlock
 	ckpTs        atomic.Value
-	prefix       []byte
 	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
-	indexCnt := make(map[int]int)
-	// every column has a zonemap
 	schema := meta.GetSchema()
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
-			continue
-		}
-		indexCnt[colDef.Idx] = 1
-	}
-	// ATTENTION: COMPOUNDPK
-	// pk column has another bloomfilter
-	pkIdx := -1024
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-		indexCnt[pkIdx] += 1
-	}
 	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
 		panic(err)
@@ -111,7 +95,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		scheduler:  scheduler,
 		indexes:    make(map[int]indexwrapper.Index),
 		bufMgr:     bufMgr,
-		prefix:     meta.MakeKey(),
 	}
 	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
@@ -124,7 +107,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 			if colDef.IsPhyAddr() {
 				continue
 			}
-			if colDef.Idx == pkIdx {
+			if colDef.IsPrimary() {
 				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type)
 				block.pkIndex = block.indexes[colDef.Idx]
 			} else {
@@ -231,7 +214,7 @@ func (blk *dataBlock) RunCalibration() (score int) {
 
 func (blk *dataBlock) estimateABlkRawScore() (score int) {
 	// Max row appended
-	rows := blk.Rows(nil, true)
+	rows := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		return 100
 	}
@@ -266,7 +249,7 @@ func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
 }
 
 func (blk *dataBlock) MutationInfo() string {
-	rows := blk.Rows(nil, true)
+	rows := blk.Rows()
 	totalChanges := blk.mvcc.GetChangeNodeCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
@@ -297,7 +280,7 @@ func (blk *dataBlock) EstimateScore(interval int64) int {
 	if score > 1 {
 		return score
 	}
-	rows := uint32(blk.Rows(nil, true)) - blk.mvcc.GetDeleteCnt()
+	rows := uint32(blk.Rows()) - blk.mvcc.GetDeleteCnt()
 	if blk.score == nil {
 		blk.score = &statBlock{
 			rows:      rows,
@@ -353,7 +336,7 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	if blk.node.Rows() == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
 	}
 	return true
@@ -363,9 +346,9 @@ func (blk *dataBlock) GetTotalChanges() int {
 	return int(blk.mvcc.GetChangeNodeCnt())
 }
 
-func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
+func (blk *dataBlock) Rows() int {
 	if blk.meta.IsAppendable() {
-		rows := int(blk.node.Rows(txn, coarse))
+		rows := int(blk.node.Rows())
 		return rows
 	}
 	metaLoc := blk.meta.GetMetaLoc()
@@ -390,7 +373,7 @@ func (blk *dataBlock) GetRowsOnReplay() uint64 {
 }
 
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows(nil, true))
+	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
 	if level >= common.PPL1 {
 		blk.mvcc.RLock()
 		s2 := blk.mvcc.StringLocked()
@@ -749,14 +732,6 @@ func (blk *dataBlock) OnApplyAppend(n txnif.AppendNode) (err error) {
 }
 
 func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts types.TS) (err error) {
-	// No pk defined
-	if !blk.meta.GetSchema().HasPK() {
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-		return
-	}
-	// If any pk defined, update index
-	blk.mvcc.Lock()
-	defer blk.mvcc.Unlock()
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
