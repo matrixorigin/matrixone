@@ -18,12 +18,10 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -48,11 +46,9 @@ func sqlOutput(_ interface{}, _ *batch.Batch) error {
 }
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},
@@ -94,7 +90,7 @@ func TestOutput(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 

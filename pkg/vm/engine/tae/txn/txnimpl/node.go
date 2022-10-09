@@ -23,9 +23,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -352,7 +354,7 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	from := uint32(n.data.Length())
 	an = n.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
-		if attr == catalog.PhyAddrColumnName {
+		if attr == pkgcatalog.PhyAddrColumnName {
 			continue
 		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]

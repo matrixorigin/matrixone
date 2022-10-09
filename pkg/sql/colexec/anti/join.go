@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 					ctr.mp.Free()
 				}
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.GetMheap())
+					ctr.bat.Clean(proc.Mp())
 				}
 				continue
 			}
@@ -108,10 +108,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
@@ -123,8 +123,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		for k := 0; k < n; k++ {
 			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
-					rbat.Clean(proc.GetMheap())
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
+					rbat.Clean(proc.Mp())
 					return err
 				}
 			}
@@ -141,7 +141,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
@@ -170,8 +170,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if vals[k] == 0 {
 				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
+					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 				}
@@ -198,8 +198,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				for j, pos := range ap.Result {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
+					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
+						rbat.Clean(proc.Mp())
 						return err
 					}
 				}
@@ -216,10 +216,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.GetMheap())
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
 				}
 			}
 			return err
@@ -240,7 +240,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 func (ctr *container) freeJoinCondition(proc *process.Process) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.GetMheap())
+			ctr.evecs[i].vec.Free(proc.Mp())
 		}
 	}
 }

@@ -17,7 +17,7 @@ package types
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 const (
@@ -53,7 +53,7 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s[2] = vlen
 }
 
-func BuildVarlena(bs []byte, area []byte, m *mheap.Mheap) (Varlena, []byte, error) {
+func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
 	vlen := len(bs)
@@ -66,7 +66,7 @@ func BuildVarlena(bs []byte, area []byte, m *mheap.Mheap) (Varlena, []byte, erro
 		if voff+vlen < cap(area) || m == nil {
 			area = append(area, bs...)
 		} else {
-			area, err = mheap.Grow2(m, area, bs, int64(voff+vlen))
+			area, err = m.Grow2(area, bs, voff+vlen)
 			if err != nil {
 				return v, nil, err
 			}

@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,11 +90,11 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.CreateWithTS(types.SystemDBTS)
 	var sid uint64
 	if schema.Name == SystemTableSchema.Name {
-		sid = SystemSegment_Table_ID
+		sid = catalog.SystemSegment_Table_ID
 	} else if schema.Name == SystemDBSchema.Name {
-		sid = SystemSegment_DB_ID
+		sid = catalog.SystemSegment_DB_ID
 	} else if schema.Name == SystemColumnSchema.Name {
-		sid = SystemSegment_Columns_ID
+		sid = catalog.SystemSegment_Columns_ID
 	} else {
 		panic("not supported")
 	}
@@ -255,9 +256,7 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		itSeg.RLock()
 		dropped := itSeg.HasDropped()
-		itSeg.RUnlock()
 		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break

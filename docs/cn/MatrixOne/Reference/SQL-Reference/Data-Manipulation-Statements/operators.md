@@ -49,7 +49,7 @@
 
 | 名称 | 描述|
 |---|-----|
-| [CASE](operators/flow-control-functions/case.md) | Case 运算符 |
+| [CASE](operators/flow-control-functions/case-when.md) | Case 运算符 |
 | [IF()](operators/flow-control-functions/function_if.md) | If/else 语句 |
 
 ## [**逻辑运算符**](operators/logical-operators/logical-operators-overview.md)

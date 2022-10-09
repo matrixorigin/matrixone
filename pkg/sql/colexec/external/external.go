@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -202,15 +203,14 @@ func judgeInterge(field string) bool {
 	return true
 }
 
-func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -247,7 +247,7 @@ func getNullFlag(param *ExternalParam, attr, field string) bool {
 }
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh)
+	bat := makeBatch(param, plh, proc.Mp())
 	var Line []string
 	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {

@@ -17,12 +17,12 @@ package moengine
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 var (
@@ -36,7 +36,7 @@ func newReader(rel handle.Relation, it handle.BlockIt) *txnReader {
 	}
 }
 
-func (r *txnReader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *txnReader) Read(attrs []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	r.it.Lock()
 	if !r.it.Valid() {
 		r.it.Unlock()

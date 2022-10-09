@@ -18,6 +18,7 @@ import (
 	"sort"
 	"testing"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -76,7 +77,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+		view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -118,7 +119,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+			view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -159,7 +160,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+			view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -203,7 +204,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
 	blk := getOneBlock(rel)
-	view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
+	view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
 	assert.NoError(t, err)
 	defer view.Close()
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {

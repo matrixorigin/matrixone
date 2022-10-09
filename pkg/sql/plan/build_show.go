@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -82,7 +81,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	for _, col := range tableDef.Cols {
 
 		colName := col.Name
-		if colName == catalog2.PhyAddrColumnName {
+		if colName == catalog.PhyAddrColumnName {
 			continue
 		}
 		nullOrNot := "NOT NULL"

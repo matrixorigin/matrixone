@@ -33,24 +33,6 @@ var (
 	PhyAddrColumnType types.Type
 )
 
-const (
-	PhyAddrColumnName    = "__mo_PADDR"
-	PhyAddrColumnComment = "Physical address"
-	SortKeyNamePrefx     = "_SORT_"
-
-	AttrRowID    = "__rowid"
-	AttrCommitTs = "commit_time"
-	AttrAborted  = "aborted"
-
-	TenantSysID              = uint32(0)
-	SystemSegment_DB_ID      = uint64(101)
-	SystemSegment_Table_ID   = uint64(102)
-	SystemSegment_Columns_ID = uint64(103)
-	SystemBlock_DB_ID        = uint64(201)
-	SystemBlock_Table_ID     = uint64(202)
-	SystemBlock_Columns_ID   = uint64(203)
-)
-
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema

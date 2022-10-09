@@ -30,8 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -45,8 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -357,7 +354,11 @@ func handleShowColumns(ses *Session) error {
 			continue
 		}
 		row[0] = colName
-		typ := types.Type{Oid: types.T(d[1].(int32))}
+		typ := &types.Type{}
+		data := d[1].([]uint8)
+		if err := types.Decode(data, typ); err != nil {
+			return err
+		}
 		row[1] = typ.String()
 		if d[2].(int8) == 0 {
 			row[2] = "NO"
@@ -951,7 +952,6 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
-	tableName := icfl.tableName
 
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
@@ -961,71 +961,72 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	//Get table infos for the database from the cube
 	//case 1: there are no table infos for the db
 	//case 2: db changed
-	var attrs []ColumnInfo
-	if ses.IsTaeEngine() {
-		if mce.tableInfos == nil || mce.db != dbName {
-			txnHandler := ses.GetTxnHandler()
-			eng := ses.GetStorage()
-			db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn())
-			if err != nil {
-				return err
-			}
-
-			names, err := db.Relations(requestCtx)
-			if err != nil {
-				return err
-			}
-			for _, name := range names {
-				table, err := db.Relation(requestCtx, name)
-				if err != nil {
-					return err
-				}
-
-				defs, err := table.TableDefs(requestCtx)
-				if err != nil {
-					return err
-				}
-				for _, def := range defs {
-					if attr, ok := def.(*engine.AttributeDef); ok {
-						attrs = append(attrs, &engineColumnInfo{
-							name: attr.Attr.Name,
-							typ:  attr.Attr.Type,
-						})
-					}
-				}
-			}
-
-			if mce.tableInfos == nil {
-				mce.tableInfos = make(map[string][]ColumnInfo)
-			}
-			mce.tableInfos[tableName] = attrs
-		}
-	}
-
-	cols, ok := mce.tableInfos[tableName]
-	if !ok {
-		//just give the empty info when there is no such table.
-		attrs = make([]ColumnInfo, 0)
-	} else {
-		attrs = cols
-	}
-
-	for _, c := range attrs {
-		col := new(MysqlColumn)
-		col.SetName(c.GetName())
-		err = convertEngineTypeToMysqlType(c.GetType(), col)
-		if err != nil {
-			return err
-		}
-
-		/*
-			mysql CMD_FIELD_LIST response: send the column definition per column
-		*/
-		err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
-		if err != nil {
-			return err
-		}
-	}
+	//NOTE: it costs too much time.
+	//It just reduces the information in the auto-completion (auto-rehash) of the mysql client.
+	//var attrs []ColumnInfo
+	//
+	//if mce.tableInfos == nil || mce.db != dbName {
+	//	txnHandler := ses.GetTxnHandler()
+	//	eng := ses.GetStorage()
+	//	db, err := eng.Database(requestCtx, dbName, txnHandler.GetTxn())
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	names, err := db.Relations(requestCtx)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	for _, name := range names {
+	//		table, err := db.Relation(requestCtx, name)
+	//		if err != nil {
+	//			return err
+	//		}
+	//
+	//		defs, err := table.TableDefs(requestCtx)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		for _, def := range defs {
+	//			if attr, ok := def.(*engine.AttributeDef); ok {
+	//				attrs = append(attrs, &engineColumnInfo{
+	//					name: attr.Attr.Name,
+	//					typ:  attr.Attr.Type,
+	//				})
+	//			}
+	//		}
+	//	}
+	//
+	//	if mce.tableInfos == nil {
+	//		mce.tableInfos = make(map[string][]ColumnInfo)
+	//	}
+	//	mce.tableInfos[tableName] = attrs
+	//}
+	//
+	//cols, ok := mce.tableInfos[tableName]
+	//if !ok {
+	//	//just give the empty info when there is no such table.
+	//	attrs = make([]ColumnInfo, 0)
+	//} else {
+	//	attrs = cols
+	//}
+	//
+	//for _, c := range attrs {
+	//	col := new(MysqlColumn)
+	//	col.SetName(c.GetName())
+	//	err = convertEngineTypeToMysqlType(c.GetType(), col)
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	/*
+	//		mysql CMD_FIELD_LIST response: send the column definition per column
+	//	*/
+	//	err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	/*
 		mysql CMD_FIELD_LIST response: End after the column has been sent.
@@ -1633,7 +1634,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+			return nil, moerr.NewInvalidInput("Incorrect arguments to EXECUTE")
+		}
+		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
@@ -1822,7 +1827,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	proc := process.New(
 		requestCtx,
-		mheap.New(ses.GuestMmu),
+		ses.Mp,
 		ses.Pu.TxnClient,
 		ses.GetTxnHandler().txn,
 		ses.Pu.FileService,
@@ -1866,7 +1871,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var havePrivilege bool
 	var err2 error
 	var columns []interface{}
-	var deallocatePlan *plan.Plan
 
 	stmt0 := cws[0].GetAst()
 	mce.beforeRun(stmt0)
@@ -2019,11 +2023,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			deallocatePlan, err = buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
-			mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -2659,8 +2658,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
 		return true
 		//others
-	case *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
 	case *tree.Use:
 		/*

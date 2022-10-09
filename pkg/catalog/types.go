@@ -20,6 +20,24 @@ import (
 )
 
 const (
+	PhyAddrColumnName    = "__mo_PADDR"
+	PhyAddrColumnComment = "Physical address"
+	SortKeyNamePrefx     = "_SORT_"
+
+	AttrRowID    = "__rowid"
+	AttrCommitTs = "commit_time"
+	AttrAborted  = "aborted"
+
+	TenantSysID              = uint32(0)
+	SystemSegment_DB_ID      = uint64(101)
+	SystemSegment_Table_ID   = uint64(102)
+	SystemSegment_Columns_ID = uint64(103)
+	SystemBlock_DB_ID        = uint64(201)
+	SystemBlock_Table_ID     = uint64(202)
+	SystemBlock_Columns_ID   = uint64(203)
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
@@ -257,7 +275,7 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),     // att_relname_id
 		types.New(types.T_varchar, 256, 0, 0),  // att_relname
 		types.New(types.T_varchar, 256, 0, 0),  // attname
-		types.New(types.T_int32, 0, 0, 0),      // atttyp
+		types.New(types.T_varchar, 256, 0, 0),  // atttyp
 		types.New(types.T_int32, 0, 0, 0),      // attnum
 		types.New(types.T_int32, 0, 0, 0),      // att_length
 		types.New(types.T_int8, 0, 0, 0),       // attnotnull

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -32,6 +33,7 @@ type appendableNode struct {
 	block     *dataBlock
 	data      *containers.Batch
 	rows      uint32
+	prefix    []byte
 	exception *atomic.Value
 }
 
@@ -39,13 +41,16 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
-	//impl.rows = file.ReadRows(block.meta.GetMetaLoc())
 	impl.rows = 0
+	impl.prefix = block.meta.MakeKey()
+
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	opts.Allocator = ImmutMemAllocator
+	// XXX What is the rule of using these Allocators?   It all seems
+	// very random.
+	opts.Allocator = common.TAEImmutableAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),
 		schema.AllNames(),
@@ -56,16 +61,10 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	return impl
 }
 
-func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
-	if coarse {
-		node.block.mvcc.RLock()
-		defer node.block.mvcc.RUnlock()
-		return node.rows
-	}
-	// TODO: fine row count
-	// 1. Load txn ts zonemap
-	// 2. Calculate fine row count
-	return 0
+func (node *appendableNode) Rows() uint32 {
+	node.block.mvcc.RLock()
+	defer node.block.mvcc.RUnlock()
+	return node.rows
 }
 
 func (node *appendableNode) CheckUnloadable() bool {
@@ -75,7 +74,7 @@ func (node *appendableNode) CheckUnloadable() bool {
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(int(minRow),
 		int(maxRow-minRow),
-		containers.DefaultAllocator)
+		common.TAEDefaultAllocator)
 	return
 }
 
@@ -95,7 +94,7 @@ func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *contai
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data
 	} else {
-		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 		data.Close()
 	}
 	return
@@ -114,7 +113,7 @@ func (node *appendableNode) getPersistedColumnData(
 	if maxRow-minRow == uint32(data.Length()) {
 		vec = data
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 		data.Close()
 	}
 	return
@@ -129,9 +128,9 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
 		data = data.Window(int(minRow), int(maxRow))
-		vec = containers.CloneWithBuffer(data, buffer, containers.DefaultAllocator)
+		vec = containers.CloneWithBuffer(data, buffer, common.TAEDefaultAllocator)
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 	}
 	return
 }
@@ -199,7 +198,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.prefix, startRow, length)
 	if err != nil {
 		return
 	}

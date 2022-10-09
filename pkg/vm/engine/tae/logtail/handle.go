@@ -147,9 +147,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 
 			// fill common syscol fields for every user column
-			rowidVec := dstBatch.GetVectorByName(catalog.AttrRowID)
-			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
-			abortVec := dstBatch.GetVectorByName(catalog.AttrAborted)
+			rowidVec := dstBatch.GetVectorByName(pkgcatalog.AttrRowID)
+			commitVec := dstBatch.GetVectorByName(pkgcatalog.AttrCommitTs)
+			abortVec := dstBatch.GetVectorByName(pkgcatalog.AttrAborted)
 			tableID := entry.GetID()
 			commitTs, aborted := tblNode.GetEnd(), tblNode.IsAborted()
 			for _, usercol := range entry.GetSchema().ColDefs {
@@ -233,9 +233,9 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
-	dstBatch.GetVectorByName(catalog.AttrAborted).Append(aborted)
+	dstBatch.GetVectorByName(pkgcatalog.AttrRowID).Append(rowid)
+	dstBatch.GetVectorByName(pkgcatalog.AttrCommitTs).Append(commitTs)
+	dstBatch.GetVectorByName(pkgcatalog.AttrAborted).Append(aborted)
 }
 
 func u64ToRowID(v uint64) types.Rowid {
@@ -260,19 +260,19 @@ func bytesToRowID(bs []byte) types.Rowid {
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
+	bat.AddVector(pkgcatalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
+	bat.AddVector(pkgcatalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
 	nullables := schema.AllNullables()
 	for i, attr := range attrs {
-		if attr == catalog.PhyAddrColumnName {
+		if attr == pkgcatalog.PhyAddrColumnName {
 			continue
 		}
 		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
 	}
-	bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), false))
+	bat.AddVector(pkgcatalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), false))
 	return bat
 }
 
@@ -355,9 +355,9 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
 			dstBatch = b.blkMetaDelBatch
 		}
 
-		dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
-		dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
-		dstBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
+		dstBatch.GetVectorByName(pkgcatalog.AttrRowID).Append(u64ToRowID(e.ID))
+		dstBatch.GetVectorByName(pkgcatalog.AttrCommitTs).Append(metaNode.GetEnd())
+		dstBatch.GetVectorByName(pkgcatalog.AttrAborted).Append(metaNode.IsAborted())
 	}
 }
 
@@ -368,7 +368,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
-		b.dataInsBatch.GetVectorByName(catalog.AttrRowID).Extend(insBatch.GetVectorByName(catalog.PhyAddrColumnName))
+		b.dataInsBatch.GetVectorByName(pkgcatalog.AttrRowID).Extend(insBatch.GetVectorByName(pkgcatalog.PhyAddrColumnName))
 		b.dataInsBatch.Extend(insBatch)
 		// insBatch is freed, don't use anymore
 	}
@@ -377,7 +377,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
-		b.dataDelBatch.GetVectorByName(catalog.AttrRowID).Extend(delBatch.GetVectorByName(catalog.PhyAddrColumnName))
+		b.dataDelBatch.GetVectorByName(pkgcatalog.AttrRowID).Extend(delBatch.GetVectorByName(pkgcatalog.PhyAddrColumnName))
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
 	}

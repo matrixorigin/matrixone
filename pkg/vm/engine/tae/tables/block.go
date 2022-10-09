@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -37,26 +36,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-)
-
-var ImmutMemAllocator stl.MemAllocator
-
-func init() {
-	ImmutMemAllocator = stl.NewSimpleAllocator()
-}
-
-type BlockState int8
-
-// BlockState is the state of the data block, which is different from the state of the mate
-const (
-	BS_Appendable BlockState = iota
-	BS_NotAppendable
 )
 
 // The initial state of the block when scoring
@@ -66,42 +52,26 @@ type statBlock struct {
 }
 
 type dataBlock struct {
-	common.RefHelper
 	*sync.RWMutex
+	common.RefHelper
 	common.ClosedState
-	meta       *catalog.BlockEntry
-	node       *appendableNode
-	file       file.Block
-	colObjects map[int]file.ColumnBlock
-	bufMgr     base.INodeManager
-	scheduler  tasks.TaskScheduler
-	indexes    map[int]indexwrapper.Index
-	pkIndex    indexwrapper.Index // a shortcut, nil if no pk column
-	mvcc       *updates.MVCCHandle
-	score      *statBlock
-	ckpTs      atomic.Value
-	prefix     []byte
-	state      BlockState
+	meta         *catalog.BlockEntry
+	node         *appendableNode
+	file         file.Block
+	colObjects   map[int]file.ColumnBlock
+	bufMgr       base.INodeManager
+	scheduler    tasks.TaskScheduler
+	indexes      map[int]indexwrapper.Index
+	pkIndex      indexwrapper.Index // a shortcut, nil if no pk column
+	mvcc         *updates.MVCCHandle
+	score        *statBlock
+	ckpTs        atomic.Value
+	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
-	indexCnt := make(map[int]int)
-	// every column has a zonemap
 	schema := meta.GetSchema()
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
-			continue
-		}
-		indexCnt[colDef.Idx] = 1
-	}
-	// ATTENTION: COMPOUNDPK
-	// pk column has another bloomfilter
-	pkIdx := -1024
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-		indexCnt[pkIdx] += 1
-	}
 	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
 		panic(err)
@@ -126,9 +96,8 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		scheduler:  scheduler,
 		indexes:    make(map[int]indexwrapper.Index),
 		bufMgr:     bufMgr,
-		prefix:     meta.MakeKey(),
 	}
-	ts := block.ReadTS()
+	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -139,21 +108,18 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 			if colDef.IsPhyAddr() {
 				continue
 			}
-			if colDef.Idx == pkIdx {
+			if colDef.IsPrimary() {
 				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type)
 				block.pkIndex = block.indexes[colDef.Idx]
 			} else {
 				block.indexes[colDef.Idx] = indexwrapper.NewMutableIndex(colDef.Type)
 			}
 		}
-		block.state = BS_Appendable
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	block.mvcc.SetMaxVisible(ts)
-	block.ckpTs.Store(ts)
 	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
@@ -165,19 +131,18 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
-func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
-func (blk *dataBlock) SetNotAppendable() {
+func (blk *dataBlock) FreezeAppend() {
 	blk.Lock()
 	defer blk.Unlock()
-	blk.state = BS_NotAppendable
+	blk.appendFrozen = true
 }
 
-func (blk *dataBlock) GetBlockState() BlockState {
+func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.state
+	return blk.appendFrozen
 }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
@@ -187,10 +152,6 @@ func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
 func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
 	ts := blk.ckpTs.Load().(types.TS)
 	return ts
-}
-
-func (blk *dataBlock) GetMaxVisibleTS() types.TS {
-	return blk.mvcc.LoadMaxVisible()
 }
 
 func (blk *dataBlock) FreeData() {
@@ -247,35 +208,49 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
-func (blk *dataBlock) RunCalibration() int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
-		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
-			return 0
-		}
-		blk.meta.RUnlock()
-		return 100
-	}
-	return blk.estimateRawScore()
+func (blk *dataBlock) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
 }
 
-func (blk *dataBlock) estimateRawScore() int {
-	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
+func (blk *dataBlock) estimateABlkRawScore() (score int) {
+	// Max row appended
+	rows := blk.Rows()
+	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		return 100
 	}
 
-	if blk.mvcc.GetChangeNodeCnt() == 0 && !blk.meta.IsAppendable() {
-		return 0
-	} else if blk.mvcc.GetChangeNodeCnt() == 0 && blk.meta.IsAppendable() &&
-		blk.mvcc.LoadMaxVisible().LessEq(blk.GetMaxCheckpointTS()) {
-		return 0
+	if blk.mvcc.GetChangeNodeCnt() == 0 && rows == 0 {
+		// No deletes or append found
+		score = 0
+	} else {
+		// Any deletes or append
+		score = 1
 	}
-	return 1
+	return
+}
+
+func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
+	if blk.meta.HasDropped() {
+		dropped = true
+		return
+	}
+	if blk.meta.IsAppendable() {
+		score = blk.estimateABlkRawScore()
+		return
+	}
+	if blk.mvcc.GetChangeNodeCnt() == 0 {
+		// No deletes found
+		score = 0
+	} else {
+		// Any delete
+		score = 1
+	}
+	return
 }
 
 func (blk *dataBlock) MutationInfo() string {
-	rows := blk.Rows(nil, true)
+	rows := blk.Rows()
 	totalChanges := blk.mvcc.GetChangeNodeCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
@@ -299,21 +274,14 @@ func (blk *dataBlock) MutationInfo() string {
 }
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
-		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
-			return 0
-		}
-		blk.meta.RUnlock()
-		return 100
+	score, dropped := blk.estimateRawScore()
+	if dropped {
+		return 0
 	}
-
-	score := blk.estimateRawScore()
 	if score > 1 {
 		return score
 	}
-	rows := uint32(blk.Rows(nil, true)) - blk.mvcc.GetDeleteCnt()
+	rows := uint32(blk.Rows()) - blk.mvcc.GetDeleteCnt()
 	if blk.score == nil {
 		blk.score = &statBlock{
 			rows:      rows,
@@ -340,7 +308,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	scopes []common.ID,
 	err error) {
 	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.SetNotAppendable()
+	blk.FreezeAppend()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.IsCreating()
@@ -365,11 +333,11 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.GetBlockState() == BS_NotAppendable {
+	if blk.IsAppendFrozen() {
 		return false
 	}
 
-	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	if blk.node.Rows() == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
 	}
 	return true
@@ -379,9 +347,9 @@ func (blk *dataBlock) GetTotalChanges() int {
 	return int(blk.mvcc.GetChangeNodeCnt())
 }
 
-func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
+func (blk *dataBlock) Rows() int {
 	if blk.meta.IsAppendable() {
-		rows := int(blk.node.Rows(txn, coarse))
+		rows := int(blk.node.Rows())
 		return rows
 	}
 	metaLoc := blk.meta.GetMetaLoc()
@@ -406,7 +374,7 @@ func (blk *dataBlock) GetRowsOnReplay() uint64 {
 }
 
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows(nil, true))
+	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
 	if level >= common.PPL1 {
 		blk.mvcc.RLock()
 		s2 := blk.mvcc.StringLocked()
@@ -657,7 +625,7 @@ func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err erro
 		return nil, nil
 	}
 	bat = containers.NewBatch()
-	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
+	colNames := []string{pkgcatalog.PhyAddrColumnName, pkgcatalog.AttrCommitTs, pkgcatalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 	for i := 0; i < 3; i++ {
 		vec, err := evictable.FetchDeltaData(nil, blk.bufMgr, blk.file, deltaloc, uint16(i), colTypes[i])
@@ -765,14 +733,6 @@ func (blk *dataBlock) OnApplyAppend(n txnif.AppendNode) (err error) {
 }
 
 func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts types.TS) (err error) {
-	// No pk defined
-	if !blk.meta.GetSchema().HasPK() {
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-		return
-	}
-	// If any pk defined, update index
-	blk.mvcc.Lock()
-	defer blk.mvcc.Unlock()
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
@@ -937,8 +897,8 @@ func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers
 	if err != nil {
 		return nil, err
 	}
-	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
-	batch.AddVector(catalog.AttrAborted, abortVec)
+	batch.AddVector(pkgcatalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(pkgcatalog.AttrAborted, abortVec)
 	return batch, nil
 }
 
@@ -948,9 +908,9 @@ func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Bat
 		return nil, nil
 	}
 	batch := containers.NewBatch()
-	batch.AddVector(catalog.PhyAddrColumnName, rowID)
-	batch.AddVector(catalog.AttrCommitTs, ts)
-	batch.AddVector(catalog.AttrAborted, abort)
+	batch.AddVector(pkgcatalog.PhyAddrColumnName, rowID)
+	batch.AddVector(pkgcatalog.AttrCommitTs, ts)
+	batch.AddVector(pkgcatalog.AttrAborted, abort)
 	return batch, nil
 }
 

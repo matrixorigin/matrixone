@@ -1,0 +1,86 @@
+SELECT REGEXP_INSTR('Cat', 'at') Result;
+SELECT REGEXP_INSTR('Cat', '^at') Result;
+SELECT REGEXP_INSTR('at', '^at') Result;
+SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) Result;
+
+SELECT REGEXP_INSTR('Cat Cat', 'Cat', 2) AS 'Pos2';
+SELECT REGEXP_INSTR('Cat Cat', 'Cat', 3) AS 'Pos3'; 
+SELECT REGEXP_INSTR('Cat Cat', 'Cat', 5) AS 'Pos5';
+
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1) 'Pos1';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2) 'Pos2';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 6) 'Pos6';
+
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1) 'Occurrence1';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 2) 'Occurrence2';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 3) 'Occurrence3';
+
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 1) 'Occurrence1';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 2) 'Occurrence2';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 2, 3) 'Occurrence3';
+
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1, 0) 'Option0';
+SELECT REGEXP_INSTR('Cat City is SO Cute!', 'C.t', 1, 1, 1) 'Option1';
+
+SELECT REGEXP_INSTR('Cat', null) Result;
+SELECT REGEXP_INSTR(null, 'C.t') Result;
+SELECT REGEXP_INSTR(null,  null) Result;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+SELECT a, REGEXP_INSTR(b, '^P') from t1;
+drop table t1;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+SELECT a, b from t1 WHERE REGEXP_INSTR(b, '^P') = 1;
+drop table t1;
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+SELECT a, REGEXP_INSTR(b, 'i', 3) from t1;
+drop table t1;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+SELECT a, REGEXP_INSTR(b, 'i', 2, 2) from t1;
+drop table t1;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+SELECT a, REGEXP_INSTR(b, 'i', 2, 2, 1) from t1;
+drop table t1;
