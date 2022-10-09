@@ -1,3 +1,31 @@
+SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
+character_set_name    default_collate_name    description    maxlen
+SELECT * FROM `information_schema`.`columns` LIMIT 0,1000;
+table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
+SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
+constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
+SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
+id    user    host    db    command    time    state    info
+SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
+query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
+SELECT * FROM `information_schema`.`schemata` LIMIT 0,1000;
+catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
+table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
+SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
+trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
+SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
+grantee    table_catalog    privilege_type    is_grantable
+SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
+host    db    user    table_name    column_name    timestamp    column_priv
+SELECT * FROM `mysql`.`db` LIMIT 0,1000;
+host    db    user    select_priv    insert_priv    update_priv    delete_priv    create_priv    drop_priv    grant_priv    references_priv    index_priv    alter_priv    create_tmp_table_priv    lock_tables_priv    create_view_priv    show_view_priv    create_routine_priv    alter_routine_priv    execute_priv    event_priv    trigger_priv
+SELECT * FROM `mysql`.`procs_priv` LIMIT 0,1000;
+host    db    user    routine_name    routine_type    grantor    proc_priv    timestamp
+SELECT * FROM `mysql`.`tables_priv` LIMIT 0,1000;
+host    db    user    table_name    grantor    timestamp    table_priv    column_priv
+SELECT * FROM `mysql`.`user` LIMIT 0,1000;
+host    user    select_priv    insert_priv    update_priv    delete_priv    create_priv    drop_priv    reload_priv    shutdown_priv    process_priv    file_priv    grant_priv    references_priv    index_priv    alter_priv    show_db_priv    super_priv    create_tmp_table_priv    lock_tables_priv    execute_priv    repl_slave_priv    repl_client_priv    create_view_priv    show_view_priv    create_routine_priv    alter_routine_priv    create_user_priv    event_priv    trigger_priv    create_tablespace_priv    ssl_type    ssl_cipher    x509_issuer    x509_subject    max_questions    max_updates    max_connections    max_user_connections    plugin    authentication_string    password_expired    password_last_changed    password_lifetime    account_locked    create_role_priv    drop_role_priv    password_reuse_history    password_reuse_time    password_require_current    user_attributes
 use mysql;
 show tables;
 tables_in_mysql
@@ -120,147 +148,38 @@ __mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL
 use information_schema;
 show tables;
 tables_in_information_schema
-KEY_COLUMN_USAGE
-COLUMNS
-PROFILING
+key_column_usage
+columns
+profiling
 PROCESSLIST
-USER_PRIVILEGES
-SCHEMATA
-CHARACTER_SETS
-TRIGGERS
-TABLES
+user_privileges
+schemata
+character_sets
+triggers
+tables
 show columns from `KEY_COLUMN_USAGE`;
-Field    Type    Null    Key    Default    Comment
-CONSTRAINT_CATALOG    VARCHAR    YES        NULL    
-CONSTRAINT_SCHEMA    VARCHAR    YES        NULL    
-CONSTRAINT_NAME    VARCHAR    YES        NULL    
-TABLE_CATALOG    VARCHAR    YES        NULL    
-TABLE_SCHEMA    VARCHAR    YES        NULL    
-TABLE_NAME    VARCHAR    YES        NULL    
-COLUMN_NAME    VARCHAR    YES        NULL    
-ORDINAL_POSITION    INT UNSIGNED    YES        NULL    
-POSITION_IN_UNIQUE_CONSTRAINT    INT UNSIGNED    YES        NULL    
-REFERENCED_TABLE_SCHEMA    VARCHAR    YES        NULL    
-REFERENCED_TABLE_NAME    VARCHAR    YES        NULL    
-REFERENCED_COLUMN_NAME    VARCHAR    YES        NULL    
+no such table information_schema.KEY_COLUMN_USAGE
 show columns from `COLUMNS`;
-Field    Type    Null    Key    Default    Comment
-TABLE_CATALOG    VARCHAR    YES        NULL    
-TABLE_SCHEMA    VARCHAR    YES        NULL    
-TABLE_NAME    VARCHAR    YES        NULL    
-COLUMN_NAME    VARCHAR    YES        NULL    
-ORDINAL_POSITION    INT UNSIGNED    YES        NULL    
-COLUMN_DEFAULT    TEXT    YES        NULL    
-IS_NULLABLE    VARCHAR    YES        NULL    
-DATA_TYPE    TEXT    YES        NULL    
-CHARACTER_MAXIMUM_LENGTH    BIGINT    YES        NULL    
-CHARACTER_OCTET_LENGTH    BIGINT    YES        NULL    
-NUMERIC_PRECISION    BIGINT UNSIGNED    YES        NULL    
-NUMERIC_SCALE    BIGINT UNSIGNED    YES        NULL    
-DATETIME_PRECISION    INT UNSIGNED    YES        NULL    
-CHARACTER_SET_NAME    VARCHAR    YES        NULL    
-COLLATION_NAME    VARCHAR    YES        NULL    
-COLUMN_TYPE    TEXT    YES        NULL    
-COLUMN_KEY    VARCHAR    YES        NULL    
-EXTRA    VARCHAR    YES        NULL    
-PRIVILEGES    VARCHAR    YES        NULL    
-COLUMN_COMMENT    TEXT    YES        NULL    
-GENERATION_EXPRESSION    TEXT    YES        NULL    
-SRS_ID    INT UNSIGNED    YES        NULL    
+no such table information_schema.COLUMNS
 show columns from `PROFILING`;
-Field    Type    Null    Key    Default    Comment
-QUERY_ID    INT    NO        NULL    
-SEQ    INT    NO        NULL    
-STATE    VARCHAR    NO        NULL    
-DURATION    DECIMAL64    NO        NULL    
-CPU_USER    DECIMAL64    YES        NULL    
-CPU_SYSTEM    DECIMAL64    YES        NULL    
-CONTEXT_VOLUNTARY    INT    YES        NULL    
-CONTEXT_INVOLUNTARY    INT    YES        NULL    
-BLOCK_OPS_IN    INT    YES        NULL    
-BLOCK_OPS_OUT    INT    YES        NULL    
-MESSAGES_SENT    INT    YES        NULL    
-MESSAGES_RECEIVED    INT    YES        NULL    
-PAGE_FAULTS_MAJOR    INT    YES        NULL    
-PAGE_FAULTS_MINOR    INT    YES        NULL    
-SWAPS    INT    YES        NULL    
-SOURCE_FUNCTION    VARCHAR    YES        NULL    
-SOURCE_FILE    VARCHAR    YES        NULL    
-SOURCE_LINE    INT    YES        NULL    
+no such table information_schema.PROFILING
 show columns from `PROCESSLIST`;
 Field    Type    Null    Key    Default    Comment
-ID    BIGINT UNSIGNED    NO        NULL    
-USER    VARCHAR    NO        NULL    
-HOST    VARCHAR    NO        NULL    
-DB    VARCHAR    YES        NULL    
-COMMAND    VARCHAR    NO        NULL    
-TIME    INT    NO        NULL    
-STATE    VARCHAR    YES        NULL    
-INFO    TEXT    YES        NULL    
+id    BIGINT UNSIGNED    NO        NULL    
+user    VARCHAR    NO        NULL    
+host    VARCHAR    NO        NULL    
+db    VARCHAR    YES        NULL    
+command    VARCHAR    NO        NULL    
+time    INT    NO        NULL    
+state    VARCHAR    YES        NULL    
+info    TEXT    YES        NULL    
 show columns from `USER_PRIVILEGES`;
-Field    Type    Null    Key    Default    Comment
-GRANTEE    VARCHAR    NO        NULL    
-TABLE_CATALOG    VARCHAR    NO        NULL    
-PRIVILEGE_TYPE    VARCHAR    NO        NULL    
-IS_GRANTABLE    VARCHAR    NO        NULL    
+no such table information_schema.USER_PRIVILEGES
 show columns from `SCHEMATA`;
-Field    Type    Null    Key    Default    Comment
-CATALOG_NAME    VARCHAR    YES        NULL    
-SCHEMA_NAME    VARCHAR    YES        NULL    
-DEFAULT_CHARACTER_SET_NAME    VARCHAR    YES        NULL    
-DEFAULT_COLLATION_NAME    VARCHAR    YES        NULL    
-SQL_PATH    VARCHAR    YES        NULL    
-DEFAULT_ENCRYPTION    VARCHAR    YES        NULL    
+no such table information_schema.SCHEMATA
 show columns from `CHARACTER_SETS`;
-Field    Type    Null    Key    Default    Comment
-CHARACTER_SET_NAME    VARCHAR    YES        NULL    
-DEFAULT_COLLATE_NAME    VARCHAR    YES        NULL    
-DESCRIPTION    VARCHAR    YES        NULL    
-MAXLEN    INT UNSIGNED    YES        NULL    
+no such table information_schema.CHARACTER_SETS
 show columns from `TRIGGERS`;
-Field    Type    Null    Key    Default    Comment
-TRIGGER_CATALOG    VARCHAR    YES        NULL    
-TRIGGER_SCHEMA    VARCHAR    YES        NULL    
-TRIGGER_NAME    VARCHAR    YES        NULL    
-EVENT_MANIPULATION    VARCHAR    YES        NULL    
-EVENT_OBJECT_CATALOG    VARCHAR    YES        NULL    
-EVENT_OBJECT_SCHEMA    VARCHAR    YES        NULL    
-EVENT_OBJECT_TABLE    VARCHAR    YES        NULL    
-ACTION_ORDER    INT UNSIGNED    YES        NULL    
-ACTION_CONDITION    VARCHAR    YES        NULL    
-ACTION_STATEMENT    TEXT    YES        NULL    
-ACTION_ORIENTATION    VARCHAR    YES        NULL    
-ACTION_TIMING    VARCHAR    YES        NULL    
-ACTION_REFERENCE_OLD_TABLE    VARCHAR    YES        NULL    
-ACTION_REFERENCE_NEW_TABLE    VARCHAR    YES        NULL    
-ACTION_REFERENCE_OLD_ROW    VARCHAR    YES        NULL    
-ACTION_REFERENCE_NEW_ROW    VARCHAR    YES        NULL    
-CREATED    TIMESTAMP    YES        NULL    
-SQL_MODE    VARCHAR    YES        NULL    
-DEFINER    VARCHAR    YES        NULL    
-CHARACTER_SET_CLIENT    VARCHAR    YES        NULL    
-COLLATION_CONNECTION    VARCHAR    YES        NULL    
-DATABASE_COLLATION    VARCHAR    YES        NULL    
+no such table information_schema.TRIGGERS
 show columns from `TABLES`;
-Field    Type    Null    Key    Default    Comment
-TABLE_CATALOG    VARCHAR    YES        NULL    
-TABLE_SCHEMA    VARCHAR    YES        NULL    
-TABLE_NAME    VARCHAR    YES        NULL    
-TABLE_TYPE    VARCHAR    YES        NULL    
-ENGINE    VARCHAR    YES        NULL    
-VERSION    INT    YES        NULL    
-ROW_FORMAT    VARCHAR    YES        NULL    
-TABLE_ROWS    BIGINT UNSIGNED    YES        NULL    
-AVG_ROW_LENGTH    BIGINT UNSIGNED    YES        NULL    
-DATA_LENGTH    BIGINT UNSIGNED    YES        NULL    
-MAX_DATA_LENGTH    BIGINT UNSIGNED    YES        NULL    
-INDEX_LENGTH    BIGINT UNSIGNED    YES        NULL    
-DATA_FREE    BIGINT UNSIGNED    YES        NULL    
-AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL    
-CREATE_TIME    TIMESTAMP    YES        NULL    
-UPDATE_TIME    DATETIME    YES        NULL    
-CHECK_TIME    DATETIME    YES        NULL    
-TABLE_COLLATION    VARCHAR    YES        NULL    
-CHECKSUM    BIGINT    YES        NULL    
-CREATE_OPTIONS    VARCHAR    YES        NULL    
-TABLE_COMMENT    TEXT    YES        NULL    
+no such table information_schema.TABLES

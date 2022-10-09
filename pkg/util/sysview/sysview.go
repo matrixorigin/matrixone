@@ -148,140 +148,140 @@ var (
 		  )`,
 	}
 	initInformationSchemaSysTables = []string{
-		"CREATE TABLE IF NOT EXISTS `KEY_COLUMN_USAGE`(" +
-			"`CONSTRAINT_CATALOG` varchar(64)," +
-			"`CONSTRAINT_SCHEMA` varchar(64)," +
-			"`CONSTRAINT_NAME` varchar(64)," +
-			"`TABLE_CATALOG` varchar(64)," +
-			"`TABLE_SCHEMA` varchar(64)," +
-			"`TABLE_NAME` varchar(64)," +
-			"`COLUMN_NAME` varchar(64)," +
-			"`ORDINAL_POSITION` int unsigned," +
-			"`POSITION_IN_UNIQUE_CONSTRAINT` int unsigned," +
-			"`REFERENCED_TABLE_SCHEMA` varchar(64)," +
-			"`REFERENCED_TABLE_NAME` varchar(64)," +
-			"`REFERENCED_COLUMN_NAME` varchar(64)" +
+		"CREATE TABLE IF NOT EXISTS KEY_COLUMN_USAGE(" +
+			"CONSTRAINT_CATALOG varchar(64)," +
+			"CONSTRAINT_SCHEMA varchar(64)," +
+			"CONSTRAINT_NAME varchar(64)," +
+			"TABLE_CATALOG varchar(64)," +
+			"TABLE_SCHEMA varchar(64)," +
+			"TABLE_NAME varchar(64)," +
+			"COLUMN_NAME varchar(64)," +
+			"ORDINAL_POSITION int unsigned," +
+			"POSITION_IN_UNIQUE_CONSTRAINT int unsigned," +
+			"REFERENCED_TABLE_SCHEMA varchar(64)," +
+			"REFERENCED_TABLE_NAME varchar(64)," +
+			"REFERENCED_COLUMN_NAME varchar(64)" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `COLUMNS`(" +
-			"`TABLE_CATALOG` varchar(64)," +
-			"`TABLE_SCHEMA` varchar(64)," +
-			"`TABLE_NAME` varchar(64)," +
-			"`COLUMN_NAME` varchar(64)," +
-			"`ORDINAL_POSITION` int unsigned," +
-			"`COLUMN_DEFAULT` text," +
-			"`IS_NULLABLE` varchar(3)," +
-			"`DATA_TYPE` longtext," +
-			"`CHARACTER_MAXIMUM_LENGTH` bigint," +
-			"`CHARACTER_OCTET_LENGTH` bigint," +
-			"`NUMERIC_PRECISION` bigint unsigned," +
-			"`NUMERIC_SCALE` bigint unsigned," +
-			"`DATETIME_PRECISION` int unsigned," +
-			"`CHARACTER_SET_NAME` varchar(64)," +
-			"`COLLATION_NAME` varchar(64)," +
-			"`COLUMN_TYPE` mediumtext," +
-			"`COLUMN_KEY` varchar(10)," +
-			"`EXTRA` varchar(256)," +
+		"CREATE TABLE IF NOT EXISTS COLUMNS(" +
+			"TABLE_CATALOG varchar(64)," +
+			"TABLE_SCHEMA varchar(64)," +
+			"TABLE_NAME varchar(64)," +
+			"COLUMN_NAME varchar(64)," +
+			"ORDINAL_POSITION int unsigned," +
+			"COLUMN_DEFAULT text," +
+			"IS_NULLABLE varchar(3)," +
+			"DATA_TYPE longtext," +
+			"CHARACTER_MAXIMUM_LENGTH bigint," +
+			"CHARACTER_OCTET_LENGTH bigint," +
+			"NUMERIC_PRECISION bigint unsigned," +
+			"NUMERIC_SCALE bigint unsigned," +
+			"DATETIME_PRECISION int unsigned," +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"COLLATION_NAME varchar(64)," +
+			"COLUMN_TYPE mediumtext," +
+			"COLUMN_KEY varchar(10)," +
+			"EXTRA varchar(256)," +
 			"`PRIVILEGES` varchar(154)," +
-			"`COLUMN_COMMENT` text," +
-			"`GENERATION_EXPRESSION` longtext," +
-			"`SRS_ID` int unsigned" +
+			"COLUMN_COMMENT text," +
+			"GENERATION_EXPRESSION longtext," +
+			"SRS_ID int unsigned" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `PROFILING` (" +
-			"`QUERY_ID` int NOT NULL DEFAULT '0'," +
-			"`SEQ` int NOT NULL DEFAULT '0'," +
-			"`STATE` varchar(30) NOT NULL DEFAULT ''," +
-			"`DURATION` decimal(9,6) NOT NULL DEFAULT '0.000000'," +
-			"`CPU_USER` decimal(9,6) DEFAULT NULL," +
-			"`CPU_SYSTEM` decimal(9,6) DEFAULT NULL," +
-			"`CONTEXT_VOLUNTARY` int DEFAULT NULL," +
-			"`CONTEXT_INVOLUNTARY` int DEFAULT NULL," +
-			"`BLOCK_OPS_IN` int DEFAULT NULL," +
-			"`BLOCK_OPS_OUT` int DEFAULT NULL," +
-			"`MESSAGES_SENT` int DEFAULT NULL," +
-			"`MESSAGES_RECEIVED` int DEFAULT NULL," +
-			"`PAGE_FAULTS_MAJOR` int DEFAULT NULL," +
-			"`PAGE_FAULTS_MINOR` int DEFAULT NULL," +
-			"`SWAPS` int DEFAULT NULL," +
-			"`SOURCE_FUNCTION` varchar(30) DEFAULT NULL," +
-			"`SOURCE_FILE` varchar(20) DEFAULT NULL," +
-			"`SOURCE_LINE` int DEFAULT NULL" +
+		"CREATE TABLE IF NOT EXISTS PROFILING (" +
+			"QUERY_ID int NOT NULL DEFAULT '0'," +
+			"SEQ int NOT NULL DEFAULT '0'," +
+			"STATE varchar(30) NOT NULL DEFAULT ''," +
+			"DURATION decimal(9,6) NOT NULL DEFAULT '0.000000'," +
+			"CPU_USER decimal(9,6) DEFAULT NULL," +
+			"CPU_SYSTEM decimal(9,6) DEFAULT NULL," +
+			"CONTEXT_VOLUNTARY int DEFAULT NULL," +
+			"CONTEXT_INVOLUNTARY int DEFAULT NULL," +
+			"BLOCK_OPS_IN int DEFAULT NULL," +
+			"BLOCK_OPS_OUT int DEFAULT NULL," +
+			"MESSAGES_SENT int DEFAULT NULL," +
+			"MESSAGES_RECEIVED int DEFAULT NULL," +
+			"PAGE_FAULTS_MAJOR int DEFAULT NULL," +
+			"PAGE_FAULTS_MINOR int DEFAULT NULL," +
+			"SWAPS int DEFAULT NULL," +
+			"SOURCE_FUNCTION varchar(30) DEFAULT NULL," +
+			"SOURCE_FILE varchar(20) DEFAULT NULL," +
+			"SOURCE_LINE int DEFAULT NULL" +
 			")",
 		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
-			"`ID` bigint unsigned NOT NULL DEFAULT '0'," +
-			"`USER` varchar(32) NOT NULL DEFAULT ''," +
-			"`HOST` varchar(261) NOT NULL DEFAULT ''," +
-			"`DB` varchar(64) DEFAULT NULL," +
-			"`COMMAND` varchar(16) NOT NULL DEFAULT ''," +
-			"`TIME` int NOT NULL DEFAULT '0'," +
-			"`STATE` varchar(64) DEFAULT NULL," +
-			"`INFO` longtext" +
+			"ID bigint unsigned NOT NULL DEFAULT '0'," +
+			"USER varchar(32) NOT NULL DEFAULT ''," +
+			"HOST varchar(261) NOT NULL DEFAULT ''," +
+			"DB varchar(64) DEFAULT NULL," +
+			"COMMAND varchar(16) NOT NULL DEFAULT ''," +
+			"TIME int NOT NULL DEFAULT '0'," +
+			"STATE varchar(64) DEFAULT NULL," +
+			"INFO longtext" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `USER_PRIVILEGES` (" +
-			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
-			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
-			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
-			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
+			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
+			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
+			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
+			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `SCHEMATA` (" +
-			"`CATALOG_NAME` varchar(64)," +
-			"`SCHEMA_NAME` varchar(64)," +
-			"`DEFAULT_CHARACTER_SET_NAME` varchar(64)," +
-			"`DEFAULT_COLLATION_NAME` varchar(64)," +
-			"`SQL_PATH` binary(0)," +
-			"`DEFAULT_ENCRYPTION` varchar(10)" +
+		"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
+			"CATALOG_NAME varchar(64)," +
+			"SCHEMA_NAME varchar(64)," +
+			"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
+			"DEFAULT_COLLATION_NAME varchar(64)," +
+			"SQL_PATH binary(0)," +
+			"DEFAULT_ENCRYPTION varchar(10)" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `CHARACTER_SETS`(" +
-			"`CHARACTER_SET_NAME` varchar(64)," +
-			"`DEFAULT_COLLATE_NAME` varchar(64)," +
-			"`DESCRIPTION` varchar(2048)," +
-			"`MAXLEN` int unsigned" +
+		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"DEFAULT_COLLATE_NAME varchar(64)," +
+			"DESCRIPTION varchar(2048)," +
+			"MAXLEN int unsigned" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `TRIGGERS`(" +
-			"`TRIGGER_CATALOG` varchar(64)," +
-			"`TRIGGER_SCHEMA` varchar(64)," +
-			"`TRIGGER_NAME` varchar(64)," +
-			"`EVENT_MANIPULATION` varchar(10)," +
-			"`EVENT_OBJECT_CATALOG` varchar(64)," +
-			"`EVENT_OBJECT_SCHEMA` varchar(64)," +
-			"`EVENT_OBJECT_TABLE` varchar(64)," +
-			"`ACTION_ORDER` int unsigned," +
-			"`ACTION_CONDITION` binary(0)," +
-			"`ACTION_STATEMENT` longtext," +
-			"`ACTION_ORIENTATION` varchar(3)," +
-			"`ACTION_TIMING` varchar(10)," +
-			"`ACTION_REFERENCE_OLD_TABLE` binary(0)," +
-			"`ACTION_REFERENCE_NEW_TABLE` binary(0)," +
-			"`ACTION_REFERENCE_OLD_ROW` varchar(3)," +
-			"`ACTION_REFERENCE_NEW_ROW` varchar(3)," +
-			"`CREATED` timestamp(2)," +
-			"`SQL_MODE` varchar(10)," +
-			"`DEFINER` varchar(288)," +
-			"`CHARACTER_SET_CLIENT` varchar(64)," +
-			"`COLLATION_CONNECTION` varchar(64)," +
-			"`DATABASE_COLLATION` varchar(64)" +
+		"CREATE TABLE IF NOT EXISTS TRIGGERS(" +
+			"TRIGGER_CATALOG varchar(64)," +
+			"TRIGGER_SCHEMA varchar(64)," +
+			"TRIGGER_NAME varchar(64)," +
+			"EVENT_MANIPULATION varchar(10)," +
+			"EVENT_OBJECT_CATALOG varchar(64)," +
+			"EVENT_OBJECT_SCHEMA varchar(64)," +
+			"EVENT_OBJECT_TABLE varchar(64)," +
+			"ACTION_ORDER int unsigned," +
+			"ACTION_CONDITION binary(0)," +
+			"ACTION_STATEMENT longtext," +
+			"ACTION_ORIENTATION varchar(3)," +
+			"ACTION_TIMING varchar(10)," +
+			"ACTION_REFERENCE_OLD_TABLE binary(0)," +
+			"ACTION_REFERENCE_NEW_TABLE binary(0)," +
+			"ACTION_REFERENCE_OLD_ROW varchar(3)," +
+			"ACTION_REFERENCE_NEW_ROW varchar(3)," +
+			"CREATED timestamp(2)," +
+			"SQL_MODE varchar(10)," +
+			"DEFINER varchar(288)," +
+			"CHARACTER_SET_CLIENT varchar(64)," +
+			"COLLATION_CONNECTION varchar(64)," +
+			"DATABASE_COLLATION varchar(64)" +
 			")",
-		"CREATE TABLE IF NOT EXISTS `TABLES`(" +
-			"`TABLE_CATALOG` varchar(64)," +
-			"`TABLE_SCHEMA` varchar(64)," +
-			"`TABLE_NAME` varchar(64)," +
-			"`TABLE_TYPE` varchar(10)," +
-			"`ENGINE` varchar(64)," +
-			"`VERSION` int," +
-			"`ROW_FORMAT` varchar(10)," +
-			"`TABLE_ROWS` bigint unsigned," +
-			"`AVG_ROW_LENGTH` bigint unsigned," +
-			"`DATA_LENGTH` bigint unsigned," +
-			"`MAX_DATA_LENGTH` bigint unsigned," +
-			"`INDEX_LENGTH` bigint unsigned," +
-			"`DATA_FREE` bigint unsigned," +
+		"CREATE TABLE IF NOT EXISTS TABLES(" +
+			"TABLE_CATALOG varchar(64)," +
+			"TABLE_SCHEMA varchar(64)," +
+			"TABLE_NAME varchar(64)," +
+			"TABLE_TYPE varchar(10)," +
+			"ENGINE varchar(64)," +
+			"VERSION int," +
+			"ROW_FORMAT varchar(10)," +
+			"TABLE_ROWS bigint unsigned," +
+			"AVG_ROW_LENGTH bigint unsigned," +
+			"DATA_LENGTH bigint unsigned," +
+			"MAX_DATA_LENGTH bigint unsigned," +
+			"INDEX_LENGTH bigint unsigned," +
+			"DATA_FREE bigint unsigned," +
 			"`AUTO_INCREMENT` bigint unsigned," +
-			"`CREATE_TIME` timestamp," +
-			"`UPDATE_TIME` datetime," +
-			"`CHECK_TIME` datetime," +
-			"`TABLE_COLLATION` varchar(64)," +
-			"`CHECKSUM` bigint," +
-			"`CREATE_OPTIONS` varchar(256)," +
-			"`TABLE_COMMENT` text" +
+			"CREATE_TIME timestamp," +
+			"UPDATE_TIME datetime," +
+			"CHECK_TIME datetime," +
+			"TABLE_COLLATION varchar(64)," +
+			"CHECKSUM bigint," +
+			"CREATE_OPTIONS varchar(256)," +
+			"TABLE_COMMENT text" +
 			")",
 	}
 )
