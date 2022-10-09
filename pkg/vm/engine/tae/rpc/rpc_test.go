@@ -33,7 +33,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose()
 	txnEngine := handle.GetTxnEngine()
-	schema := catalog.MockSchema(13, 12)
+	schema := catalog.MockSchema(2, 1)
 	//DDL
 	//create db;
 	dbName := "dbtest"
@@ -77,7 +77,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
-	defs[5].(*engine.AttributeDef).Attr.Default = &plan.Default{
+	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
@@ -91,7 +91,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		},
 		OriginString: "expr1",
 	}
-	defs[6].(*engine.AttributeDef).Attr.Default = &plan.Default{
+	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: false,
 		Expr: &plan.Expr{
 			Expr: &plan.Expr_C{
@@ -135,13 +135,20 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.Nil(t, err)
 	dbHandle, err = txnEngine.GetDatabase(ctx, dbName, txn)
 	assert.NoError(t, err)
+	dbId := dbHandle.GetDatabaseID(ctx)
+	assert.True(t, dbTestId == dbId)
 	names, _ = dbHandle.RelationNames(ctx)
 	assert.Equal(t, 1, len(names))
 	tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbHandle.GetRelationID(ctx)
-	//rdefs, _ := tbHandle.TableDefs(ctx)
-	//assert.Equal(t, 15, len(rdefs))
+	rDefs, _ := tbHandle.TableDefs(ctx)
+	assert.Equal(t, 3, len(rDefs))
+	rAttr := rDefs[0].(*engine.AttributeDef).Attr
+	assert.Equal(t, true, rAttr.Default.NullAbility)
+	rAttr = rDefs[1].(*engine.AttributeDef).Attr
+	assert.Equal(t, "expr2", rAttr.Default.OriginString)
+
 	err = txn.Commit()
 	assert.NoError(t, err)
 
@@ -179,12 +186,13 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 	tbHandle, err = dbHandle.GetRelation(ctx, schema.Name)
 	assert.NoError(t, err)
-	tbReaders, _ := tbHandle.NewReader(ctx, 10, nil, nil)
+	tbReaders, _ := tbHandle.NewReader(ctx, 1, nil, nil)
 	for _, reader := range tbReaders {
 		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, handle.m)
 		assert.Nil(t, err)
 		if bat != nil {
-			assert.Equal(t, 100, vector.Length(bat.Vecs[0]))
+			len := vector.Length(bat.Vecs[0])
+			assert.Equal(t, 100, len)
 		}
 	}
 

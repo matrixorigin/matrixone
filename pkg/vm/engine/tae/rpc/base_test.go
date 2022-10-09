@@ -44,6 +44,12 @@ type mockHandle struct {
 	m *mheap.Mheap
 }
 
+func (h *mockHandle) HandleClose() error {
+	err := h.Handle.HandleClose()
+	//TODO::free h.m?
+	return err
+}
+
 func initDB(t *testing.T, opts *options.Options) *db.DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := db.Open(dir, opts)
@@ -160,12 +166,15 @@ func genColumns(
 			comment:      attrDef.Attr.Comment,
 		}
 		if attrDef.Attr.Default != nil {
-			col.hasDef = 1
-			defaultExpr, err := attrDef.Attr.Default.Marshal()
+			defaultExpr, err := types.Encode(attrDef.Attr.Default)
 			if err != nil {
 				return nil, err
 			}
-			col.defaultExpr = defaultExpr
+			if len(defaultExpr) > 0 {
+				col.hasDef = 1
+				col.defaultExpr = defaultExpr
+
+			}
 		}
 		if attrDef.Attr.IsHidden {
 			col.isHidden = 1
@@ -265,24 +274,6 @@ func genCreateDatabaseTuple(
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch, error) {
-	bat := batch.NewWithSize(2)
-	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
-	{
-		idx := catalog.MO_DATABASE_DAT_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_id
-		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_DATABASE_DAT_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // datname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
-			return nil, err
-		}
-	}
-	return bat, nil
-}
-
 func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
@@ -307,23 +298,27 @@ func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
 		if err := bat.Vecs[idx].Append([]byte(col.databaseName), false, m); err != nil {
 			return nil, err
 		}
+
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname_id
+		//TODO::rel id get from col
 		if err := bat.Vecs[idx].Append(uint64(0), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_COLUMNS_ATTTYP_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname
+
+		idx = catalog.MO_COLUMNS_ATT_RELNAME_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname_id
 		if err := bat.Vecs[idx].Append([]byte(col.tableName), false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_COLUMNS_ATTNUM_IDX
+		//idx = catalog.MO_COLUMNS_ATTNUM_IDX
+		idx = catalog.MO_COLUMNS_ATTNAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // attname
 		if err := bat.Vecs[idx].Append([]byte(col.name), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ATTTYP_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // atttyp
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname
 		if err := bat.Vecs[idx].Append(col.typ, false, m); err != nil {
 			return nil, err
 		}
@@ -544,35 +539,6 @@ func genCreateTableTuple(
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // partition
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
-			return nil, err
-		}
-	}
-	return bat, nil
-}
-
-func genDropTableTuple(id, databaseId uint64, name, databaseName string,
-	m *mheap.Mheap) (*batch.Batch, error) {
-	bat := batch.NewWithSize(4)
-	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	{
-		idx := catalog.MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
-		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
-		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
-		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
 			return nil, err
 		}
 	}
