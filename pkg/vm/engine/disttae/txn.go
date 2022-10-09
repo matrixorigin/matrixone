@@ -179,6 +179,23 @@ func (txn *Transaction) IncStatementId() {
 func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, bat *batch.Batch, dnStore DNStore) error {
 	txn.readOnly = false
+	if typ == INSERT {
+		len := bat.Length()
+		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		for i := 0; i < len; i++ {
+			if err := vec.Append(txn.genRowId(), false,
+				txn.proc.Mp()); err != nil {
+				return err
+			}
+		}
+		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+	} else {
+		if bat = txn.deleteBatch(bat, databaseId, tableId); bat.Length() == 0 {
+			bat.Clean(txn.proc.Mp())
+			return nil
+		}
+	}
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -295,7 +312,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 		}
 		for _, rd := range rds {
 			for {
-				bat, err := rd.Read(columns, expr, nil)
+				bat, err := rd.Read(columns, expr, txn.proc.Mp())
 				if err != nil {
 					return nil, err
 				}
@@ -332,6 +349,48 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 		bats[i] = bat
 	}
 	return bats, nil
+}
+
+func (txn *Transaction) deleteBatch(bat *batch.Batch,
+	databaseId, tableId uint64) *batch.Batch {
+	mp := make(map[types.Rowid]uint8)
+	rowids := vector.MustTCols[types.Rowid](bat.GetVector(0))
+	for _, rowid := range rowids {
+		mp[rowid] = 0
+	}
+	sels := txn.proc.Mp().GetSels()
+	for i := range txn.writes {
+		for j, e := range txn.writes[i] {
+			sels = sels[:0]
+			if e.tableId == tableId && e.databaseId == databaseId {
+				vs := vector.MustTCols[types.Rowid](e.bat.GetVector(0))
+				for k, v := range vs {
+					if _, ok := mp[v]; !ok {
+						sels = append(sels, int64(k))
+					} else {
+						mp[v]++
+					}
+				}
+				if len(sels) != len(vs) {
+					txn.writes[i][j].bat.Shrink(sels)
+				}
+			}
+		}
+	}
+	sels = sels[:0]
+	for k, rowid := range rowids {
+		if mp[rowid] == 0 {
+			sels = append(sels, int64(k))
+		}
+	}
+	bat.Shrink(sels)
+	txn.proc.Mp().PutSels(sels)
+	return bat
+}
+
+func (txn *Transaction) genRowId() types.Rowid {
+	txn.rowId[1]++
+	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
 func (h transactionHeap) Len() int {
