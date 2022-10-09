@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDateDiff(t *testing.T){
+func TestDateDiff(t *testing.T) {
 	cases := []struct {
 		name string
 		vecs []*vector.Vector

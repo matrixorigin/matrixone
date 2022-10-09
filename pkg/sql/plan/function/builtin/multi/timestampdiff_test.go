@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDateDiff(t *testing.T){
+func TestDateDiff(t *testing.T) {
 	cases := []struct {
 		name string
 		vecs []*vector.Vector
@@ -34,67 +34,67 @@ func TestDateDiff(t *testing.T){
 	}{
 		{
 			name: "TEST01",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.MicroSecond, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.MicroSecond, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 2660588000000,
 		},
 		{
 			name: "TEST02",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Second, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Second, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 2660588,
 		},
 		{
 			name: "TEST03",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Minute, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Minute, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 44343,
 		},
 		{
 			name: "TEST04",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Hour, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Hour, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 739,
 		},
 		{
 			name: "TEST05",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Day, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 30,
 		},
 		{
 			name: "TEST06",
-			vecs:  makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-08 12:15:12", types.Week, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-12-01 12:15:12", "2018-01-08 12:15:12", types.Week, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 5,
 		},
 		{
 			name: "TEST07",
-			vecs:  makeTimeStampDiffVectors("2017-11-01 12:15:12", "2018-01-01 12:15:12", types.Month, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-11-01 12:15:12", "2018-01-01 12:15:12", types.Month, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 2,
 		},
 		{
 			name: "TEST08",
-			vecs:  makeTimeStampDiffVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Quarter, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Quarter, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 4,
 		},
 		{
 			name: "TEST09",
-			vecs:  makeTimeStampDiffVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Year, proc.Mp()),
+			vecs: makeTimeStampDiffVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Year, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: 1,
 		},
 		{
 			name: "TEST10",
-			vecs:  makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.MicroSecond, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.MicroSecond, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -2660588000000,
 		},
 		{
 			name: "TEST11",
-			vecs:  makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Second, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Second, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -2660588,
 		},
@@ -106,37 +106,37 @@ func TestDateDiff(t *testing.T){
 		},
 		{
 			name: "TEST13",
-			vecs:  makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Hour, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Hour, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -739,
 		},
 		{
 			name: "TEST14",
-			vecs:  makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Day, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", types.Day, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -30,
 		},
 		{
 			name: "TEST15",
-			vecs:  makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-08 12:15:12", types.Week, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-12-01 12:15:12", "2018-01-08 12:15:12", types.Week, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -5,
 		},
 		{
 			name: "TEST16",
-			vecs:  makeTimeStampDiffReverseVectors("2017-11-01 12:15:12", "2018-01-01 12:15:12", types.Month, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-11-01 12:15:12", "2018-01-01 12:15:12", types.Month, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -2,
 		},
 		{
 			name: "TEST17",
-			vecs:  makeTimeStampDiffReverseVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Quarter, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Quarter, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -4,
 		},
 		{
 			name: "TEST18",
-			vecs:  makeTimeStampDiffReverseVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Year, proc.Mp()),
+			vecs: makeTimeStampDiffReverseVectors("2017-01-01 12:15:12", "2018-01-01 12:15:12", types.Year, proc.Mp()),
 			proc: testutil.NewProc(),
 			want: -1,
 		},
