@@ -196,8 +196,8 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 		})
 	}()
-	M1ValuesRe := regexp.MustCompile(`m1,(.*[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
-	M2ValuesRe := regexp.MustCompile(`m2,(.*[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
+	M1ValuesRe := regexp.MustCompile(`m1,(.*[,]?)+\n`) // find pattern like m1,...,...,...\n
+	M2ValuesRe := regexp.MustCompile(`m2,(.*[,]?)+\n`) // find pattern like m2,...,...,...\n
 	nameAndValueCnt := func(n, s string, re *regexp.Regexp) (name string, cnt int) {
 		t.Logf("name: %s, csv: %s", n, s)
 		cnt = len(re.FindAllString(s, -1))
