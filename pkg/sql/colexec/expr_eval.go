@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -57,32 +56,32 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConstFixed(constBType, length, t.C.GetBval())
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
 			case *plan.Const_Ival:
-				vec = vector.NewConstFixed(constIType, length, t.C.GetIval())
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
 			case *plan.Const_Fval:
-				vec = vector.NewConstFixed(constFType, length, t.C.GetFval())
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
 			case *plan.Const_Uval:
-				vec = vector.NewConstFixed(constUType, length, t.C.GetUval())
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 			case *plan.Const_Dval:
-				vec = vector.NewConstFixed(constDType, length, t.C.GetDval())
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
-				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval())
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval())
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
 				cd64 := t.C.GetDecimal64Val()
 				d64 := types.Decimal64FromInt64Raw(cd64.A)
-				vec = vector.NewConstFixed(constDecimal64Type, length, d64)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
 				d128 := types.Decimal64FromInt64Raw(cd128.A)
-				vec = vector.NewConstFixed(constDecimal128Type, length, d128)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
-				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval())
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, length, sval)
+				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -158,23 +157,38 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
+		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())}, 1)
-			nulls.Add(vec.Nsp, 0)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConst(constBType, 1)
-				vec.Col = []bool{t.C.GetBval()}
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
 			case *plan.Const_Ival:
-				vec = vector.NewConst(constIType, 1)
-				vec.Col = []int64{t.C.GetIval()}
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
+			case *plan.Const_Fval:
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
+			case *plan.Const_Uval:
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 			case *plan.Const_Dval:
-				vec = vector.NewConst(constDType, 1)
-				vec.Col = []float64{t.C.GetDval()}
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
+			case *plan.Const_Dateval:
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Datetimeval:
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
+			case *plan.Const_Decimal64Val:
+				cd64 := t.C.GetDecimal64Val()
+				d64 := types.Decimal64FromInt64Raw(cd64.A)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
+			case *plan.Const_Decimal128Val:
+				cd128 := t.C.GetDecimal128Val()
+				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
+			case *plan.Const_Timestampval:
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, 1, sval)
+				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -190,7 +204,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
+			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
 		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
@@ -256,32 +270,32 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConstFixed(constBType, length, t.C.GetBval())
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
 			case *plan.Const_Ival:
-				vec = vector.NewConstFixed(constIType, length, t.C.GetIval())
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
 			case *plan.Const_Fval:
-				vec = vector.NewConstFixed(constFType, length, t.C.GetFval())
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
 			case *plan.Const_Uval:
-				vec = vector.NewConstFixed(constUType, length, t.C.GetUval())
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 			case *plan.Const_Dval:
-				vec = vector.NewConstFixed(constDType, length, t.C.GetDval())
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
-				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval())
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval())
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
 				cd64 := t.C.GetDecimal64Val()
 				d64 := types.Decimal64FromInt64Raw(cd64.A)
-				vec = vector.NewConstFixed(constDecimal64Type, length, d64)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
 				d128 := types.Decimal64FromInt64Raw(cd128.A)
-				vec = vector.NewConstFixed(constDecimal128Type, length, d128)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
-				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval())
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, length, sval)
+				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -344,9 +358,9 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 			if err != nil {
 				// if cann't compare, just return true.
 				// that means we don't known this filter expr's return, so you must readBlock
-				return vector.NewConstFixed(types.T_bool.ToType(), 1, true), nil
+				return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, isTrue), nil
+			return vector.NewConstFixed(types.T_bool.ToType(), 1, isTrue, proc.Mp()), nil
 		}
 
 		switch t.F.Func.ObjName {
@@ -374,28 +388,28 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				if leftHasTrue {
 					for _, rightHasTrue := range cols2 {
 						if rightHasTrue {
-							return vector.NewConstFixed(types.T_bool.ToType(), 1, true), nil
+							return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
 						}
 					}
 					break
 				}
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, false), nil
+			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
 		case "or":
 			// if some one is true in left/right, that will be true
 			cols1 := vector.MustTCols[bool](vs[0])
 			cols2 := vector.MustTCols[bool](vs[1])
 			for _, flag := range cols1 {
 				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), 1, true), nil
+					return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
 				}
 			}
 			for _, flag := range cols2 {
 				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), 1, true), nil
+					return vector.NewConstFixed(types.T_bool.ToType(), 1, true, proc.Mp()), nil
 				}
 			}
-			return vector.NewConstFixed(types.T_bool.ToType(), 1, false), nil
+			return vector.NewConstFixed(types.T_bool.ToType(), 1, false, proc.Mp()), nil
 		}
 
 		vec, err = f.VecFn(vs, proc)
@@ -417,23 +431,38 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
+		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())}, 1)
-			nulls.Add(vec.Nsp, 0)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConst(constBType, 1)
-				vec.Col = []bool{t.C.GetBval()}
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
 			case *plan.Const_Ival:
-				vec = vector.NewConst(constIType, 1)
-				vec.Col = []int64{t.C.GetIval()}
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
+			case *plan.Const_Fval:
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
+			case *plan.Const_Uval:
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 			case *plan.Const_Dval:
-				vec = vector.NewConst(constDType, 1)
-				vec.Col = []float64{t.C.GetDval()}
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
+			case *plan.Const_Dateval:
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Datetimeval:
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
+			case *plan.Const_Decimal64Val:
+				cd64 := t.C.GetDecimal64Val()
+				d64 := types.Decimal64FromInt64Raw(cd64.A)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
+			case *plan.Const_Decimal128Val:
+				cd128 := t.C.GetDecimal128Val()
+				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
+			case *plan.Const_Timestampval:
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, 1, sval)
+				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -449,9 +478,9 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
+			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
-		return s.Vecs[t.Col.ColPos].ToConst(sRow), nil
+		return s.Vecs[t.Col.ColPos].ToConst(sRow, proc.Mp()), nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)

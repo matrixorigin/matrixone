@@ -42,10 +42,10 @@ func funcIs(vectors []*vector.Vector, proc *process.Process, nullValue bool, eqB
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
 		if input.IsScalarNull() {
-			return vector.NewConstFixed(retType, input.Length(), nullValue), nil
+			return vector.NewConstFixed(retType, input.Length(), nullValue, proc.Mp()), nil
 		} else {
 			col := vector.MustTCols[bool](input)
-			return vector.NewConstFixed(retType, input.Length(), col[0] == eqBool), nil
+			return vector.NewConstFixed(retType, input.Length(), col[0] == eqBool, proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()

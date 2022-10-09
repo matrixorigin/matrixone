@@ -31,7 +31,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultValues := make([]string, 1)
 		reverse.Reverse(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		reverse.Reverse(inputValues, resultValues)

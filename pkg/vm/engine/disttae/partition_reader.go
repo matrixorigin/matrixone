@@ -17,6 +17,7 @@ package disttae
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type PartitionReader struct {
@@ -45,7 +45,7 @@ func (p *PartitionReader) Close() error {
 	return nil
 }
 
-func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.Mheap) (*batch.Batch, error) {
+func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -56,7 +56,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 		for i, name := range colNames {
 			b.Vecs[i] = vector.New(p.typsMap[name])
 		}
-		if _, err := b.Append(heap, bat); err != nil {
+		if _, err := b.Append(mp, bat); err != nil {
 			return nil, err
 		}
 
@@ -91,7 +91,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 			if !ok {
 				panic(fmt.Sprintf("invalid column name: %v", name))
 			}
-			value.AppendVector(b.Vecs[i], heap)
+			value.AppendVector(b.Vecs[i], mp)
 		}
 
 		rows++

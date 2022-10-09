@@ -188,7 +188,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	}
 
 	if v1.IsScalar() && v2.IsScalar() {
-		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale)), nil
+		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale), proc.Mp()), nil
 	}
 
 	if v1.IsScalar() {
@@ -279,7 +279,7 @@ func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*ve
 	}
 
 	if v1.IsScalar() && v2.IsScalar() {
-		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0])), nil
+		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0]), proc.Mp()), nil
 	}
 
 	if v1.IsScalar() {

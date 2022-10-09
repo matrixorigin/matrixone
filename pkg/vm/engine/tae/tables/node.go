@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -45,7 +46,9 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	opts.Allocator = ImmutMemAllocator
+	// XXX What is the rule of using these Allocators?   It all seems
+	// very random.
+	opts.Allocator = common.TAEImmutableAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),
 		schema.AllNames(),
@@ -75,7 +78,7 @@ func (node *appendableNode) CheckUnloadable() bool {
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(int(minRow),
 		int(maxRow-minRow),
-		containers.DefaultAllocator)
+		common.TAEDefaultAllocator)
 	return
 }
 
@@ -95,7 +98,7 @@ func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *contai
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data
 	} else {
-		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 		data.Close()
 	}
 	return
@@ -114,7 +117,7 @@ func (node *appendableNode) getPersistedColumnData(
 	if maxRow-minRow == uint32(data.Length()) {
 		vec = data
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 		data.Close()
 	}
 	return
@@ -129,9 +132,9 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
 		data = data.Window(int(minRow), int(maxRow))
-		vec = containers.CloneWithBuffer(data, buffer, containers.DefaultAllocator)
+		vec = containers.CloneWithBuffer(data, buffer, common.TAEDefaultAllocator)
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 	}
 	return
 }

@@ -83,7 +83,10 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			return false, nil
 		case operatorEnd:
 			// operator over.
-			arg.ctr.hashTable.Free()
+			if arg.ctr.hashTable != nil {
+				arg.ctr.hashTable.Free()
+				arg.ctr.hashTable = nil
+			}
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
