@@ -1538,15 +1538,13 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(types.T_varchar.ToType())
-	// XXX Memory accounting or not.
-	if err := vector.AppendBytes(vec, vs, nil); err != nil {
-		return err
-	}
+	vec := vector.NewWithBytes(types.T_varchar.ToType(), vs, nil, session.Mp)
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
-	return fill(session, bat)
+	err := fill(session, bat)
+	vec.Free(session.Mp)
+	return err
 }
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
