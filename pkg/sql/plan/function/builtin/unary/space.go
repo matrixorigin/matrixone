@@ -34,7 +34,7 @@ func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstString(resultType, inputVector.Length(), results[0]), nil
+		return vector.NewConstString(resultType, inputVector.Length(), results[0], proc.Mp()), nil
 	}
 
 	results := make([]string, len(inputValues))

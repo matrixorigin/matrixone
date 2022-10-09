@@ -29,9 +29,9 @@ func TestLength(t *testing.T) {
 	makeTempVector := func(src string, t types.T, srcIsScalar bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 1)
 		if srcIsScalar {
-			vectors[0] = vector.NewConstString(t.ToType(), 1, src)
+			vectors[0] = vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithStrings(t.ToType(), []string{src}, nil, nil)
+			vectors[0] = vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
 		}
 		return vectors
 	}
@@ -97,7 +97,7 @@ func TestBlobLength(t *testing.T) {
 		} else {
 			inputVector = vector.New(inputType)
 		}
-		err := inputVector.Append(src, false, procs.GetMheap())
+		err := inputVector.Append(src, false, procs.Mp())
 		if err != nil {
 			t.Fatal(err)
 		}

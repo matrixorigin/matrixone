@@ -18,10 +18,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // Analyze analyzes information for operator
@@ -102,7 +102,8 @@ type Process struct {
 	Id  string
 	Reg Register
 	Lim Limitation
-	mp  *mheap.Mheap
+
+	mp *mpool.MPool
 
 	// unix timestamp
 	UnixTime int64

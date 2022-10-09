@@ -82,7 +82,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)
 			ap.ctr.seen += uint64(length)
 			bat.Shrink(sels)
-			proc.GetMheap().PutSels(sels)
+			proc.Mp().PutSels(sels)
 			anal.Output(bat)
 			proc.SetInputBatch(bat)
 			return false, nil
@@ -96,7 +96,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.GetMheap().GetSels()
+	sels := proc.Mp().GetSels()
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}

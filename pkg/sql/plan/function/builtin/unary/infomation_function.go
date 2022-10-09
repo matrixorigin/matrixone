@@ -60,9 +60,9 @@ func adapter(vectors []*vector.Vector,
 		if result == nil {
 			return vector.NewConstNull(resultType, 1), nil
 		} else if resultType.IsString() {
-			return vector.NewConstString(resultType, 1, svals[0]), nil
+			return vector.NewConstString(resultType, 1, svals[0], proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(resultType, 1, uvals[0]), nil
+			return vector.NewConstFixed(resultType, 1, uvals[0], proc.Mp()), nil
 		}
 	}
 	return nil, errorParameterIsInvalid

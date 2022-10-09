@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 // Routine handles requests.
@@ -36,10 +34,6 @@ type Routine struct {
 
 	//execution layer
 	executor CmdExecutor
-
-	//for computation
-	guestMmu *guest.Mmu
-	mempool  *mempool.Mempool
 
 	//channel of request
 	requestChan chan *Request
@@ -178,8 +172,6 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		protocol:          protocol,
 		executor:          executor,
 		requestChan:       make(chan *Request, 1),
-		guestMmu:          guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu),
-		mempool:           pu.Mempool,
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
 	}

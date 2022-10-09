@@ -18,10 +18,10 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
@@ -44,7 +44,7 @@ func (a *UnaryDistAgg[T1, T2]) String() string {
 	return fmt.Sprintf("%v", a.vs)
 }
 
-func (a *UnaryDistAgg[T1, T2]) Free(m *mheap.Mheap) {
+func (a *UnaryDistAgg[T1, T2]) Free(m *mpool.MPool) {
 	if a.da != nil {
 		m.Free(a.da)
 		a.da = nil
@@ -75,7 +75,7 @@ func (a *UnaryDistAgg[T1, T2]) InputTypes() []types.Type {
 	return a.ityps
 }
 
-func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
+func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 	if a.otyp.IsString() {
 		if len(a.vs) == 0 {
 			a.es = make([]bool, 0, size)
@@ -110,7 +110,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 	sz := a.otyp.TypeSize()
 	n := len(a.vs)
 	if n == 0 {
-		data, err := m.Alloc(int64(size * sz))
+		data, err := m.Alloc(size * sz)
 		if err != nil {
 			return err
 		}
@@ -118,16 +118,16 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		a.es = make([]bool, 0, size)
 		a.srcs = make([][]T1, 0, size)
 		a.maps = make([]*hashmap.StrHashMap, 0, size)
-		a.vs = types.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da)
 	} else if n+size >= cap(a.vs) {
 		a.da = a.da[:n*sz]
-		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
+		data, err := m.Grow(a.da, (n+size)*sz)
 		if err != nil {
 			return err
 		}
 		m.Free(a.da)
 		a.da = data
-		a.vs = types.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da)
 	}
 	a.vs = a.vs[:n+size]
 	a.da = a.da[:(n+size)*sz]
@@ -309,7 +309,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
+func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
 		a.da = nil
 		a.vs = nil
@@ -340,7 +340,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		}
 		return vec, nil
 	}
-	return vector.NewWithData(a.otyp, a.da, a.eval(a.vs), nsp), nil
+	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {
@@ -417,6 +417,6 @@ func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
 		}
 	default:
 		a := agg.(*UnaryDistAgg[T1, T2])
-		a.vs = types.DecodeFixedSlice[T2](a.da, typ.TypeSize())
+		a.vs = types.DecodeSlice[T2](a.da)
 	}
 }

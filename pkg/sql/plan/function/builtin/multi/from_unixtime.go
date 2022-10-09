@@ -14,6 +14,8 @@
 package multi
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -21,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/fromunixtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 const (
@@ -39,7 +40,7 @@ func FromUnixTimeInt64(lv []*vector.Vector, proc *process.Process) (*vector.Vect
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
 
-		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0])
+		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0], proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
 		}
@@ -48,7 +49,7 @@ func FromUnixTimeInt64(lv []*vector.Vector, proc *process.Process) (*vector.Vect
 	} else {
 		rs := make([]types.Datetime, len(times))
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
-		vec := vector.NewWithFixed(types.T_datetime.ToType(), rs, nulls.NewWithSize(len(rs)), proc.GetMheap())
+		vec := vector.NewWithFixed(types.T_datetime.ToType(), rs, nulls.NewWithSize(len(rs)), proc.Mp())
 		for i := 0; i < len(times); i++ {
 			if times[i] < 0 || times[i] > max_unix_timestamp_int {
 				nulls.Add(vec.Nsp, uint64(i))
@@ -72,7 +73,7 @@ func FromUnixTimeFloat64(lv []*vector.Vector, proc *process.Process) (*vector.Ve
 		fromunixtime.UnixToDateTimeWithNsec(proc.SessionInfo.TimeZone, ints, fracs, rs)
 
 		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
-		vec := vector.NewConstFixed(t, 1, rs[0])
+		vec := vector.NewConstFixed(t, 1, rs[0], proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
 		}
@@ -114,7 +115,7 @@ func FromUnixTimeInt64Format(vs []*vector.Vector, proc *process.Process) (*vecto
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0])
+		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
 		}
@@ -160,7 +161,7 @@ func FromUnixTimeFloat64Format(vs []*vector.Vector, proc *process.Process) (*vec
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0])
+		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
 		if times[0] < 0 || times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
 		}
@@ -216,7 +217,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 	if inVec.IsScalar() {
 		rs := make([]types.Datetime, 1)
 		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, uint64ToInt64(times), rs)
-		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0])
+		vec := vector.NewConstFixed(types.T_datetime.ToType(), 1, rs[0], proc.Mp())
 
 		if times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
@@ -266,8 +267,8 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		vec := vector.NewConstString(resultType, 1, resCol[0])
-		if times[0] < 0 || times[0] > max_unix_timestamp_int {
+		vec := vector.NewConstString(resultType, 1, resCol[0], proc.Mp())
+		if times[0] > max_unix_timestamp_int {
 			nulls.Add(vec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
@@ -282,7 +283,7 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 		}
 		vec := vector.NewWithStrings(resultType, resCol, inVec.Nsp, proc.Mp())
 		for i := 0; i < len(times); i++ {
-			if times[i] < 0 || times[i] > max_unix_timestamp_int {
+			if times[i] > max_unix_timestamp_int {
 				nulls.Add(vec.Nsp, uint64(i))
 			}
 		}

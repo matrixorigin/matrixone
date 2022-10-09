@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -72,7 +73,7 @@ func (vec *vecView) Length() int       { return vec.impl.Length() }
 func (vec *vecView) Capacity() int     { return vec.impl.Capacity() }
 func (vec *vecView) Allocated() int    { return vec.impl.Allocated() }
 
-func (vec *vecView) GetAllocator() MemAllocator { return vec.impl.GetAllocator() }
+func (vec *vecView) GetAllocator() *mpool.MPool { return vec.impl.GetAllocator() }
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }
 func (vec *vecView) String() string             { return vec.impl.String() }
 func (vec *vecView) Close()                     {}

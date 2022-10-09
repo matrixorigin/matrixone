@@ -134,7 +134,8 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	defer db.PrintStats()
+	// XXX PRINT
+	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
 	db.TimedScanner.Stop()
 	db.CKPDriver.Stop()

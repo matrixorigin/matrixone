@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,8 +34,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -74,8 +73,8 @@ type Session struct {
 	//for test
 	Mrs *MysqlResultSet
 
-	GuestMmu *guest.Mmu
-	Mempool  *mempool.Mempool
+	// mpool
+	Mp *mpool.MPool
 
 	Pu *config.ParameterUnit
 
@@ -141,12 +140,26 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
+	var err error
+	if mp == nil {
+		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
+		// fixed pool size can be another param, or should be computed from cap,
+		// but here, too lazy, just use Mid.
+		//
+		// XXX MPOOL
+		// We don't have a way to close a session, so the only sane way of creating
+		// a mpool is to use NoFixed
+		mp, err = mpool.NewMPool("session", PU.SV.GuestMmuLimitation, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
 	ses := &Session{
 		protocol: proto,
-		GuestMmu: gm,
-		Mempool:  mp,
+		Mp:       mp,
 		Pu:       PU,
 		ep: &tree.ExportParam{
 			Outfile: false,
@@ -187,8 +200,8 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
-	ses := NewSession(&FakeProtocol{}, gm, mp, PU, gSysVars)
+func NewBackgroundSession(ctx context.Context, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *BackgroundSession {
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars)
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(ctx)
 	ses.SetRequestContext(cancelBackgroundCtx)
@@ -642,7 +655,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses.Mp, ses.Pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -663,7 +676,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +718,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if tenant.HasDefaultRole() {
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -716,7 +729,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -733,7 +746,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	} else {
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1225,8 +1238,8 @@ func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(ctx, gm, mp, pu)
+func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
 	err := bh.Exec(ctx, sql)
 	if err != nil {
@@ -1254,10 +1267,10 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
-var NewBackgroundHandler = func(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) BackgroundExec {
+var NewBackgroundHandler = func(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, gm, mp, pu, gSysVariables),
+		ses: NewBackgroundSession(ctx, mp, pu, gSysVariables),
 	}
 	return bh
 }

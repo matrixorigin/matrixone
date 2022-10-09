@@ -201,7 +201,7 @@ func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetBlockRows(blk.entry)
 	}
-	return blk.entry.GetBlockData().Rows(blk.Txn, true)
+	return blk.entry.GetBlockData().Rows()
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {

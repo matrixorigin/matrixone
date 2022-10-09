@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,14 +35,14 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.NeedHashMap {
-		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
+		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 			return err
 		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.GetMheap().GetSels()
+	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.New(typ)
 	}
@@ -92,12 +93,12 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		anal.Input(bat)
 		anal.Alloc(int64(bat.Size()))
-		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
-			bat.Clean(proc.GetMheap())
-			ctr.bat.Clean(proc.GetMheap())
+		if ctr.bat, err = ctr.bat.Append(proc.Mp(), bat); err != nil {
+			bat.Clean(proc.Mp())
+			ctr.bat.Clean(proc.Mp())
 			return err
 		}
-		bat.Clean(proc.GetMheap())
+		bat.Clean(proc.Mp())
 	}
 	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
 		return nil
@@ -140,10 +141,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.GetMheap())
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
 				}
 			}
 			return err
@@ -164,7 +165,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 func (ctr *container) freeJoinCondition(proc *process.Process) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.GetMheap())
+			ctr.evecs[i].vec.Free(proc.Mp())
 		}
 	}
 }

@@ -129,6 +129,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 		if rowID.IsNull {
 			panic("no row id")
 		}
+
 		rowID.AppendVector(batch.Vecs[0], m.mheap)
 		// commit time
 		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)
