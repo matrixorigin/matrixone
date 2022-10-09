@@ -32,7 +32,7 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		}
 		resultValues := make([]string, 1)
 		rtrim.Rtrim(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		rtrim.Rtrim(inputValues, resultValues)

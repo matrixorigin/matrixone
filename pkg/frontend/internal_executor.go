@@ -18,9 +18,10 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
@@ -136,7 +137,21 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 }
 
 func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
-	sess := NewSession(ie.proto, guest.New(ie.pu.SV.GuestMmuLimitation, ie.pu.HostMmu), ie.pu.Mempool, ie.pu, gSysVariables)
+	// Use the Mid configuration for session. We can make Mid a configuration
+	// param, or, compute from GuestMmuLimitation.   Lazy.
+	//
+	// XXX MPOOL
+	// Cannot use Mid.   Turns out we create a Session for *EVERY QUERY*
+	// If we preallocate anything, we will explode.
+	//
+	// Session does not have a close call.   We need a Close() call in the Exec/Query method above.
+	//
+	mp, err := mpool.NewMPool("internal_exec_cmd_session", ie.pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
+		panic(err)
+	}
+	sess := NewSession(ie.proto, mp, ie.pu, gSysVariables)
 	sess.SetRequestContext(ctx)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)

@@ -92,11 +92,11 @@ func (a *Avg[T]) Merge(xIndex int64, yIndex int64, x float64, y float64, xEmpty 
 }
 
 func (a *Avg[T]) MarshalBinary() ([]byte, error) {
-	return types.EncodeInt64Slice(a.Cnts), nil
+	return types.EncodeSlice(a.Cnts), nil
 }
 
 func (a *Avg[T]) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeInt64Slice(data)
+	a.Cnts = types.DecodeSlice[int64](data)
 	return nil
 }
 
@@ -157,11 +157,11 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, z
 }
 
 func (a *Decimal64Avg) MarshalBinary() ([]byte, error) {
-	return types.EncodeInt64Slice(a.Cnts), nil
+	return types.EncodeSlice(a.Cnts), nil
 }
 
 func (a *Decimal64Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeInt64Slice(data)
+	a.Cnts = types.DecodeSlice[int64](data)
 	return nil
 }
 
@@ -221,10 +221,10 @@ func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, 
 }
 
 func (a *Decimal128Avg) MarshalBinary() ([]byte, error) {
-	return types.EncodeInt64Slice(a.Cnts), nil
+	return types.EncodeSlice(a.Cnts), nil
 }
 
 func (a *Decimal128Avg) UnmarshalBinary(data []byte) error {
-	a.Cnts = types.DecodeInt64Slice(data)
+	a.Cnts = types.DecodeSlice[int64](data)
 	return nil
 }

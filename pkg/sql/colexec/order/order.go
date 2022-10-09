@@ -76,6 +76,17 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
+	for i := 0; i < bat.VectorCount(); i++ {
+		vec := bat.GetVector(int32(i))
+		if vec.IsOriginal() {
+			nvec, err := vector.Dup(bat.Vecs[i], proc.Mp())
+			if err != nil {
+				return false, err
+			}
+			bat.SetVector(int32(i), nvec)
+
+		}
+	}
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {

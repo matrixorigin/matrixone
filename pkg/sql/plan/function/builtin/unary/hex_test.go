@@ -73,7 +73,7 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputstr != nil {
 				if c.isScalar {
-					inVector = vector.NewConstString(types.T_varchar.ToType(), 1, c.inputstr[0])
+					inVector = vector.NewConstString(types.T_varchar.ToType(), 1, c.inputstr[0], testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeCharVector(c.inputstr, nil)
 				}
@@ -131,7 +131,7 @@ func TestHex(t *testing.T) {
 			var inVector *vector.Vector
 			if c.inputnum != nil {
 				if c.isScalar {
-					inVector = vector.NewConstFixed(types.T_int64.ToType(), 1, c.inputnum[0])
+					inVector = vector.NewConstFixed(types.T_int64.ToType(), 1, c.inputnum[0], testutil.TestUtilMp)
 				} else {
 					inVector = testutil.MakeInt64Vector(c.inputnum, nil)
 				}

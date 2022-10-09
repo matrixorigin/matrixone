@@ -21,32 +21,25 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func NewMheap() *mheap.Mheap {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	return mheap.New(gm)
-}
-
 func NewProcess() *process.Process {
-	return NewProcessWithMheap(NewMheap())
+	mp := mpool.MustNewZero()
+	return NewProcessWithMPool(mp)
 }
 
-func NewProcessWithMheap(heap *mheap.Mheap) *process.Process {
+func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 	proc := process.New(
 		context.Background(),
-		heap,
+		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
@@ -90,7 +83,7 @@ func NewTaskService() taskservice.TaskService {
 	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
-func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
+func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
@@ -100,7 +93,7 @@ func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch 
 	return bat
 }
 
-func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
+func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
@@ -129,7 +122,7 @@ func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 	return bat
 }
 
-func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interface{}) *vector.Vector {
+func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interface{}) *vector.Vector {
 	switch typ.Oid {
 	case types.T_bool:
 		if vs, ok := Values.([]bool); ok {
@@ -221,7 +214,7 @@ func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 	}
 }
 
-func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, _ bool, vs []bool) *vector.Vector {
+func NewBoolVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []bool) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -241,7 +234,7 @@ func NewBoolVector(n int, typ types.Type, m *mheap.Mheap, _ bool, vs []bool) *ve
 	return vec
 }
 
-func NewInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8) *vector.Vector {
+func NewInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -265,7 +258,7 @@ func NewInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8
 	return vec
 }
 
-func NewInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int16) *vector.Vector {
+func NewInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int16) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -289,7 +282,7 @@ func NewInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func NewInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int32) *vector.Vector {
+func NewInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int32) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -313,7 +306,7 @@ func NewInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func NewInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int64) *vector.Vector {
+func NewInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -337,7 +330,7 @@ func NewInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func NewUInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint8) *vector.Vector {
+func NewUInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint8) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -361,7 +354,7 @@ func NewUInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uin
 	return vec
 }
 
-func NewUInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint16) *vector.Vector {
+func NewUInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint16) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -385,7 +378,7 @@ func NewUInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 	return vec
 }
 
-func NewUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint32) *vector.Vector {
+func NewUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint32) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -409,7 +402,7 @@ func NewUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 	return vec
 }
 
-func NewUInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint64) *vector.Vector {
+func NewUInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -433,7 +426,7 @@ func NewUInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 	return vec
 }
 
-func NewFloat32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []float32) *vector.Vector {
+func NewFloat32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []float32) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -457,7 +450,7 @@ func NewFloat32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []f
 	return vec
 }
 
-func NewFloat64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []float64) *vector.Vector {
+func NewFloat64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []float64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -481,7 +474,7 @@ func NewFloat64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []f
 	return vec
 }
 
-func NewDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal64) *vector.Vector {
+func NewDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -507,7 +500,7 @@ func NewDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 	return vec
 }
 
-func NewDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal128) *vector.Vector {
+func NewDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal128) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -532,7 +525,7 @@ func NewDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 	return vec
 }
 
-func NewDateVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -560,7 +553,7 @@ func NewDateVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []stri
 	return vec
 }
 
-func NewDatetimeVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+func NewDatetimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -588,7 +581,7 @@ func NewDatetimeVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []
 	return vec
 }
 
-func NewTimestampVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -616,7 +609,7 @@ func NewTimestampVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 	return vec
 }
 
-func NewStringVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {

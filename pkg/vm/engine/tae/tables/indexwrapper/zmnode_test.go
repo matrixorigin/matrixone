@@ -19,6 +19,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,9 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,9 +99,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 }
 
 func newBatch() *batch.Batch {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	mp := mheap.New(gm)
+	mp := mpool.MustNewZero()
 	types := []types.Type{
 		{Oid: types.T_int32},
 		{Oid: types.T_int16},

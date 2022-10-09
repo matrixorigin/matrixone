@@ -34,9 +34,9 @@ func funcUnkown(vectors []*vector.Vector, proc *process.Process, nullValue bool,
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
 		if input.IsScalarNull() {
-			return vector.NewConstFixed(retType, input.Length(), nullValue), nil
+			return vector.NewConstFixed(retType, input.Length(), nullValue, proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(retType, input.Length(), unnullValue), nil
+			return vector.NewConstFixed(retType, input.Length(), unnullValue, proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()
