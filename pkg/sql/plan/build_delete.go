@@ -275,15 +275,17 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 		// }
 	}
 
+	// we will allways return hideKey
+	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
+	if hideKey == nil {
+		return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
+	}
+	psNames[hideKey.Name] = struct{}{}
+	e := tree.SetUnresolvedName(tblName, hideKey.Name)
+	ps = append(ps, tree.SelectExpr{Expr: e})
+
 	if useKey == nil {
-		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
-		if hideKey == nil {
-			return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
-		}
 		useKey = hideKey
-		psNames[hideKey.Name] = struct{}{}
-		e := tree.SetUnresolvedName(tblName, hideKey.Name)
-		ps = append(ps, tree.SelectExpr{Expr: e})
 		isHideKey = true
 	}
 
