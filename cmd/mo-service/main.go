@@ -272,7 +272,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory),
+			metric.WithMultiTable(SV.MetricMultiTable))
 	}
 	return nil
 }

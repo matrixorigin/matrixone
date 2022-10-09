@@ -202,16 +202,16 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 
 	optFactory := trace.GetOptionFactory(batchProcessMode)
 
-	if multiTable {
-		buf := new(bytes.Buffer)
-		for desc := range descChan {
-			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
-			mustExec(sql)
-		}
-	} else {
+	if !multiTable {
 		mustExec(singleMetricTable.ToCreateSql(true, optFactory))
 		for desc := range descChan {
 			sql := createView(desc)
+			mustExec(sql)
+		}
+	} else {
+		buf := new(bytes.Buffer)
+		for desc := range descChan {
+			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
 			mustExec(sql)
 		}
 	}

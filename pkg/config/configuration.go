@@ -346,6 +346,9 @@ type ObservabilityParameters struct {
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
 	LongQueryTime float64 `toml:"long_query_time"`
+
+	// MetricMultiTable default is false. With true, save all metric data in one table.
+	MetricMultiTable bool `toml:"metricMultiTable"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {

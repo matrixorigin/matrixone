@@ -266,12 +266,15 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 		writerFactory: writerFactory,
 		opts:          initOpts,
 	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c,
-		bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum),
-		bp.PipeWithBufferWorkerNum(1),
-		bp.PipeWithItemNameFormatter(func(bp.HasName) string {
-			return singleMetricTable.GetName()
-		}))
+	pipeOpts := []bp.BaseBatchPipeOpt{bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum)}
+	if !multiTable {
+		pipeOpts = append(pipeOpts,
+			bp.PipeWithBufferWorkerNum(1),
+			bp.PipeWithItemNameFormatter(func(bp.HasName) string {
+				return singleMetricTable.GetName()
+			}))
+	}
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c, pipeOpts...)
 	c.BaseBatchPipe = base
 	return c
 }
@@ -292,14 +295,12 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		writerFactory: c.writerFactory,
-		multiTable:    multiTable,
 	}
 }
 
 type mfsetCSV struct {
 	mfset
 	writerFactory export.FSWriterFactory
-	multiTable    bool
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
@@ -320,10 +321,10 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 }
 
 func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
-	if s.multiTable {
-		return s.GetBatchMultiTable(buf)
+	if !multiTable {
+		return s.GetBatchSingleTable(buf)
 	}
-	return s.GetBatchSingleTable(buf)
+	return s.GetBatchMultiTable(buf)
 }
 
 func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) *trace.CSVRequest {
