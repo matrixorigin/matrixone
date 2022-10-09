@@ -42,7 +42,7 @@ func NewStdVector[T any](opts ...*Options) *StdVector[T] {
 		}
 	}
 	if vec.alloc == nil {
-		vec.alloc = common.TAEDefaultAllocator
+		vec.alloc = common.DefaultAllocator
 	}
 	// if capacity == 0 {
 	// 	capacity = 4

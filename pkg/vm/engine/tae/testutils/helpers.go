@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -53,9 +54,9 @@ func InitTestEnv(module string, t *testing.T) string {
 }
 
 func EnsureNoLeak(t *testing.T) {
-	// assert.Zerof(t, stl.DefaultAllocator.Usage(), stl.DefaultAllocator.String())
+	// assert.Zerof(t, common.DefaultAllocator.CurrNB(), common.DefaultAllocator.Stats().Report(""))
 	// XXX MPOOL: Too noisy
-	// if common.TAEDefaultAllocator.CurrNB() != 0 {
-	// 	t.Log(common.TAEDefaultAllocator.Report())
-	// }
+	if common.DefaultAllocator.CurrNB() != 0 {
+		t.Log(common.DefaultAllocator.Stats().Report(""))
+	}
 }

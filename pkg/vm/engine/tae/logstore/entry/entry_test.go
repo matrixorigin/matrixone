@@ -33,14 +33,14 @@ package entry
 // 	for i := 0; i < 100000; i++ {
 // 		e := GetBase()
 // 		e.SetType(ETFlush)
-// 		n := common.GPool.Alloc(30)
+// 		n := common.LogAllocator.Alloc(30)
 // 		copy(n.GetBuf(), buf)
 // 		err := e.UnmarshalFromNode(n, true)
 // 		assert.Nil(t, err)
 // 		e.Free()
 // 	}
 // 	t.Logf("takes %s", time.Since(now))
-// 	t.Log(common.GPool.String())
+// 	t.Log(common.LogAllocator.String())
 // }
 
 // func TestInfoMarshal1(t *testing.T) {
