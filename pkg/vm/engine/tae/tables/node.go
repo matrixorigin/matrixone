@@ -50,7 +50,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	opts.Capacity = int(schema.BlockMaxRows)
 	// XXX What is the rule of using these Allocators?   It all seems
 	// very random.
-	opts.Allocator = common.TAEImmutableAllocator
+	opts.Allocator = common.MutMemAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),
 		schema.AllNames(),
@@ -74,7 +74,7 @@ func (node *appendableNode) CheckUnloadable() bool {
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(int(minRow),
 		int(maxRow-minRow),
-		common.TAEDefaultAllocator)
+		common.DefaultAllocator)
 	return
 }
 
@@ -94,7 +94,7 @@ func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *contai
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data
 	} else {
-		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 		data.Close()
 	}
 	return
@@ -113,7 +113,7 @@ func (node *appendableNode) getPersistedColumnData(
 	if maxRow-minRow == uint32(data.Length()) {
 		vec = data
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 		data.Close()
 	}
 	return
@@ -128,9 +128,9 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
 		data = data.Window(int(minRow), int(maxRow))
-		vec = containers.CloneWithBuffer(data, buffer, common.TAEDefaultAllocator)
+		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 	}
 	return
 }
