@@ -221,7 +221,7 @@ func (blk *dataBlock) RunCalibration() (score int) {
 
 func (blk *dataBlock) estimateABlkRawScore() (score int) {
 	// Max row appended
-	rows := blk.Rows(nil, true)
+	rows := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		return 100
 	}
@@ -256,7 +256,7 @@ func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
 }
 
 func (blk *dataBlock) MutationInfo() string {
-	rows := blk.Rows(nil, true)
+	rows := blk.Rows()
 	totalChanges := blk.mvcc.GetChangeNodeCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
@@ -287,7 +287,7 @@ func (blk *dataBlock) EstimateScore(interval int64) int {
 	if score > 1 {
 		return score
 	}
-	rows := uint32(blk.Rows(nil, true)) - blk.mvcc.GetDeleteCnt()
+	rows := uint32(blk.Rows()) - blk.mvcc.GetDeleteCnt()
 	if blk.score == nil {
 		blk.score = &statBlock{
 			rows:      rows,
@@ -343,7 +343,7 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.node.Rows(nil, true) == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
+	if blk.node.Rows() == blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows {
 		return false
 	}
 	return true
@@ -353,9 +353,9 @@ func (blk *dataBlock) GetTotalChanges() int {
 	return int(blk.mvcc.GetChangeNodeCnt())
 }
 
-func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
+func (blk *dataBlock) Rows() int {
 	if blk.meta.IsAppendable() {
-		rows := int(blk.node.Rows(txn, coarse))
+		rows := int(blk.node.Rows())
 		return rows
 	}
 	metaLoc := blk.meta.GetMetaLoc()
@@ -380,7 +380,7 @@ func (blk *dataBlock) GetRowsOnReplay() uint64 {
 }
 
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows(nil, true))
+	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
 	if level >= common.PPL1 {
 		blk.mvcc.RLock()
 		s2 := blk.mvcc.StringLocked()
