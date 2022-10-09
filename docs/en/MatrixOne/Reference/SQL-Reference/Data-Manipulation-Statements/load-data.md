@@ -33,7 +33,7 @@ LOAD DATA INFILE '/tmp/test.txt' INTO TABLE test IGNORE 1 LINES;
 ## **Examples**
 
 The SSB Test is an example of LOAD DATA syntax. [Complete a SSB Test with MatrixOne
-](../../../Get-Started/Tutorial/SSB-test-with-matrixone.md)
+](../../../Tutorial/SSB-test-with-matrixone.md)
 
 ```
 > LOAD DATA INFILE '/ssb-dbgen-path/lineorder_flat.tbl ' INTO TABLE lineorder_flat;

@@ -765,7 +765,7 @@ func TestCompaction2(t *testing.T) {
 	schema.BlockMaxRows = 21
 	schema.SegmentMaxBlocks = 4
 	cnt := uint32(3)
-	rows := schema.BlockMaxRows / 3 * cnt
+	rows := schema.BlockMaxRows
 	bat := catalog.MockBatch(schema, int(rows))
 	defer bat.Close()
 	bats := bat.Split(int(cnt))
@@ -777,22 +777,7 @@ func TestCompaction2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
-			it.Next()
-		}
-		time.Sleep(400 * time.Millisecond)
-	}
+	time.Sleep(400 * time.Millisecond)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
@@ -807,15 +792,6 @@ func TestCompaction2(t *testing.T) {
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
 			it.Next()
 		}
-	}
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[1])
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
-		time.Sleep(400 * time.Millisecond)
 	}
 	{
 		txn, _ := db.StartTxn(nil)
