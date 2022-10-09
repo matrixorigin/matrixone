@@ -756,14 +756,6 @@ func (blk *dataBlock) OnApplyAppend(n txnif.AppendNode) (err error) {
 }
 
 func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts types.TS) (err error) {
-	// No pk defined
-	if !blk.meta.GetSchema().HasPK() {
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-		return
-	}
-	// If any pk defined, update index
-	blk.mvcc.Lock()
-	defer blk.mvcc.Unlock()
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
