@@ -51,14 +51,6 @@ func init() {
 	ImmutMemAllocator = stl.NewSimpleAllocator()
 }
 
-type BlockState int8
-
-// BlockState is the state of the data block, which is different from the state of the mate
-const (
-	BS_Appendable BlockState = iota
-	BS_NotAppendable
-)
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -69,19 +61,19 @@ type dataBlock struct {
 	common.RefHelper
 	*sync.RWMutex
 	common.ClosedState
-	meta       *catalog.BlockEntry
-	node       *appendableNode
-	file       file.Block
-	colObjects map[int]file.ColumnBlock
-	bufMgr     base.INodeManager
-	scheduler  tasks.TaskScheduler
-	indexes    map[int]indexwrapper.Index
-	pkIndex    indexwrapper.Index // a shortcut, nil if no pk column
-	mvcc       *updates.MVCCHandle
-	score      *statBlock
-	ckpTs      atomic.Value
-	prefix     []byte
-	state      BlockState
+	meta         *catalog.BlockEntry
+	node         *appendableNode
+	file         file.Block
+	colObjects   map[int]file.ColumnBlock
+	bufMgr       base.INodeManager
+	scheduler    tasks.TaskScheduler
+	indexes      map[int]indexwrapper.Index
+	pkIndex      indexwrapper.Index // a shortcut, nil if no pk column
+	mvcc         *updates.MVCCHandle
+	score        *statBlock
+	ckpTs        atomic.Value
+	prefix       []byte
+	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -128,7 +120,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:     bufMgr,
 		prefix:     meta.MakeKey(),
 	}
-	ts := block.ReadTS()
+	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -146,14 +138,11 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 				block.indexes[colDef.Idx] = indexwrapper.NewMutableIndex(colDef.Type)
 			}
 		}
-		block.state = BS_Appendable
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	block.mvcc.SetMaxVisible(ts)
-	block.ckpTs.Store(ts)
 	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
@@ -165,19 +154,18 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
-func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
-func (blk *dataBlock) SetNotAppendable() {
+func (blk *dataBlock) FreezeAppend() {
 	blk.Lock()
 	defer blk.Unlock()
-	blk.state = BS_NotAppendable
+	blk.appendFrozen = true
 }
 
-func (blk *dataBlock) GetBlockState() BlockState {
+func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.state
+	return blk.appendFrozen
 }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
@@ -187,10 +175,6 @@ func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
 func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
 	ts := blk.ckpTs.Load().(types.TS)
 	return ts
-}
-
-func (blk *dataBlock) GetMaxVisibleTS() types.TS {
-	return blk.mvcc.LoadMaxVisible()
 }
 
 func (blk *dataBlock) FreeData() {
@@ -247,31 +231,45 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
-func (blk *dataBlock) RunCalibration() int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
-		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
-			return 0
-		}
-		blk.meta.RUnlock()
-		return 100
-	}
-	return blk.estimateRawScore()
+func (blk *dataBlock) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
 }
 
-func (blk *dataBlock) estimateRawScore() int {
-	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
+func (blk *dataBlock) estimateABlkRawScore() (score int) {
+	// Max row appended
+	rows := blk.Rows(nil, true)
+	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		return 100
 	}
 
-	if blk.mvcc.GetChangeNodeCnt() == 0 && !blk.meta.IsAppendable() {
-		return 0
-	} else if blk.mvcc.GetChangeNodeCnt() == 0 && blk.meta.IsAppendable() &&
-		blk.mvcc.LoadMaxVisible().LessEq(blk.GetMaxCheckpointTS()) {
-		return 0
+	if blk.mvcc.GetChangeNodeCnt() == 0 && rows == 0 {
+		// No deletes or append found
+		score = 0
+	} else {
+		// Any deletes or append
+		score = 1
 	}
-	return 1
+	return
+}
+
+func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
+	if blk.meta.HasDropped() {
+		dropped = true
+		return
+	}
+	if blk.meta.IsAppendable() {
+		score = blk.estimateABlkRawScore()
+		return
+	}
+	if blk.mvcc.GetChangeNodeCnt() == 0 {
+		// No deletes found
+		score = 0
+	} else {
+		// Any delete
+		score = 1
+	}
+	return
 }
 
 func (blk *dataBlock) MutationInfo() string {
@@ -299,17 +297,10 @@ func (blk *dataBlock) MutationInfo() string {
 }
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
-		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
-			return 0
-		}
-		blk.meta.RUnlock()
-		return 100
+	score, dropped := blk.estimateRawScore()
+	if dropped {
+		return 0
 	}
-
-	score := blk.estimateRawScore()
 	if score > 1 {
 		return score
 	}
@@ -340,7 +331,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	scopes []common.ID,
 	err error) {
 	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.SetNotAppendable()
+	blk.FreezeAppend()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.IsCreating()
@@ -365,7 +356,7 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.GetBlockState() == BS_NotAppendable {
+	if blk.IsAppendFrozen() {
 		return false
 	}
 

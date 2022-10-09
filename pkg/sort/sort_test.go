@@ -100,7 +100,7 @@ func TestSort(t *testing.T) {
 		for i := range os {
 			os[i] = int64(i)
 		}
-		Sort(tc.desc, os, tc.vec)
+		Sort(tc.desc, false, false, os, tc.vec, nil)
 		checkResult(t, tc.desc, tc.vec, os)
 		tc.vec.Free(tc.proc.Mp())
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
@@ -125,7 +125,7 @@ func BenchmarkSortIntVector(b *testing.B) {
 		os[i] = int64(i)
 	}
 	for i := 0; i < b.N; i++ {
-		Sort(false, os, vec)
+		Sort(false, false, false, os, vec, nil)
 	}
 }
 
