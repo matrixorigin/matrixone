@@ -41,9 +41,8 @@ type mockHandle struct {
 	m *mpool.MPool
 }
 
-func (h *mockHandle) HandleClose() error {
-	err := h.Handle.HandleClose()
-	//TODO::free h.m?
+func (h *mockHandle) HandleClose(ctx context.Context) error {
+	err := h.Handle.HandleClose(ctx)
 	return err
 }
 

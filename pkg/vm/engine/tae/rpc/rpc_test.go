@@ -31,7 +31,7 @@ import (
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
-	defer handle.HandleClose()
+	defer handle.HandleClose(context.TODO())
 	txnEngine := handle.GetTxnEngine()
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
@@ -53,6 +53,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.Nil(t, err)
 	createDbTxn := mock1PCTxn(txnEngine)
 	err = handle.HandlePreCommit(
+		context.TODO(),
 		createDbTxn,
 		api.PrecommitWriteCmd{
 			UserId:    ac.userId,
@@ -63,7 +64,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		new(api.SyncLogTailResp),
 	)
 	assert.Nil(t, err)
-	err = handle.HandleCommit(createDbTxn)
+	err = handle.HandleCommit(context.TODO(), createDbTxn)
 	assert.Nil(t, err)
 
 	//start txn ,read "dbtest"'s ID
@@ -122,6 +123,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	err = handle.HandlePreCommit(
+		context.TODO(),
 		createTbTxn,
 		api.PrecommitWriteCmd{
 			UserId:    ac.userId,
@@ -131,7 +133,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		},
 		new(api.SyncLogTailResp))
 	assert.Nil(t, err)
-	err = handle.HandleCommit(createTbTxn)
+	err = handle.HandleCommit(context.TODO(), createTbTxn)
 	assert.Nil(t, err)
 	//start txn ,read table ID
 	txn, err = txnEngine.StartTxn(nil)
@@ -164,6 +166,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	var insertEntries []*api.Entry
 	insertEntries = append(insertEntries, insertEntry)
 	err = handle.HandlePreCommit(
+		context.TODO(),
 		insertTxn,
 		api.PrecommitWriteCmd{
 			UserId:    ac.userId,
@@ -176,7 +179,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	assert.NoError(t, err)
 	// TODO:: Dml delete
 	//bat := batch.NewWithSize(1)
-	err = handle.HandleCommit(insertTxn)
+	err = handle.HandleCommit(context.TODO(), insertTxn)
 	assert.NoError(t, err)
 	//TODO::DML:delete by primary key.
 	// physcial addr + primary key
@@ -204,7 +207,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 func TestHandle_HandlePreCommit2PC(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
-	defer handle.HandleClose()
+	defer handle.HandleClose(context.TODO())
 	txnEngine := handle.GetTxnEngine()
 	//create db/tb;
 	_, err := mock2PCTxn(txnEngine)
