@@ -391,8 +391,8 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.Update(txn, 3, 2, int32(999))
-		assert.Nil(t, err)
+		// _, err = dataBlk.Update(txn, 3, 2, int32(999))
+		// assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(txn, 2, nil)
 		assert.Nil(t, err)
@@ -400,8 +400,8 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
-		v = view.GetData().Get(3)
-		assert.Equal(t, int32(999), v)
+		// v = view.GetData().Get(3)
+		// assert.Equal(t, int32(999), v)
 
 		assert.Nil(t, txn.Commit())
 	}
@@ -506,7 +506,8 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			assert.Nil(t, err)
-			err = rel.Update(id, offset+1, 3, int64(99))
+			f2 := handle.NewEQFilter(v.(int32) + 1)
+			err = rel.UpdateByFilter(f2, 3, int64(99))
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
@@ -529,14 +530,14 @@ func TestCompactBlock1(t *testing.T) {
 			preparer, err := task.PrepareData(blkMeta.MakeKey())
 			assert.Nil(t, err)
 			defer preparer.Close()
-			assert.Equal(t, bat.Vecs[0].Length()-2, preparer.Columns.Vecs[0].Length())
+			assert.Equal(t, bat.Vecs[0].Length()-3, preparer.Columns.Vecs[0].Length())
 			maxTs = txn.GetStartTS()
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
+		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
@@ -1647,25 +1648,6 @@ func TestScan2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
-func TestUpdatePrimaryKey(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 12)
-	bat := catalog.MockBatch(schema, 100)
-	defer bat.Close()
-	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-
-	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
-	filter := handle.NewEQFilter(v)
-	id, row, err := rel.GetByFilter(filter)
-	assert.NoError(t, err)
-	err = rel.Update(id, row, uint16(schema.GetSingleSortKeyIdx()), v)
-	assert.Error(t, err)
-	assert.NoError(t, txn.Commit())
-}
-
 func TestADA(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -1980,7 +1962,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3333), v.(int64))
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -2259,7 +2241,7 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	uv, err = rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
 	assert.True(t, types.IsNull(uv))
