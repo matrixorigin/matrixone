@@ -34,7 +34,7 @@ func Left(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if leftVec.IsScalar() && rightVec.IsScalar() {
 		resultValues := make([]string, 1)
 		left.LeftAllConst(strValues, lengthValues, resultValues)
-		resultVector := vector.NewConstString(leftVec.Typ, 1, resultValues[0])
+		resultVector := vector.NewConstString(leftVec.Typ, 1, resultValues[0], proc.Mp())
 		return resultVector, nil
 	} else if leftVec.IsScalar() && !rightVec.IsScalar() {
 		resultValues := make([]string, len(lengthValues))

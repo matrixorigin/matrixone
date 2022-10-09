@@ -16,6 +16,7 @@ package projection
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,9 +54,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
 		vec, err := colexec.EvalExpr(bat, proc, e)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
-			bat.Clean(proc.GetMheap())
-			rbat.Clean(proc.GetMheap())
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+			bat.Clean(proc.Mp())
+			rbat.Clean(proc.Mp())
 			return false, err
 		}
 		rbat.Vecs[i] = vec
@@ -70,7 +71,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
-	bat.Clean(proc.GetMheap())
+	bat.Clean(proc.Mp())
 	anal.Output(rbat)
 	proc.Reg.InputBatch = rbat
 	return false, nil

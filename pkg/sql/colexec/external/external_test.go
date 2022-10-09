@@ -25,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -47,7 +45,7 @@ var (
 	tcs externalTestCase
 )
 
-func newTestCase(gm *guest.Mmu, all bool) externalTestCase {
+func newTestCase(all bool) externalTestCase {
 	proc := testutil.NewProcess()
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,9 +64,7 @@ func newTestCase(gm *guest.Mmu, all bool) externalTestCase {
 }
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	tcs = newTestCase(gm, true)
+	tcs = newTestCase(true)
 }
 
 func Test_String(t *testing.T) {
@@ -218,7 +214,7 @@ func Test_makeBatch(t *testing.T) {
 		plh := &ParseLineHandler{
 			batchSize: 1,
 		}
-		_ = makeBatch(param, plh)
+		_ = makeBatch(param, plh, testutil.TestUtilMp)
 	})
 }
 

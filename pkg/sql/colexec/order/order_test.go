@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -46,13 +44,11 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []orderTestCase{
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 2}}),
+		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: 0}}),
+		newTestCase([]types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 2}}),
 	}
 }
 
@@ -88,17 +84,15 @@ func TestOrder(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []orderTestCase{
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+			newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+			newTestCase([]types.Type{{Oid: types.T_int8}}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -122,10 +116,10 @@ func BenchmarkOrder(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
+func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMheap(m),
+		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
 			Fs: fs,
 		},

@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -144,11 +142,9 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -209,11 +205,9 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -245,11 +239,9 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -294,11 +286,9 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -344,11 +334,9 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -387,11 +375,9 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		sql2result := make(map[string]ExecResult)
 
@@ -452,11 +438,9 @@ func Test_initRole(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -5985,16 +5969,14 @@ func Test_genRevokeCases(t *testing.T) {
 }
 
 func newSes(priv *privilege) *Session {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New()
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	proto := NewMysqlClientProtocol(0, nil, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, nil, pu, gSysVariables)
+	ses := NewSession(proto, nil, pu, gSysVariables)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
