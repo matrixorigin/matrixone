@@ -59,3 +59,4 @@ CREATE TABLE t2(id VARCHAR(10) NOT NULL, name VARCHAR(20) NOT NULL, nation VARCH
 INSERT INTO t1() VALUES(1,'ronaldo','F'), (2,'kante','M'), (3,'noyer','F'),(4,'modrici','M');
 INSERT INTO t2() VALUES(1,'ronaldo','American'), (2,'kante','Franch'), (3,'noyer','Germany'),(4,'modrici','UK');
 (SELECT * FROM t1 WHERE id BETWEEN 1 AND 2 ORDER BY name) UNION ALL (SELECT * FROM t2 WHERE nation BETWEEN 'A' AND 'F' ORDER BY id DESC);
+select * from (SELECT * FROM t1 UNION ALL SELECT * FROM t2) a where id > 1 and sex > 'F' order by id;

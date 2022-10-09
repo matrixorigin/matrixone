@@ -107,3 +107,10 @@ id	name	sex
 2	kante	M
 1	ronaldo	F
 1	ronaldo	American
+select * from (SELECT * FROM t1 UNION ALL SELECT * FROM t2) a where id > 1 and sex > 'F' order by id;
+id	name	sex
+2	kante	M
+2	kante	Franch
+3	noyer	Germany
+4	modrici	M
+4	modrici	UK
