@@ -280,8 +280,8 @@ var (
 	metricNameColumn        = inittool.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
 	metricCollectTimeColumn = inittool.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
 	metricValueColumn       = inittool.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
-	metricNodeColumn        = inittool.Column{Name: `node`, Type: `VARCHAR(36)`, Default: `monolithic`, Comment: `mo node uuid`}
-	metricRoleColumn        = inittool.Column{Name: `role`, Type: `VARCHAR(32)`, Default: `monolithic`, Comment: `mo node role, like: CN, DN, LOG`}
+	metricNodeColumn        = inittool.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
+	metricRoleColumn        = inittool.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
 	metricAccountColumn     = inittool.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
 	metricTypeColumn        = inittool.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
 )
