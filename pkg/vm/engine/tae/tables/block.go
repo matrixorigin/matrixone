@@ -72,7 +72,6 @@ type dataBlock struct {
 	mvcc         *updates.MVCCHandle
 	score        *statBlock
 	ckpTs        atomic.Value
-	prefix       []byte
 	appendFrozen bool
 }
 
@@ -103,7 +102,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		scheduler:  scheduler,
 		indexes:    make(map[int]indexwrapper.Index),
 		bufMgr:     bufMgr,
-		prefix:     meta.MakeKey(),
 	}
 	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)

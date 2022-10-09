@@ -32,6 +32,7 @@ type appendableNode struct {
 	block     *dataBlock
 	data      *containers.Batch
 	rows      uint32
+	prefix    []byte
 	exception *atomic.Value
 }
 
@@ -39,8 +40,9 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
-	//impl.rows = file.ReadRows(block.meta.GetMetaLoc())
 	impl.rows = 0
+	impl.prefix = block.meta.MakeKey()
+
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
@@ -199,7 +201,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.prefix, startRow, length)
 	if err != nil {
 		return
 	}
