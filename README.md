@@ -157,9 +157,11 @@ MatrixOne supports Linux and MacOS. You can install MatrixOne either by [buildin
 For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
-**Step 1. Install Go (version 1.19 is required).**
+**Step 1. Install Go (version 1.19 is required)**
 
-**Step 2. Get the MatrixOne code to build MatrixOne**
+**Step 2. Install MySQL Client (version [8.0.30](https://dev.mysql.com/downloads/installer/) is required)**
+
+**Step 3. Get the MatrixOne code to build MatrixOne**
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
@@ -239,7 +241,7 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
     ```bash
     docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
     ```
-    
+
     !!! info
          The *nightly* version is updated once a day.
 

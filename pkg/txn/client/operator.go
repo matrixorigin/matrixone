@@ -280,6 +280,9 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true))
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnClosed) {
+			return nil
+		}
 		return err
 	}
 	if result != nil {

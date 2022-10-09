@@ -213,6 +213,19 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
+func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
+	function, err := GetFunctionByID(overloadID)
+	if err != nil {
+		return false, err
+	}
+	// if function cann't be fold, we think that will be not monotonical
+	if function.Volatile {
+		return false, nil
+	}
+	isMonotonical := (function.Flag & plan.Function_MONOTONICAL) != 0
+	return isMonotonical, nil
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return the encoded overload id and the overload's return type

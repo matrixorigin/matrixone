@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -51,8 +52,9 @@ type DNStore = logservice.DNStore
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
-type BlockMeta struct {
-}
+// type BlockMeta struct {
+
+// }
 
 // Cache is a multi-version cache for maintaining some table data.
 // The cache is concurrently secure,  with multiple transactions accessing
@@ -66,25 +68,29 @@ type Cache interface {
 		tableId uint64, ts timestamp.Timestamp) error
 }
 
+type IDGenerator interface {
+	AllocateID(ctx context.Context) (uint64, error)
+}
+
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries [][]Entry) []BlockMeta
+		blocks []BlockMeta, entries []Entry) []BlockMeta
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
+		blocks []BlockMeta, ts timestamp.Timestamp, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
 	sync.RWMutex
 	db                *DB
-	m                 *mheap.Mheap
+	proc              *process.Process
 	cli               client.TxnClient
+	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
@@ -129,7 +135,9 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
-	m        *mheap.Mheap
+	proc     *process.Process
+
+	idGen IDGenerator
 
 	// use to cache table
 	tableMap map[tableKey]*table
@@ -192,9 +200,13 @@ type table struct {
 	insertExpr *plan.Expr
 	deleteExpr *plan.Expr
 	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	proc       *process.Process
 }
 
 type column struct {
+	accountId  uint32
+	tableId    uint64
 	databaseId uint64
 	// column name
 	name            string
@@ -213,10 +225,15 @@ type column struct {
 }
 
 type blockReader struct {
-	blks []BlockMeta
-	ctx  context.Context
+	blks     []BlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	tableDef *plan.TableDef
 }
 
 type mergeReader struct {
 	rds []engine.Reader
+}
+
+type emptyReader struct {
 }

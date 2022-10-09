@@ -16,7 +16,7 @@
 package mysql
 
 import (
-	"fmt"
+    "fmt"
     "strings"
     "go/constant"
 
@@ -56,6 +56,7 @@ import (
     groupBy tree.GroupBy
     aliasedTableExpr *tree.AliasedTableExpr
     direction tree.Direction
+    nullsPosition tree.NullsPosition
     orderBy tree.OrderBy
     order *tree.Order
     limit *tree.Limit
@@ -182,7 +183,7 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -370,6 +371,7 @@ import (
 %type <tableExprs> table_references table_name_wild_list
 %type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
 %type <direction> asc_desc_opt
+%type <nullsPosition> nulls_first_last_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
@@ -751,7 +753,7 @@ system_variable:
         } else if len(vs) == 1 {
            r = vs[0]
         } else {
-        	yylex.Error("variable syntax error")
+            yylex.Error("variable syntax error")
             return 1
         }
         $$ = &tree.VarExpr{
@@ -771,7 +773,7 @@ user_variable:
 //        } else if len(vs) == 1 {
 //           r = vs[0]
 //        } else {
-//        	yylex.Error("variable syntax error")
+//            yylex.Error("variable syntax error")
 //            return 1
 //        }
         $$ = &tree.VarExpr{
@@ -832,7 +834,7 @@ load_fields:
     {
         res := &tree.Fields{
             Terminated: "\t",
-			EscapedBy:    0,
+            EscapedBy:    0,
         }
         for _, f := range $2 {
             if f.Terminated != "" {
@@ -877,9 +879,9 @@ field_item:
         }
         var b byte
         if len(str) != 0 {
-        	b = byte(str[0])
+            b = byte(str[0])
         } else {
-        	b = 0
+            b = 0
         }
         $$ = &tree.Fields{
             Optionally: true,
@@ -955,34 +957,34 @@ grant_stmt:
             Typ: tree.GrantTypePrivilege,
             GrantPrivilege: tree.GrantPrivilege{
                 Privileges: $2,
-	    	ObjType: $4,
-	    	Level: $5,
-	    	Roles: $7,
-	    	GrantOption: $8,
+                ObjType: $4,
+                Level: $5,
+                Roles: $7,
+                GrantOption: $8,
             },
         }
     }
 |   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
-                 Typ: tree.GrantTypeRole,
-                 GrantRole:tree.GrantRole{
-		       Roles: $2,
-		       Users: $4,
-		       GrantOption: $5,
-		   },
-             }
+            Typ: tree.GrantTypeRole,
+            GrantRole:tree.GrantRole{
+                Roles: $2,
+                Users: $4,
+                GrantOption: $5,
+            },
+        }
     }
 |   GRANT PROXY ON user_spec TO user_spec_list grant_option_opt
     {
         $$ =  &tree.Grant{
-	      Typ: tree.GrantTypeProxy,
-	      GrantProxy:tree.GrantProxy{
-		     ProxyUser: $4,
-		     Users: $6,
-		     GrantOption: $7,
-		 },
-	  }
+            Typ: tree.GrantTypeProxy,
+            GrantProxy:tree.GrantProxy{
+                ProxyUser: $4,
+                Users: $6,
+                GrantOption: $7,
+            },
+        }
 
     }
 
@@ -994,10 +996,10 @@ grant_option_opt:
     {
         $$ = true
     }
-// |	WITH MAX_QUERIES_PER_HOUR INTEGRAL
-// |	WITH MAX_UPDATES_PER_HOUR INTEGRAL
-// |	WITH MAX_CONNECTIONS_PER_HOUR INTEGRAL
-// |	WITH MAX_USER_CONNECTIONS INTEGRAL
+// |    WITH MAX_QUERIES_PER_HOUR INTEGRAL
+// |    WITH MAX_UPDATES_PER_HOUR INTEGRAL
+// |    WITH MAX_CONNECTIONS_PER_HOUR INTEGRAL
+// |    WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
     REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
@@ -1005,11 +1007,11 @@ revoke_stmt:
         $$ = &tree.Revoke{
             Typ: tree.RevokeTypePrivilege,
             RevokePrivilege: tree.RevokePrivilege{
-		    IfExists: $2,
-		    Privileges: $3,
-		    ObjType: $5,
-		    Level: $6,
-		    Roles: $8,
+                IfExists: $2,
+                Privileges: $3,
+                ObjType: $5,
+                Level: $6,
+                Roles: $8,
             },
         }
     }
@@ -1018,8 +1020,8 @@ revoke_stmt:
         $$ = &tree.Revoke{
             Typ: tree.RevokeTypeRole,
             RevokeRole: tree.RevokeRole{
-		IfExists: $2,
-		Roles: $3,
+                IfExists: $2,
+                Roles: $3,
                 Users: $5,
             },
         }
@@ -1126,205 +1128,205 @@ column_name_list:
 
 priv_type:
     ALL
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALL
-	}
-|	CREATE ACCOUNT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT
-	}
-|	DROP ACCOUNT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
+    }
+|    CREATE ACCOUNT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT
+    }
+|    DROP ACCOUNT
         {
-        	$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
+            $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
         }
-|	ALTER ACCOUNT
+|    ALTER ACCOUNT
         {
                 $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
         }
-|	ALL PRIVILEGES
-	{
-	    $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
-	}
-|	ALTER TABLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE
-	}
-|	ALTER VIEW
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW
-	}
-|	CREATE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE
-	}
-|	CREATE USER
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_USER
-	}
-|	DROP USER
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_USER
-	}
-|	ALTER USER
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_USER
-	}
-|	CREATE TABLESPACE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE
-	}
-|	TRIGGER
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_TRIGGER
-	}
-|	DELETE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DELETE
-	}
-|	DROP TABLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE
-	}
-|	DROP VIEW
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW
-	}
-|	EXECUTE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_EXECUTE
-	}
-|	INDEX
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_INDEX
-	}
-|	INSERT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_INSERT
-	}
-|	SELECT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SELECT
-	}
-|	SUPER
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SUPER
-	}
-|	CREATE DATABASE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE
-	}
-|	DROP DATABASE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE
-	}
-|	SHOW DATABASES
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES
-	}
-|	CONNECT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CONNECT
-	}
-|	MANAGE GRANTS
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS
-	}
-|	OWNERSHIP
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP
-	}
-|	SHOW TABLES
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES
-	}
-|	CREATE TABLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE
-	}
-|	UPDATE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_UPDATE
-	}
-|	GRANT OPTION
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_GRANT_OPTION
-	}
-|	REFERENCES
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_REFERENCES
-	}
-|	REFERENCE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_REFERENCE
-	}
-|	REPLICATION SLAVE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_REPLICATION_SLAVE
-	}
-|	REPLICATION CLIENT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_REPLICATION_CLIENT
-	}
-|	USAGE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_USAGE
-	}
-|	RELOAD
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_RELOAD
-	}
-|	FILE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_FILE
-	}
-|	CREATE TEMPORARY TABLES
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TEMPORARY_TABLES
-	}
-|	LOCK TABLES
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_LOCK_TABLES
-	}
-|	CREATE VIEW
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW
-	}
-|	SHOW VIEW
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_VIEW
-	}
-|	CREATE ROLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ROLE
-	}
-|	DROP ROLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE
-	}
-|	ALTER ROLE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE
-	}
-|  	CREATE ROUTINE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE
-	}
-|	ALTER ROUTINE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ROUTINE
-	}
-|	EVENT
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_EVENT
-	}
-|	SHUTDOWN
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_SHUTDOWN
-	}
-|	TRUNCATE
-	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_TRUNCATE
-	}
+|    ALL PRIVILEGES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
+    }
+|    ALTER TABLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE
+    }
+|    ALTER VIEW
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW
+    }
+|    CREATE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE
+    }
+|    CREATE USER
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_USER
+    }
+|    DROP USER
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_USER
+    }
+|    ALTER USER
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_USER
+    }
+|    CREATE TABLESPACE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE
+    }
+|    TRIGGER
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_TRIGGER
+    }
+|    DELETE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DELETE
+    }
+|    DROP TABLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE
+    }
+|    DROP VIEW
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW
+    }
+|    EXECUTE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_EXECUTE
+    }
+|    INDEX
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_INDEX
+    }
+|    INSERT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_INSERT
+    }
+|    SELECT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SELECT
+    }
+|    SUPER
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SUPER
+    }
+|    CREATE DATABASE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE
+    }
+|    DROP DATABASE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE
+    }
+|    SHOW DATABASES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES
+    }
+|    CONNECT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CONNECT
+    }
+|    MANAGE GRANTS
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS
+    }
+|    OWNERSHIP
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP
+    }
+|    SHOW TABLES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES
+    }
+|    CREATE TABLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE
+    }
+|    UPDATE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_UPDATE
+    }
+|    GRANT OPTION
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_GRANT_OPTION
+    }
+|    REFERENCES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_REFERENCES
+    }
+|    REFERENCE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_REFERENCE
+    }
+|    REPLICATION SLAVE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_REPLICATION_SLAVE
+    }
+|    REPLICATION CLIENT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_REPLICATION_CLIENT
+    }
+|    USAGE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_USAGE
+    }
+|    RELOAD
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_RELOAD
+    }
+|    FILE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_FILE
+    }
+|    CREATE TEMPORARY TABLES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TEMPORARY_TABLES
+    }
+|    LOCK TABLES
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_LOCK_TABLES
+    }
+|    CREATE VIEW
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW
+    }
+|    SHOW VIEW
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_VIEW
+    }
+|    CREATE ROLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ROLE
+    }
+|    DROP ROLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE
+    }
+|    ALTER ROLE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE
+    }
+|      CREATE ROUTINE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE
+    }
+|    ALTER ROUTINE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ROUTINE
+    }
+|    EVENT
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_EVENT
+    }
+|    SHUTDOWN
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_SHUTDOWN
+    }
+|    TRUNCATE
+    {
+        $$ = tree.PRIVILEGE_TYPE_STATIC_TRUNCATE
+    }
 
 set_stmt:
     set_variable_stmt
@@ -1336,23 +1338,23 @@ set_role_stmt:
     SET ROLE role_spec
     {
         $$ = &tree.SetRole{
-		SecondaryRole: false,
-		Role: $3,
-	}
+            SecondaryRole: false,
+            Role: $3,
+        }
     }
 |   SET SECONDARY ROLE ALL
     {
-	$$ = &tree.SetRole{
-		SecondaryRole: true,
-		SecondaryRoleType: tree.SecondaryRoleTypeAll,
-	}
+    $$ = &tree.SetRole{
+            SecondaryRole: true,
+            SecondaryRoleType: tree.SecondaryRoleTypeAll,
+        }
     }
 |   SET SECONDARY ROLE NONE
     {
-	$$ = &tree.SetRole{
-		SecondaryRole: true,
-		SecondaryRoleType: tree.SecondaryRoleTypeNone,
-	}
+    $$ = &tree.SetRole{
+            SecondaryRole: true,
+            SecondaryRoleType: tree.SecondaryRoleTypeNone,
+        }
     }
 
 set_default_role_stmt:
@@ -1468,18 +1470,18 @@ var_assignment:
     }
 |   AT_ID equal_or_assignment set_expr
     {
-    	vs := strings.Split($1, ".")
+        vs := strings.Split($1, ".")
         var isGlobal bool
         if strings.ToLower(vs[0]) == "global" {
             isGlobal = true
         }
         var r string
         if len(vs) == 2 {
-        	r = vs[1]
+            r = vs[1]
         } else if len(vs) == 1{
-        	r = vs[0]
+            r = vs[0]
         } else {
-        	yylex.Error("variable syntax error")
+            yylex.Error("variable syntax error")
             return 1
         }
         $$ = &tree.VarAssignmentExpr{
@@ -1491,18 +1493,18 @@ var_assignment:
     }
 |   AT_AT_ID equal_or_assignment set_expr
     {
-    	vs := strings.Split($1, ".")
+        vs := strings.Split($1, ".")
         var isGlobal bool
         if strings.ToLower(vs[0]) == "global" {
             isGlobal = true
         }
         var r string
         if len(vs) == 2 {
-        	r = vs[1]
+            r = vs[1]
         } else if len(vs) == 1{
-        	r = vs[0]
+            r = vs[0]
         } else {
-        	yylex.Error("variable syntax error")
+            yylex.Error("variable syntax error")
             return 1
         }
         $$ = &tree.VarAssignmentExpr{
@@ -1618,7 +1620,7 @@ completion_type:
     {
         $$ = tree.COMPLETION_TYPE_NO_CHAIN
     }
-|	WORK
+|    WORK
     {
         $$ = tree.COMPLETION_TYPE_NO_CHAIN
     }
@@ -1683,50 +1685,50 @@ use_stmt:
     USE ident
     {
         $$ = &tree.Use{
-        	SecondaryRole: false,
-        	Name: $2,
+            SecondaryRole: false,
+            Name: $2,
         }
     }
 |   USE
     {
         $$ = &tree.Use{
-        	SecondaryRole: false,
+            SecondaryRole: false,
         }
     }
 |   USE ROLE role_spec
     {
-	$$ = &tree.Use{
-		SecondaryRole: false,
-		Role: $3,
-	}
+    $$ = &tree.Use{
+        SecondaryRole: false,
+        Role: $3,
+    }
     }
 |   USE SECONDARY ROLE ALL
     {
-	$$ = &tree.Use{
-		SecondaryRole: true,
-		SecondaryRoleType: tree.SecondaryRoleTypeAll,
-	}
+    $$ = &tree.Use{
+        SecondaryRole: true,
+        SecondaryRoleType: tree.SecondaryRoleTypeAll,
+    }
     }
 |   USE SECONDARY ROLE NONE
     {
-	$$ = &tree.Use{
-		SecondaryRole: true,
-		SecondaryRoleType: tree.SecondaryRoleTypeNone,
-	}
+    $$ = &tree.Use{
+        SecondaryRole: true,
+        SecondaryRoleType: tree.SecondaryRoleTypeNone,
+    }
     }
 
 update_stmt:
-	update_no_with_stmt
-|	with_clause update_no_with_stmt
-	{
-		$2.(*tree.Update).With = $1
-		$$ = $2
-	}
+    update_no_with_stmt
+|    with_clause update_no_with_stmt
+    {
+        $2.(*tree.Update).With = $1
+        $$ = $2
+    }
 
 update_no_with_stmt:
     UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
     {
-    	// Single-table syntax
+        // Single-table syntax
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
@@ -1735,15 +1737,15 @@ update_no_with_stmt:
             Limit: $9,
         }
     }
-|	UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
-	{
-		// Multiple-table syntax
-		$$ = &tree.Update{
-			Tables: $4,
-			Exprs: $6,
-			Where: $7,
-		}
-	}
+|    UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+    {
+        // Multiple-table syntax
+        $$ = &tree.Update{
+            Tables: $4,
+            Exprs: $6,
+            Where: $7,
+        }
+    }
 
 update_list:
     update_value
@@ -1831,41 +1833,41 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-		explainStmt := tree.NewExplainStmt($3, "text")
-		optionElem := tree.MakeOptionElem("verbose", "NULL")
+        explainStmt := tree.NewExplainStmt($3, "text")
+        optionElem := tree.MakeOptionElem("verbose", "NULL")
         options := tree.MakeOptions(optionElem)
-		explainStmt.Options = options
-		$$ = explainStmt
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-    		explainStmt := tree.NewExplainAnalyze($3, "text")
-    		optionElem := tree.MakeOptionElem("analyze", "NULL")
-    	options := tree.MakeOptions(optionElem)
-	explainStmt.Options = options
-	$$ = explainStmt
+            explainStmt := tree.NewExplainAnalyze($3, "text")
+            optionElem := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem)
+    explainStmt.Options = options
+    $$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
         explainStmt := tree.NewExplainAnalyze($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-		options := tree.MakeOptions(optionElem1)
-		options = append(options, optionElem2)
-		explainStmt.Options = options
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
         $$ = explainStmt
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-    	if tree.IsContainAnalyze($3) {
-    	     explainStmt := tree.NewExplainAnalyze($5, "text")
-	     explainStmt.Options = $3
-	     $$ = explainStmt
-    	} else {
-    	     explainStmt := tree.NewExplainStmt($5, "text")
-    	     explainStmt.Options = $3
-	     $$ = explainStmt
-    	}
+        if tree.IsContainAnalyze($3) {
+             explainStmt := tree.NewExplainAnalyze($5, "text")
+         explainStmt.Options = $3
+         $$ = explainStmt
+        } else {
+             explainStmt := tree.NewExplainStmt($5, "text")
+             explainStmt.Options = $3
+         $$ = explainStmt
+        }
     }
 
 explain_option_key:
@@ -1897,7 +1899,7 @@ utility_option_list:
     {
         $$ = tree.MakeOptions($1)
     }
-| 	utility_option_list ',' utility_option_elem
+|     utility_option_list ',' utility_option_elem
     {
         $$ = append($1, $3);
     }
@@ -1915,8 +1917,8 @@ utility_option_name:
     }
 
 utility_option_arg:
-    TRUE				    { $$ = "true" }
-|   FALSE			            { $$ = "false" }
+    TRUE                    { $$ = "true" }
+|   FALSE                        { $$ = "false" }
 |   explain_foramt_value                    { $$ = $1 }
 
 
@@ -1934,13 +1936,13 @@ alter_stmt:
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
-	$$ = &tree.AlterAccount{
-		IfExists:$3,
-		Name:$4,
-		AuthOption:$5,
-		StatusOption:$6,
-		Comment:$7,
-	}
+    $$ = &tree.AlterAccount{
+        IfExists:$3,
+        Name:$4,
+        AuthOption:$5,
+        StatusOption:$6,
+        Comment:$7,
+    }
     }
 
 alter_user_stmt:
@@ -2083,89 +2085,89 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
-|	show_target_filter_stmt
-|	show_table_status_stmt
-|	show_grants_stmt
+|   show_target_filter_stmt
+|   show_table_status_stmt
+|   show_grants_stmt
 
 show_grants_stmt:
-	SHOW GRANTS
-	{
-		$$ = &tree.ShowGrants{}
-	}
-|	SHOW GRANTS	FOR user_name using_roles_opt
-	{
-		$$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
-	}
+    SHOW GRANTS
+    {
+        $$ = &tree.ShowGrants{}
+    }
+|    SHOW GRANTS    FOR user_name using_roles_opt
+    {
+        $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
+    }
 
 using_roles_opt:
-	{
-		$$ = nil
-	}
-|	USING role_spec_list
-	{
-		$$ = $2
-	}
+    {
+        $$ = nil
+    }
+|    USING role_spec_list
+    {
+        $$ = $2
+    }
 
 show_table_status_stmt:
-	SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
-	{
-		$$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
-	}
+    SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
+    {
+        $$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
+    }
 
 from_or_in_opt:
-	{}
-|	from_or_in
+    {}
+|    from_or_in
 
 db_name_opt:
-	{}
-|	db_name
+    {}
+|    db_name
 
 show_target_filter_stmt:
-	SHOW show_target like_opt where_expression_opt
+    SHOW show_target like_opt where_expression_opt
     {
-    	s := $2.(*tree.ShowTarget)
+        s := $2.(*tree.ShowTarget)
         s.Like = $3
         s.Where = $4
         $$ = s
     }
 
 show_target:
-	CONFIG
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowConfig}
-	}
-|	charset_keyword
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowCharset}
-	}
-|	ENGINES
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowEngines}
-	}
-|	TRIGGERS from_or_in_opt db_name_opt
-	{
-		$$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
-	}
-|	PROCEDURE STATUS
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowProcedureStatus}
-	}
-|	EVENTS from_or_in_opt db_name_opt
-	{
-		$$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
-	}
-|	PLUGINS
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowPlugins}
-	}
-|	PRIVILEGES
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowPrivileges}
-	}
-|	PROFILES
-	{
-		$$ = &tree.ShowTarget{Type: tree.ShowProfiles}
-	}
+    CONFIG
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowConfig}
+    }
+|    charset_keyword
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowCharset}
+    }
+|    ENGINES
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowEngines}
+    }
+|    TRIGGERS from_or_in_opt db_name_opt
+    {
+        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
+    }
+|    PROCEDURE STATUS
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowProcedureStatus}
+    }
+|    EVENTS from_or_in_opt db_name_opt
+    {
+        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
+    }
+|    PLUGINS
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowPlugins}
+    }
+|    PRIVILEGES
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowPrivileges}
+    }
+|    PROFILES
+    {
+        $$ = &tree.ShowTarget{Type: tree.ShowProfiles}
+    }
 
 show_index_stmt:
     SHOW extended_opt index_kwd from_or_in table_name where_expression_opt
@@ -2177,9 +2179,9 @@ show_index_stmt:
     }
 
 extended_opt:
-	{}
-|	EXTENDED
-	{}
+    {}
+|    EXTENDED
+    {}
 
 index_kwd:
     INDEX
@@ -2395,8 +2397,8 @@ drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
     {
         $$ = &tree.DropAccount{
-        	IfExists: $3,
-        	Name: $4,
+            IfExists: $3,
+            Name: $4,
         }
     }
 
@@ -2472,29 +2474,29 @@ drop_prepare_stmt:
     }
 
 delete_stmt:
-	delete_without_using_stmt
-|	delete_with_using_stmt
-|	with_clause delete_with_using_stmt
-	{
-		$2.(*tree.Delete).With = $1
-		$$ = $2
-	}
-|	with_clause delete_without_using_stmt
-	{
-    	$2.(*tree.Delete).With = $1
+    delete_without_using_stmt
+|    delete_with_using_stmt
+|    with_clause delete_with_using_stmt
+    {
+        $2.(*tree.Delete).With = $1
+        $$ = $2
+    }
+|    with_clause delete_without_using_stmt
+    {
+        $2.(*tree.Delete).With = $1
         $$ = $2
     }
 
 delete_without_using_stmt:
     DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
     {
-    	// Single-Table Syntax
-    	t := &tree.AliasedTableExpr {
-    		Expr: $6,
-    		As: tree.AliasClause{
-    			Alias: tree.Identifier($8),
-    		},
-    	}
+        // Single-Table Syntax
+        t := &tree.AliasedTableExpr {
+            Expr: $6,
+            As: tree.AliasClause{
+                Alias: tree.Identifier($8),
+            },
+        }
         $$ = &tree.Delete{
             Tables: tree.TableExprs{t},
             Where: $9,
@@ -2502,73 +2504,73 @@ delete_without_using_stmt:
             Limit: $11,
         }
     }
-|	DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
-	{
-		// Multiple-Table Syntax
-		$$ = &tree.Delete{
-			Tables: $5,
-			Where: $8,
-			TableRefs: $7,
-		}
-	}
+|    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+    {
+        // Multiple-Table Syntax
+        $$ = &tree.Delete{
+            Tables: $5,
+            Where: $8,
+            TableRefs: $7,
+        }
+    }
 
 
 
 delete_with_using_stmt:
-	DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
-	{
-		// Multiple-Table Syntax
-		$$ = &tree.Delete{
-			Tables: $6,
-			Where: $9,
-			TableRefs: $8,
-		}
-	}
+    DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+    {
+        // Multiple-Table Syntax
+        $$ = &tree.Delete{
+            Tables: $6,
+            Where: $9,
+            TableRefs: $8,
+        }
+    }
 
 table_name_wild_list:
-	table_name_opt_wild
-	{
-		$$ = tree.TableExprs{$1}
-	}
-|	table_name_wild_list ',' table_name_opt_wild
-	{
-		$$ = append($1, $3)
-	}
+    table_name_opt_wild
+    {
+        $$ = tree.TableExprs{$1}
+    }
+|    table_name_wild_list ',' table_name_opt_wild
+    {
+        $$ = append($1, $3)
+    }
 
 table_name_opt_wild:
-	ident wild_opt
-	{
-		prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+    ident wild_opt
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier($1), prefix)
-	}
-|	ident '.' ident wild_opt
-	{
-		prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
+    }
+|    ident '.' ident wild_opt
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier($3), prefix)
-	}
+    }
 
 wild_opt:
-	%prec EMPTY
-	{}
-|	'.' '*'
-	{}
+    %prec EMPTY
+    {}
+|    '.' '*'
+    {}
 
 priority_opt:
-	{}
-|	priority
+    {}
+|    priority
 
 priority:
-	LOW_PRIORITY
-|	HIGH_PRIORITY
-|	DELAYED
+    LOW_PRIORITY
+|    HIGH_PRIORITY
+|    DELAYED
 
 quick_opt:
-	{}
-|	QUICK
+    {}
+|    QUICK
 
 ignore_opt:
-	{}
-|	IGNORE
+    {}
+|    IGNORE
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data
@@ -2615,46 +2617,46 @@ insert_data:
             Rows: $4,
         }
     }
-|	SET set_value_list
-	{
-		if $2 == nil {
-			yylex.Error("the set list of insert can not be empty")
-			return 1
-		}
-		var identList tree.IdentifierList
-		var valueList tree.Exprs
-		for _, a := range $2 {
-			identList = append(identList, a.Column)
-			valueList = append(valueList, a.Expr)
-		}
-		vc := tree.NewValuesClause([]tree.Exprs{valueList})
-		$$ = &tree.Insert{
-			Columns: identList,
-			Rows: tree.NewSelect(vc, nil, nil),
-		}
-	}
+|    SET set_value_list
+    {
+        if $2 == nil {
+            yylex.Error("the set list of insert can not be empty")
+            return 1
+        }
+        var identList tree.IdentifierList
+        var valueList tree.Exprs
+        for _, a := range $2 {
+            identList = append(identList, a.Column)
+            valueList = append(valueList, a.Expr)
+        }
+        vc := tree.NewValuesClause([]tree.Exprs{valueList})
+        $$ = &tree.Insert{
+            Columns: identList,
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
 
 set_value_list:
-	{
-		$$ = nil
-	}
-|	set_value
-	{
-		$$ = []*tree.Assignment{$1}
-	}
-|	set_value_list ',' set_value
-	{
-		$$ = append($1, $3)
-	}
+    {
+        $$ = nil
+    }
+|    set_value
+    {
+        $$ = []*tree.Assignment{$1}
+    }
+|    set_value_list ',' set_value
+    {
+        $$ = append($1, $3)
+    }
 
 set_value:
-	insert_column '=' expr_or_default
-	{
-		$$ = &tree.Assignment{
-			Column: tree.Identifier($1),
-			Expr: $3,
-		}
-	}
+    insert_column '=' expr_or_default
+    {
+        $$ = &tree.Assignment{
+            Column: tree.Identifier($1),
+            Expr: $3,
+        }
+    }
 
 insert_column_list:
     insert_column
@@ -2693,8 +2695,8 @@ row_value:
     }
 
 row_opt:
-	{}
-|	ROW
+    {}
+|    ROW
 
 data_opt:
     {
@@ -2896,7 +2898,7 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
     }
-|	with_clause simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
+|    with_clause simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
     }
@@ -2910,48 +2912,48 @@ select_no_parens:
     }
 
 with_clause:
-	WITH cte_list
-	{
-		$$ = &tree.With{
-			IsRecursive: false,
-			CTEs: $2,
-		}
-	}
-|	WITH RECURSIVE cte_list
-	{
-		$$ = &tree.With{
-        	IsRecursive: true,
-        	CTEs: $3,
+    WITH cte_list
+    {
+        $$ = &tree.With{
+            IsRecursive: false,
+            CTEs: $2,
         }
-	}
+    }
+|    WITH RECURSIVE cte_list
+    {
+        $$ = &tree.With{
+            IsRecursive: true,
+            CTEs: $3,
+        }
+    }
 
 cte_list:
-	common_table_expr
-	{
-		$$ = []*tree.CTE{$1}
-	}
-|	cte_list ',' common_table_expr
-	{
-		$$ = append($1, $3)
-	}
+    common_table_expr
+    {
+        $$ = []*tree.CTE{$1}
+    }
+|    cte_list ',' common_table_expr
+    {
+        $$ = append($1, $3)
+    }
 
 common_table_expr:
-	ident column_list_opt AS '(' stmt ')'
-	{
-		$$ = &tree.CTE{
-			Name: &tree.AliasClause{Alias: tree.Identifier($1), Cols: $2},
-			Stmt: $5,
-		}
-	}
+    ident column_list_opt AS '(' stmt ')'
+    {
+        $$ = &tree.CTE{
+            Name: &tree.AliasClause{Alias: tree.Identifier($1), Cols: $2},
+            Stmt: $5,
+        }
+    }
 
 column_list_opt:
-	{
-		$$ = nil
-	}
-|	'(' column_list ')'
-	{
-		$$ = $2
-	}
+    {
+        $$ = nil
+    }
+|    '(' column_list ')'
+    {
+        $$ = $2
+    }
 
 limit_opt:
     {
@@ -3002,9 +3004,9 @@ order_list:
     }
 
 order:
-    expression asc_desc_opt
+    expression asc_desc_opt nulls_first_last_opt
     {
-        $$ = &tree.Order{Expr: $1, Direction: $2}
+        $$ = &tree.Order{Expr: $1, Direction: $2, NullsPosition: $3}
     }
 
 asc_desc_opt:
@@ -3020,6 +3022,18 @@ asc_desc_opt:
         $$ = tree.Descending
     }
 
+nulls_first_last_opt:
+    {
+        $$ = tree.DefaultNullsPosition
+    }
+|   NULLS FIRST
+    {
+        $$ = tree.NullsFirst
+    }
+|   NULLS LAST
+    {
+        $$ = tree.NullsLast
+    }
 
 select_with_parens:
     '(' select_no_parens ')'
@@ -3188,7 +3202,7 @@ simple_select_clause:
             Having: $7,
         }
     }
-|	SELECT select_option_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+|    SELECT select_option_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
     {
         $$ = &tree.SelectClause{
             Distinct: false,
@@ -3202,9 +3216,9 @@ simple_select_clause:
     }
 
 select_option_opt:
-	SQL_SMALL_RESULT
-|	SQL_BIG_RESULT
-|	SQL_BUFFER_RESULT
+    SQL_SMALL_RESULT
+|    SQL_BIG_RESULT
+|    SQL_BUFFER_RESULT
 
 distinct_opt:
     {
@@ -3280,7 +3294,7 @@ select_expression:
 
 from_opt:
     {
-    	prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         tn := tree.NewTableName(tree.Identifier(""), prefix)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
@@ -3310,7 +3324,7 @@ table_references:
     }
 
 escaped_table_reference:
-	table_reference %prec LOWER_THAN_SET
+    table_reference %prec LOWER_THAN_SET
 
 table_reference:
     table_factor
@@ -3489,16 +3503,16 @@ table_factor:
     }
 |   table_function as_opt_id
     {
-    	if $2 != "" {
-    		$$ = &tree.AliasedTableExpr{
-    			Expr: $1,
-    			As: tree.AliasClause{
-    				Alias: tree.Identifier($2),
-    			},
-    		}
-    	} else {
-    		$$ = $1
-    	}
+        if $2 != "" {
+            $$ = &tree.AliasedTableExpr{
+                Expr: $1,
+                As: tree.AliasClause{
+                    Alias: tree.Identifier($2),
+                },
+            }
+        } else {
+            $$ = $1
+        }
     }
 // |   '(' table_references ')'
 
@@ -3515,121 +3529,121 @@ table_function:
         a2 := "$"
         a3 := false
         $$ = &tree.Unnest{
-        	Param: &tree.UnnestParam{
-			Origin: a1,
-			Path: a2,
-			Outer: a3,
-		},
-       	}
+                Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 |   UNNEST '(' STRING ',' STRING ')'
     {
-	a1 := $3
-	a2 := "$"
-	if len($5) > 0 {
-       	    a2 = $5
+        a1 := $3
+        a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
         }
         a3 := false
-	$$ = &tree.Unnest{
+        $$ = &tree.Unnest{
                 Param: &tree.UnnestParam{
-        		Origin: a1,
-        		Path: a2,
-        		Outer: a3,
-        	},
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
         }
     }
 |   UNNEST '(' STRING ',' STRING ',' TRUE ')'
     {
-    	a1 := $3
-    	a2 := "$"
+        a1 := $3
+        a2 := "$"
         if len($5) > 0 {
             a2 = $5
         }
-	a3 := true
-	$$ = &tree.Unnest{
+        a3 := true
+        $$ = &tree.Unnest{
                 Param: &tree.UnnestParam{
-        		Origin: a1,
-        		Path: a2,
-        		Outer: a3,
-        	},
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
         }
     }
 |   UNNEST '(' STRING ',' STRING ',' FALSE ')'
     {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
+        a1 := $3
+        a2 := "$"
+        if len($5) > 0 {
             a2 = $5
         }
-    	a3 := false
-    	$$ = &tree.Unnest{
-		Param: &tree.UnnestParam{
-			Origin: a1,
-			Path: a2,
-			Outer: a3,
-		},
-	}
+        a3 := false
+        $$ = &tree.Unnest{
+            Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 |   UNNEST '(' column_name ')'
     {
-    	a1 := $3
-    	a2 := "$"
-    	a3 := false
-    	$$ = &tree.Unnest{
-		Param: &tree.UnnestParam{
-			Origin: a1,
-			Path: a2,
-			Outer: a3,
-		},
-	}
+        a1 := $3
+        a2 := "$"
+        a3 := false
+        $$ = &tree.Unnest{
+            Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 |   UNNEST '(' column_name ',' STRING ')'
     {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-    	$$ = &tree.Unnest{
-    		Param: &tree.UnnestParam{
-    			Origin: a1,
-    			Path: a2,
-   			Outer: a3,
-    		},
-    	}
+        a1 := $3
+        a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+        a3 := false
+        $$ = &tree.Unnest{
+            Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 |   UNNEST '(' column_name ',' STRING ',' TRUE ')'
     {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := true
-    	$$ = &tree.Unnest{
-    		Param: &tree.UnnestParam{
-    			Origin: a1,
-    			Path: a2,
-    			Outer: a3,
-    		},
-    	}
+        a1 := $3
+        a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+        a3 := true
+        $$ = &tree.Unnest{
+            Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 |   UNNEST '(' column_name ',' STRING ',' FALSE ')'
     {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-    	$$ = &tree.Unnest{
-    		Param: &tree.UnnestParam{
-    			Origin: a1,
-    			Path: a2,
-    			Outer: a3,
-    		},
-    	}
+        a1 := $3
+        a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+        a3 := false
+        $$ = &tree.Unnest{
+            Param: &tree.UnnestParam{
+                Origin: a1,
+                Path: a2,
+                Outer: a3,
+            },
+        }
     }
 
 
@@ -3680,14 +3694,14 @@ as_name_opt:
     {
         $$ = $2
     }
-|	STRING
-	{
-		$$ = $1
-	}
+|    STRING
+    {
+        $$ = $1
+    }
 |   AS STRING
-	{
-		$$ = $2
-	}
+    {
+        $$ = $2
+    }
 
 stmt_name:
     ident
@@ -3715,123 +3729,123 @@ create_ddl_stmt:
     create_table_stmt
 |   create_database_stmt
 |   create_index_stmt
-|	create_view_stmt
+|    create_view_stmt
 
 create_view_stmt:
-	CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
-	{
-		$$ = &tree.CreateView{
-			Name: $5,
-			ColNames: $6,
-			AsSource: $8,
-			Temporary: $2,
-			IfNotExists: false,
-		}
-	}
-|	CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
+    CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
     {
-		$$ = &tree.CreateView{
-        	Name: $8,
-        	ColNames: $9,
-        	AsSource: $11,
-        	Temporary: $2,
-        	IfNotExists: true,
+        $$ = &tree.CreateView{
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            Temporary: $2,
+            IfNotExists: false,
+        }
+    }
+|    CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
+    {
+        $$ = &tree.CreateView{
+            Name: $8,
+            ColNames: $9,
+            AsSource: $11,
+            Temporary: $2,
+            IfNotExists: true,
        }
     }
 
 view_recursive_opt:
-	{}
-|	RECURSIVE
+    {}
+|    RECURSIVE
 
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
-	$$ = &tree.CreateAccount{
-		IfNotExists:$3,
+    $$ = &tree.CreateAccount{
+        IfNotExists:$3,
                 Name:$4,
                 AuthOption:$5,
-             	StatusOption:$6,
+                 StatusOption:$6,
                 Comment:$7,
-	}
+    }
     }
 
 account_name:
     ID
     {
-	$$ = $1
+    $$ = $1
     }
 
 account_auth_option:
     ADMIN_NAME equal_opt account_admin_name account_identified
     {
-	$$ = tree.AccountAuthOption{
-		Equal:$2,
-		AdminName:$3,
+    $$ = tree.AccountAuthOption{
+        Equal:$2,
+        AdminName:$3,
                 IdentifiedType:$4,
-	}
+    }
     }
 
 account_admin_name:
     STRING
     {
-	$$ = $1
+    $$ = $1
     }
 
 account_identified:
     IDENTIFIED BY STRING
     {
-	$$ = tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedByPassword,
-		Str: $3,
-	}
+    $$ = tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedByPassword,
+        Str: $3,
+    }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-	$$ = tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedByRandomPassword,
-	}
+    $$ = tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedByRandomPassword,
+    }
     }
 |   IDENTIFIED WITH STRING
     {
-	$$ = tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedWithSSL,
-		Str: $3,
-	}
+    $$ = tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedWithSSL,
+        Str: $3,
+    }
     }
 
 account_status_option:
     {
-    	$$ = tree.AccountStatus{
-		Exist: false,
-	}
+        $$ = tree.AccountStatus{
+        Exist: false,
+    }
     }
 |   OPEN
     {
-	$$ = tree.AccountStatus{
-		Exist: true,
-		Option: tree.AccountStatusOpen,
-	}
+    $$ = tree.AccountStatus{
+        Exist: true,
+        Option: tree.AccountStatusOpen,
+    }
     }
 |   SUSPEND
     {
-	$$ = tree.AccountStatus{
-		Exist: true,
-		Option: tree.AccountStatusSuspend,
-	}
+    $$ = tree.AccountStatus{
+        Exist: true,
+        Option: tree.AccountStatusSuspend,
+    }
     }
 
 account_comment_opt:
     {
-    	$$ = tree.AccountComment{
-		Exist: false,
-	}
+        $$ = tree.AccountComment{
+        Exist: false,
+    }
     }
 |   COMMENT_KEYWORD STRING
     {
-	$$ = tree.AccountComment{
-		Exist: true,
-		Comment: $2,
-	}
+    $$ = tree.AccountComment{
+        Exist: true,
+        Comment: $2,
+    }
     }
 
 create_user_stmt:
@@ -3849,7 +3863,7 @@ create_user_stmt:
 account_role_name:
     ID
     {
-	$$ = $1
+    $$ = $1
     }
 
 user_comment_or_attribute_opt:
@@ -3860,19 +3874,19 @@ user_comment_or_attribute_opt:
     }
 |   COMMENT_KEYWORD STRING
     {
-	$$ = tree.AccountCommentOrAttribute{
-		Exist: true,
-		IsComment: true,
-		Str: $2,
-	}
+    $$ = tree.AccountCommentOrAttribute{
+        Exist: true,
+        IsComment: true,
+        Str: $2,
+    }
     }
 |   ATTRIBUTE STRING
     {
-	$$ = tree.AccountCommentOrAttribute{
-		Exist: true,
-		IsComment: false,
-		Str: $2,
-	}
+    $$ = tree.AccountCommentOrAttribute{
+        Exist: true,
+        IsComment: false,
+        Str: $2,
+    }
     }
 
 //conn_options:
@@ -4031,29 +4045,29 @@ user_identified_opt:
     }
 |   user_identified
     {
-    	$$ = $1
+        $$ = $1
     }
 
 user_identified:
     IDENTIFIED BY STRING
     {
-	$$ = &tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedByPassword,
-		Str: $3,
-	}
+    $$ = &tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedByPassword,
+        Str: $3,
+    }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-	$$ = &tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedByRandomPassword,
-	}
+    $$ = &tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedByRandomPassword,
+    }
     }
 |   IDENTIFIED WITH STRING
     {
-	$$ = &tree.AccountIdentified{
-		Typ: tree.AccountIdentifiedWithSSL,
-		Str: $3,
-	}
+    $$ = &tree.AccountIdentified{
+        Typ: tree.AccountIdentifiedWithSSL,
+        Str: $3,
+    }
     }
 
 name_string:
@@ -4218,9 +4232,9 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_RTREE
     }
-|	USING BSI
+|    USING BSI
     {
-    	$$ = tree.INDEX_TYPE_BSI
+        $$ = tree.INDEX_TYPE_BSI
     }
 
 create_database_stmt:
@@ -4487,8 +4501,8 @@ values_opt:
     }
 |   VALUES LESS THAN MAXVALUE
     {
-    	expr := tree.NewMaxValue()
-    	$$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
+        expr := tree.NewMaxValue()
+        $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
 |   VALUES LESS THAN '(' expression_list ')'
     {
@@ -4496,7 +4510,7 @@ values_opt:
     }
 |   VALUES IN '(' expression_list ')'
     {
-	$$ = &tree.ValuesIn{ValueList: $4}
+    $$ = &tree.ValuesIn{ValueList: $4}
     }
 
 sub_partition_num_opt:
@@ -4737,27 +4751,27 @@ table_option:
     {
         $$= tree.NewTableOptionUnion($4)
     }
-|	PROPERTIES '(' properties_list ')'
-	{
-		$$ = &tree.TableOptionProperties{Preperties: $3}
-	}
+|    PROPERTIES '(' properties_list ')'
+    {
+        $$ = &tree.TableOptionProperties{Preperties: $3}
+    }
 // |   INSERT_METHOD equal_opt insert_method_options
 
 properties_list:
-	property_elem
-	{
-		$$ = []tree.Property{$1}
-	}
-|	properties_list ',' property_elem
-	{
-		$$ = append($1, $3)
-	}
+    property_elem
+    {
+        $$ = []tree.Property{$1}
+    }
+|    properties_list ',' property_elem
+    {
+        $$ = append($1, $3)
+    }
 
 property_elem:
-	STRING '=' STRING
-	{
-		$$ = tree.Property{Key: $1, Value: $3}
-	}
+    STRING '=' STRING
+    {
+        $$ = tree.Property{Key: $1, Value: $3}
+    }
 
 storage_opt:
     {
@@ -4799,11 +4813,11 @@ row_format_options:
     }
 
 charset_name:
-	name_string
+    name_string
 |   BINARY
 
 collate_name:
-	name_string
+    name_string
 |   BINARY
 
 table_name_list:
@@ -4854,145 +4868,145 @@ table_elem:
     }
 |   constaint_def
     {
-    	$$ = $1
+        $$ = $1
     }
 
 constaint_def:
-	constraint_keyword constraint_elem
-	{
-		if $1 != "" {
-			switch v := $2.(type) {
+    constraint_keyword constraint_elem
+    {
+        if $1 != "" {
+            switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
-            	v.Name = $1
+                v.Name = $1
             }
-		}
-		$$ = $2
-	}
-|	constraint_elem
-	{
-		$$ = $1
-	}
+        }
+        $$ = $2
+    }
+|    constraint_elem
+    {
+        $$ = $1
+    }
 
 constraint_elem:
-	PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
-	{
- 		$$ = &tree.PrimaryKeyIndex{
-			KeyParts: $5,
-			Name: $3[0],
-			Empty: $3[1] == "",
-			IndexOption: $7,
-		}
-	}
-|	FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
-	{
-		$$ = &tree.FullTextIndex{
-			KeyParts: $5,
-			Name: $3,
-			Empty: true,
-			IndexOption: $7,
-		}
-	}
-|	key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
-	{
-		keyTyp := tree.INDEX_TYPE_INVALID
-		if $3[1] != "" {
-           	t := strings.ToLower($3[1])
-            switch t {
-            case "zonemap":
-            	keyTyp = tree.INDEX_TYPE_ZONEMAP
-            case "bsi":
-            	keyTyp = tree.INDEX_TYPE_BSI
-            default:
-            	yylex.Error("Invail the type of index")
-                return 1
-            }
-		}
-		$$ = &tree.Index{
-			IfNotExists: $2,
-			KeyParts: $5,
-			Name: $3[0],
-			KeyType: keyTyp,
-			IndexOption: $7,
-		}
-	}
-|	UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
-	{
-		$$ = &tree.UniqueIndex{
-			KeyParts: $5,
-			Name: $3[0],
+    PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+         $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
             Empty: $3[1] == "",
             IndexOption: $7,
-		}
-	}
-|	FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
-	{
-		$$ = &tree.ForeignKey{
-			IfNotExists: $3,
-			KeyParts: $6,
-			Name: $4,
-			Refer: $8,
-			Empty: true,
-		}
-	}
-|	CHECK '(' expression ')' enforce_opt
-	{
-		$$ = &tree.CheckIndex{
-			Expr: $3,
-			Enforced: $5,
-		}
-	}
+        }
+    }
+|    FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+    {
+        $$ = &tree.FullTextIndex{
+            KeyParts: $5,
+            Name: $3,
+            Empty: true,
+            IndexOption: $7,
+        }
+    }
+|    key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+        keyTyp := tree.INDEX_TYPE_INVALID
+        if $3[1] != "" {
+               t := strings.ToLower($3[1])
+            switch t {
+            case "zonemap":
+                keyTyp = tree.INDEX_TYPE_ZONEMAP
+            case "bsi":
+                keyTyp = tree.INDEX_TYPE_BSI
+            default:
+                yylex.Error("Invail the type of index")
+                return 1
+            }
+        }
+        $$ = &tree.Index{
+            IfNotExists: $2,
+            KeyParts: $5,
+            Name: $3[0],
+            KeyType: keyTyp,
+            IndexOption: $7,
+        }
+    }
+|    UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+    {
+        $$ = &tree.UniqueIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $7,
+        }
+    }
+|    FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
+    {
+        $$ = &tree.ForeignKey{
+            IfNotExists: $3,
+            KeyParts: $6,
+            Name: $4,
+            Refer: $8,
+            Empty: true,
+        }
+    }
+|    CHECK '(' expression ')' enforce_opt
+    {
+        $$ = &tree.CheckIndex{
+            Expr: $3,
+            Enforced: $5,
+        }
+    }
 
 enforce_opt:
-	{
-		$$ = false
-	}
-|	enforce
+    {
+        $$ = false
+    }
+|    enforce
 
 key_or_index_opt:
-	{
-		$$ = ""
-	}
-|	key_or_index
-	{
-		$$ = $1
-	}
+    {
+        $$ = ""
+    }
+|    key_or_index
+    {
+        $$ = $1
+    }
 
 key_or_index:
-	KEY
-|	INDEX
+    KEY
+|    INDEX
 
 index_name_and_type_opt:
-	index_name
-	{
-		$$ = make([]string, 2)
-		$$[0] = $1
-		$$[1] = ""
-	}
-|	index_name USING index_type
-	{
-		$$ = make([]string, 2)
+    index_name
+    {
+        $$ = make([]string, 2)
+        $$[0] = $1
+        $$[1] = ""
+    }
+|    index_name USING index_type
+    {
+        $$ = make([]string, 2)
         $$[0] = $1
         $$[1] = $3
-	}
-|	ident TYPE index_type
-	{
-		$$ = make([]string, 2)
+    }
+|    ident TYPE index_type
+    {
+        $$ = make([]string, 2)
         $$[0] = $1
         $$[1] = $3
-	}
+    }
 
 index_type:
-	BTREE
-|	HASH
-|	RTREE
-|	ZONEMAP
-|	BSI
+    BTREE
+|    HASH
+|    RTREE
+|    ZONEMAP
+|    BSI
 
 index_name:
-	{
-		$$ = ""
-	}
-|	ident
+    {
+        $$ = ""
+    }
+|    ident
 
 column_def:
     column_name column_type column_attribute_list_opt
@@ -5107,7 +5121,7 @@ column_attribute_elem:
     }
 |   ON UPDATE name_datetime_precision datetime_precision_opt
     {
-		name := tree.SetUnresolvedName(strings.ToLower($3))
+        name := tree.SetUnresolvedName(strings.ToLower($3))
         var es tree.Exprs = nil
         if $4 != nil {
             es = append(es, $4)
@@ -5133,13 +5147,13 @@ constraint_keyword_opt:
     {
         $$ = ""
     }
- |	constraint_keyword
- 	{
- 		$$ = $1
- 	}
+ |    constraint_keyword
+     {
+         $$ = $1
+     }
 
 constraint_keyword:
-	CONSTRAINT
+    CONSTRAINT
     {
         $$ = ""
     }
@@ -5161,7 +5175,7 @@ references_def:
     }
 
 on_delete_update_opt:
-	%prec LOWER_THAN_ON
+    %prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: tree.REFERENCE_OPTION_INVALID,
@@ -5389,14 +5403,14 @@ simple_expr:
         $2.Exists = true
         $$ = $2
     }
-|	CASE expression_opt when_clause_list else_opt END
-	{
-		$$ = &tree.CaseExpr{
-			Expr: $2,
-			Whens: $3,
-			Else: $4,
-		}
-	}
+|    CASE expression_opt when_clause_list else_opt END
+    {
+        $$ = &tree.CaseExpr{
+            Expr: $2,
+            Whens: $3,
+            Else: $4,
+        }
+    }
 |   CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -5430,65 +5444,65 @@ simple_expr:
     {
         $$ = $1
     }
-| 	function_call_json
+|     function_call_json
     {
         $$ = $1
     }
 
 else_opt:
-	{
-		$$ = nil
-	}
-|	ELSE expression
-	{
-		$$ = $2
-	}
+    {
+        $$ = nil
+    }
+|    ELSE expression
+    {
+        $$ = $2
+    }
 
 expression_opt:
-	{
-		$$ = nil
-	}
-|	expression
-	{
-		$$ = $1
-	}
+    {
+        $$ = nil
+    }
+|    expression
+    {
+        $$ = $1
+    }
 
 when_clause_list:
-	when_clause
-	{
-		$$ = []*tree.When{$1}
-	}
-|	when_clause_list when_clause
-	{
-		$$ = append($1, $2)
-	}
+    when_clause
+    {
+        $$ = []*tree.When{$1}
+    }
+|    when_clause_list when_clause
+    {
+        $$ = append($1, $2)
+    }
 
 when_clause:
-	WHEN expression THEN expression
-	{
-		$$ = &tree.When{
-			Cond: $2,
-			Val: $4,
-		}
-	}
+    WHEN expression THEN expression
+    {
+        $$ = &tree.When{
+            Cond: $2,
+            Val: $4,
+        }
+    }
 
 mo_cast_type:
-	column_type
+    column_type
 |   SIGNED integer_opt
     {
-    	name := $1
-    	if $2 != "" {
-    		name = $2
-    	}
+        name := $1
+        if $2 != "" {
+            name = $2
+        }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: name,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 |   UNSIGNED integer_opt
@@ -5496,13 +5510,13 @@ mo_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $2,
-		        Width:  64,
-		        Locale: &locale,
+                Width:  64,
+                Locale: &locale,
                 Unsigned: true,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 
@@ -5513,12 +5527,12 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
-	        },
+            },
         }
     }
 |   CHAR length_option_opt
@@ -5526,12 +5540,12 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
-	        },
+            },
         }
     }
 |   DATE
@@ -5539,11 +5553,11 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.DateFamily,
+                Family: tree.DateFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DATE),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_DATE),
+            },
         }
     }
 |   YEAR length_opt
@@ -5551,13 +5565,13 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Width:  16,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_YEAR),
-	        },
+                Width:  16,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_YEAR),
+            },
         }
     }
 |   DATETIME timestamp_option_opt
@@ -5565,14 +5579,14 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family:             tree.TimestampFamily,
-		        Precision:          $2,
+                Family:             tree.TimestampFamily,
+                Precision:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        TimePrecisionIsSet: false,
-		        Locale:             &locale,
-		        Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
-	        },
+                TimePrecisionIsSet: false,
+                Locale:             &locale,
+                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
+            },
         }
     }
 |   TIME length_opt
@@ -5580,31 +5594,31 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.TimeFamily,
+                Family: tree.TimeFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Precision: 0,
-		        TimePrecisionIsSet: false,
-		        Locale: &locale,
-		        Oid: uint32(defines.MYSQL_TYPE_TIME),
-	        },
+                Precision: 0,
+                TimePrecisionIsSet: false,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIME),
+            },
         }
     }
 |   SIGNED integer_opt
     {
-    	name := $1
-    	if $2 != "" {
-    		name = $2
-    	}
+        name := $1
+        if $2 != "" {
+            name = $2
+        }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: name,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 |   UNSIGNED integer_opt
@@ -5612,20 +5626,20 @@ mysql_cast_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $2,
-		        Width:  64,
-		        Locale: &locale,
+                Width:  64,
+                Locale: &locale,
                 Unsigned: true,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 
 integer_opt:
     {}
-|	INTEGER
-|	INT
+|    INTEGER
+|    INT
 
 function_call_aggregate:
     AVG '(' func_type_opt expression  ')'
@@ -5778,9 +5792,9 @@ function_call_generic:
     }
 |   substr_option '(' expression_list_opt ')'
     {
-    	name := tree.SetUnresolvedName(strings.ToLower($1))
-       	$$ = &tree.FuncExpr{
-           	Func: tree.FuncName2ResolvableFunctionReference(name),
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
         }
     }
@@ -5788,16 +5802,16 @@ function_call_generic:
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{$3, $5},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$3, $5},
         }
     }
 |   substr_option '(' expression FROM expression FOR expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{$3, $5, $7},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$3, $5, $7},
         }
     }
 |   EXTRACT '(' time_unit FROM expression ')'
@@ -5805,126 +5819,126 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         timeUinit := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{timeUinit, $5},
-       }
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{timeUinit, $5},
+        }
     }
-|	func_not_keyword '(' expression_list_opt ')'
-	{
+|    func_not_keyword '(' expression_list_opt ')'
+    {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: $3,
         }
     }
-|	VARIANCE '(' func_type_opt expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
+|    VARIANCE '(' func_type_opt expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
         }
-	}
-|	GROUP_CONCAT '(' func_type_opt expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
+    }
+|    GROUP_CONCAT '(' func_type_opt expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$4},
             Type: $3,
         }
-	}
-|	TRIM '(' expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
+    }
+|    TRIM '(' expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{$3},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$3},
         }
-	}
-|	TRIM '(' expression FROM expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
+    }
+|    TRIM '(' expression FROM expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{$3},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$3},
         }
-	}
-|	TRIM '(' trim_direction FROM expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
-		arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{arg1, $5},
-        }
-	}
-|	TRIM '(' trim_direction expression FROM expression ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
+    }
+|    TRIM '(' trim_direction FROM expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{arg1, $4, $6},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{arg1, $5},
         }
-	}
+    }
+|    TRIM '(' trim_direction expression FROM expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{arg1, $4, $6},
+        }
+    }
 function_call_json:
-	JSON_EXTRACT '(' STRING ',' STRING ')'
-	{
-		name := tree.SetUnresolvedName(strings.ToLower($1))
-		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-	$$ = &tree.FuncExpr{
-	     Func: tree.FuncName2ResolvableFunctionReference(name),
-	     Exprs: tree.Exprs{a1, a2},
-	}
-	}
+    JSON_EXTRACT '(' STRING ',' STRING ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{a1, a2},
+        }
+    }
 
 trim_direction:
-	BOTH
-|	LEADING
-|	TRAILING
+    BOTH
+|    LEADING
+|    TRAILING
 
 substr_option:
-	SUBSTRING
-|	SUBSTR
+    SUBSTRING
+|    SUBSTR
 
 time_unit:
-	time_stamp_unit
-	{
-		$$ = $1
-	}
-|	SECOND_MICROSECOND
-|	MINUTE_MICROSECOND
-|	MINUTE_SECOND
-|	HOUR_MICROSECOND
-|	HOUR_SECOND
-|	HOUR_MINUTE
-|	DAY_MICROSECOND
-|	DAY_SECOND
-|	DAY_MINUTE
-|	DAY_HOUR
-|	YEAR_MONTH
+    time_stamp_unit
+    {
+        $$ = $1
+    }
+|    SECOND_MICROSECOND
+|    MINUTE_MICROSECOND
+|    MINUTE_SECOND
+|    HOUR_MICROSECOND
+|    HOUR_SECOND
+|    HOUR_MINUTE
+|    DAY_MICROSECOND
+|    DAY_SECOND
+|    DAY_MINUTE
+|    DAY_HOUR
+|    YEAR_MONTH
 
 time_stamp_unit:
-	MICROSECOND
-|	SECOND
-|	MINUTE
-|	HOUR
-|	DAY
-|	WEEK
-|	MONTH
-|	QUARTER
-|	YEAR
-|	SQL_TSI_SECOND
-|	SQL_TSI_MINUTE
-|	SQL_TSI_HOUR
-|	SQL_TSI_DAY
-|	SQL_TSI_WEEK
-|	SQL_TSI_MONTH
-|	SQL_TSI_QUARTER
-|	SQL_TSI_YEAR
+    MICROSECOND
+|    SECOND
+|    MINUTE
+|    HOUR
+|    DAY
+|    WEEK
+|    MONTH
+|    QUARTER
+|    YEAR
+|    SQL_TSI_SECOND
+|    SQL_TSI_MINUTE
+|    SQL_TSI_HOUR
+|    SQL_TSI_DAY
+|    SQL_TSI_WEEK
+|    SQL_TSI_MONTH
+|    SQL_TSI_QUARTER
+|    SQL_TSI_YEAR
 
 function_call_nonkeyword:
     CURTIME datetime_precision
@@ -5968,8 +5982,8 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
         }
     }
-|	SCHEMA '('')'
-	{
+|    SCHEMA '('')'
+    {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6146,8 +6160,8 @@ name_confict:
 interval_expr:
     INTERVAL expression time_unit
     {
- 		name := tree.SetUnresolvedName("interval")
-		arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+         name := tree.SetUnresolvedName("interval")
+        arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$2, arg2},
@@ -6202,14 +6216,14 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
-|	expression PIPE_CONCAT expression %prec PIPE_CONCAT
-	{
-		name := tree.SetUnresolvedName(strings.ToLower("concat"))
+|    expression PIPE_CONCAT expression %prec PIPE_CONCAT
+    {
+        name := tree.SetUnresolvedName(strings.ToLower("concat"))
         $$ = &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{$1, $3},
         }
-	}
+    }
 |   expression XOR expression %prec XOR
     {
         $$ = tree.NewXorExpr($1, $3)
@@ -6220,7 +6234,7 @@ expression:
     }
 |   MAXVALUE
     {
-    	$$ = tree.NewMaxValue()
+        $$ = tree.NewMaxValue()
     }
 |   boolean_primary
     {
@@ -6327,18 +6341,18 @@ col_tuple:
 // |   LIST_ARG
 
 and_or_some:
-	ALL
-	{
-		$$ = tree.ALL
-	}
-|	ANY
-	{
-		$$ = tree.ANY
-	}
-|	SOME
-	{
-		$$ = tree.SOME
-	}
+    ALL
+    {
+        $$ = tree.ALL
+    }
+|    ANY
+    {
+        $$ = tree.ANY
+    }
+|    SOME
+    {
+        $$ = tree.SOME
+    }
 
 comparison_operator:
     '='
@@ -6366,9 +6380,9 @@ comparison_operator:
         $$ = tree.NOT_EQUAL
     }
 |   NULL_SAFE_EQUAL
-	{
-		$$ = tree.NULL_SAFE_EQUAL
-	}
+    {
+        $$ = tree.NULL_SAFE_EQUAL
+    }
 
 keys:
     PRIMARY KEY
@@ -6395,16 +6409,16 @@ literal:
     }
 |   INTEGRAL
     {
-    	str := fmt.Sprintf("%v", $1)
-    	switch v := $1.(type) {
-    	case uint64:
-    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
-    	case int64:
-    		$$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
-    	default:
-    		yylex.Error("parse integral fail")
+        str := fmt.Sprintf("%v", $1)
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+        default:
+            yylex.Error("parse integral fail")
             return 1
-    	}
+        }
     }
 |   FLOAT
     {
@@ -6424,37 +6438,37 @@ literal:
         $$ = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
     }
 |   HEXNUM
-	{
+    {
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
         case int64:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
         case string:
-        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
+            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
         default:
             yylex.Error("parse integral fail")
             return 1
         }
-	}
+    }
 |   DECIMAL_VALUE
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
 |   BIT_LITERAL
-	{
+    {
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
         case int64:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
         case string:
-        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
+            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
         default:
             yylex.Error("parse integral fail")
             return 1
         }
-	}
+    }
 |   VALUE_ARG
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
@@ -6488,11 +6502,11 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BitFamily,
+                Family: tree.BitFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_BIT),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_BIT),
+            },
         }
     }
 |   BOOL
@@ -6500,11 +6514,11 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BoolFamily,
+                Family: tree.BoolFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_BOOL),
-	        },
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_BOOL),
+            },
         }
     }
 |   BOOLEAN
@@ -6512,11 +6526,11 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BoolFamily,
+                Family: tree.BoolFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_BOOL),
-	        },
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_BOOL),
+            },
         }
     }
 |   INT1
@@ -6524,12 +6538,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  8,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_TINY),
-	        },
+                Width:  8,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TINY),
+            },
         }
     }
 |   TINYINT
@@ -6537,12 +6551,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  8,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_TINY),
-	        },
+                Width:  8,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TINY),
+            },
         }
     }
 |   INT2
@@ -6550,12 +6564,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  16,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_SHORT),
-	        },
+                Width:  16,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_SHORT),
+            },
         }
     }
 |   SMALLINT
@@ -6563,12 +6577,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  16,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_SHORT),
-	        },
+                Width:  16,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_SHORT),
+            },
         }
     }
 |   INT3
@@ -6576,12 +6590,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  24,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_INT24),
-	        },
+                Width:  24,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_INT24),
+            },
         }
     }
 |   MEDIUMINT
@@ -6589,12 +6603,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  24,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_INT24),
-	        },
+                Width:  24,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_INT24),
+            },
         }
     }
 |   INT4
@@ -6602,38 +6616,38 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  32,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONG),
+                Width:  32,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONG),
             },
-	    }
+        }
     }
 |   INT
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  32,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONG),
+                Width:  32,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONG),
             },
-	    }
+        }
     }
 |   INTEGER
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  32,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONG),
-	        },
+                Width:  32,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONG),
+            },
         }
     }
 |   INT8
@@ -6641,12 +6655,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 |   BIGINT
@@ -6654,12 +6668,12 @@ int_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
-	        },
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+            },
         }
     }
 
@@ -6668,58 +6682,58 @@ decimal_type:
     {
         locale := ""
         if $2.DisplayWith > 255 {
-        	yylex.Error("Display width for double out of range (max = 255)")
-        	return 1
+            yylex.Error("Display width for double out of range (max = 255)")
+            return 1
         }
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
                 return 1
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		Family: tree.FloatFamily,
+        Family: tree.FloatFamily,
                 FamilyString: $1,
-		Width:  64,
-		Locale: &locale,
-		Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+        Width:  64,
+        Locale: &locale,
+        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Precision: $2.Precision,
-	    },
+        },
         }
     }
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-		return 1
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        return 1
         }
         if $2.DisplayWith > 53 {
-        	yylex.Error("For float(M), M must between 0 and 53.")
+            yylex.Error("For float(M), M must between 0 and 53.")
                 return 1
         } else if $2.DisplayWith >= 24 {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  64,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
-		}
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  64,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+            DisplayWith: $2.DisplayWith,
+            Precision: $2.Precision,
+            },
+        }
         } else {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  32,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  32,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+            DisplayWith: $2.DisplayWith,
+            Precision: $2.Precision,
+            },
                 }
         }
     }
@@ -6728,35 +6742,35 @@ decimal_type:
     {
         locale := ""
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-		return 1
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        return 1
         }
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-        	yylex.Error("For decimal(M), M must between 0 and 38.")
+            yylex.Error("For decimal(M), M must between 0 and 38.")
                 return 1
         } else if $2.DisplayWith <= 16 {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  64,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
-		}
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  64,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Precision: $2.Precision,
+            },
+        }
         } else {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  128,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Precision: $2.Precision,
+            },
                 }
         }
     }
@@ -6777,14 +6791,14 @@ decimal_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
+                Family: tree.FloatFamily,
                 FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Precision: $2.Precision,
-	        },
+            },
         }
     }
 
@@ -6794,11 +6808,11 @@ time_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.DateFamily,
+                Family: tree.DateFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DATE),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_DATE),
+            },
         }
     }
 |   TIME length_opt
@@ -6806,54 +6820,54 @@ time_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.TimeFamily,
+                Family: tree.TimeFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Precision: 0,
-		        TimePrecisionIsSet: false,
-		        Locale: &locale,
-		        Oid: uint32(defines.MYSQL_TYPE_TIME),
-	        },
+                Precision: 0,
+                TimePrecisionIsSet: false,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIME),
+            },
         }
     }
 |   TIMESTAMP timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-        		yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-        		return 1
+                yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+                return 1
                 } else {
                 $$ = &tree.T{
-            		InternalType: tree.InternalType{
-		        Family:             tree.TimestampFamily,
-		        Precision:          $2,
-                	FamilyString: $1,
-                	DisplayWith: 26,
-		        TimePrecisionIsSet: true,
-		        Locale:             &locale,
-		        Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
-	        },
-	    }
+                    InternalType: tree.InternalType{
+                Family:             tree.TimestampFamily,
+                Precision:          $2,
+                    FamilyString: $1,
+                    DisplayWith: 26,
+                TimePrecisionIsSet: true,
+                Locale:             &locale,
+                Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
+            },
+        }
         }
     }
 |   DATETIME timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-        		yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-        		return 1
+                yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
+                return 1
                 } else {
                 $$ = &tree.T{
-            		InternalType: tree.InternalType{
-		        Family:             tree.TimestampFamily,
-		        Precision:          $2,
-                	FamilyString: $1,
-                	DisplayWith: 26,
-		        TimePrecisionIsSet: true,
-		        Locale:             &locale,
-		        Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
-	        },
-	    }
+                    InternalType: tree.InternalType{
+                Family:             tree.TimestampFamily,
+                Precision:          $2,
+                    FamilyString: $1,
+                    DisplayWith: 26,
+                TimePrecisionIsSet: true,
+                Locale:             &locale,
+                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
+            },
+        }
         }
     }
 |   YEAR length_opt
@@ -6861,13 +6875,13 @@ time_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.IntFamily,
+                Family: tree.IntFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Width:  16,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_YEAR),
-	        },
+                Width:  16,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_YEAR),
+            },
         }
     }
 
@@ -6877,12 +6891,12 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_STRING),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_STRING),
                 DisplayWith: $2,
-	        },
+            },
         }
     }
 |   VARCHAR length_option_opt
@@ -6890,12 +6904,12 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
-		        Locale: &locale,
+                Family: tree.StringFamily,
+                Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
-	        },
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
         }
     }
 |   BINARY length_opt
@@ -6903,12 +6917,12 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
+                Family: tree.StringFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
-	        },
+            },
         }
     }
 |   VARBINARY length_opt
@@ -6916,12 +6930,12 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.StringFamily,
-		        Locale: &locale,
+                Family: tree.StringFamily,
+                Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
-	        },
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
         }
     }
 |   TEXT
@@ -6929,10 +6943,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_BLOB),
             },
         }
     }
@@ -6941,10 +6955,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
             },
         }
     }
@@ -6953,11 +6967,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+            },
         }
     }
 |   LONGTEXT
@@ -6965,11 +6979,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
+            },
         }
     }
 |   BLOB
@@ -6977,10 +6991,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_BLOB),
             },
         }
     }
@@ -6989,10 +7003,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TINY_BLOB),
             },
         }
     }
@@ -7001,11 +7015,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+            },
         }
     }
 |   LONGBLOB
@@ -7013,11 +7027,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.BlobFamily,
+                Family: tree.BlobFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
-	        },
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONG_BLOB),
+            },
         }
     }
 |   JSON
@@ -7025,10 +7039,10 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.JsonFamily,
+                Family: tree.JsonFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_JSON),
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_JSON),
             },
         }
     }
@@ -7037,12 +7051,12 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.EnumFamily,
+                Family: tree.EnumFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_ENUM),
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_ENUM),
                 EnumValues: $3,
-	        },
+            },
         }
     }
 |   SET '(' enum_values ')'
@@ -7050,25 +7064,25 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.SetFamily,
+                Family: tree.SetFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_SET),
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_SET),
                 EnumValues: $3,
-	        },
+            },
         }
     }
 |  UUID
     {
-   	locale := ""
-    	$$ = &tree.T{
-	     InternalType: tree.InternalType{
-		Family: tree.UuidFamily,
-	   	FamilyString: $1,
-		Width:  128,
-		Locale: &locale,
-		Oid:    uint32(defines.MYSQL_TYPE_UUID),
-	},
+       locale := ""
+        $$ = &tree.T{
+         InternalType: tree.InternalType{
+        Family: tree.UuidFamily,
+           FamilyString: $1,
+        Width:  128,
+        Locale: &locale,
+        Oid:    uint32(defines.MYSQL_TYPE_UUID),
+    },
     }
 }
 
@@ -7105,11 +7119,11 @@ spatial_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.GeometryFamily,
+                Family: tree.GeometryFamily,
                 FamilyString: $1,
-		        Locale: &locale,
-		        Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
-	        },
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
         }
     }
 // |   POINT
@@ -7138,23 +7152,23 @@ length_opt:
     {
         $$ = 0
     }
-|	length
+|    length
 
 timestamp_option_opt:
     /* EMPTY */
-    	{
-    	    $$ = 0
-    	}
-|	'(' INTEGRAL ')'
+        {
+            $$ = 0
+        }
+|    '(' INTEGRAL ')'
     {
         $$ = int32($2.(int64))
     }
 
 length_option_opt:
-	{
-		$$ = int32(-1)
-	}
-|	'(' INTEGRAL ')'
+    {
+        $$ = int32(-1)
+    }
+|    '(' INTEGRAL ')'
     {
         $$ = int32($2.(int64))
     }
@@ -7303,6 +7317,7 @@ reserved_keyword:
 |   EXISTS
 |   EXPLAIN
 |   FALSE
+|   FIRST
 |   FOR
 |   FORCE
 |   FROM
@@ -7323,6 +7338,7 @@ reserved_keyword:
 |   ISSUER
 |   JOIN
 |   KEY
+|   LAST
 |   LEFT
 |   LIKE
 |   LIMIT
@@ -7340,6 +7356,7 @@ reserved_keyword:
 |   NOT
 |   NONE
 |   NULL
+|   NULLS
 |   ON
 |   OR
 |   ORDER
@@ -7351,7 +7368,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
-|	REFERENCES
+|    REFERENCES
 |   RECURSIVE
 |   REVERSE
 |   SCHEMA
@@ -7393,22 +7410,22 @@ reserved_keyword:
 |   INT4
 |   INT8
 |   CHECK
-|	CONSTRAINT
+|    CONSTRAINT
 |   PRIMARY
 |   FULLTEXT
 |   FOREIGN
-|	ROW
+|    ROW
 |   OUTFILE
-|	SQL_SMALL_RESULT
-|	SQL_BIG_RESULT
-|	LEADING
-|	TRAILING
+|    SQL_SMALL_RESULT
+|    SQL_BIG_RESULT
+|    LEADING
+|    TRAILING
 |   CHARACTER
-|	LOW_PRIORITY
-|	HIGH_PRIORITY
-|	DELAYED
+|    LOW_PRIORITY
+|    HIGH_PRIORITY
+|    DELAYED
 |   PARTITION
-|	QUICK
+|    QUICK
 |   EXCEPT
 |   ADMIN_NAME
 |   RANDOM
@@ -7525,7 +7542,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
-|	PROFILES
+|    PROFILES
 |   ROLE
 |   RANGE
 |   READ
@@ -7579,29 +7596,29 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
-|	TYPE
+|    TYPE
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
-|	UNKNOWN
-|	ANY
-|	SOME
+|    UNKNOWN
+|    ANY
+|    SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
-|	HASH
-|	ENGINES
-|	TRIGGERS
+|    HASH
+|    ENGINES
+|    TRIGGERS
 
 func_not_keyword:
-	DATE_ADD
-|	DATE_SUB
+    DATE_ADD
+|    DATE_SUB
 |   NOW
-|	ADDDATE
+|    ADDDATE
 |   CURDATE
 |   POSITION
 |   SESSION_USER
@@ -7649,7 +7666,7 @@ not_keyword:
 |   AVG
 
 //mo_keywords:
-//	PROPERTIES
+//    PROPERTIES
 //  BSI
 //  ZONEMAP
 

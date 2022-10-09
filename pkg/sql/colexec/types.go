@@ -14,12 +14,6 @@
 
 package colexec
 
-import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
 type ResultPos struct {
 	Rel int32
 	Pos int32
@@ -27,40 +21,4 @@ type ResultPos struct {
 
 func NewResultPos(rel int32, pos int32) ResultPos {
 	return ResultPos{Rel: rel, Pos: pos}
-}
-
-// Direction for ordering results.
-type Direction int8
-
-// Direction values.
-const (
-	DefaultDirection Direction = iota
-	Ascending
-	Descending
-)
-
-var directionName = [...]string{
-	DefaultDirection: "",
-	Ascending:        "ASC",
-	Descending:       "DESC",
-}
-
-type Field struct {
-	E    *plan.Expr
-	Type Direction
-}
-
-func (n Field) String() string {
-	s := fmt.Sprintf("%v", n.E)
-	if n.Type != DefaultDirection {
-		s += " " + n.Type.String()
-	}
-	return s
-}
-
-func (i Direction) String() string {
-	if i < 0 || i > Direction(len(directionName)-1) {
-		return fmt.Sprintf("Direction(%d)", i)
-	}
-	return directionName[i]
 }

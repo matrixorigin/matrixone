@@ -232,10 +232,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
 	copy(newTable.TableFunctionParam, table.TableFunctionParam)
-	// FIX ME: don't support now
-	// for idx, def := range table.Defs {
-	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
-	// }
 
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {

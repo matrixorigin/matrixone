@@ -1,0 +1,94 @@
+SELECT REGEXP_LIKE('Cat', '.*') Result;
+result
+true
+SELECT REGEXP_LIKE('Cat', 'b+') Result;
+result
+false
+SELECT REGEXP_LIKE('Cat', '^Ca') Result;
+result
+true
+SELECT REGEXP_LIKE('Cat', '^Da') Result;
+result
+false
+SELECT REGEXP_LIKE(NULL, '.*');
+regexp_like(null, .*)
+NULL
+SELECT REGEXP_LIKE('Cat', NULL);
+regexp_like(Cat, null)
+NULL
+SELECT REGEXP_LIKE(NULL, NULL);
+regexp_like(null, null)
+NULL
+drop table if exists t1;
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+insert into t1 values( 9 , "Killers");
+insert into t1 values(10 , "No Prayer for the Dying");
+insert into t1 values(11 , "No Sound Without Silence");
+insert into t1 values(12 , "Big Swing Face");
+insert into t1 values(13 , "Blue Night");
+insert into t1 values(14 , "Eternity");
+insert into t1 values(15 , "Scandinavia");
+insert into t1 values(16 , "Long Lost Suitcase");
+insert into t1 values(17 , "Praise and Blame");
+insert into t1 values(18 , "Along Came Jones");
+insert into t1 values(19 , "All Night Wrong");
+insert into t1 values(20 , "The Sixteen Men of Tain");
+SELECT a, b
+FROM t1
+WHERE REGEXP_LIKE(b, '^Power');
+a    b
+1    PowerSlave
+2    Powerage
+drop table t1;
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+insert into t1 values( 9 , "Killers");
+SELECT a, REGEXP_LIKE(b, '^P') from t1;
+a    regexp_like(b, ^P)
+1    true
+2    true
+3    false
+4    false
+5    false
+6    false
+7    false
+8    true
+9    false
+drop table t1;
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , NULL);
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , NULL);
+insert into t1 values( 9 , "Killers");
+SELECT a, REGEXP_LIKE(b, '^P') from t1;
+a    regexp_like(b, ^P)
+1    true
+2    true
+3    false
+4    null
+5    false
+6    false
+7    false
+8    null
+9    false
+drop table t1;
