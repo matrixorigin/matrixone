@@ -737,6 +737,13 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				},
 			},
 		}, nil
+	case "time_stamp_unit":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg("timestampdiff function only need one args", len(args))
+		}
+		
+		return resetTimeStampUnitFunc(args[0])
+			
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1215,4 +1222,26 @@ func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 		Expr: expr,
 	}
 	return resetDateFunctionArgs(dateExpr, listExpr)
+}
+
+func resetTimeStampUnitFunc(unit *Expr)(*Expr , error){
+	intervalTypeStr := unit.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
+	if err != nil {
+		return nil, err
+	}
+	intervalTypeInFunction := &plan.Type{
+		Id:   int32(types.T_int64),
+		Size: 8,
+	}
+	return&plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Value: &plan.Const_Ival{
+						Ival: int64(intervalType),
+					},
+				},
+			},
+			Typ: intervalTypeInFunction,
+		},  nil
 }

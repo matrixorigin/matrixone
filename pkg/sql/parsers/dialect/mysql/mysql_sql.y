@@ -423,7 +423,7 @@ import (
 
 %type <expr> literal
 %type <expr> predicate
-%type <expr> bit_expr interval_expr
+%type <expr> bit_expr interval_expr timediff_expr
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
@@ -6157,7 +6157,7 @@ timediff_expr:
 		arg2 := tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{$2, arg2},
+            Exprs: tree.Exprs{arg2},
         }
     }
 func_type_opt:

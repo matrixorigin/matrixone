@@ -338,6 +338,30 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	return newDate, true
 }
 
+func (diff Datetime)ConvertToInterval(its IntervalType)(int64, error){
+	switch its {
+	case MicroSecond:
+		return int64(diff), nil
+	case Second:
+		return diff.sec(), nil
+	case Minute:
+		return int64(diff) / (microSecsPerSec * secsPerMinute), nil
+	case Hour:
+		return int64(diff) / (microSecsPerSec *  secsPerHour), nil
+	case Day:
+		return int64(diff) / (microSecsPerSec * secsPerDay), nil
+	case Week:
+		return int64(diff) / (microSecsPerSec * secsPerWeek), nil
+	case Month:
+		return int64(diff.Month()), nil
+	case Quarter:
+		return int64(diff.Month()) / 3, nil
+	case Year:
+		return int64(diff.Year()), nil
+	}
+	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
+}
+
 func (dt Datetime) MicroSec() int64 {
 	return int64(dt) % microSecsPerSec
 }
