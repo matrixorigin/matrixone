@@ -55,7 +55,7 @@ func InitTestEnv(module string, t *testing.T) string {
 func EnsureNoLeak(t *testing.T) {
 	// assert.Zerof(t, stl.DefaultAllocator.Usage(), stl.DefaultAllocator.String())
 	// XXX MPOOL: Too noisy
-	// if common.TAEDefaultAllocator.CurrNB() != 0 {
-	// 	t.Log(common.TAEDefaultAllocator.Report())
+	// if common.DefaultAllocator.CurrNB() != 0 {
+	// 	t.Log(common.DefaultAllocator.Report())
 	// }
 }
