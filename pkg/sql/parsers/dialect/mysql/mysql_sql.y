@@ -146,6 +146,7 @@ import (
     strs []string
 
     duplicateKey tree.DuplicateKey
+    updateList *tree.UpdateList
     fields *tree.Fields
     fieldsList []*tree.Fields
     lines *tree.Lines
@@ -490,6 +491,7 @@ import (
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
+%type <updateList> on_duplicate_key_update_opt
 %type <rowsExprs> values_list
 %type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop extended_opt
@@ -2552,11 +2554,12 @@ ignore_opt:
 |    IGNORE
 
 insert_stmt:
-    INSERT into_table_name partition_clause_opt insert_data
+    INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
     {
         ins := $4
         ins.Table = $2
         ins.PartitionNames = $3
+        ins.OnDuplicateUpdate = $5
         $$ = ins
     }
 
@@ -2613,6 +2616,29 @@ insert_data:
             Columns: identList,
             Rows: tree.NewSelect(vc, nil, nil),
         }
+    }
+
+on_duplicate_key_update_opt:
+    {
+		$$ = nil
+    }
+|   ON DUPLICATE KEY UPDATE set_value_list
+    {
+    		if $5 == nil {
+      			yylex.Error("the ON DUPLICATE KEY UPDATE list can not be empty")
+      			return 1
+      		}
+      		var identList tree.IdentifierList
+      		var valueList tree.Exprs
+      		for _, a := range $5 {
+      			identList = append(identList, a.Column)
+      			valueList = append(valueList, a.Expr)
+      		}
+      		vc := tree.NewValuesClause([]tree.Exprs{valueList})
+      		$$ = &tree.UpdateList{
+      			Columns: identList,
+      			Rows: tree.NewSelect(vc, nil, nil),
+      		}
     }
 
 set_value_list:
@@ -5862,6 +5888,16 @@ function_call_generic:
             Exprs: tree.Exprs{arg1, $4, $6},
         }
     }
+|   VALUES '(' insert_column ')'
+    {
+    	column := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+    	$$ = &tree.FuncExpr{
+                    Func: tree.FuncName2ResolvableFunctionReference(name),
+                    Exprs: tree.Exprs{column},
+        }
+    }
+
 function_call_json:
     JSON_EXTRACT '(' STRING ',' STRING ')'
     {
