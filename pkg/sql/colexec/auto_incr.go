@@ -286,7 +286,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
 	bat := makeAutoIncrBatch(name, curNum, 1, mp)
-	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
+	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 				continue
 			}
 			bat := makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1, proc.Mp())
-			if err = rel2.Delete(ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}
 		}
