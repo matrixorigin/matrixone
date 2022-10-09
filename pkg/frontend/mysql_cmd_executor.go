@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -355,7 +354,11 @@ func handleShowColumns(ses *Session) error {
 			continue
 		}
 		row[0] = colName
-		typ := types.Type{Oid: types.T(d[1].(int32))}
+		typ := &types.Type{}
+		data := d[1].([]uint8)
+		if err := types.Decode(data, typ); err != nil {
+			return err
+		}
 		row[1] = typ.String()
 		if d[2].(int8) == 0 {
 			row[2] = "NO"
@@ -1631,7 +1634,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+			return nil, moerr.NewInvalidInput("Incorrect arguments to EXECUTE")
+		}
+		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
@@ -2694,8 +2701,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
 		return true
 		//others
-	case *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
 	case *tree.Use:
 		/*

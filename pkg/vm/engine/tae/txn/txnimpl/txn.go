@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -62,4 +63,8 @@ func (txn *txnImpl) DatabaseNames() (names []string) {
 
 func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return txn.Store.LogTxnEntry(dbId, tableId, entry, readed)
+}
+
+func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	return txn.Store.LogTxnState(sync)
 }

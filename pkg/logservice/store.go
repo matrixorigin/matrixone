@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -74,7 +75,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	logdbFactory := (config.LogDBFactory)(nil)
 	logdbFactory = tan.Factory
 	if cfg.UseTeeLogDB {
-		logger.Warn("using tee based logdb backed by pebble and tan, for testing purposes only")
+		logutil.Warn("using tee based logdb backed by pebble and tan, for testing purposes only")
 		logdbFactory = tee.TanPebbleLogDBFactory
 	}
 	return config.NodeHostConfig{
@@ -123,6 +124,7 @@ type store struct {
 	alloc             hakeeper.IDAllocator
 	stopper           *stopper.Stopper
 	tickerStopper     *stopper.Stopper
+	logger            *zap.Logger
 
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
@@ -137,12 +139,13 @@ type store struct {
 	}
 }
 
-func newLogStore(cfg Config, taskService taskservice.TaskService) (*store, error) {
+func newLogStore(cfg Config, taskService taskservice.TaskService, logger *zap.Logger) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
+	logger = logutil.Adjust(logger)
 	logger.Info("HAKeeper Timeout Configs",
 		zap.Int64("LogStoreTimeout", int64(hakeeperConfig.LogStoreTimeout)),
 		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.DNStoreTimeout)),
@@ -156,6 +159,7 @@ func newLogStore(cfg Config, taskService taskservice.TaskService) (*store, error
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
+		logger:        logger,
 	}
 	ls.mu.truncateCh = make(chan struct{})
 	ls.mu.pendingTruncate = make(map[uint64]struct{})
@@ -213,7 +217,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
 	if !l.cfg.DisableWorkers {
 		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
-			logger.Info("HAKeeper ticker started")
+			l.logger.Info("HAKeeper ticker started")
 			l.ticker(ctx)
 		}); err != nil {
 			return err
@@ -352,11 +356,11 @@ func (l *store) truncateLog(ctx context.Context,
 	cmd := getSetTruncatedLsnCmd(index)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		logger.Error("propose truncate log cmd failed", zap.Error(err))
+		l.logger.Error("propose truncate log cmd failed", zap.Error(err))
 		return err
 	}
 	if result.Value > 0 {
-		logger.Error(fmt.Sprintf("shardID %d already truncated to index %d", shardID, result.Value))
+		l.logger.Error(fmt.Sprintf("shardID %d already truncated to index %d", shardID, result.Value))
 		return moerr.NewInvalidTruncateLsn(shardID, result.Value)
 	}
 	l.mu.Lock()
@@ -371,11 +375,11 @@ func (l *store) append(ctx context.Context,
 	session := l.nh.GetNoOPSession(shardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		logger.Error("propose failed", zap.Error(err))
+		l.logger.Error("propose failed", zap.Error(err))
 		return 0, err
 	}
 	if len(result.Data) > 0 {
-		logger.Error("not current lease holder", zap.Uint64("data", binaryEnc.Uint64(result.Data)))
+		l.logger.Error("not current lease holder", zap.Uint64("data", binaryEnc.Uint64(result.Data)))
 		return 0, moerr.NewNotLeaseHolder(binaryEnc.Uint64(result.Data))
 	}
 	if result.Value == 0 {
@@ -398,7 +402,7 @@ func (l *store) tsoUpdate(ctx context.Context, count uint64) (uint64, error) {
 	session := l.nh.GetNoOPSession(firstLogShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		logger.Error("failed to propose tso updat", zap.Error(err))
+		l.logger.Error("failed to propose tso updat", zap.Error(err))
 		return 0, err
 	}
 	return result.Value, nil
@@ -420,7 +424,7 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
-		logger.Error("propose failed", zap.Error(err))
+		l.logger.Error("propose failed", zap.Error(err))
 		return pb.CommandBatch{}, handleNotHAKeeperError(err)
 	} else {
 		var cb pb.CommandBatch
@@ -435,7 +439,7 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	cmd := hakeeper.GetCNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if _, err := l.propose(ctx, session, cmd); err != nil {
-		logger.Error("propose failed", zap.Error(err))
+		l.logger.Error("propose failed", zap.Error(err))
 		return handleNotHAKeeperError(err)
 	}
 	return nil
@@ -447,7 +451,7 @@ func (l *store) cnAllocateID(ctx context.Context,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		logger.Error("propose get id failed", zap.Error(err))
+		l.logger.Error("propose get id failed", zap.Error(err))
 		return 0, err
 	}
 	return result.Value, nil
@@ -459,7 +463,7 @@ func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
-		logger.Error("propose failed", zap.Error(err))
+		l.logger.Error("propose failed", zap.Error(err))
 		return pb.CommandBatch{}, handleNotHAKeeperError(err)
 	} else {
 		var cb pb.CommandBatch
@@ -509,7 +513,7 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 	}
 	v, err := l.read(ctx, shardID, leaseHistoryQuery{lsn: e.Index})
 	if err != nil {
-		logger.Error("failed to read", zap.Error(err))
+		l.logger.Error("failed to read", zap.Error(err))
 		return 0, err
 	}
 	return v.(uint64), nil
@@ -607,7 +611,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 	// FIXME: check whether lastIndex >= firstIndex
 	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex+1, maxSize)
 	if err != nil {
-		logger.Error("QueryRaftLog failed", zap.Error(err))
+		l.logger.Error("QueryRaftLog failed", zap.Error(err))
 		return nil, 0, err
 	}
 	select {
@@ -617,13 +621,13 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
 			results, err := l.markEntries(ctx, shardID, entries)
 			if err != nil {
-				logger.Error("markEntries failed", zap.Error(err))
+				l.logger.Error("markEntries failed", zap.Error(err))
 				return nil, 0, err
 			}
 			return results, next, nil
 		} else if v.RequestOutOfRange() {
 			// FIXME: add more details to the log, what is the available range
-			logger.Error("OutOfRange query found")
+			l.logger.Error("OutOfRange query found")
 			return nil, 0, dragonboat.ErrInvalidRange
 		}
 		panic(moerr.NewInvalidState("unexpected rs state"))
@@ -636,7 +640,7 @@ func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
-	logger.Info("Hakeeper interval configs",
+	l.logger.Info("Hakeeper interval configs",
 		zap.Int64("HAKeeperTickInterval", int64(l.cfg.HAKeeperTickInterval.Duration)),
 		zap.Int64("HAKeeperCheckInterval", int64(l.cfg.HAKeeperCheckInterval.Duration)))
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
@@ -645,7 +649,7 @@ func (l *store) ticker(ctx context.Context) {
 		panic("invalid HAKeeperCheckInterval")
 	}
 	defer func() {
-		logger.Info("HAKeeper ticker stopped")
+		l.logger.Info("HAKeeper ticker stopped")
 	}()
 	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
@@ -670,7 +674,7 @@ func (l *store) ticker(ctx context.Context) {
 
 func (l *store) truncationWorker(ctx context.Context) {
 	defer func() {
-		logger.Info("truncation worker stopped")
+		l.logger.Info("truncation worker stopped")
 	}()
 
 	for {
@@ -703,7 +707,7 @@ func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 func (l *store) hakeeperTick() {
 	isLeader, _, err := l.isLeaderHAKeeper()
 	if err != nil {
-		logger.Error("failed to get HAKeeper Leader ID", zap.Error(err))
+		l.logger.Error("failed to get HAKeeper Leader ID", zap.Error(err))
 		return
 	}
 
@@ -713,7 +717,7 @@ func (l *store) hakeeperTick() {
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 		if _, err := l.propose(ctx, session, cmd); err != nil {
-			logger.Error("propose tick failed", zap.Error(err))
+			l.logger.Error("propose tick failed", zap.Error(err))
 			return
 		}
 	}
@@ -738,7 +742,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 			defer cancel()
 			lsn, err := l.getTruncatedLsn(ctx, shardID)
 			if err != nil {
-				logger.Error("GetTruncatedIndex failed", zap.Error(err))
+				l.logger.Error("GetTruncatedIndex failed", zap.Error(err))
 				// FIXME: check error type, see whether it is a tmp one
 				return err
 			}
@@ -749,7 +753,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 					CompactionIndex:            lsn - 1,
 				}
 				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
-					logger.Error("SyncRequestSnapshot failed", zap.Error(err))
+					l.logger.Error("SyncRequestSnapshot failed", zap.Error(err))
 					// FIXME: check error type, see whether it is a tmp one
 					return err
 				}
@@ -776,7 +780,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
 		if ci.Pending {
-			logger.Info(fmt.Sprintf("shard %d is pending, not included into the heartbeat",
+			l.logger.Info(fmt.Sprintf("shard %d is pending, not included into the heartbeat",
 				ci.ShardID))
 			continue
 		}

@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"bytes"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -139,8 +138,23 @@ func (be *MVCCSlice) SearchNodeByTS(ts types.TS) (node txnif.MVCCNode) {
 	}
 	return
 }
-
-func (be *MVCCSlice) ForEach(fn func(un txnif.MVCCNode) bool) {
+func (be *MVCCSlice) ForEach(fn func(un txnif.MVCCNode) bool, reverse bool) {
+	if reverse {
+		be.forEachReverse(fn)
+	} else {
+		be.forEach(fn)
+	}
+}
+func (be *MVCCSlice) forEach(fn func(un txnif.MVCCNode) bool) {
+	for i := len(be.MVCC) - 1; i <= 0; i++ {
+		n := be.MVCC[i]
+		gonext := fn(n)
+		if !gonext {
+			break
+		}
+	}
+}
+func (be *MVCCSlice) forEachReverse(fn func(un txnif.MVCCNode) bool) {
 	for _, n := range be.MVCC {
 		gonext := fn(n)
 		if !gonext {
@@ -213,14 +227,6 @@ func (be *MVCCSlice) SearchNodeByCompareFn(fn func(a txnif.MVCCNode) int) (offse
 	return mid, be.MVCC[mid]
 }
 
-func (be *MVCCSlice) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
-	if un == nil {
-		return false, nil
-	}
-	return un.NeedWaitCommitting(startTS)
-}
-
 func (be *MVCCSlice) IsEmpty() bool {
 	return len(be.MVCC) == 0
 }
@@ -239,27 +245,6 @@ func (be *MVCCSlice) IsCommitted() bool {
 		return false
 	}
 	return un.IsCommitted()
-}
-
-func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (indexes []*wal.Index) {
-	needWait, txn := be.NeedWaitCommitting(end.Next())
-	if needWait {
-		mu.RUnlock()
-		txn.GetTxnState(true)
-		mu.RLock()
-	}
-	startOffset, node := be.GetNodeToReadByPrepareTS(start)
-	if node != nil && node.GetEnd().Less(start) {
-		startOffset++
-	}
-	endOffset, node := be.GetNodeToReadByPrepareTS(end)
-	if node == nil {
-		return nil
-	}
-	for i := endOffset; i >= startOffset; i-- {
-		indexes = append(indexes, be.MVCC[i].GetLogIndex())
-	}
-	return
 }
 
 func (be *MVCCSlice) LoopInRange(start, end types.TS, fn func(txnif.MVCCNode) bool) (indexes []*wal.Index) {
