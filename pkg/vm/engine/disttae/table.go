@@ -132,7 +132,17 @@ func (tbl *table) getTableDef() *plan.TableDef {
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
-	return tbl.defs, nil
+	//return tbl.defs, nil
+	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
+	defs := make([]engine.TableDef, 0, len(tbl.defs))
+	for i, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if !attr.Attr.IsHidden {
+				defs = append(defs, tbl.defs[i])
+			}
+		}
+	}
+	return defs, nil
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
@@ -165,7 +175,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	for i := range bats {
-		if bats[i].GetVector(0).Length() == 0 {
+		if bats[i].Length() == 0 {
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
@@ -188,10 +198,10 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 		return err
 	}
 	for i := range bats {
-		if bats[i].GetVector(0).Length() == 0 {
+		if bats[i].Length() == 0 {
 			continue
 		}
-		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
 			return err
 		}
