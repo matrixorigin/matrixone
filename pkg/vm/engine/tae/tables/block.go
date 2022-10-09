@@ -78,14 +78,7 @@ type dataBlock struct {
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
-	// every column has a zonemap
 	schema := meta.GetSchema()
-	// ATTENTION: COMPOUNDPK
-	// pk column has another bloomfilter
-	pkIdx := -1024
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-	}
 	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
 		panic(err)
@@ -123,7 +116,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 			if colDef.IsPhyAddr() {
 				continue
 			}
-			if colDef.Idx == pkIdx {
+			if colDef.IsPrimary() {
 				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type)
 				block.pkIndex = block.indexes[colDef.Idx]
 			} else {
