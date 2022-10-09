@@ -523,34 +523,6 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	return
 }
 
-func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
-	if blk.meta.GetSchema().PhyAddrKey.Idx == int(colIdx) {
-		err = moerr.NewTAEError("update physical addr key")
-		return
-	}
-	return blk.updateWithFineLock(txn, row, colIdx, v)
-}
-
-func (blk *dataBlock) updateWithFineLock(
-	txn txnif.AsyncTxn,
-	row uint32,
-	colIdx uint16,
-	v any) (node txnif.UpdateNode, err error) {
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
-	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
-	if err == nil {
-		chain := blk.mvcc.GetColumnChain(colIdx)
-		chain.Lock()
-		node = chain.AddNodeLocked(txn)
-		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-			chain.DeleteNodeLocked(node.(*updates.ColumnUpdateNode))
-		}
-		chain.Unlock()
-	}
-	return
-}
-
 func (blk *dataBlock) RangeDelete(
 	txn txnif.AsyncTxn,
 	start, end uint32, dt handle.DeleteType) (node txnif.DeleteNode, err error) {

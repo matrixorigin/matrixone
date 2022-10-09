@@ -599,8 +599,6 @@ func TestCompactBlock2(t *testing.T) {
 		assert.True(t, view.GetData().Equals(bat.Vecs[3]))
 		err = blk.RangeDelete(1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
-		err = blk.Update(3, 3, int64(999))
-		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -630,10 +628,8 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.Nil(t, view.DeleteMask)
-		v := view.GetData().Get(1)
 		// t.Logf("view: %v", view.GetData().String())
 		// t.Logf("raw : %v", bat.Vecs[3].String())
-		assert.Equal(t, int64(999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
 		cnt := 0
@@ -657,8 +653,6 @@ func TestCompactBlock2(t *testing.T) {
 			assert.NoError(t, err)
 			err = blk.RangeDelete(4, 5, handle.DT_Normal)
 			assert.NoError(t, err)
-			err = blk.Update(3, 3, int64(1999))
-			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit())
 		}
 		assert.NoError(t, txn.Commit())
@@ -676,8 +670,6 @@ func TestCompactBlock2(t *testing.T) {
 		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(4))
 		assert.True(t, view.DeleteMask.Contains(5))
-		v := view.GetData().Get(3)
-		assert.Equal(t, int64(1999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
 		txn2, rel2 := getDefaultRelation(t, db, schema.Name)

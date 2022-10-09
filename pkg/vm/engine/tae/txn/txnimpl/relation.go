@@ -237,10 +237,6 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	return
 }
 
-func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error {
-	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
-}
-
 func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
 	id, row, err := h.GetByFilter(filter)
 	if err != nil {

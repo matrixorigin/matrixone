@@ -180,42 +180,6 @@ func TestTable(t *testing.T) {
 	}
 }
 
-func TestUpdateUncommitted(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
-
-	schema := catalog.MockSchemaAll(3, 1)
-	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
-
-	bat := catalog.MockBatch(schema, 1000)
-	defer bat.Close()
-	bats := bat.Split(2)
-
-	txn, _ := mgr.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
-	for _, b := range bats {
-		err := rel.Append(b)
-		assert.Nil(t, err)
-	}
-
-	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
-	tbl, _ := tDB.getOrSetTable(rel.ID())
-	row := uint32(9)
-	assert.False(t, tbl.IsLocalDeleted(row))
-	rows := tbl.UncommittedRows()
-	err := tbl.UpdateLocalValue(row, 1, int16(1999))
-	assert.Nil(t, err)
-	assert.True(t, tbl.IsLocalDeleted(row))
-	assert.Equal(t, rows+1, tbl.UncommittedRows())
-	assert.NoError(t, txn.Commit())
-}
-
 func TestAppend(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
