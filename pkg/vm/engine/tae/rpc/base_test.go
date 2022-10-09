@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -88,8 +87,8 @@ func mockDNShard(id uint64) metadata.DNShard {
 
 func mock2PCTxn(eng moengine.TxnEngine) (txn.TxnMeta, error) {
 	txnMeta := txn.TxnMeta{}
-	txnMeta.ID = common.NewTxnIDAllocator().Alloc()
-	txnMeta.SnapshotTS = types.GlobalTsAlloctor.Alloc().ToTimestamp()
+	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
+	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
 	return txnMeta, nil

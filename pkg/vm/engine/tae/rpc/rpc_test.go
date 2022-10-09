@@ -34,6 +34,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer handle.HandleClose()
 	txnEngine := handle.GetTxnEngine()
 	schema := catalog.MockSchema(2, 1)
+	schema.Name = "tbtest"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
 	//DDL
 	//create db;
 	dbName := "dbtest"

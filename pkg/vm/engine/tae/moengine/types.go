@@ -60,7 +60,7 @@ type Relation interface {
 	//just for test
 	TableDefs(context.Context) ([]engine.TableDef, error)
 
-	//Truncate(context.Context) (uint64, error)
+	Truncate(context.Context) (uint64, error)
 
 	GetRelationID(context.Context) uint64
 	//just for test
