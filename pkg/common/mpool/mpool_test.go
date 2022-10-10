@@ -134,6 +134,8 @@ func TestFreelist(t *testing.T) {
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
 	m, err := NewMPool("testjson", 0, Small)
+	m.EnableDetailRecording()
+
 	require.True(t, err == nil, "new mpool failed %v", err)
 	mem, err := m.Alloc(1000000)
 	require.True(t, err == nil, "mpool alloc failed %v", err)

@@ -40,3 +40,30 @@ func MoMemUsage(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		panic(moerr.NewInvalidInput("mo mem usage can only take scalar input"))
 	}
 }
+
+func moMemUsageCmd(cmd string, vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(vectors) != 1 {
+		return nil, moerr.NewInvalidInput("no mpool name")
+	}
+	inputVector := vectors[0]
+	resultType := types.T_varchar.ToType()
+	inputValues := vector.MustStrCols(inputVector)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+
+		ok := mpool.MPoolControl(inputValues[0], cmd)
+		return vector.NewConstString(resultType, inputVector.Length(), ok, proc.Mp()), nil
+	} else {
+		panic(moerr.NewInvalidInput("mo mem usage can only take scalar input"))
+	}
+}
+
+func MoEnableMemUsageDetail(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return moMemUsageCmd("enable_detail", vectors, proc)
+}
+
+func MoDisableMemUsageDetail(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return moMemUsageCmd("disable_detail", vectors, proc)
+}

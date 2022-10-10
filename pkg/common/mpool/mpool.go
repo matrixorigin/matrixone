@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 // Mo's extremely simple memory pool.
@@ -202,14 +203,87 @@ func (fp *fixedPool) destroy() {
 }
 */
 
+type detailInfo struct {
+	cnt, bytes int64
+}
+
+type mpoolDetails struct {
+	mu    sync.Mutex
+	alloc map[string]detailInfo
+	free  map[string]detailInfo
+}
+
+func newMpoolDetails() *mpoolDetails {
+	mpd := mpoolDetails{}
+	mpd.alloc = make(map[string]detailInfo)
+	mpd.free = make(map[string]detailInfo)
+	return &mpd
+}
+
+func (d *mpoolDetails) recordAlloc(nb int64) {
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v", f)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	info := d.alloc[k]
+	info.cnt += 1
+	info.bytes += nb
+	d.alloc[k] = info
+}
+
+func (d *mpoolDetails) recordFree(nb int64) {
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v", f)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	info := d.free[k]
+	info.cnt += 1
+	info.bytes += nb
+	d.free[k] = info
+}
+
+func (d *mpoolDetails) reportJson() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ret := `{"alloc": {`
+	var allocs []string
+	for k, v := range d.alloc {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		allocs = append(allocs, kvs)
+	}
+	ret += strings.Join(allocs, ",")
+	ret += `}, "free": {`
+	var frees []string
+	for k, v := range d.free {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		frees = append(frees, kvs)
+	}
+	ret += strings.Join(frees, ",")
+	ret += "}}"
+	return ret
+}
+
 // The memory pool.
 type MPool struct {
-	id    int64      // mpool generated, used to look up the MPool
-	tag   string     // user supplied, for debug/inspect
-	cap   int64      // pool capacity
-	stats MPoolStats // stats
-	pools [7]fixedPool
-	sels  *sync.Pool // weirdness, keep old API but this should go away.
+	id      int64      // mpool generated, used to look up the MPool
+	tag     string     // user supplied, for debug/inspect
+	cap     int64      // pool capacity
+	stats   MPoolStats // stats
+	pools   [7]fixedPool
+	sels    *sync.Pool // weirdness, keep old API but this should go away.
+	details *mpoolDetails
+}
+
+func (mp *MPool) EnableDetailRecording() {
+	if mp.details == nil {
+		mp.details = newMpoolDetails()
+	}
+}
+
+func (mp *MPool) DisableDetailRecording() {
+	mp.details = nil
 }
 
 func (mp *MPool) Stats() *MPoolStats {
@@ -237,7 +311,7 @@ func (mp *MPool) initPool(sz []int) error {
 		nb, err := mp.pools[i].initPool(mp.tag, mp.id, i, cnt, cap-tot)
 		if err != nil {
 			return err
-		} else {
+		} else if nb > 0 {
 			mp.stats.RecordAlloc(mp.tag, nb)
 		}
 		tot += nb
@@ -328,9 +402,15 @@ func (mp *MPool) ReportJson() string {
 	for i := range mp.pools {
 		ps := mp.FixedPoolStats(i).ReportJson()
 		if ps != "" {
-			ret += fmt.Sprintf(",\"Fixed-%d\": %s\n", i, ps)
+			ret += fmt.Sprintf(",\n \"Fixed-%d\": %s", i, ps)
 		}
 	}
+
+	if mp.details != nil {
+		ret += `,\n "detailed_alloc": `
+		ret += mp.details.reportJson()
+	}
+
 	return ret + "}"
 }
 
@@ -440,6 +520,10 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		return nil, moerr.NewInternalError("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 
+	if mp.details != nil {
+		mp.details.recordAlloc(int64(sz))
+	}
+
 	// allocate!
 	bs := make([]uint64, (sz+kMemHdrSz+7)/8)
 	hdr := unsafe.Pointer(&bs[0])
@@ -472,6 +556,9 @@ func (mp *MPool) Free(bs []byte) {
 		if pHdr.fixedPoolIdx < NumFixedPool {
 			mp.pools[pHdr.fixedPoolIdx].free(hdr)
 		} else {
+			if mp.details != nil {
+				mp.details.recordFree(int64(pHdr.allocSz))
+			}
 			mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
 			globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
 		}
@@ -618,4 +705,26 @@ func ReportMemUsage(tag string) string {
 	globalPools.Range(gather)
 
 	return "[" + strings.Join(poolStats, ",") + "]"
+}
+
+func MPoolControl(tag string, cmd string) string {
+	if tag == "" || tag == "global" {
+		return "Cannot enable detail on mpool global stats"
+	}
+
+	cmdFunc := func(key, value any) bool {
+		mp := value.(*MPool)
+		if tag == mp.tag {
+			switch cmd {
+			case "enable_detail":
+				mp.EnableDetailRecording()
+			case "disable_detail":
+				mp.DisableDetailRecording()
+			}
+		}
+		return true
+	}
+
+	globalPools.Range(cmdFunc)
+	return "ok"
 }
