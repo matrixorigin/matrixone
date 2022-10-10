@@ -136,7 +136,13 @@ func (be *TableBaseEntry) IsCreating() bool {
 	return un.IsActive()
 }
 
-func (be *TableBaseEntry) IsDroppedCommitted() bool {
+func (be *TableBaseEntry) HasDropCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDropCommittedLocked()
+}
+
+func (be *TableBaseEntry) HasDropCommittedLocked() bool {
 	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
@@ -151,14 +157,6 @@ func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
 	oe.RLock()
 	defer oe.RUnlock()
 	return CompareUint64(be.ID, oe.ID)
-}
-
-func (be *TableBaseEntry) HasDropCommitted() bool {
-	node := be.GetLatestCommittedNode()
-	if node == nil {
-		return false
-	}
-	return node.(*TableMVCCNode).HasDropCommitted()
 }
 
 func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -208,7 +206,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode boo
 	if err != nil {
 		return
 	}
-	if be.HasDropCommitted() {
+	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)

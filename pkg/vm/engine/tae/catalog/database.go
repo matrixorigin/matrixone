@@ -483,8 +483,5 @@ func (e *DBEntry) CloneCreateEntry() *DBEntry {
 
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
-	e.RLock()
-	defer e.RUnlock()
-	dropped := e.IsDroppedCommitted()
-	return !dropped
+	return !e.HasDropCommitted()
 }

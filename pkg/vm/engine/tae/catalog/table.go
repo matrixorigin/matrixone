@@ -408,8 +408,5 @@ func (entry *TableEntry) IsActive() bool {
 	if !db.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }

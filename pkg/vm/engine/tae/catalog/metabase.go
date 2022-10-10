@@ -204,7 +204,13 @@ func (be *MetaBaseEntry) IsCreating() bool {
 	return un.IsActive()
 }
 
-func (be *MetaBaseEntry) IsDroppedCommitted() bool {
+func (be *MetaBaseEntry) HasDropCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDropCommittedLocked()
+}
+
+func (be *MetaBaseEntry) HasDropCommittedLocked() bool {
 	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
@@ -219,20 +225,6 @@ func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
 	oe.RLock()
 	defer oe.RUnlock()
 	return CompareUint64(be.ID, oe.ID)
-}
-
-func (be *MetaBaseEntry) HasDropCommitted() bool {
-	be.RLock()
-	defer be.RUnlock()
-	return be.HasDroppedLocked()
-}
-
-func (be *MetaBaseEntry) HasDroppedLocked() bool {
-	node := be.GetLatestCommittedNode()
-	if node == nil {
-		return false
-	}
-	return node.(*MetadataMVCCNode).HasDropCommitted()
 }
 
 func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -282,7 +274,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 	if err != nil {
 		return
 	}
-	if be.HasDroppedLocked() {
+	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)

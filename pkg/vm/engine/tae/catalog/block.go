@@ -220,10 +220,7 @@ func (entry *BlockEntry) IsActive() bool {
 	if !segment.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }
 
 // GetTerminationTS is coarse API: no consistency check

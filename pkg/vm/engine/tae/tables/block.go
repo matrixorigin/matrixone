@@ -302,7 +302,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	// If the conditions are met, immediately modify the data block status to NotAppendable
 	blk.FreezeAppend()
 	blk.meta.RLock()
-	dropped := blk.meta.IsDroppedCommitted()
+	dropped := blk.meta.HasDropCommittedLocked()
 	inTxn := blk.meta.IsCreating()
 	blk.meta.RUnlock()
 	if dropped || inTxn {

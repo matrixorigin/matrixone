@@ -406,22 +406,19 @@ func (entry *SegmentEntry) IsActive() bool {
 	if !table.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }
 
 func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	table := entry.GetTable()
 	db := table.GetDB()
-	if db.IsDroppedCommitted() {
+	if db.HasDropCommittedLocked() {
 		return db.DBBaseEntry
 	}
-	if table.IsDroppedCommitted() {
+	if table.HasDropCommittedLocked() {
 		return table.TableBaseEntry
 	}
-	if entry.IsDroppedCommitted() {
+	if entry.HasDropCommittedLocked() {
 		return entry.MetaBaseEntry
 	}
 	return nil

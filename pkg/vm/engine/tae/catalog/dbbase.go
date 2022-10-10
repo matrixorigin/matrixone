@@ -136,7 +136,13 @@ func (be *DBBaseEntry) IsCreating() bool {
 	return un.IsActive()
 }
 
-func (be *DBBaseEntry) IsDroppedCommitted() bool {
+func (be *DBBaseEntry) HasDropCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDropCommittedLocked()
+}
+
+func (be *DBBaseEntry) HasDropCommittedLocked() bool {
 	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
@@ -200,7 +206,7 @@ func (be *DBBaseEntry) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err
 	if err != nil {
 		return
 	}
-	if be.IsDroppedCommitted() {
+	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txn)
@@ -223,7 +229,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 		}
 	}
 	if txn == nil || be.GetTxn() != txn {
-		if !be.IsDroppedCommitted() {
+		if !be.HasDropCommittedLocked() {
 			return moerr.NewDuplicate()
 		}
 	} else {
