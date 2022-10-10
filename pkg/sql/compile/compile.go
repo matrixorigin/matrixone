@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"runtime"
 	"sync/atomic"
 
@@ -331,9 +333,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsUnnestValueScan(n) {
+		if plan2.IsTableFunctionValueScan(n) {
 			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TableFunctionParam, false, c.proc.Mp())
+			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -475,7 +477,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
-	case plan.Node_UNNEST:
+	case plan.Node_TABLE_FUNCTION:
 		var (
 			pre []*Scope
 			err error
@@ -487,7 +489,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		c.anal.curr = curr
-		ss, err := c.compileUnnest(n, pre)
+		ss, err := c.compileTableFunction(n, pre)
 		if err != nil {
 			return nil, err
 		}
@@ -518,17 +520,25 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	args := &tree.UnnestParam{}
-	err := args.Unmarshal(n.TableDef.TableFunctionParam)
-	if err != nil {
+func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	switch n.TableDef.TblFunc.Name {
+	case "unnest":
+		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+	default:
+		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
+	}
+}
+
+func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
+	externParam := &unnest.ExternalParam{}
+	if err := json.Unmarshal(dt, externParam); err != nil {
 		return nil, err
 	}
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, args),
+			Arg: constructUnnest(n, c.ctx, externParam),
 		})
 	}
 	return ss, nil
