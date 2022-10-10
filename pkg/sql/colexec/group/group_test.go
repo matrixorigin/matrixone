@@ -127,30 +127,58 @@ func TestGroup(t *testing.T) {
 }
 
 func TestLowCardinalityGroup(t *testing.T) {
-	// SELECT count(*) FROM t GROUP BY t.values
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_varchar}},
-		[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
+	{
+		// SELECT COUNT(*) FROM t GROUP BY t.values
+		tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_varchar}},
+			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
 
-	// a->4, b->3, c->3, d->2
-	values := []string{"a", "b", "b", "a", "c", "b", "c", "a", "a", "d", "c", "d"}
-	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
-	constructIndex(t, v, tc.proc.Mp())
+		// a->4, b->3, c->3, d->2
+		values := []string{"a", "b", "b", "a", "c", "b", "c", "a", "a", "d", "c", "d"}
+		v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+		constructIndex(t, v, tc.proc.Mp())
 
-	err := Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
-	tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
-	_, err = Call(0, tc.proc, tc.arg)
-	tc.proc.Reg.InputBatch = nil
-	_, err = Call(0, tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = nil
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
 
-	rbat := tc.proc.Reg.InputBatch
-	groups := vector.GetStrVectorValues(rbat.Vecs[0])
-	require.Equal(t, []string{"a", "b", "c", "d"}, groups)
-	counts := rbat.Zs
-	require.Equal(t, []int64{4, 3, 3, 2}, counts)
+		rbat := tc.proc.Reg.InputBatch
+		groups := vector.GetStrVectorValues(rbat.Vecs[0])
+		require.Equal(t, []string{"a", "b", "c", "d"}, groups)
+		counts := rbat.Zs
+		require.Equal(t, []int64{4, 3, 3, 2}, counts)
 
-	if tc.proc.Reg.InputBatch != nil {
-		tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
+	}
+	{
+		// SELECT SUM(t.values) FROM t GROUP BY t.values
+		tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int64}},
+			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}})
+		tc.arg.NeedEval = true
+
+		values := []int64{16, 16, 1, 4, 4, 2, 8, 8, 1, 32, 2, 2}
+		v := testutil.NewVector(len(values), types.T_int64.ToType(), tc.proc.Mp(), false, values)
+		constructIndex(t, v, tc.proc.Mp())
+
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+		_, err = Call(0, tc.proc, tc.arg)
+		tc.proc.Reg.InputBatch = nil
+		_, err = Call(0, tc.proc, tc.arg)
+
+		rbat := tc.proc.Reg.InputBatch
+		require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustTCols[int64](rbat.Vecs[1]))
+
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
 	}
 }
 

@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	benchFlag        = true
+	benchFlag        = false
 	benchCardinality = 1024
 
 	benchBuildTargetRows = 2_500
@@ -45,51 +45,26 @@ var (
 )
 
 func init() {
-	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
-	charsLen := len(chars)
-
-	// mock random strings
-	dataset := make([][]byte, benchCardinality)
-	for i := range dataset {
-		randLen := rand.Intn(charsLen) + 1
-		dataset[i] = make([]byte, randLen)
-		for j := range dataset[i] {
-			dataset[i][j] = chars[rand.Intn(charsLen)]
-		}
-	}
-
 	// init benchBuildData
-	for {
-		for i := range dataset {
-			n := rand.Intn(10) + 1
-			for j := 0; j < n; j++ {
-				benchBuildData = append(benchBuildData, string(append([]byte{}, dataset[i]...)))
-			}
-		}
-		if len(benchBuildData) >= benchBuildTargetRows {
-			break
-		}
-	}
+	benchBuildData = testutil.MakeRandomStrings(benchCardinality, benchBuildTargetRows)
 
 	// init benchProbeData
 	for len(benchProbeData) < benchProbeTargetRows {
 		// there is 1/3 probability picking a not existed string
 		if rand.Intn(3) == 0 {
-			benchProbeData = append(benchProbeData, "hello_world") // '_' is not existed
+			benchProbeData = append(benchProbeData, "_hello_world") // '_' is not existed
 		} else {
-			src := dataset[rand.Intn(len(dataset))]
+			src := benchBuildData[rand.Intn(len(benchBuildData))]
 			benchProbeData = append(benchProbeData, string(append([]byte{}, src...)))
 		}
 	}
 
 	// init benchBuildIndex and benchProbeIndex
 	var err error
-	benchBuildIndex, err = initBenchIndex(benchBuildData)
-	if err != nil {
+	if benchBuildIndex, err = initBenchIndex(benchBuildData); err != nil {
 		panic(err)
 	}
-	benchProbeIndex, err = initBenchIndex(benchProbeData)
-	if err != nil {
+	if benchProbeIndex, err = initBenchIndex(benchProbeData); err != nil {
 		panic(err)
 	}
 }

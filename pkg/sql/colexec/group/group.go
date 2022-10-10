@@ -331,9 +331,12 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 }
 
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
+	// TODO null values
+	groups := make([]int64, 0)
 	nulls := make([]int64, 0)
 	sels := make([][]int64, math.MaxUint16+1)
 	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	// ["a", "b", NULL, ...]
 	for k, v := range poses {
 		if v == 0 {
 			nulls = append(nulls, int64(k))
@@ -341,6 +344,7 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 		}
 		bucket := int(v) - 1
 		if len(sels[bucket]) == 0 {
+			groups = append(groups, int64(k))
 			sels[bucket] = make([]int64, 0, 64)
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
@@ -348,20 +352,14 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 		ctr.bat.Zs[bucket] += bat.Zs[k]
 	}
 
-	// TODO: null group?
-	for _, sel := range sels {
-		if len(sel) > 0 {
-			if err := vector.UnionOne(ctr.bat.Vecs[0], ctr.vecs[0], sel[0], proc.GetMheap()); err != nil {
-				return err
-			}
-			for _, ag := range ctr.bat.Aggs {
-				if err := ag.Grows(1, proc.Mp()); err != nil {
-					return err
-				}
-			}
+	for _, ag := range ctr.bat.Aggs {
+		if err := ag.Grows(len(groups), proc.Mp()); err != nil {
+			return err
 		}
 	}
-
+	if err := vector.Union(ctr.bat.Vecs[0], ctr.vecs[0], groups, proc.GetMheap()); err != nil {
+		return err
+	}
 	for i, ag := range ctr.bat.Aggs {
 		aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
 		for j, sel := range sels {
@@ -372,7 +370,46 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 			}
 		}
 	}
+	//for i, ag := range ctr.bat.Aggs {
+	//	aggVec := ctr.aggVecs[i].vec
+	//	for j, sel := range sels {
+	//		if err := ctr.groupFill(ag, aggVec, int64(j), sel, bat, proc); err != nil {
+	//			return err
+	//		}
+	//	}
+	//}
+
+	if len(nulls) > 0 {
+		for _, ag := range ctr.bat.Aggs {
+			if err := ag.Grows(1, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		if err := vector.UnionOne(ctr.bat.Vecs[0], ctr.vecs[0], nulls[0], proc.GetMheap()); err != nil {
+			return err
+		}
+
+		// TODO
+		nullGroupIndex := int64(len(groups))
+		for i, ag := range ctr.bat.Aggs {
+			aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
+			for _, ri := range nulls {
+				if err := ag.Fill(nullGroupIndex, ri, 1, aggVecs); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
+}
+
+// groupFill inefficient
+func (ctr *container) groupFill(ag agg.Agg[any], aggVec *vector.Vector, gi int64, sels []int64, bat *batch.Batch, proc *process.Process) error {
+	v := vector.New(aggVec.Typ)
+	if err := vector.Union(v, aggVec, sels, proc.GetMheap()); err != nil {
+		return err
+	}
+	return ag.BulkFill(gi, bat.Zs, []*vector.Vector{v})
 }
 
 func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
