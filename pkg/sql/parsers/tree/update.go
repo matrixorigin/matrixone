@@ -112,9 +112,23 @@ const (
 	LZ4        = "lz4"
 )
 
+// load data fotmat
+const (
+	CSV      = "csv"
+	JSONLINE = "jsonline"
+)
+
+// if $format is jsonline
+const (
+	OBJECT = "object"
+	ARRAY  = "array"
+)
+
 type ExternParam struct {
 	Filepath     string
 	CompressType string
+	Format       string
+	JsonData     string
 	Tail         *TailParameter
 	FileService  fileservice.FileService
 	NullMap      map[string]([]string)
@@ -158,12 +172,16 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
+	if (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) && node.Param.Format == CSV {
 		ctx.WriteString(" infile ")
 		ctx.WriteString(node.Param.Filepath)
 	} else {
 		ctx.WriteString(" infile ")
-		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
+		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "', 'format':'" + strings.ToLower(node.Param.Format) + "'")
+		if node.Param.Format == JSONLINE {
+			ctx.WriteString(", 'jsondata':'" + node.Param.JsonData + "'")
+		}
+		ctx.WriteString("}")
 	}
 
 	switch node.DuplicateHandling.(type) {
