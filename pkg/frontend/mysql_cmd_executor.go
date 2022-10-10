@@ -2656,6 +2656,8 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Execute, *tree.Deallocate:
+		return true
 	case *tree.Use:
 		/*
 			These statements can not be executed in an uncommitted transaction:
