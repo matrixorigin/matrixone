@@ -43,16 +43,17 @@ func TestMetric(t *testing.T) {
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
-		SV.BatchProcessor = InternalExecutor
+		SV.BatchProcessor = FileService
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true), WithMultiTable(true))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
+			WithMultiTable(true), WithExportInterval(1))
 		defer StopMetricSync()
 
 		const (
 			none      = "--None"
 			createDB  = "create database"
-			createTbl = "create table"
+			createTbl = "create EXTERNAL table"
 			insertRow = "insert into"
 		)
 		prevSqlKind := none
@@ -96,7 +97,7 @@ func TestMetricNoProm(t *testing.T) {
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
-		SV.BatchProcessor = InternalExecutor
+		SV.BatchProcessor = FileService
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
@@ -155,7 +156,8 @@ func TestMetricSingleTable(t *testing.T) {
 		SV.BatchProcessor = FileService
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true), WithMultiTable(false))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true),
+			WithMultiTable(false), WithExportInterval(1))
 		defer StopMetricSync()
 
 		const (

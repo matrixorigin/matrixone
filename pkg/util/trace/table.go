@@ -15,7 +15,6 @@
 package trace
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 
@@ -89,6 +88,8 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 	for idx, col := range tbl.Columns {
 		if idx > 0 {
 			sb.WriteString(newLineCharacter)
+		} else {
+			sb.WriteRune('\n')
 		}
 		sb.WriteString(col.ToCreateSql())
 	}
@@ -193,19 +194,12 @@ func (r *Row) SetInt64(col string, val int64) {
 
 // ToStrings output all column as string
 func (r *Row) ToStrings() []string {
-	return r.Columns
-}
-
-// ToValueString output string like "(column_val[,column_val]*)"
-func (r *Row) ToValueString(buf *bytes.Buffer) {
-	buf.WriteRune('(')
-	for idx, val := range r.Columns {
-		if idx > 0 {
-			buf.WriteRune(',')
+	for idx, col := range r.Columns {
+		if len(col) == 0 {
+			r.Columns[idx] = r.Table.Columns[idx].Default
 		}
-		buf.WriteString(fmt.Sprintf(`%q`, val))
 	}
-	buf.WriteRune(')')
+	return r.Columns
 }
 
 var _ TableOptions = (*NoopTableOptions)(nil)
