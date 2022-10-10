@@ -193,7 +193,11 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	// bat := batch.NewWithSize(1)
 	// bat.Vecs[0] = vec
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
+	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+	if bat.Length() == 0 {
+		return nil
+	}
+	bats, err := partitionDeleteBatch(tbl, bat)
 	if err != nil {
 		return err
 	}

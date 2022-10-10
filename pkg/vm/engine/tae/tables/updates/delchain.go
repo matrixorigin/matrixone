@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -32,8 +33,9 @@ import (
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain
-	mvcc *MVCCHandle
-	cnt  uint32
+	mvcc  *MVCCHandle
+	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
+	cnt   uint32
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -43,6 +45,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
+		links:     make(map[uint32]*common.GenericSortedDList[txnif.MVCCNode]),
 		mvcc:      mvcc,
 	}
 	return chain
@@ -130,8 +133,34 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	node.AttachTo(chain)
 	return node
 }
-
+func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
+	var link *common.GenericSortedDList[txnif.MVCCNode]
+	if link = chain.links[row]; link == nil {
+		link = common.NewGenericSortedDList(compareDeleteNode)
+		n := link.Insert(deleteNode)
+		deleteNode.viewNodes[row] = n
+		chain.links[row] = link
+		return
+	}
+	link.Insert(deleteNode)
+}
+func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
+	it := deleteNode.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		link := chain.links[row]
+		link.Delete(deleteNode.viewNodes[row])
+		if link.Depth() == 0 {
+			delete(chain.links, row)
+		}
+	}
+}
 func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
+	it := deleteNode.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.InsertInDeleteView(row, deleteNode)
+	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
 }
@@ -234,12 +263,13 @@ func (chain *DeleteChain) CollectDeletesLocked(
 }
 
 func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
-	chain.LoopChain(func(un txnif.MVCCNode) bool {
-		if un.(*DeleteNode).mask.Contains(row) {
-			n = un.(*DeleteNode)
-			return false
-		}
-		return true
-	})
+	link := chain.links[row]
+	if link == nil {
+		return
+	}
+	link.Loop(func(vn *common.GenericDLNode[txnif.MVCCNode]) bool {
+		n = vn.GetPayload().(*DeleteNode)
+		return n.Aborted
+	}, false)
 	return
 }
