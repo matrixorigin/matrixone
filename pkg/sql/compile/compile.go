@@ -107,6 +107,13 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case TruncateTable:
+		affectRows, err := c.scope.TruncateTable(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectRows)
+		return nil
 	case Deletion:
 		defer c.fillAnalyzeInfo()
 		affectedRows, err := c.scope.Delete(c)
@@ -166,6 +173,11 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return &Scope{
 				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_TRUNCATE_TABLE:
+			return &Scope{
+				Magic: TruncateTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:

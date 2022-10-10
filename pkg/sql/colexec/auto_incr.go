@@ -370,6 +370,31 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 	return nil
 }
 
+// for delete table operation, reset col in mo_increment_columns table
+func ResetAutoInsrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, tableID string) error {
+	relation, err := db.Relation(ctx, AUTO_INCR_TABLE)
+	if err != nil {
+		return nil
+	}
+	defs, err := rel.TableDefs(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, def := range defs {
+		switch d := def.(type) {
+		case *engine.AttributeDef:
+			if d.Attr.AutoIncrement {
+				continue
+			}
+			bat := makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1, proc.Mp())
+			if err2 := relation.Update(ctx, bat); err2 != nil {
+				return err2
+			}
+		}
+	}
+	return nil
+}
+
 func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {

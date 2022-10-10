@@ -2257,7 +2257,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Delete:
+			*tree.Delete, *tree.TruncateTable:
 			runBegin := time.Now()
 			/*
 				Step 1: Start
@@ -2679,7 +2679,7 @@ func IsDDL(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView,
 		*tree.CreateDatabase, *tree.DropDatabase,
-		*tree.CreateIndex, *tree.DropIndex:
+		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
 	}
 	return false
