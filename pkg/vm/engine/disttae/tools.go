@@ -828,8 +828,8 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 					}
 					return nil, err
 				}
+				break
 			}
-			break
 		}
 	}
 	for i := range bats {
