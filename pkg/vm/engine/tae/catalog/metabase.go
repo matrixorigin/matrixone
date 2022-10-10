@@ -63,19 +63,19 @@ func (be *MetaBaseEntry) PPString(level common.PPLevel, depth int, prefix string
 func (be *MetaBaseEntry) GetMetaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
-	if be.GetNodeLocked() == nil {
+	if be.GetLatestNodeLocked() == nil {
 		return ""
 	}
-	str := be.GetNodeLocked().(*MetadataMVCCNode).MetaLoc
+	str := be.GetLatestNodeLocked().(*MetadataMVCCNode).MetaLoc
 	return str
 }
 func (be *MetaBaseEntry) GetDeltaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
-	if be.GetNodeLocked() == nil {
+	if be.GetLatestNodeLocked() == nil {
 		return ""
 	}
-	str := be.GetNodeLocked().(*MetadataMVCCNode).DeltaLoc
+	str := be.GetLatestNodeLocked().(*MetadataMVCCNode).DeltaLoc
 	return str
 }
 
@@ -124,7 +124,7 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MetadataMVCCNode) {
-	entry := be.GetNodeLocked()
+	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*MetadataMVCCNode)
 	} else {
@@ -189,7 +189,7 @@ func (be *MetaBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -197,7 +197,7 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 }
 
 func (be *MetaBaseEntry) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -290,7 +290,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 }
 
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -309,7 +309,7 @@ func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *MetaBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -317,7 +317,7 @@ func (be *MetaBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *MetaBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

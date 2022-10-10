@@ -173,10 +173,10 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (entry *TableEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *TableEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)

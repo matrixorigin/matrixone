@@ -94,7 +94,7 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *TableMVCCNode) {
-	entry := be.GetNodeLocked()
+	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*TableMVCCNode)
 	} else {
@@ -121,7 +121,7 @@ func (be *TableBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -129,7 +129,7 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 }
 
 func (be *TableBaseEntry) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -243,7 +243,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *TableBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -262,7 +262,7 @@ func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *TableBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -270,7 +270,7 @@ func (be *TableBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *TableBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

@@ -131,10 +131,10 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 }
 
 func (entry *SegmentEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *SegmentEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer

@@ -94,7 +94,7 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 func (be *DBBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *DBMVCCNode) {
-	entry := be.GetNodeLocked()
+	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*DBMVCCNode)
 	} else {
@@ -121,7 +121,7 @@ func (be *DBBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -129,7 +129,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 }
 
 func (be *DBBaseEntry) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -195,15 +195,15 @@ func (be *DBBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
-	err = be.CheckConflict(txnCtx)
+func (be *DBBaseEntry) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	err = be.CheckConflict(txn)
 	if err != nil {
 		return
 	}
 	if be.IsDroppedCommitted() {
 		return false, moerr.NewNotFound()
 	}
-	isNewNode, err = be.DeleteLocked(txnCtx)
+	isNewNode, err = be.DeleteLocked(txn)
 	return
 }
 
@@ -235,7 +235,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *DBBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -254,7 +254,7 @@ func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *DBBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -262,7 +262,7 @@ func (be *DBBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *DBBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
