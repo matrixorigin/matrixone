@@ -71,7 +71,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		meta:       meta,
 		parts:      parts,
 		insertExpr: genInsertExpr(defs, len(parts)),
-		deleteExpr: genDeleteExpr(defs, len(parts)),
 	}
 	db.txn.tableMap[key] = tbl
 	return tbl, nil
