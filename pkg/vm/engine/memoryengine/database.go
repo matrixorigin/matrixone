@@ -86,7 +86,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		ctx,
 		d.txnOperator,
 		true,
-		d.engine.allShards,
+		d.engine.anyShard,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID:   d.id,
@@ -134,10 +134,5 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	var relNames []string
-	for _, resp := range resps {
-		relNames = append(relNames, resp.Names...)
-	}
-
-	return relNames, nil
+	return resps[0].Names, nil
 }
