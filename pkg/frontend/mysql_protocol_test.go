@@ -17,10 +17,14 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -31,7 +35,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/smartystreets/goconvey/convey"
@@ -298,44 +303,40 @@ func TestReadStringLenEnc(t *testing.T) {
 }
 
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
-// func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
-// 	//before anything using the configuration
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-// 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	pu.SV.EnableTls = true
+func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
+	//before anything using the configuration
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
+		panic(err)
+	}
+	pu.SV.EnableTls = true
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, pu)
+	rm.SetSkipCheckUser(true)
 
-// 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-// 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 
-// 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-// 	rm, _ := NewRoutineManager(ctx, pu)
-// 	rm.SetSkipCheckUser(true)
+	// //running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, NewSqlCodec())
+	}()
 
-// 	wg := sync.WaitGroup{}
-// 	wg.Add(1)
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
 
-// 	// //running server
-// 	go func() {
-// 		defer wg.Done()
-// 		echoServer(rm.Handler, rm, NewSqlCodec())
-// 	}()
+	time.Sleep(time.Second * 2)
+	db := open_tls_db(t, 6001)
+	close_db(t, db)
 
-// 	// to := NewTimeout(1*time.Minute, false)
-// 	// for isClosed() && !to.isTimeout() {
-// 	// }
-
-// 	time.Sleep(time.Second * 2)
-// 	db := open_tls_db(t, 6001)
-// 	close_db(t, db)
-
-// 	time.Sleep(time.Millisecond * 10)
-// 	//close server
-// 	setServer(1)
-// 	wg.Wait()
-// }
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
+}
 
 func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
@@ -1280,55 +1281,55 @@ func TestMysqlResultSet(t *testing.T) {
 	wg.Wait()
 }
 
-// func open_tls_db(t *testing.T, port int) *sql.DB {
-// 	tlsName := "custom"
-// 	rootCertPool := x509.NewCertPool()
-// 	pem, err := os.ReadFile("test/ca.pem")
-// 	if err != nil {
-// 		setServer(1)
-// 		require.NoError(t, err)
-// 	}
-// 	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-// 		log.Fatal("Failed to append PEM.")
-// 	}
-// 	clientCert := make([]tls.Certificate, 0, 1)
-// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
-// 	if err != nil {
-// 		setServer(1)
-// 		require.NoError(t, err)
-// 	}
-// 	clientCert = append(clientCert, certs)
-// 	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-// 		RootCAs:            rootCertPool,
-// 		Certificates:       clientCert,
-// 		MinVersion:         tls.VersionTLS12,
-// 		InsecureSkipVerify: true,
-// 	})
-// 	if err != nil {
-// 		setServer(1)
-// 		require.NoError(t, err)
-// 	}
+func open_tls_db(t *testing.T, port int) *sql.DB {
+	tlsName := "custom"
+	rootCertPool := x509.NewCertPool()
+	pem, err := os.ReadFile("test/ca.pem")
+	if err != nil {
+		setServer(1)
+		require.NoError(t, err)
+	}
+	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+		log.Fatal("Failed to append PEM.")
+	}
+	clientCert := make([]tls.Certificate, 0, 1)
+	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
+	if err != nil {
+		setServer(1)
+		require.NoError(t, err)
+	}
+	clientCert = append(clientCert, certs)
+	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
+		RootCAs:            rootCertPool,
+		Certificates:       clientCert,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		setServer(1)
+		require.NoError(t, err)
+	}
 
-// 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
-// 	db, err := sql.Open("mysql", dsn)
-// 	if err != nil {
-// 		require.NoError(t, err)
-// 	} else {
-// 		db.SetConnMaxLifetime(time.Minute * 3)
-// 		db.SetMaxOpenConns(1)
-// 		db.SetMaxIdleConns(1)
-// 		time.Sleep(time.Millisecond * 100)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		require.NoError(t, err)
+	} else {
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		time.Sleep(time.Millisecond * 100)
 
-// 		// ping opens the connection
-// 		logutil.Info("start ping")
-// 		err = db.Ping()
-// 		if err != nil {
-// 			setServer(1)
-// 			require.NoError(t, err)
-// 		}
-// 	}
-// 	return db
-// }
+		// ping opens the connection
+		logutil.Info("start ping")
+		err = db.Ping()
+		if err != nil {
+			setServer(1)
+			require.NoError(t, err)
+		}
+	}
+	return db
+}
 
 func open_db(t *testing.T, port int) *sql.DB {
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s", port)

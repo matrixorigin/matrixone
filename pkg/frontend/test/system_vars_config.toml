@@ -347,10 +347,10 @@ enableTls = false
 tlsCaFile = "test/ca.pem"
 
 #default is ''. Path of file that contains X509 certificate in PEM format for client
-tlsCertFile = "test/server-cert.pem"
+tlsCertFile = "test/server-cert2.pem"
 
 #default is ''. Path of file that contains X509 key in PEM format for client
-tlsKeyFile = "test/server-key.pem"
+tlsKeyFile = "test/server-key2.pem"
 
 # Cluster Configs
 pre-allocated-group-num = 20
