@@ -17,7 +17,6 @@ package txnimpl
 import (
 	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,16 +24,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -353,114 +349,6 @@ func TestNodeCommand(t *testing.T) {
 		}
 	}
 	assert.NoError(t, txn.Commit())
-}
-
-func TestApplyToColumn1(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	deletes := roaring.BitmapOf(1)
-	ts := types.NextGlobalTsForTest()
-	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
-	node.AttachTo(chain)
-	err := node.UpdateLocked(3, []byte("update"))
-	assert.Nil(t, err)
-	deletes.AddRange(3, 4)
-
-	vec := containers.MakeVector(types.T_varchar.ToType(), true)
-	defer vec.Close()
-	for i := 0; i < 5; i++ {
-		data := "val" + strconv.Itoa(i)
-		vec.Append([]byte(data))
-	}
-	vec.Update(2, types.Null{})
-	vec.Update(4, types.Null{})
-
-	// Nulls {2, 4}
-	// Deletes {1,3}
-	// Length 5
-	assert.True(t, types.IsNull(vec.Get(2)))
-	assert.True(t, types.IsNull(vec.Get(4)))
-	node.ApplyToColumn(vec, deletes)
-	assert.Equal(t, 3, vec.Length())
-	assert.True(t, types.IsNull(vec.Get(1)))
-	assert.True(t, types.IsNull(vec.Get(2)))
-	assert.Equal(t, uint64(2), vec.NullMask().GetCardinality())
-	t.Log(vec.String())
-}
-
-func TestApplyToColumn2(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	deletes := roaring.BitmapOf(1)
-	ts := types.NextGlobalTsForTest()
-	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
-	node.AttachTo(chain)
-	err := node.UpdateLocked(0, int32(8))
-	assert.Nil(t, err)
-	deletes.AddRange(2, 4)
-
-	vec := containers.MakeVector(types.T_int32.ToType(), true)
-	defer vec.Close()
-	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
-
-	vec.Update(2, types.Null{})
-	vec.Update(1, types.Null{})
-	vec.Update(3, types.Null{})
-	vec.Update(0, types.Null{})
-
-	assert.Equal(t, 4, vec.Length())
-	assert.Equal(t, uint64(4), vec.NullMask().GetCardinality())
-	// deletes: {1,2,3}
-	node.ApplyToColumn(vec, deletes)
-	assert.Equal(t, 1, vec.Length())
-	assert.False(t, vec.HasNull())
-	assert.Equal(t, any(int32(8)), vec.Get(0))
-}
-
-func TestApplyToColumn3(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	ts := types.NextGlobalTsForTest()
-	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
-	node.AttachTo(chain)
-	err := node.UpdateLocked(3, []byte("update"))
-	assert.Nil(t, err)
-
-	vec := containers.MakeVector(types.T_varchar.ToType(), true)
-	defer vec.Close()
-	for i := 0; i < 5; i++ {
-		data := "val" + strconv.Itoa(i)
-		vec.Append([]byte(data))
-	}
-
-	deletes := roaring.BitmapOf(1)
-
-	assert.Equal(t, 5, vec.Length())
-	t.Log(vec.String())
-	node.ApplyToColumn(vec, deletes)
-	t.Log(vec.String())
-
-	assert.Equal(t, 4, vec.Length())
-	assert.Equal(t, "update", string(vec.Get(2).([]byte)))
-}
-
-func TestApplyToColumn4(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	ts := types.NextGlobalTsForTest()
-	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
-	node.AttachTo(chain)
-	err := node.UpdateLocked(3, int32(8))
-	assert.Nil(t, err)
-
-	vec := containers.MakeVector(types.T_int32.ToType(), true)
-	defer vec.Close()
-	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
-
-	t.Log(vec.String())
-	node.ApplyToColumn(vec, nil)
-	t.Log(vec.String())
-	assert.Equal(t, any(int32(8)), vec.Get(3))
 }
 
 func TestTxnManager1(t *testing.T) {

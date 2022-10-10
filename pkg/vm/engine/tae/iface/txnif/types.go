@@ -130,25 +130,6 @@ type SyncTxn interface {
 	TxnChanger
 }
 
-type UpdateChain interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-	GetID() *common.ID
-
-	// DeleteNode(*common.DLNode)
-	// DeleteNodeLocked(*common.DLNode)
-
-	AddNode(txn AsyncTxn) UpdateNode
-	AddNodeLocked(txn AsyncTxn) UpdateNode
-	PrepareUpdate(uint32, UpdateNode) error
-
-	GetValueLocked(row uint32, ts types.TS) (any, error)
-	TryUpdateNodeLocked(row uint32, v any, n UpdateNode) error
-	// CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
-	// CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
-}
-
 type DeleteChain interface {
 	sync.Locker
 	RLock()
@@ -214,18 +195,6 @@ type DeleteNode interface {
 	IsDeletedLocked(row uint32) bool
 	GetRowMaskRefLocked() *roaring.Bitmap
 	OnApply() error
-}
-
-type UpdateNode interface {
-	TxnEntry
-	GetID() *common.ID
-	String() string
-	GetChain() UpdateChain
-	// GetDLNode() *common.DLNode
-	GetMask() *roaring.Bitmap
-	GetValues() map[uint32]interface{}
-
-	UpdateLocked(row uint32, v any) error
 }
 
 type TxnStore interface {

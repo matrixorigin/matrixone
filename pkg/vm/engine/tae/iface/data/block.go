@@ -54,7 +54,6 @@ type BlockAppender interface {
 
 type BlockReplayer interface {
 	OnReplayDelete(node txnif.DeleteNode) (err error)
-	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }

@@ -40,7 +40,6 @@ type txnTable struct {
 	createEntry  txnif.TxnEntry
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
-	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
 	schema       *catalog.Schema
@@ -59,7 +58,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		store:       store,
 		entry:       entry,
 		schema:      entry.GetSchema(),
-		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
@@ -295,7 +293,6 @@ func (tbl *txnTable) Close() error {
 		}
 		tbl.localSegment = nil
 	}
-	tbl.updateNodes = nil
 	tbl.deleteNodes = nil
 	tbl.logs = nil
 	return nil
@@ -310,18 +307,6 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
-	tbl.txnEntries = append(tbl.txnEntries, node)
-	return nil
-}
-
-func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
-	id := *node.GetID()
-	u := tbl.updateNodes[id]
-	if u != nil {
-		return ErrDuplicateNode
-	}
-	tbl.store.IncreateWriteCnt()
-	tbl.updateNodes[id] = node
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -369,11 +354,8 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		chain := node.GetChain().(*updates.DeleteChain)
 		mvcc := chain.GetController()
 		mvcc.Lock()
-		err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
-		if err == nil {
-			if err = mvcc.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
-				node.RangeDeleteLocked(start, end)
-			}
+		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
+			node.RangeDeleteLocked(start, end)
 		}
 		mvcc.Unlock()
 		if err != nil {
