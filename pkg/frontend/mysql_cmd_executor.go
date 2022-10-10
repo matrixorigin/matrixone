@@ -2651,7 +2651,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:

@@ -18,12 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -356,7 +354,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
