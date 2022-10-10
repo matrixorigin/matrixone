@@ -192,15 +192,6 @@ func (be *TableBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err
 	return
 }
 
-func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
-	cloned, uncloned := be.CloneLatestNode()
-	uncloned.(*TableMVCCNode).DeletedAt = types.TS{}
-	return &TableBaseEntry{
-		MVCCChain: cloned,
-		ID:        be.ID,
-	}
-}
-
 func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
 	err = be.CheckConflict(txnCtx)
 	if err != nil {

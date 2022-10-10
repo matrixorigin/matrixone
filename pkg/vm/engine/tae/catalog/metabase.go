@@ -260,24 +260,15 @@ func (be *MetaBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err 
 	return
 }
 
-func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
-	cloned, uncloned := be.CloneLatestNode()
-	uncloned.(*MetadataMVCCNode).DeletedAt = types.TS{}
-	return &MetaBaseEntry{
-		MVCCChain: cloned,
-		ID:        be.ID,
-	}
-}
-
-func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
-	err = be.CheckConflict(txnCtx)
+func (be *MetaBaseEntry) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	err = be.CheckConflict(txn)
 	if err != nil {
 		return
 	}
 	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
-	isNewNode, err = be.DeleteLocked(txnCtx)
+	isNewNode, err = be.DeleteLocked(txn)
 	return
 }
 

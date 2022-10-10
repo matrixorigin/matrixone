@@ -394,14 +394,6 @@ func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 	}
 }
 
-func (entry *TableEntry) CloneCreateEntry() *TableEntry {
-	return &TableEntry{
-		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
-		db:             entry.db,
-		schema:         entry.schema,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()

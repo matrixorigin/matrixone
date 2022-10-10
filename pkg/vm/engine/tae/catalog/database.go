@@ -473,14 +473,6 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 	}
 }
 
-func (e *DBEntry) CloneCreateEntry() *DBEntry {
-	return &DBEntry{
-		acInfo:      e.acInfo,
-		DBBaseEntry: e.DBBaseEntry.CloneCreateEntry().(*DBBaseEntry),
-		name:        e.name,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()
