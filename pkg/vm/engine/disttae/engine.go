@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -137,7 +138,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.proc.GetMheap())
+	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -166,6 +167,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		readOnly:    true,
 		meta:        op.Txn(),
 		idGen:       e.idGen,
+		rowId:       [2]uint64{math.MaxUint64, 0},
 		dnStores:    cluster.DNStores,
 		fileMap:     make(map[string]uint64),
 		tableMap:    make(map[tableKey]*table),
@@ -212,7 +214,8 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return nil // compatible with existing logic
+		//	return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	return nil
@@ -257,7 +260,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.proc.GetMheap())
+			txn.writes[i][j].bat.Clean(e.proc.Mp())
 		}
 	}
 	e.Lock()

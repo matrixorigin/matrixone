@@ -19,10 +19,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -47,41 +47,41 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase(testutil.NewMheap(), []bool{false}, false, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(testutil.NewMheap(), []bool{false, true}, false, []types.Type{
+		newTestCase([]bool{false}, false, []types.Type{{Oid: types.T_int8}}),
+		newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+		newTestCase([]bool{false, true}, false, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{false, true}, true, []types.Type{
+		newTestCase([]bool{false, true}, true, []types.Type{
 			{Oid: types.T_int16},
 			{Oid: types.T_int64},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{false, true}, false, []types.Type{
+		newTestCase([]bool{false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{true, false, true}, false, []types.Type{
+		newTestCase([]bool{true, false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{true, false, true}, false, []types.Type{
+		newTestCase([]bool{true, false, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{true, true, true}, false, []types.Type{
+		newTestCase([]bool{true, true, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{true, true, true}, false, []types.Type{
+		newTestCase([]bool{true, true, true}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
 			{Oid: types.T_decimal128},
 		}),
-		newTestCase(testutil.NewMheap(), []bool{false, false, false}, false, []types.Type{
+		newTestCase([]bool{false, false, false}, false, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
 			{Oid: types.T_decimal128},
@@ -122,15 +122,15 @@ func TestGroup(t *testing.T) {
 				}
 			}
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
-			newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-			newTestCase(testutil.NewMheap(), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+			newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+			newTestCase([]bool{false}, true, []types.Type{{Oid: types.T_int8}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -162,8 +162,8 @@ func BenchmarkGroup(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMheap(m)
+func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

@@ -15,6 +15,7 @@
 package options
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -26,7 +27,7 @@ import (
 const (
 	// Temp unlimit the txn cache size.
 	// In v0.6, we will limit the cache to a reasonable value
-	DefaultTxnCacheSize   = common.UNLIMIT
+	DefaultTxnCacheSize   = mpool.TB
 	DefaultIndexCacheSize = 128 * common.M
 	DefaultMTCacheSize    = 4 * common.G
 

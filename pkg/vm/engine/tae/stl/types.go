@@ -18,6 +18,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -59,7 +60,7 @@ type Vector[T any] interface {
 	Close()
 
 	// Clone deep copy data from offset to offset+length and create a new vector
-	Clone(offset, length int, allocator ...MemAllocator) Vector[T]
+	Clone(offset, length int, allocator ...*mpool.MPool) Vector[T]
 
 	// ReadBytes reads a serialized buffer and initializes the vector using the buf
 	// as its initial contents.
@@ -110,7 +111,7 @@ type Vector[T any] interface {
 	RangeDelete(offset, length int)
 
 	// Returns the underlying memory allocator
-	GetAllocator() MemAllocator
+	GetAllocator() *mpool.MPool
 	// Returns the capacity, which is always >= Length().
 	// It is related to the number of elements. Same as C++ std::vector::capacity
 	Capacity() int

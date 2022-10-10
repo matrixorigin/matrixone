@@ -18,8 +18,6 @@ import (
 	"io"
 	"os"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type Type = uint16
@@ -67,7 +65,7 @@ type Entry interface {
 	SetInfoBuf(buf []byte)
 
 	SetPayload([]byte) error
-	UnmarshalFromNode(*common.MemNode, bool) error
+	UnmarshalFromNode([]byte, bool) error
 
 	Unmarshal(buf []byte) error
 	Marshal() (buf []byte, err error)

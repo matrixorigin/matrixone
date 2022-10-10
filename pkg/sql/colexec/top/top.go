@@ -70,7 +70,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			if ap.Limit == 0 {
 				ctr.state = End
-				bat.Clean(proc.GetMheap())
+				bat.Clean(proc.Mp())
 				proc.Reg.InputBatch = nil
 				return true, nil
 			}

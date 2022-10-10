@@ -15,12 +15,12 @@
 package memoryengine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -290,18 +290,18 @@ type ReadReq struct {
 type ReadResp struct {
 	Batch *batch.Batch
 
-	heap *mheap.Mheap
+	mp *mpool.MPool
 }
 
 func (r *ReadResp) Close() error {
 	if r.Batch != nil {
-		r.Batch.Clean(r.heap)
+		r.Batch.Clean(r.mp)
 	}
 	return nil
 }
 
-func (r *ReadResp) SetHeap(heap *mheap.Mheap) {
-	r.heap = heap
+func (r *ReadResp) SetHeap(mp *mpool.MPool) {
+	r.mp = mp
 }
 
 type CloseTableIterReq struct {

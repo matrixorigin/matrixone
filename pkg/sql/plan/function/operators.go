@@ -2780,7 +2780,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2792,7 +2792,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2804,7 +2804,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2816,7 +2816,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2828,7 +2828,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2840,7 +2840,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2852,7 +2852,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2864,7 +2864,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2876,7 +2876,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2888,7 +2888,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2900,7 +2900,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2912,7 +2912,7 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},

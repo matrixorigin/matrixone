@@ -38,6 +38,10 @@ type Handle struct {
 	eng moengine.TxnEngine
 }
 
+func (h *Handle) GetTxnEngine() moengine.TxnEngine {
+	return h.eng
+}
+
 func NewTAEHandle(opt *options.Options) *Handle {
 	//just for test
 	path := "./store"

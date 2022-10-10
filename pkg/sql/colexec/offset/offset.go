@@ -52,7 +52,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
 		ap.Seen += uint64(length)
 		bat.Shrink(sels)
-		proc.GetMheap().PutSels(sels)
+		proc.Mp().PutSels(sels)
 		proc.SetInputBatch(bat)
 		return false, nil
 	}
@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.GetMheap().GetSels()
+	sels := proc.Mp().GetSels()
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}

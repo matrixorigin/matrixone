@@ -46,7 +46,7 @@ func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vecto
 	for i := range vectors {
 		res += vectors[i].GetString(0)
 	}
-	return vector.NewConstString(vct, length, res), nil
+	return vector.NewConstString(vct, length, res, proc.Mp()), nil
 }
 
 func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

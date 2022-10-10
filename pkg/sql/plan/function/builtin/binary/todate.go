@@ -42,7 +42,7 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.NewConstString(resultType, 1, result[0])
+		resultVector := vector.NewConstString(resultType, 1, result[0], proc.Mp())
 		nulls.Set(resultVector.Nsp, resultNsp)
 		return resultVector, nil
 	} else {

@@ -33,7 +33,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		resultValues := make([]string, 1)
 		HexEncodeString(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeString(inputValues, resultValues)
@@ -51,7 +51,7 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		resultValues := make([]string, 1)
 		HexEncodeInt64(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
 		resultValues := make([]string, len(inputValues))
 		HexEncodeInt64(inputValues, resultValues)

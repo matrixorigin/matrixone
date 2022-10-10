@@ -18,11 +18,11 @@ import (
 	"encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"golang.org/x/exp/constraints"
 )
 
@@ -83,13 +83,13 @@ type Agg[T any] interface {
 	String() string
 
 	// Free the agg.
-	Free(*mheap.Mheap)
+	Free(*mpool.MPool)
 
 	// Grows allocates n groups for the agg.
-	Grows(n int, _ *mheap.Mheap) error
+	Grows(n int, _ *mpool.MPool) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
-	Eval(_ *mheap.Mheap) (*vector.Vector, error)
+	Eval(_ *mpool.MPool) (*vector.Vector, error)
 
 	// Fill use the rowIndex-rows of vector to update the data of groupIndex-group.
 	// rowCount indicates the number of times the rowIndex-row is repeated.
