@@ -17,7 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+
 	"go.uber.org/zap"
 	"sync"
 
@@ -35,12 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -86,6 +88,22 @@ func NewService(
 		},
 	}
 
+	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
+		taskservice.WithOptions(
+			cfg.TaskRunner.QueryLimit,
+			cfg.TaskRunner.Parallelism,
+			cfg.TaskRunner.MaxWaitTasks,
+			cfg.TaskRunner.FetchInterval.Duration,
+			cfg.TaskRunner.FetchTimeout.Duration,
+			cfg.TaskRunner.RetryInterval.Duration,
+			cfg.TaskRunner.HeartbeatInterval.Duration,
+		),
+	)
+	if err != nil {
+		panic(err)
+	}
+	srv.taskRunner = runner
+
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
 	if err = srv.initMOServer(ctx, pu); err != nil {
@@ -109,22 +127,6 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
-
-	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
-		taskservice.WithOptions(
-			cfg.TaskRunner.QueryLimit,
-			cfg.TaskRunner.Parallelism,
-			cfg.TaskRunner.MaxWaitTasks,
-			cfg.TaskRunner.FetchInterval.Duration,
-			cfg.TaskRunner.FetchTimeout.Duration,
-			cfg.TaskRunner.RetryInterval.Duration,
-			cfg.TaskRunner.HeartbeatInterval.Duration,
-		),
-	)
-	if err != nil {
-		return nil, err
-	}
-	srv.taskRunner = runner
 
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
@@ -248,23 +250,32 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
 
-	ieFactory := func() ie.InternalExecutor {
+	s.registerTaskExecutors(moServerCtx, func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(pu)
-	}
-	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
+	})
+
 	frontend.InitServerVersion(pu.SV.MoVersion)
-	err := frontend.InitSysTenant(moServerCtx)
-	if err != nil {
-		panic(err)
+}
+
+func (s *service) registerTaskExecutors(moServerCtx context.Context, ieFactory func() ie.InternalExecutor) {
+	inits := []func(context.Context, func() ie.InternalExecutor) error{
+		trace.InitSchema,
+		metric.InitSchema,
+		sysview.InitSchema,
+		func(ctx context.Context, _ func() ie.InternalExecutor) error {
+			return frontend.InitSysTenant(ctx)
+		},
 	}
+
+	s.taskRunner.RegisterExecutor(taskservice.SystemInit,
+		func(ctx context.Context, task task.Task) error {
+			for _, init := range inits {
+				if err := init(moServerCtx, ieFactory); err != nil {
+					panic(err)
+				}
+			}
+			return nil
+		})
 }
 
 func (s *service) runMoServer() error {

@@ -76,10 +76,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	taskStorage := taskservice.NewMemTaskStorage()
 	taskService := taskservice.NewTaskService(taskStorage, nil)
 
-	cnSvcNum := 1
-	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum).
-		WithTaskStorage(taskStorage)
+	opt := DefaultOptions().WithTaskStorage(taskStorage)
 
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -87,6 +84,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
+	defer c.Close()
 	require.NoError(t, err)
 
 	indexed, err := c.GetCNServiceIndexed(0)
@@ -97,7 +95,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 		},
 	)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 0})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -107,8 +105,6 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
@@ -126,6 +122,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
+	defer c.Close()
 	require.NoError(t, err)
 
 	cn1, err := c.GetCNServiceIndexed(0)
@@ -144,7 +141,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		},
 	)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 0})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -161,9 +158,6 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel1()
 	waitTaskRescheduled(t, ctx1, taskService, uuid1)
-
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestTaskRunner(t *testing.T) {
@@ -177,10 +171,7 @@ func TestTaskRunner(t *testing.T) {
 		return nil
 	}
 
-	cnSvcNum := 1
-	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum).
-		WithTaskStorage(taskStorage)
+	opt := DefaultOptions().WithTaskStorage(taskStorage)
 
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -188,13 +179,14 @@ func TestTaskRunner(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
+	defer c.Close()
 	require.NoError(t, err)
 
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	indexed.GetTaskRunner().RegisterExecutor(1, taskExecutor)
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 1})
+	indexed.GetTaskRunner().RegisterExecutor(taskservice.TestOnly, taskExecutor)
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -213,6 +205,88 @@ func TestTaskRunner(t *testing.T) {
 	case i := <-ch:
 		t.Logf("task %d is completed", i)
 	}
-	err = c.Close()
+}
+
+func TestNoErrorOccursWhenTaskRunnerWithNoExecutor(t *testing.T) {
+	taskStorage := taskservice.NewMemTaskStorage()
+	taskService := taskservice.NewTaskService(taskStorage, nil)
+
+	opt := DefaultOptions().WithTaskStorage(taskStorage)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	defer c.Close()
+	require.NoError(t, err)
+
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
+	require.NoError(t, err)
+	tasks, err := taskService.QueryTask(context.TODO(),
+		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(tasks))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitTaskScheduled(t, ctx, taskService)
+	// make sure task is not allocated.
+	time.Sleep(3 * time.Second)
+}
+
+func TestSysTablesCanInit(t *testing.T) {
+	taskStorage := taskservice.NewMemTaskStorage()
+	taskService := taskservice.NewTaskService(taskStorage, nil)
+
+	opt := DefaultOptions().WithTaskStorage(taskStorage)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	defer c.Close()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+	waitInitTasksCompleted(t, ctx, taskService)
+}
+
+func waitInitTasksCompleted(t *testing.T, ctx context.Context, taskService taskservice.TaskService) {
+	i := 0
+	fn := func(t *testing.T, status task.TaskStatus) int {
+		tasks, err := taskService.QueryTask(context.TODO(),
+			taskservice.WithTaskStatusCond(taskservice.EQ, status))
+		require.NoError(t, err)
+		require.True(t, len(tasks) <= 1)
+		taskNames := make([]string, 0, len(tasks))
+		for _, ts := range tasks {
+			taskNames = append(taskNames, ts.Metadata.ID)
+		}
+
+		t.Logf("%s tasks: %v(%d in total)", status.String(), taskNames, len(taskNames))
+		return len(taskNames)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(t, "tasks not completed")
+		default:
+			t.Logf("iteration: %d", i)
+			fn(t, task.TaskStatus_Created)
+			fn(t, task.TaskStatus_Running)
+			if completed := fn(t, task.TaskStatus_Completed); completed != 1 {
+				time.Sleep(1 * time.Second)
+				i++
+				continue
+			}
+			t.Logf("all init tasks are completed")
+			return
+		}
+	}
 }

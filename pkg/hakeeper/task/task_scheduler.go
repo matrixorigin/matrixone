@@ -63,7 +63,7 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 func (s *Scheduler) queryRunningTasks() []task.Task {
 	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 	if err != nil {
-		s.logger.Error("query running tasks error")
+		s.logger.Error("query running tasks error", zap.Error(err))
 		return nil
 	}
 	return tasks
@@ -72,7 +72,7 @@ func (s *Scheduler) queryRunningTasks() []task.Task {
 func (s *Scheduler) queryCreatedTasks() []task.Task {
 	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	if err != nil {
-		s.logger.Error("query created tasks error")
+		s.logger.Error("query created tasks error", zap.Error(err))
 		return nil
 	}
 	return tasks
@@ -82,13 +82,15 @@ func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	for _, t := range tasks {
 		runner := orderedCN.min()
 		if runner == "" {
-			s.logger.Info("no CN available")
+			s.logger.Warn("no CN available")
 			return
 		}
 		err := s.Allocate(s.ctx, t, runner)
 		if err != nil {
 			s.logger.Error("allocating task error",
-				zap.Uint64("task-id", t.ID), zap.String("task-runner", runner))
+				zap.Uint64("task-id", t.ID),
+				zap.String("task-runner", runner),
+				zap.Error(err))
 			return
 		}
 		s.logger.Info("task allocated",
