@@ -145,6 +145,8 @@ type baseBatchPipeOpts struct {
 	BatchWorkerNum int
 	// the number of goroutines to merge items into a buffer, default is 1
 	BufferWorkerNum int
+	// ItemNameFormatter
+	ItemNameFormatter func(HasName) string
 }
 
 type BaseBatchPipeOpt interface {
@@ -163,10 +165,18 @@ func (x PipeWithBufferWorkerNum) ApplyTo(o *baseBatchPipeOpts) {
 	o.BufferWorkerNum = int(x)
 }
 
+type PipeWithItemNameFormatter func(HasName) string
+
+func (x PipeWithItemNameFormatter) ApplyTo(o *baseBatchPipeOpts) {
+	o.ItemNameFormatter = x
+}
+
 func defaultBaseBatchPipeOpts() baseBatchPipeOpts {
 	return baseBatchPipeOpts{
 		BatchWorkerNum:  runtime.NumCPU(),
 		BufferWorkerNum: 1,
+		// default use T.GetName()
+		ItemNameFormatter: func(T HasName) string { return T.GetName() },
 	}
 }
 
@@ -336,7 +346,7 @@ func (bc *BaseBatchPipe[T, B]) mergeWorker(ctx context.Context) {
 				quitMsg = quitChannelClose
 				return
 			}
-			name := item.GetName()
+			name := bc.opts.ItemNameFormatter(item)
 			itembuf := bufByNames[name]
 			if itembuf == nil {
 				itembuf = bc.impl.NewItemBuffer(name)
