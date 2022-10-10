@@ -153,14 +153,6 @@ func (be *DBBaseEntry) DoCompre(voe BaseEntry) int {
 	return CompareUint64(be.ID, oe.ID)
 }
 
-func (be *DBBaseEntry) HasDropped() bool {
-	node := be.GetCommittedNode()
-	if node == nil {
-		return false
-	}
-	return node.(*DBMVCCNode).HasDropped()
-}
-
 func (be *DBBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
 	visible, dropped := be.GetVisibilityLocked(ts)
 	if !visible {
@@ -208,7 +200,7 @@ func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, 
 	if err != nil {
 		return
 	}
-	if be.HasDropped() {
+	if be.IsDroppedCommitted() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
@@ -231,7 +223,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 		}
 	}
 	if txn == nil || be.GetTxn() != txn {
-		if !be.HasDropped() {
+		if !be.IsDroppedCommitted() {
 			return moerr.NewDuplicate()
 		}
 	} else {
