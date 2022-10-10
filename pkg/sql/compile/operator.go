@@ -18,12 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -145,15 +143,11 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *mark.Argument:
 		{
 			rin.Arg = &mark.Argument{
-				Typs:         arg.Typs,
-				Cond:         arg.Cond,
-				Result:       arg.Result,
-				Conditions:   arg.Conditions,
-				OutputNull:   arg.OutputNull,
-				OutputMark:   arg.OutputMark,
-				MarkMeaning:  arg.MarkMeaning,
-				OutputAnyway: arg.OutputAnyway,
-				OnList:       arg.OnList,
+				Typs:       arg.Typs,
+				Cond:       arg.Cond,
+				Result:     arg.Result,
+				Conditions: arg.Conditions,
+				OnList:     arg.OnList,
 			}
 		}
 	case *offset.Argument:
@@ -360,7 +354,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -378,15 +372,8 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &top.Argument{
-		Fs:    fs,
+		Fs:    n.OrderBy,
 		Limit: vec.Col.([]int64)[0],
 	}
 }
@@ -488,30 +475,19 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
-		Typs:         typs,
-		Result:       result,
-		Cond:         cond,
-		Conditions:   constructJoinConditions(conds),
-		OutputMark:   false,
-		OutputNull:   false,
-		MarkMeaning:  false,
-		OutputAnyway: false,
-		OnList:       onList,
+		Typs:       typs,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
+		OnList:     onList,
 	}
 }
 
 var _ = constructMark
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &order.Argument{
-		Fs: fs,
+		Fs: n.OrderBy,
 	}
 }
 
@@ -614,15 +590,8 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &mergetop.Argument{
-		Fs:    fs,
+		Fs:    n.OrderBy,
 		Limit: vec.Col.([]int64)[0],
 	}
 }
@@ -648,15 +617,8 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 }
 
 func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &mergeorder.Argument{
-		Fs: fs,
+		Fs: n.OrderBy,
 	}
 }
 

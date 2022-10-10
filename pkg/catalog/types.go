@@ -20,6 +20,10 @@ import (
 )
 
 const (
+	Row_ID = "__rowid"
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
@@ -142,6 +146,7 @@ const (
 // tae and memengine do not make the catalog into a table
 // for its convenience, a conversion interface is provided to ensure easy use.
 type CreateDatabase struct {
+	DatabaseId  uint64
 	Name        string
 	CreateSql   string
 	Owner       uint32
@@ -156,6 +161,7 @@ type DropDatabase struct {
 }
 
 type CreateTable struct {
+	TableId      uint64
 	Name         string
 	CreateSql    string
 	Owner        uint32
@@ -255,7 +261,7 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),     // att_relname_id
 		types.New(types.T_varchar, 256, 0, 0),  // att_relname
 		types.New(types.T_varchar, 256, 0, 0),  // attname
-		types.New(types.T_int32, 0, 0, 0),      // atttyp
+		types.New(types.T_varchar, 256, 0, 0),  // atttyp
 		types.New(types.T_int32, 0, 0, 0),      // attnum
 		types.New(types.T_int32, 0, 0, 0),      // att_length
 		types.New(types.T_int8, 0, 0, 0),       // attnotnull

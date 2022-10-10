@@ -82,8 +82,8 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs types.TS) (err error) {
 	ckpTs := blk.GetMaxCheckpointTS()
 	logutil.Info("[Start]", common.ReprerField("blk", blk.meta),
 		common.OperationField("ckp-wal"),
-		common.AnyField("ckpTs", ckpTs),
-		common.AnyField("curr", currTs))
+		common.AnyField("ckpTs", ckpTs.ToString()),
+		common.AnyField("curr", currTs.ToString()))
 	if currTs.LessEq(ckpTs) {
 		return
 	}

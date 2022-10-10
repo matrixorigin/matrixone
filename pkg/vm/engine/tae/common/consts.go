@@ -19,4 +19,10 @@ const (
 	MAX_UINT16 = ^uint16(0)
 	MAX_UINT32 = ^uint32(0)
 	MAX_UINT64 = ^uint64(0)
+
+	K = 1024
+	M = 1024 * K
+	G = 1024 * M
+	T = 1024 * G
+	P = 1024 * T
 )

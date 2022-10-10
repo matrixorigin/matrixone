@@ -15,17 +15,16 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type testPair struct {
@@ -392,18 +391,16 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []benchmarkTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_datetime}}),
+		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{{Oid: types.T_datetime}}),
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type) benchmarkTestCase {
+func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type) benchmarkTestCase {
 	return benchmarkTestCase{
 		types: ts,
 		flags: flgs,
-		proc:  testutil.NewProcessWithMheap(m),
+		proc:  testutil.NewProcessWithMPool(m),
 	}
 }
 
@@ -419,9 +416,9 @@ func BenchmarkDatetimeToHour(b *testing.B) {
 			bat := newBatch(t, tc.flags, tc.types, tc.proc, Rows)
 			vec, err := DatetimeToHour(bat.Vecs, tc.proc)
 			require.NoError(t, err)
-			bat.Clean(tc.proc.GetMheap())
-			vec.Free(tc.proc.GetMheap())
-			require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+			bat.Clean(tc.proc.Mp())
+			vec.Free(tc.proc.Mp())
+			require.Equal(t, int64(0), tc.proc.Mp().Stats().NumCurrBytes.Load())
 		}
 	}
 }

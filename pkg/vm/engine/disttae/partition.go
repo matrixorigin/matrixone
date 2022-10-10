@@ -62,8 +62,8 @@ func (d *DataRow) Indexes() []memtable.Tuple {
 
 var _ MVCC = new(Partition)
 
-func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries [][]Entry) []BlockMeta {
-	panic("unimplemented")
+func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
+	return nil
 }
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
@@ -158,9 +158,10 @@ func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
 	expr *plan.Expr,
+	defs []engine.TableDef,
 	blocks []BlockMeta,
 	ts timestamp.Timestamp,
-	entries [][]Entry,
+	entries []Entry,
 ) ([]engine.Reader, error) {
 
 	t := memtable.Time{
@@ -172,18 +173,38 @@ func (p *Partition) NewReader(
 		memtable.SnapshotIsolation,
 	)
 
+	inserts := make([]*batch.Batch, 0, len(entries))
+	deletes := make([]*batch.Batch, 0, len(entries))
+	for _, entry := range entries {
+		if entry.typ == INSERT {
+			inserts = append(inserts, entry.bat)
+		} else {
+			deletes = append(deletes, entry.bat)
+		}
+	}
+
 	readers := make([]engine.Reader, readerNumber)
 
+	mp := make(map[string]types.Type)
+	for _, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		mp[attr.Attr.Name] = attr.Attr.Type
+	}
 	readers[0] = &PartitionReader{
+		typsMap:  mp,
 		iter:     p.data.NewIter(tx),
 		readTime: t,
 		tx:       tx,
 		expr:     expr,
+		inserts:  inserts,
+		deletes:  deletes,
+	}
+	for i := 1; i < readerNumber; i++ {
+		readers[i] = &emptyReader{}
 	}
 
 	return readers, nil
-}
-
-func (*Partition) RowsCount(ctx context.Context, ts timestamp.Timestamp) int64 {
-	panic("unimplemented")
 }

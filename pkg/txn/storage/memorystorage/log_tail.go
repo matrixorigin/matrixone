@@ -78,13 +78,12 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 	insertNames := make([]string, 0, len(attrs))
 	deleteNames := make([]string, 0, len(attrs))
 	for _, attr := range attrs {
-		if attr.Value.IsRowId {
-			continue // will add row id to the first col of batch
-		}
 		attrsMap[attr.Value.Name] = attr.Value
-		insertNames = append(insertNames, attr.Value.Name)
-		if attr.Value.Primary {
-			deleteNames = append(deleteNames, attr.Value.Name)
+		if !attr.Value.IsRowId {
+			insertNames = append(insertNames, attr.Value.Name)
+			if attr.Value.Primary {
+				deleteNames = append(deleteNames, attr.Value.Name)
+			}
 		}
 	}
 	sort.Slice(insertNames, func(i, j int) bool {
@@ -130,6 +129,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 		if rowID.IsNull {
 			panic("no row id")
 		}
+
 		rowID.AppendVector(batch.Vecs[0], m.mheap)
 		// commit time
 		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)

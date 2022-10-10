@@ -139,17 +139,24 @@ func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int, fn f
 }
 
 func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uint64, records []logservice.LogRecord) {
-	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	defer cancel()
 	client, err := d.clientPool.Get()
 	defer d.clientPool.Put(client)
 	if err != nil {
 		panic(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
-	if err != nil { //TODO
-		logutil.Infof("try read %d", lsn)
-		panic(err)
+	cancel()
+	if err != nil {
+		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+			records, nextLsn, err = client.c.Read(ctx, lsn, d.config.ReadMaxSize)
+			cancel()
+			return err == nil
+		})
+		if err != nil {
+			panic(err)
+		}
 	}
 	return
 }

@@ -30,7 +30,7 @@ type blockAppender struct {
 func newAppender(node *appendableNode) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
-	appender.rows = node.Rows(nil, true)
+	appender.rows = node.Rows()
 	return appender
 }
 

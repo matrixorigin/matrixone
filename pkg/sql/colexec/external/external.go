@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,6 +51,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
+	param.records = make([][]string, param.batchSize)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -201,15 +203,14 @@ func judgeInterge(field string) bool {
 	return true
 }
 
-func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
-		// XXX memory accouting?
-		vector.PreAlloc(vec, batchSize, batchSize, nil)
+		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -246,7 +247,7 @@ func getNullFlag(param *ExternalParam, attr, field string) bool {
 }
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh)
+	bat := makeBatch(param, plh, proc.Mp())
 	var Line []string
 	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
@@ -619,6 +620,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
+	var cnt int
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
@@ -627,11 +629,12 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
-	if len(plh.simdCsvLineArray) < param.batchSize {
+	if cnt < param.batchSize {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
 		err := param.reader.Close()
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
