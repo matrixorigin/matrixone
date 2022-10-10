@@ -88,7 +88,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	// do null value check
 	for i := range bat.Vecs {
-		if p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement {
+		if p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement || !p.ExplicitCols[i].Default.NullAbility {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
