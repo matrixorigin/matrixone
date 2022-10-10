@@ -185,7 +185,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			stm.SetTxnID(handler.GetTxn().Txn().ID)
 		}
