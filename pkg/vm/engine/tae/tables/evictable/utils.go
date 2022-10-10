@@ -68,8 +68,8 @@ func PinEvictableNode(mgr base.INodeManager, key string, factory EvictableNodeFa
 
 func copyVector(data containers.Vector, buf *bytes.Buffer) containers.Vector {
 	if buf != nil {
-		return containers.CloneWithBuffer(data, buf, common.TAEDefaultAllocator)
+		return containers.CloneWithBuffer(data, buf, common.DefaultAllocator)
 	} else {
-		return data.CloneWindow(0, data.Length(), common.TAEDefaultAllocator)
+		return data.CloneWindow(0, data.Length(), common.DefaultAllocator)
 	}
 }

@@ -81,6 +81,11 @@ func TestAppend2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
+	beater.Start()
+	defer beater.Stop()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
 	schema.SegmentMaxBlocks = 10
@@ -2691,6 +2696,15 @@ func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
+	beater.Start()
+	defer func() {
+		// sleep to see more blocks flush
+		time.Sleep(500 * time.Millisecond)
+		beater.Stop()
+	}()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -3542,4 +3556,154 @@ func TestTxnIdempotent(t *testing.T) {
 		}()
 		wg.Wait()
 	}
+}
+
+// insert 200 rows and do quick compaction
+// expect that there are some dirty tables at first and then zero dirty table found
+func TestWatchDirty(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	logMgr := tae.LogtailMgr
+
+	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(logMgr, opts.Clock, tae.Catalog, visitor)
+	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
+	watcher.WithDelay(10 * time.Nanosecond)
+
+	tbl, seg, blk := watcher.DirtyCount()
+	assert.Zero(t, blk)
+	assert.Zero(t, seg)
+	assert.Zero(t, tbl)
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	appendCnt := 200
+	bat := catalog.MockBatch(schema, appendCnt)
+	bats := bat.Split(appendCnt)
+
+	tae.createRelAndAppend(bats[0], true)
+	tae.checkRowsByScan(1, false)
+
+	wg := &sync.WaitGroup{}
+	pool, _ := ants.NewPool(5)
+	worker := func(i int) func() {
+		return func() {
+			txn, _ := tae.getRelation()
+			err := tae.doAppendWithTxn(bats[i], txn, true)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+			wg.Done()
+		}
+	}
+	for i := 1; i < appendCnt; i++ {
+		wg.Add(1)
+		pool.Submit(worker(i))
+	}
+
+	stopCh := make(chan int)
+	defer close(stopCh)
+	dirtyCountCh := make(chan int, 100)
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				close(dirtyCountCh)
+				return
+			default:
+			}
+			time.Sleep(5 * time.Millisecond)
+			watcher.Run()
+			_, _, blkCnt := watcher.DirtyCount()
+			dirtyCountCh <- blkCnt
+		}
+	}()
+
+	wg.Wait()
+	seenDirty := false
+	prevVal, prevCount := 0, 0
+	// wait two seconds for ch to produce consecutive zeros
+	assert.NoError(t, testutils.WaitChTimeout(1*time.Second, dirtyCountCh, func(count int, closed bool) (moveOn bool, err error) {
+		if closed {
+			return false, moerr.NewInternalError("unexpected close on chan")
+		}
+		if count > 0 {
+			seenDirty = true
+		}
+
+		if prevVal != count {
+			t.Logf("dirty count %d appears %d times", prevVal, prevCount)
+			prevVal, prevCount = count, 1
+		} else {
+			prevCount++
+		}
+
+		if seenDirty && count == 0 {
+			// expect that all following count is zero
+			sum := 0
+			for i := 0; i < 10; i++ {
+				c := <-dirtyCountCh
+				sum += c
+			}
+			if sum == 0 {
+				// 10 zeros were found, can stop
+				return false, nil
+			}
+		}
+		return true, nil
+	}))
+}
+
+func TestDirtyWatchRace(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+
+	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
+
+	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher.WithDelay(10 * time.Nanosecond)
+
+	wg := &sync.WaitGroup{}
+
+	addRow := func() {
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		tbl.Append(catalog.MockBatch(schema, 1))
+		assert.NoError(t, txn.Commit())
+		wg.Done()
+	}
+
+	pool, _ := ants.NewPool(5)
+
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		pool.Submit(addRow)
+	}
+
+	// test race
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			for j := 0; j < 300; j++ {
+				time.Sleep(5 * time.Millisecond)
+				watcher.Run()
+				// tbl, seg, blk := watcher.DirtyCount()
+				// t.Logf("t%d: tbl %d, seg %d, blk %d", i, tbl, seg, blk)
+				_, _, _ = watcher.DirtyCount()
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
 }
