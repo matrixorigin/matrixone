@@ -163,7 +163,7 @@ var dummySerializeExecPlan = func(plan any, _ uuid.UUID) ([]byte, int64, int64) 
 	if err != nil {
 		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), 0, 0
 	}
-	return json, 0, 0
+	return json, 1, 1
 }
 
 var dummySerializeExecPlan2 = func(plan any, _ uuid.UUID) ([]byte, int64, int64) {
