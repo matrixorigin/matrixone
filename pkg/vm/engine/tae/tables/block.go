@@ -833,7 +833,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	if keyselects == nil {
 		panic("unexpected error")
 	}
-	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
+	metaLoc := blk.meta.GetMetaLoc()
 	sortKey, err := blk.ResolveColumnFromMeta(
 		metaLoc,
 		txn.GetStartTS(),
