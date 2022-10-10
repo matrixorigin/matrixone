@@ -174,7 +174,12 @@ func (be *DBBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool) 
 	if un == nil {
 		return
 	}
-	visible, dropped = true, un.(*DBMVCCNode).HasDropped()
+	visible = true
+	if un.IsSameTxn(ts) {
+		dropped = un.(*DBMVCCNode).HasDropIntent()
+	} else {
+		dropped = un.(*DBMVCCNode).HasDropped()
+	}
 	return
 }
 

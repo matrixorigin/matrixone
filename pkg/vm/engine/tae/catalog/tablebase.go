@@ -174,11 +174,12 @@ func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped boo
 	if un == nil {
 		return
 	}
-	if un.(*TableMVCCNode).HasDropped() {
-		visible, dropped = true, true
-		return
+	visible = true
+	if un.IsSameTxn(ts) {
+		dropped = un.(*TableMVCCNode).HasDropIntent()
+	} else {
+		dropped = un.(*TableMVCCNode).HasDropped()
 	}
-	visible, dropped = true, un.(*TableMVCCNode).HasDropped()
 	return
 }
 

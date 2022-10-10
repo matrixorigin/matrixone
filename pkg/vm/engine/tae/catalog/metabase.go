@@ -248,7 +248,12 @@ func (be *MetaBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool
 	if un == nil {
 		return
 	}
-	visible, dropped = true, un.(*MetadataMVCCNode).HasDropped()
+	visible = true
+	if un.IsSameTxn(ts) {
+		dropped = un.(*MetadataMVCCNode).HasDropIntent()
+	} else {
+		dropped = un.(*MetadataMVCCNode).HasDropped()
+	}
 	return
 }
 

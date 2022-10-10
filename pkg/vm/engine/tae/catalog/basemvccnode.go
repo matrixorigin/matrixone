@@ -31,7 +31,13 @@ func NewEntryMVCCNode() *EntryMVCCNode {
 	return &EntryMVCCNode{}
 }
 
+// Dropped committed
 func (un *EntryMVCCNode) HasDropped() bool {
+	return !un.DeletedAt.IsEmpty() && un.DeletedAt != txnif.UncommitTS
+}
+
+// Dropped committed or uncommitted
+func (un *EntryMVCCNode) HasDropIntent() bool {
 	return !un.DeletedAt.IsEmpty()
 }
 
