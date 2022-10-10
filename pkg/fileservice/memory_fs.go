@@ -214,7 +214,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
-func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
+func (m *MemoryFS) Delete(ctx context.Context, filePath ...string) error {
 	m.Lock()
 	defer m.Unlock()
 

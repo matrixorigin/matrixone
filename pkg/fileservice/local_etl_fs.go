@@ -348,7 +348,7 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 	return
 }
 
-func (l *LocalETLFS) Delete(ctx context.Context, filePath string) error {
+func (l *LocalETLFS) Delete(ctx context.Context, filePath ...string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err
