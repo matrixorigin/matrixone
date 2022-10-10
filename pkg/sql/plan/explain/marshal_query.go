@@ -527,6 +527,9 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	return labels, nil
 }
 
+var InputRows = "Input Rows"
+var InputSize = "Input Size"
+
 func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
 	if options.Analyze && m.node.AnalyzeInfo != nil {

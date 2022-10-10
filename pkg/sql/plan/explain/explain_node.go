@@ -33,6 +33,9 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	}
 }
 
+var TableScan = "Table Scan"
+var ExternalScan = "External Scan"
+
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string, error) {
 	var result string
 	var pname string /* node type name for text output */
