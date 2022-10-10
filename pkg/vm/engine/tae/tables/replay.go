@@ -100,12 +100,6 @@ func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	return
 }
 
-func (blk *dataBlock) OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error) {
-	chain := blk.mvcc.GetColumnChain(colIdx)
-	chain.OnReplayUpdateNode(node)
-	return
-}
-
 func (blk *dataBlock) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
 	blk.node.block.mvcc.OnReplayAppendNode(an)

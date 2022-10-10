@@ -17,6 +17,7 @@ package moengine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -55,35 +56,7 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	allNullables := schema.AllNullables()
-	bat := containers.NewEmptyBatch()
-	defer bat.Close()
-	for i, vec := range data.Vecs {
-		idx := catalog.GetAttrIdx(schema.AllNames(), data.Attrs[i])
-		if vec.Typ.Oid == types.T_any {
-			vec.Typ = schema.ColDefs[idx].Type
-			logutil.Warn("[Moengine]", common.OperationField("Update"),
-				common.OperandField("Col type is any"))
-		}
-		v := containers.NewVectorWithSharedMemory(vec, allNullables[idx])
-		bat.AddVector(data.Attrs[i], v)
-	}
-	phyAddrIdx := catalog.GetAttrIdx(data.Attrs, schema.PhyAddrKey.Name)
-	for idx := 0; idx < bat.Vecs[phyAddrIdx].Length(); idx++ {
-		v := bat.Vecs[phyAddrIdx].Get(idx)
-		for i, attr := range bat.Attrs {
-			if schema.PhyAddrKey.Name == attr {
-				continue
-			}
-			colIdx := schema.GetColIdx(attr)
-			err := rel.handle.UpdateByPhyAddrKey(v, colIdx, bat.Vecs[i].Get(idx))
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return moerr.NewNYI("Update not supported")
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
