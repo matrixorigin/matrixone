@@ -161,7 +161,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	}
 	if err != nil {
 		ctr.clean()
-		ctr.cleanBatch(proc)
+		ctr.cleanBatch(proc.Mp())
 		return err
 	}
 	return nil
@@ -281,12 +281,5 @@ func (ctr *container) clean() {
 	if ctr.strHashMap != nil {
 		ctr.strHashMap.Free()
 		ctr.strHashMap = nil
-	}
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
 	}
 }

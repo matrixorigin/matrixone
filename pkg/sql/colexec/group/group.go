@@ -173,7 +173,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
 		ctr.clean()
-		ctr.cleanBatch(proc)
+		ctr.cleanBatch(proc.Mp())
 		return false, err
 	}
 	defer ctr.freeAggVector(proc)
@@ -190,7 +190,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				}
 			}
 			ctr.clean()
-			ctr.cleanBatch(proc)
+			ctr.cleanBatch(proc.Mp())
 			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
@@ -243,13 +243,13 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		case size <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				ctr.cleanBatch(proc)
+				ctr.cleanBatch(proc.Mp())
 				return false, err
 			}
 		default:
 			ctr.typ = HStr
 			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				ctr.cleanBatch(proc)
+				ctr.cleanBatch(proc.Mp())
 				return false, err
 			}
 		}
@@ -262,7 +262,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 	if err != nil {
 		ctr.clean()
-		ctr.cleanBatch(proc)
+		ctr.cleanBatch(proc.Mp())
 		return false, err
 	}
 	return false, err
@@ -399,12 +399,5 @@ func (ctr *container) clean() {
 	if ctr.strHashMap != nil {
 		ctr.strHashMap.Free()
 		ctr.strHashMap = nil
-	}
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
 	}
 }

@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
@@ -29,4 +30,8 @@ type DeleteCtx struct {
 	TableSource  engine.Relation
 	UseDeleteKey string
 	CanTruncate  bool
+}
+
+func (arg *Argument) Free(_ *process.Process) {
+	return
 }

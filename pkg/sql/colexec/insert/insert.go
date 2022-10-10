@@ -39,6 +39,10 @@ type Argument struct {
 	CPkeyColDef   *plan.ColDef
 }
 
+func (arg *Argument) Free(_ *process.Process) {
+	return
+}
+
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }

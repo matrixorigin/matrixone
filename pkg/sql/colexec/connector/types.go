@@ -22,3 +22,10 @@ import (
 type Argument struct {
 	Reg *process.WaitRegister
 }
+
+func (arg *Argument) Free(_ *process.Process) {
+	select {
+	case arg.Reg.Ch <- nil:
+	case <-arg.Reg.Ctx.Done():
+	}
+}

@@ -29,3 +29,12 @@ type Argument struct {
 	vecs []*vector.Vector
 	Regs []*process.WaitRegister
 }
+
+func (arg *Argument) Free(_ *process.Process) {
+	for i := range arg.Regs {
+		select {
+		case <-arg.Regs[i].Ctx.Done():
+		case arg.Regs[i].Ch <- nil:
+		}
+	}
+}

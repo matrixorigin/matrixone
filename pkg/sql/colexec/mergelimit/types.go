@@ -14,6 +14,8 @@
 
 package mergelimit
 
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
+
 const (
 	Eval = iota
 	End
@@ -29,4 +31,8 @@ type Argument struct {
 	Limit uint64
 	// ctr stores the attributes needn't do Serialization work
 	ctr *container
+}
+
+func (arg *Argument) Free(_ *process.Process) {
+	return
 }

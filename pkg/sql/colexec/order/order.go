@@ -41,7 +41,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	{
 		ap.ctr.desc = make([]bool, len(ap.Fs))
 		ap.ctr.nullsLast = make([]bool, len(ap.Fs))
@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return ap.ctr.process(ap, bat, proc)
 }
 
-func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
+func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
 		if vec.IsOriginal() {

@@ -14,7 +14,13 @@
 
 package offset
 
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
+
 type Argument struct {
 	Seen   uint64 // seen is the number of tuples seen so far
 	Offset uint64
+}
+
+func (arg *Argument) Free(_ *process.Process) {
+	return
 }

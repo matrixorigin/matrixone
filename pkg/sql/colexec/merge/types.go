@@ -14,10 +14,16 @@
 
 package merge
 
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
+
 type container struct {
 	i int
 }
 
 type Argument struct {
 	ctr *container
+}
+
+func (arg *Argument) Free(_ *process.Process) {
+	return
 }

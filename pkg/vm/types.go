@@ -14,6 +14,8 @@
 
 package vm
 
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
+
 const (
 	Top = iota
 	Join
@@ -60,6 +62,11 @@ const (
 	Unnest
 )
 
+type InstructionArgument interface {
+	// Free release all memory allocated from mPool in an operator.
+	Free(process *process.Process)
+}
+
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.
@@ -67,7 +74,7 @@ type Instruction struct {
 	// Idx specified the anaylze information index.
 	Idx int
 	// Arg contains the operand of this instruction.
-	Arg any
+	Arg InstructionArgument
 }
 
 type Instructions []Instruction

@@ -14,8 +14,15 @@
 
 package restrict
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type Argument struct {
 	E *plan.Expr
+}
+
+func (arg *Argument) Free(_ *process.Process) {
+	return
 }
