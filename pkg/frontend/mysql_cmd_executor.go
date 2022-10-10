@@ -1808,11 +1808,6 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
-	incStatementCounter("0", stmt)
-}
-
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
@@ -1869,8 +1864,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var err2 error
 	var columns []interface{}
 
-	stmt0 := cws[0].GetAst()
-	mce.beforeRun(stmt0)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
@@ -2370,6 +2363,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 	handleSucceeded:
 		//load data handle txn failure internally
+		incStatementCounter(tenant, stmt)
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
@@ -2419,6 +2413,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
 		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
