@@ -668,7 +668,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		return
 	}
 	for i := len(rows) - 1; i >= 0; i-- {
-		row := rows[i]
+		row = rows[i]
 		appendnode := blk.GetAppendNodeByRow(row)
 		needWait, txn := appendnode.NeedWaitCommitting(ts)
 		if needWait {
@@ -679,18 +679,13 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
 			continue
 		}
-		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
-		if deleteNode == nil {
-			return row, nil
+		var deleted bool
+		deleted, err = blk.mvcc.IsDeletedLocked(row, ts, blk.mvcc.RWMutex)
+		if err != nil {
+			return
 		}
-		needWait, txn = deleteNode.NeedWaitCommitting(ts)
-		if needWait {
-			blk.mvcc.RUnlock()
-			txn.GetTxnState(true)
-			blk.mvcc.RLock()
-		}
-		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
-			return row, nil
+		if !deleted {
+			return
 		}
 	}
 	return 0, moerr.NewNotFound()
