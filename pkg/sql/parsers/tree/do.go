@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,38 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package tree
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
-type Param struct {
-	Attrs   []string
-	Cols    []*plan.ColDef
-	Extern  *ExternalParam
-	filters []string
-	colName string
-	seq     int32
-	isCol   bool // use to mark the unnest args is from column in table
-	path    string
-	outer   bool
+// Do statement
+type Do struct {
+	statementImpl
+	Exprs []Expr
 }
 
-type Argument struct {
-	Es *Param
+func (node *Do) Format(ctx *FmtCtx) {
+	ctx.WriteString("do ")
+	for _, e := range node.Exprs {
+		e.Format(ctx)
+	}
 }
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
-}
-
-var (
-	deniedFilters = []string{"col", "seq"}
-)
-
-const (
-	mode      = "both"
-	recursive = false
-)

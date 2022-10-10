@@ -12,38 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unnest
+package external
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
-type Param struct {
-	Attrs   []string
-	Cols    []*plan.ColDef
-	Extern  *ExternalParam
-	filters []string
-	colName string
-	seq     int32
-	isCol   bool // use to mark the unnest args is from column in table
-	path    string
-	outer   bool
-}
-
-type Argument struct {
-	Es *Param
-}
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
-}
-
-var (
-	deniedFilters = []string{"col", "seq"}
-)
-
-const (
-	mode      = "both"
-	recursive = false
-)
+const NULL_FLAG = "\\N"

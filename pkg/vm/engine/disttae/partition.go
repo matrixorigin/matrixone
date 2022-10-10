@@ -70,6 +70,21 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 	panic("unimplemented")
 }
 
+func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	if _, err := p.data.Get(tx, RowID(key)); err != nil {
+		return false
+	}
+	return true
+}
+
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {

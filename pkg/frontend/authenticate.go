@@ -2834,7 +2834,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.Insert, *tree.Load, *tree.Import:
+	case *tree.Insert, *tree.Load, *tree.Import, *tree.Do:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Update:
@@ -2863,6 +2863,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.Execute:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.Declare:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *InternalCmdFieldList:
@@ -4187,7 +4190,7 @@ handleFailed:
 
 // createTablesInInformationSchema creates the database information_schema and the views or tables.
 func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	err := bh.Exec(ctx, "create database information_schema;")
+	err := bh.Exec(ctx, "create database if not exists information_schema;")
 	if err != nil {
 		return err
 	}
