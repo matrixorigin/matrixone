@@ -60,6 +60,9 @@ func (be *MetaBaseEntry) PPString(level common.PPLevel, depth int, prefix string
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
+func (be *MetaBaseEntry) HasPersistedData() bool {
+	return be.GetMetaLoc() != ""
+}
 func (be *MetaBaseEntry) GetMetaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
@@ -68,6 +71,9 @@ func (be *MetaBaseEntry) GetMetaLoc() string {
 	}
 	str := be.GetLatestNodeLocked().(*MetadataMVCCNode).MetaLoc
 	return str
+}
+func (be *MetaBaseEntry) HasPersistedDeltaData() bool {
+	return be.GetDeltaLoc() != ""
 }
 func (be *MetaBaseEntry) GetDeltaLoc() string {
 	be.RLock()
