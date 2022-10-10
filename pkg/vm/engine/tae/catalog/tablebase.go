@@ -62,7 +62,7 @@ func (be *TableBaseEntry) PPString(level common.PPLevel, depth int, prefix strin
 }
 
 func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func (be *TableBaseEntry) IsCreating() bool {
 }
 
 func (be *TableBaseEntry) IsDroppedCommitted() bool {
-	un := be.GetCommittedNode()
+	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
 	}
@@ -154,7 +154,7 @@ func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
 }
 
 func (be *TableBaseEntry) HasDropped() bool {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return false
 	}

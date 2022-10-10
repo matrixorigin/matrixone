@@ -92,7 +92,7 @@ func (be *MetaBaseEntry) GetVisibleDeltaLoc(ts types.TS) string {
 	return str
 }
 func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return
 	}
@@ -205,7 +205,7 @@ func (be *MetaBaseEntry) IsCreating() bool {
 }
 
 func (be *MetaBaseEntry) IsDroppedCommitted() bool {
-	un := be.GetCommittedNode()
+	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
 	}
@@ -228,7 +228,7 @@ func (be *MetaBaseEntry) HasDropped() bool {
 }
 
 func (be *MetaBaseEntry) HasDroppedLocked() bool {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return false
 	}
