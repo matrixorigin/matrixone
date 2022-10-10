@@ -11,9 +11,10 @@ create database t012345678901234567890123456789012345678901234567890123456789012
 show databases;
 Database
 mo_catalog
-information_schema
 system
 system_metrics
+mysql
+information_schema
 create_database
 test01
 测试数据库
@@ -33,9 +34,10 @@ create database if not exists db1;
 show schemas;
 Database
 mo_catalog
-information_schema
 system
 system_metrics
+mysql
+information_schema
 create_database
 db1
 drop database if exists db1;
