@@ -75,6 +75,7 @@ var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
+var multiTable = false // need set before newMetricFSCollector and initTables
 
 var inited uint32
 
@@ -91,14 +92,15 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
-		moCollector = newMetricFSCollector(initOpts.writerFactory)
+		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
 	} else {
-		moCollector = newMetricCollector(ieFactory)
+		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
+	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
 		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
@@ -122,6 +124,8 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		}()
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
+
+	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
 }
 
 func StopMetricSync() {
@@ -141,6 +145,8 @@ func StopMetricSync() {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
+	// mark inited = false
+	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
 }
 
 func mustRegiterToProm(collector prom.Collector) {
@@ -195,11 +201,19 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 		close(descChan)
 	}()
 
-	optFactory := trace.GetOptionFactory(batchProcessMode)
-	buf := new(bytes.Buffer)
-	for desc := range descChan {
-		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
-		mustExec(sql)
+	if !multiTable {
+		mustExec(singleMetricTable.ToCreateSql(true))
+		for desc := range descChan {
+			sql := createView(desc)
+			mustExec(sql)
+		}
+	} else {
+		optFactory := trace.GetOptionFactory(trace.ExternalTableEngine)
+		buf := new(bytes.Buffer)
+		for desc := range descChan {
+			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
+			mustExec(sql)
+		}
 	}
 
 	createCost = time.Since(instant)
@@ -226,6 +240,16 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 	buf.WriteRune(')')
 	buf.WriteString(opts.GetTableOptions())
 	return buf.String()
+}
+
+func createView(desc *prom.Desc) string {
+	extra := newDescExtra(desc)
+	var labelNames = make([]string, 0, len(extra.labels))
+	for _, lbl := range extra.labels {
+		labelNames = append(labelNames, lbl.GetName())
+	}
+	view := GetMetricViewWithLabels(extra.fqName, labelNames)
+	return view.ToCreateSql(true)
 }
 
 type descExtra struct {
@@ -263,6 +287,10 @@ type InitOptions struct {
 	writerFactory export.FSWriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
+	// initSingleTable
+	multiTable bool // see WithMultiTable
+	// exportInterval
+	exportInterval time.Duration // see WithExportInterval
 }
 
 type InitOption func(*InitOptions)
@@ -281,4 +309,89 @@ func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.needInitTable = init
 	})
+}
+
+func WithMultiTable(multi bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.multiTable = multi
+	})
+}
+
+func WithExportInterval(sec int) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.exportInterval = time.Second * time.Duration(sec)
+	})
+}
+
+var (
+	metricNameColumn        = trace.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	metricCollectTimeColumn = trace.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
+	metricValueColumn       = trace.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
+	metricNodeColumn        = trace.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
+	metricRoleColumn        = trace.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
+	metricAccountColumn     = trace.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
+	metricTypeColumn        = trace.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
+)
+
+var singleMetricTable = &trace.Table{
+	Database:         MetricDBConst,
+	Table:            `metric`,
+	Columns:          []trace.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
+	PrimaryKeyColumn: []trace.Column{},
+	Engine:           trace.ExternalTableEngine,
+	Comment:          `metric data`,
+	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
+}
+
+type ViewWhereCondition struct {
+	Table string
+}
+
+func NewMetricView(tbl string, opts ...trace.ViewOption) *trace.View {
+	view := &trace.View{
+		Database:    MetricDBConst,
+		Table:       tbl,
+		OriginTable: singleMetricTable,
+		Columns:     []trace.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
+		Condition:   &ViewWhereCondition{Table: tbl},
+	}
+	for _, opt := range opts {
+		opt.Apply(view)
+	}
+	return view
+}
+
+func NewMetricViewWithLabels(tbl string, lbls []string) *trace.View {
+	var options []trace.ViewOption
+	for _, label := range lbls {
+		for _, col := range singleMetricTable.Columns {
+			if strings.EqualFold(label, col.Name) {
+				options = append(options, trace.WithColumn(col))
+			}
+		}
+	}
+	return NewMetricView(tbl, options...)
+}
+
+func (tbl *ViewWhereCondition) String() string {
+	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
+}
+
+var gView struct {
+	content map[string]*trace.View
+	mu      sync.Mutex
+}
+
+func GetMetricViewWithLabels(tbl string, lbls []string) *trace.View {
+	gView.mu.Lock()
+	defer gView.mu.Unlock()
+	if len(gView.content) == 0 {
+		gView.content = make(map[string]*trace.View)
+	}
+	view, exist := gView.content[tbl]
+	if !exist {
+		view = NewMetricViewWithLabels(tbl, lbls)
+		gView.content[tbl] = view
+	}
+	return view
 }

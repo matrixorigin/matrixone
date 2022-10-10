@@ -55,9 +55,7 @@ func TestCheckpoint1(t *testing.T) {
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		err := blk.Update(1, 3, int32(333))
-		assert.Nil(t, err)
-		err = blk.RangeDelete(3, 3, handle.DT_Normal)
+		err := blk.RangeDelete(3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}

@@ -20,7 +20,9 @@ import (
 )
 
 const (
+	Row_ID               = "__rowid"
 	PhyAddrColumnName    = "__mo_PADDR"
+	PrefixPriColName     = "__mo_cpkey_"
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 

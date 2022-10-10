@@ -192,10 +192,6 @@ func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	return
 }
 
-func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
-	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
-}
-
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {

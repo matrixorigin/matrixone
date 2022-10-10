@@ -17,10 +17,11 @@ package tree
 // the INSERT statement.
 type Insert struct {
 	statementImpl
-	Table          TableExpr
-	PartitionNames IdentifierList
-	Columns        IdentifierList
-	Rows           *Select
+	Table             TableExpr
+	PartitionNames    IdentifierList
+	Columns           IdentifierList
+	Rows              *Select
+	OnDuplicateUpdate *UpdateList
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -42,6 +43,10 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
+	if node.OnDuplicateUpdate != nil {
+		ctx.WriteByte(' ')
+		node.OnDuplicateUpdate.Format(ctx)
+	}
 }
 
 func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Insert {
@@ -56,4 +61,22 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 type Assignment struct {
 	Column Identifier
 	Expr   Expr
+}
+
+type UpdateList struct {
+	Columns IdentifierList
+	Rows    *Select
+}
+
+func (node *UpdateList) Format(ctx *FmtCtx) {
+	ctx.WriteString("on duplicate key update ")
+	if node.Columns != nil {
+		ctx.WriteString(" (")
+		node.Columns.Format(ctx)
+		ctx.WriteByte(')')
+	}
+	if node.Rows != nil {
+		ctx.WriteByte(' ')
+		node.Rows.Format(ctx)
+	}
 }
