@@ -40,7 +40,6 @@ type txnTable struct {
 	createEntry  txnif.TxnEntry
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
-	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
 	schema       *catalog.Schema
@@ -59,7 +58,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		store:       store,
 		entry:       entry,
 		schema:      entry.GetSchema(),
-		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
@@ -295,7 +293,6 @@ func (tbl *txnTable) Close() error {
 		}
 		tbl.localSegment = nil
 	}
-	tbl.updateNodes = nil
 	tbl.deleteNodes = nil
 	tbl.logs = nil
 	return nil
@@ -310,18 +307,6 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
-	tbl.txnEntries = append(tbl.txnEntries, node)
-	return nil
-}
-
-func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
-	id := *node.GetID()
-	u := tbl.updateNodes[id]
-	if u != nil {
-		return ErrDuplicateNode
-	}
-	tbl.store.IncreateWriteCnt()
-	tbl.updateNodes[id] = node
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -369,11 +354,8 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		chain := node.GetChain().(*updates.DeleteChain)
 		mvcc := chain.GetController()
 		mvcc.Lock()
-		err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
-		if err == nil {
-			if err = mvcc.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
-				node.RangeDeleteLocked(start, end)
-			}
+		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
+			node.RangeDeleteLocked(start, end)
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -457,58 +439,6 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	return block.GetValue(tbl.store.txn, int(row), int(col))
 }
 
-func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
-	chain := node.GetChain().(*updates.ColumnChain)
-	mvcc := chain.GetController()
-	mvcc.RLock()
-	if err = mvcc.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
-		chain.Lock()
-		err = chain.TryUpdateNodeLocked(row, v, node)
-		chain.Unlock()
-	}
-	mvcc.RUnlock()
-	return
-}
-
-func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
-	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
-		err = moerr.NewTAEError("update unique key")
-		return
-	}
-	if isLocalSegment(id) {
-		return tbl.UpdateLocalValue(row, col, v)
-	}
-	uid := *id
-	uid.Idx = col
-	node := tbl.updateNodes[uid]
-	if node != nil {
-		err = tbl.updateWithFineLock(node, tbl.store.txn, row, v)
-		if err != nil {
-			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
-			blk, _ := seg.GetBlockEntryByID(id.BlockID)
-			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
-		}
-		return
-	}
-	seg, err := tbl.entry.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		return
-	}
-	blk, err := seg.GetBlockEntryByID(id.BlockID)
-	if err != nil {
-		return
-	}
-	blkData := blk.GetBlockData()
-	node2, err := blkData.Update(tbl.store.txn, row, col, v)
-	if err == nil {
-		if err = tbl.AddUpdateNode(node2); err != nil {
-			return
-		}
-		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
-	}
-	return
-}
-
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
 	if err != nil {
@@ -543,18 +473,6 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) 
 	}
 	if isNewNode {
 		tbl.txnEntries = append(tbl.txnEntries, meta)
-	}
-	return
-}
-
-// 1. Get insert node and offset in node
-// 2. Get row
-// 3. Build a new row
-// 4. Delete the row in the node
-// 5. Append the new row
-func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value any) (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.Update(row, col, value)
 	}
 	return
 }

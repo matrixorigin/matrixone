@@ -258,13 +258,6 @@ func (blk *dataBlock) MutationInfo() string {
 	if totalChanges == 0 {
 		return s
 	}
-	for i := range blk.meta.GetSchema().ColDefs {
-		cnt := blk.mvcc.GetColumnUpdateCnt(uint16(i))
-		if cnt == 0 {
-			continue
-		}
-		s = fmt.Sprintf("%s, Col[%d]:%d/%d", s, i, cnt, rows)
-	}
 	deleteCnt := blk.mvcc.GetDeleteCnt()
 	if deleteCnt != 0 {
 		s = fmt.Sprintf("%s, Del:%d/%d", s, deleteCnt, rows)
@@ -385,14 +378,6 @@ func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *dataBlock) FillColumnUpdates(view *model.ColumnView) (err error) {
-	chain := blk.mvcc.GetColumnChain(uint16(view.ColIdx))
-	chain.RLock()
-	view.UpdateMask, view.UpdateVals, err = chain.CollectUpdatesLocked(view.Ts)
-	chain.RUnlock()
-	return
-}
-
 func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.RWMutex) (err error) {
 	deleteChain := blk.mvcc.GetDeleteChain()
 	n, err := deleteChain.CollectDeletesLocked(view.Ts, false, rwlocker)
@@ -402,20 +387,6 @@ func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.R
 	dnode := n.(*updates.DeleteNode)
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
-	return
-}
-
-func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err error) {
-	chain := blk.mvcc.GetColumnChain(colIdx)
-	chain.RLock()
-	updateMask, updateVals, err := chain.CollectUpdatesLocked(view.Ts)
-	chain.RUnlock()
-	if err != nil {
-		return
-	}
-	if updateMask != nil {
-		view.SetUpdates(int(colIdx), updateMask, updateVals)
 	}
 	return
 }
@@ -466,10 +437,7 @@ func (blk *dataBlock) ResolveColumnFromMeta(
 	view.SetData(raw)
 
 	blk.mvcc.RLock()
-	err = blk.FillColumnUpdates(view)
-	if err == nil {
-		err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
-	}
+	err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
 	if err != nil {
 		return
@@ -502,10 +470,7 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	}
 	view.SetData(data)
 	blk.mvcc.RLock()
-	err = blk.FillColumnUpdates(view)
-	if err == nil {
-		err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
-	}
+	err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
 	if err != nil {
 		return
@@ -523,46 +488,16 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	return
 }
 
-func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
-	if blk.meta.GetSchema().PhyAddrKey.Idx == int(colIdx) {
-		err = moerr.NewTAEError("update physical addr key")
-		return
-	}
-	return blk.updateWithFineLock(txn, row, colIdx, v)
-}
-
-func (blk *dataBlock) updateWithFineLock(
-	txn txnif.AsyncTxn,
-	row uint32,
-	colIdx uint16,
-	v any) (node txnif.UpdateNode, err error) {
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
-	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
-	if err == nil {
-		chain := blk.mvcc.GetColumnChain(colIdx)
-		chain.Lock()
-		node = chain.AddNodeLocked(txn)
-		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-			chain.DeleteNodeLocked(node.(*updates.ColumnUpdateNode))
-		}
-		chain.Unlock()
-	}
-	return
-}
-
 func (blk *dataBlock) RangeDelete(
 	txn txnif.AsyncTxn,
 	start, end uint32, dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.mvcc.Lock()
 	defer blk.mvcc.Unlock()
-	err = blk.mvcc.CheckNotDeleted(start, end, txn.GetStartTS())
-	if err == nil {
-		if err = blk.mvcc.CheckNotUpdated(start, end, txn.GetStartTS()); err == nil {
-			node = blk.mvcc.CreateDeleteNode(txn, dt)
-			node.RangeDeleteLocked(start, end)
-		}
+	if err = blk.mvcc.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
+		return
 	}
+	node = blk.mvcc.CreateDeleteNode(txn, dt)
+	node.RangeDeleteLocked(start, end)
 	return
 }
 
@@ -574,20 +509,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		blk.mvcc.RUnlock()
 		return
 	}
-	if !deleted {
-		chain := blk.mvcc.GetColumnChain(uint16(col))
-		chain.RLock()
-		v, err = chain.GetValueLocked(uint32(row), ts)
-		chain.RUnlock()
-		if moerr.IsMoErrCode(err, moerr.ErrTxnError) {
-			blk.mvcc.RUnlock()
-			return
-		}
-		if err != nil {
-			v = nil
-			err = nil
-		}
-	} else {
+	if deleted {
 		err = moerr.NewNotFound()
 	}
 	blk.mvcc.RUnlock()
@@ -862,21 +784,6 @@ func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes 
 func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
 	view = model.NewBlockView(endTs)
 	blk.mvcc.RLock()
-
-	for i := range blk.meta.GetSchema().ColDefs {
-		chain := blk.mvcc.GetColumnChain(uint16(i))
-		chain.RLock()
-		updateMask, updateVals, indexes, err := chain.CollectCommittedInRangeLocked(startTs, endTs)
-		chain.RUnlock()
-		if err != nil {
-			blk.mvcc.RUnlock()
-			return view, err
-		}
-		if updateMask != nil {
-			view.SetUpdates(i, updateMask, updateVals)
-			view.SetLogIndexes(i, indexes)
-		}
-	}
 	deleteChain := blk.mvcc.GetDeleteChain()
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
