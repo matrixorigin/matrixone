@@ -76,29 +76,17 @@ func (chain *DeleteChain) StringLocked() string {
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
 func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
-	chain.LoopChain(
-		func(vn txnif.MVCCNode) (goNext bool) {
-			n := vn.(*DeleteNode)
-			if n.GetStartTS().Greater(ts) {
-				return true
-			}
-			if n.HasOverlapLocked(row, row) {
-				needWait, txnToWait := n.NeedWaitCommitting(ts)
-				if needWait {
-					rwlocker.RUnlock()
-					txnToWait.GetTxnState(true)
-					rwlocker.RLock()
-				}
-				if n.IsVisible(ts) {
-					deleted = true
-				}
-			}
-			if n.IsMerged() || deleted || err != nil {
-				return false
-			}
-			return true
-		})
-	return
+	deleteNode := chain.GetDeleteNodeByRow(row)
+	if deleteNode == nil {
+		return false, nil
+	}
+	needWait, txn := deleteNode.NeedWaitCommitting(ts)
+	if needWait {
+		rwlocker.RUnlock()
+		txn.GetTxnState(true)
+		rwlocker.RLock()
+	}
+	return deleteNode.IsVisible(ts), nil
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
