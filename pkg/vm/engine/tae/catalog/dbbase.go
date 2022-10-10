@@ -66,7 +66,7 @@ func (be *DBBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated boo
 	if node == nil {
 		return
 	}
-	if node.(*DBMVCCNode).HasDropped() {
+	if node.(*DBMVCCNode).HasDropCommitted() {
 		return true, node.(*DBMVCCNode).DeletedAt
 	}
 	return
@@ -141,7 +141,7 @@ func (be *DBBaseEntry) IsDroppedCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.(*DBMVCCNode).HasDropped()
+	return un.(*DBMVCCNode).HasDropCommitted()
 }
 
 func (be *DBBaseEntry) DoCompre(voe BaseEntry) int {
@@ -170,7 +170,7 @@ func (be *DBBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool) 
 	if un.IsSameTxn(ts) {
 		dropped = un.(*DBMVCCNode).HasDropIntent()
 	} else {
-		dropped = un.(*DBMVCCNode).HasDropped()
+		dropped = un.(*DBMVCCNode).HasDropCommitted()
 	}
 	return
 }

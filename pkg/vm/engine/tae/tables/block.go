@@ -230,7 +230,7 @@ func (blk *dataBlock) estimateABlkRawScore() (score int) {
 }
 
 func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
-	if blk.meta.HasDropped() {
+	if blk.meta.HasDropCommitted() {
 		dropped = true
 		return
 	}

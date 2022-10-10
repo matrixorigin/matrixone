@@ -32,7 +32,7 @@ func NewEntryMVCCNode() *EntryMVCCNode {
 }
 
 // Dropped committed
-func (un *EntryMVCCNode) HasDropped() bool {
+func (un *EntryMVCCNode) HasDropCommitted() bool {
 	return !un.DeletedAt.IsEmpty() && un.DeletedAt != txnif.UncommitTS
 }
 

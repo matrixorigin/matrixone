@@ -437,7 +437,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	blk, err := seg.GetBlockEntryByID(blockEntry.ID)
 	t.Log(blk.String())
 	assert.Nil(t, err)
-	assert.True(t, blk.HasDropped())
+	assert.True(t, blk.HasDropCommitted())
 	assert.True(t, blk.GetDeleteAt().Greater(endTs))
 	assert.True(t, blk.GetCreatedAt().Greater(startTs))
 	assert.Equal(t, blk.GetCreatedAt(), blockEntry.GetCreatedAt())

@@ -96,7 +96,7 @@ func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated b
 	if node == nil {
 		return
 	}
-	if node.(*MetadataMVCCNode).HasDropped() {
+	if node.(*MetadataMVCCNode).HasDropCommitted() {
 		return true, node.(*MetadataMVCCNode).DeletedAt
 	}
 	return
@@ -209,7 +209,7 @@ func (be *MetaBaseEntry) IsDroppedCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.(*MetadataMVCCNode).HasDropped()
+	return un.(*MetadataMVCCNode).HasDropCommitted()
 }
 
 func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
@@ -221,7 +221,7 @@ func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
 	return CompareUint64(be.ID, oe.ID)
 }
 
-func (be *MetaBaseEntry) HasDropped() bool {
+func (be *MetaBaseEntry) HasDropCommitted() bool {
 	be.RLock()
 	defer be.RUnlock()
 	return be.HasDroppedLocked()
@@ -232,7 +232,7 @@ func (be *MetaBaseEntry) HasDroppedLocked() bool {
 	if node == nil {
 		return false
 	}
-	return node.(*MetadataMVCCNode).HasDropped()
+	return node.(*MetadataMVCCNode).HasDropCommitted()
 }
 
 func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -252,7 +252,7 @@ func (be *MetaBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool
 	if un.IsSameTxn(ts) {
 		dropped = un.(*MetadataMVCCNode).HasDropIntent()
 	} else {
-		dropped = un.(*MetadataMVCCNode).HasDropped()
+		dropped = un.(*MetadataMVCCNode).HasDropCommitted()
 	}
 	return
 }

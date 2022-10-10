@@ -222,7 +222,7 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
 		itBlk := it.Get().GetPayload()
-		dropped := itBlk.HasDropped()
+		dropped := itBlk.HasDropCommitted()
 		if itBlk.IsAppendable() && !dropped {
 			blk = itBlk
 			break

@@ -66,7 +66,7 @@ func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated 
 	if node == nil {
 		return
 	}
-	if node.(*TableMVCCNode).HasDropped() {
+	if node.(*TableMVCCNode).HasDropCommitted() {
 		return true, node.(*TableMVCCNode).DeletedAt
 	}
 	return
@@ -141,7 +141,7 @@ func (be *TableBaseEntry) IsDroppedCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.(*TableMVCCNode).HasDropped()
+	return un.(*TableMVCCNode).HasDropCommitted()
 }
 
 func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
@@ -153,12 +153,12 @@ func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
 	return CompareUint64(be.ID, oe.ID)
 }
 
-func (be *TableBaseEntry) HasDropped() bool {
+func (be *TableBaseEntry) HasDropCommitted() bool {
 	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return false
 	}
-	return node.(*TableMVCCNode).HasDropped()
+	return node.(*TableMVCCNode).HasDropCommitted()
 }
 
 func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -178,7 +178,7 @@ func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped boo
 	if un.IsSameTxn(ts) {
 		dropped = un.(*TableMVCCNode).HasDropIntent()
 	} else {
-		dropped = un.(*TableMVCCNode).HasDropped()
+		dropped = un.(*TableMVCCNode).HasDropCommitted()
 	}
 	return
 }
@@ -208,7 +208,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode boo
 	if err != nil {
 		return
 	}
-	if be.HasDropped() {
+	if be.HasDropCommitted() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
@@ -231,7 +231,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 		}
 	}
 	if txn == nil || be.GetTxn() != txn {
-		if !be.HasDropped() {
+		if !be.HasDropCommitted() {
 			return moerr.NewDuplicate()
 		}
 	} else {
