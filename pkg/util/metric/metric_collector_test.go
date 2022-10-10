@@ -90,7 +90,7 @@ func TestCollector(t *testing.T) {
 			}},
 			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
+					Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
 				},
 			}},
@@ -153,17 +153,23 @@ func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
+func dummyInitView(tbls []string) {
+	for _, tbl := range tbls {
+		GetMetricViewWithLabels(tbl, []string{metricTypeColumn.Name, metricAccountColumn.Name})
+	}
+}
 
 func TestCsvFSCollector(t *testing.T) {
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
-	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
+	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
+	dummyInitView(names)
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
@@ -173,7 +179,7 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
+					Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
 				},
 			}},
@@ -190,11 +196,11 @@ func TestCsvFSCollector(t *testing.T) {
 			}},
 		})
 	}()
-	instant := time.Now()
-	valuesRe := regexp.MustCompile(`(.+[,]?)+\n`) // find pattern like **{str}**,**{num}**,**{time}**\n
-	nameAndValueCnt := func(n, s string) (name string, cnt int) {
+	M1ValuesRe := regexp.MustCompile(`m1,(.*[,]?)+\n`) // find pattern like m1,...,...,...\n
+	M2ValuesRe := regexp.MustCompile(`m2,(.*[,]?)+\n`) // find pattern like m2,...,...,...\n
+	nameAndValueCnt := func(n, s string, re *regexp.Regexp) (name string, cnt int) {
 		t.Logf("name: %s, csv: %s", n, s)
-		cnt = len(valuesRe.FindAllString(s, -1))
+		cnt = len(re.FindAllString(s, -1))
 		if cnt > 0 {
 			name = n
 		} else {
@@ -203,17 +209,14 @@ func TestCsvFSCollector(t *testing.T) {
 		return name, cnt
 	}
 
-	name, cnt := nameAndValueCnt(<-csvCh, <-csvCh)
-	if name != names[0] || cnt != 3 {
+	n, s := <-csvCh, <-csvCh
+	name, cnt := nameAndValueCnt(n, s, M1ValuesRe)
+	if name != singleMetricTable.GetName() || cnt != 3 {
 		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
 	}
 
-	name2, csvContent := <-csvCh, <-csvCh
-	if time.Since(instant) < 200*time.Millisecond {
-		t.Errorf("m2 should be flushed after a period")
-	}
-	name, cnt = nameAndValueCnt(name2, csvContent)
-	if name != names[1] || cnt != 2 {
+	name, cnt = nameAndValueCnt(n, s, M2ValuesRe)
+	if name != singleMetricTable.GetName() || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}
 }
