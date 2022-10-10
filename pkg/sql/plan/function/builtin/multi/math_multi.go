@@ -52,14 +52,14 @@ func generalMathMulti[T mathMultiT](funName string, vecs []*vector.Vector, proc 
 		rs := make([]T, 1)
 		ret_rs := cb(vs, rs, digits)
 
-		vec := vector.NewConstFixed(typ, 1, ret_rs[0])
+		vec := vector.NewConstFixed(typ, 1, ret_rs[0], proc.Mp())
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		return vec, nil
 	} else {
 		rs := make([]T, len(vs))
 		ret_rs := cb(vs, rs, digits)
 
-		vec := vector.NewWithFixed(typ, ret_rs, nulls.NewWithSize(len(ret_rs)), proc.GetMheap())
+		vec := vector.NewWithFixed(typ, ret_rs, nulls.NewWithSize(len(ret_rs)), proc.Mp())
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 
 		return vec, nil

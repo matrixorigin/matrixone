@@ -4,7 +4,7 @@
 
 The CASE statement for stored programs implements a complex conditional construct.
 
-Note: There is also a CASE operator, which differs from the `CASE` statement described here. See [Flow Control Functions](operators/flow-control-functions/case.md). The `CASE` statement cannot have an `ELSE NULL` clause, and it is terminated with `END CASE` instead of `END`.
+Note: There is also a CASE operator, which differs from the `CASE` statement described here. See [Flow Control Functions](operators/flow-control-functions/case-when.md). The `CASE` statement cannot have an `ELSE NULL` clause, and it is terminated with `END CASE` instead of `END`.
 
 If no `when_value` or `search_condition` matches the value tested and the `CASE` statement contains no `ELSE` clause, a `Case` not found for `CASE` statement error results.
 

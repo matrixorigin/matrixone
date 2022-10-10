@@ -15,10 +15,12 @@
 package memtable
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -85,19 +87,19 @@ func TestTable(t *testing.T) {
 
 }
 
+// time util
+func ts(i int64) Time {
+	return Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: i,
+		},
+	}
+}
+
 func TestTableIsolation(t *testing.T) {
 
 	// table
 	table := NewTable[Int, int, TestRow]()
-
-	// time util
-	ts := func(i int64) Time {
-		return Time{
-			Timestamp: timestamp.Timestamp{
-				PhysicalTime: i,
-			},
-		}
-	}
 
 	// tx 1
 	tx1 := NewTransaction("1", ts(1), SnapshotIsolation)
@@ -140,6 +142,93 @@ func TestTableIsolation(t *testing.T) {
 	n = 0
 	for ok := iter.First(); ok; ok = iter.Next() {
 		n++
+	}
+	assert.Equal(t, 1, n)
+
+}
+
+type Issue5388Row struct {
+	RowID memoryengine.ID
+	A     int
+	B     int
+}
+
+func (i Issue5388Row) Key() memoryengine.ID {
+	return i.RowID
+}
+
+func (i Issue5388Row) Value() Issue5388Row {
+	return i
+}
+
+func (i Issue5388Row) Indexes() []Tuple {
+	return nil
+}
+
+func TestIssue5388(t *testing.T) {
+	table := NewTable[memoryengine.ID, Issue5388Row, Issue5388Row]()
+
+	newID := func() ID {
+		id, err := memoryengine.RandomIDGenerator.NewID(context.Background())
+		assert.Nil(t, err)
+		return id
+	}
+
+	// insert 10, 10
+	tx1 := NewTransaction("1", ts(1), SnapshotIsolation)
+	id1 := newID()
+	assert.Nil(t, table.Insert(tx1, Issue5388Row{
+		RowID: id1,
+		A:     10,
+		B:     10,
+	}))
+	assert.Nil(t, tx1.Commit(ts(1)))
+
+	tx2 := NewTransaction("2", ts(2), SnapshotIsolation)
+	// set a = a - 1
+	assert.Nil(t, table.Delete(tx2, id1))
+	id2 := newID()
+	assert.Nil(t, table.Insert(tx2, Issue5388Row{
+		RowID: id2,
+		A:     9,
+		B:     10,
+	}))
+	// set b = b + 1
+	assert.Nil(t, table.Delete(tx2, id2))
+	id3 := newID()
+	assert.Nil(t, table.Insert(tx2, Issue5388Row{
+		RowID: id3,
+		A:     9,
+		B:     11,
+	}))
+
+	// concurrent tx
+	tx3 := NewTransaction("3", ts(3), SnapshotIsolation)
+
+	// read before tx2 commit
+	iter := table.NewIter(tx3)
+	n := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+		_, value, err := iter.Read()
+		assert.Nil(t, err)
+		assert.Equal(t, 10, value.A)
+		assert.Equal(t, 10, value.B)
+	}
+	assert.Equal(t, 1, n)
+
+	// tx2 commit
+	assert.Nil(t, tx2.Commit(ts(4)))
+
+	// read after tx2 commit
+	iter = table.NewIter(tx3)
+	n = 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+		_, value, err := iter.Read()
+		assert.Nil(t, err)
+		assert.Equal(t, 10, value.A)
+		assert.Equal(t, 10, value.B)
 	}
 	assert.Equal(t, 1, n)
 

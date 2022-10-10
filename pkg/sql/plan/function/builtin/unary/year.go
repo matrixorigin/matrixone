@@ -31,7 +31,7 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultValues := make([]int64, 1)
 		DateToYearPlan2(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, 1, resultValues[0]), nil
+		return vector.NewConstFixed(resultType, 1, resultValues[0], proc.Mp()), nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
@@ -81,7 +81,7 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		}
 		resultValues := make([]int64, 1)
 		DateStringToYearPlan2(inputValues, nil, resultValues)
-		return vector.NewConstFixed(resultType, 1, resultValues[0]), nil
+		return vector.NewConstFixed(resultType, 1, resultValues[0], proc.Mp()), nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {

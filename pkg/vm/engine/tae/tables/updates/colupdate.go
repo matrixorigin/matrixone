@@ -357,7 +357,6 @@ func (node *ColumnUpdateNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.txn = nil
 	node.logIndex = index
-	node.chain.mvcc.SetMaxVisible(node.commitTs)
 	node.chain.mvcc.IncChangeNodeCnt()
 	return
 }

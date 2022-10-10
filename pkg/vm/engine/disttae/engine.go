@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,27 +26,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	m *mheap.Mheap,
+	proc *process.Process,
 	ctx context.Context,
 	cli client.TxnClient,
+	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
-		return nil
+		panic(err)
+	}
+	db := newDB(cli, cluster.DNStores)
+	if err := db.init(ctx, proc.Mp()); err != nil {
+		panic(err)
 	}
 	return &Engine{
-		m:                 m,
+		db:                db,
+		proc:              proc,
 		cli:               cli,
+		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
-		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -59,7 +66,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.m)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	databaseId, err := txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
+		name, databaseId, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -79,6 +93,16 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	key := genDatabaseKey(ctx, name)
 	if db, ok := txn.databaseMap[key]; ok {
+		return db, nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		txn.databaseMap[key] = db
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)
@@ -114,7 +138,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.m)
+	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -138,10 +162,12 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
-		m:           e.m,
+		proc:        e.proc,
 		db:          e.db,
 		readOnly:    true,
 		meta:        op.Txn(),
+		idGen:       e.idGen,
+		rowId:       [2]uint64{math.MaxUint64, 0},
 		dnStores:    cluster.DNStores,
 		fileMap:     make(map[string]uint64),
 		tableMap:    make(map[tableKey]*table),
@@ -188,7 +214,8 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return nil // compatible with existing logic
+		//	return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	return nil
@@ -233,7 +260,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.m)
+			txn.writes[i][j].bat.Clean(e.proc.Mp())
 		}
 	}
 	e.Lock()

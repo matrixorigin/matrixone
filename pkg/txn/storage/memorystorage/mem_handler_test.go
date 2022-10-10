@@ -19,20 +19,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func TestMemHandler(t *testing.T) {
 	testDatabase(t, func() (*Storage, error) {
 		return New(
 			NewMemHandler(
-				testutil.NewMheap(),
+				mpool.MustNewZero(),
 				memtable.Serializable,
 				clock.NewHLCClock(func() int64 {
 					return time.Now().UnixNano()
 				}, math.MaxInt64),
+				memoryengine.RandomIDGenerator,
 			),
 		)
 	})

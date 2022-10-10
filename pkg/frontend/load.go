@@ -1656,7 +1656,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		var txnHandler *TxnHandler
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
-		tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+		// XXX run backgroup session using initSes.Mp, is this correct thing?
+		tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
 		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
@@ -1799,7 +1800,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				tableHandler := handler.tableHandler
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
-				tmpSes := NewBackgroundSession(ctx, initSes.GuestMmu, initSes.Mempool, initSes.Pu, gSysVariables)
+				// XXX: Using initSes.Mp
+				tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
 				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {

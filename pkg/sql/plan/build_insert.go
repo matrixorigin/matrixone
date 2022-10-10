@@ -24,6 +24,9 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	if stmt.OnDuplicateUpdate != nil {
+		return nil, moerr.NewNotSupported("INSERT ... ON DUPLICATE KEY UPDATE ...")
+	}
 	rows := stmt.Rows
 	switch rows.Select.(type) {
 	case *tree.ValuesClause:
@@ -332,10 +335,6 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
 			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
-		}
-		pkeyColDef := ctx.GetPrimaryKeyDef(dbName, tblName)
-		if len(pkeyColDef) > 0 && pkeyColDef[0].IsCPkey {
-			tableDef.CompositePkey = pkeyColDef[0]
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:

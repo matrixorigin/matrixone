@@ -16,15 +16,15 @@ package stl
 
 import (
 	"testing"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAlloctor(t *testing.T) {
-	allocator := NewSimpleAllocator()
-	node := allocator.Alloc(10)
-	assert.True(t, int(unsafe.Sizeof(int32(0)))*10 <= allocator.Usage())
+func TestAllocator(t *testing.T) {
+	allocator := mpool.MustNewZero()
+	node, err := allocator.Alloc(10)
+	assert.True(t, err == nil)
 	allocator.Free(node)
-	assert.Equal(t, 0, allocator.Usage())
+	assert.Equal(t, int64(0), allocator.CurrNB())
 }

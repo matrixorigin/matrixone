@@ -188,7 +188,7 @@ func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
-	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, deltaloc)
+	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
 	return
 }
 
@@ -201,7 +201,7 @@ func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetBlockRows(blk.entry)
 	}
-	return blk.entry.GetBlockData().Rows(blk.Txn, true)
+	return blk.entry.GetBlockData().Rows()
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {

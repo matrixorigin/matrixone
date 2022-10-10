@@ -27,9 +27,9 @@ import (
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
-		logger.Info(fmt.Sprintf("%s applying cmd: %s", s.ID(), cmd.LogString()))
+		s.logger.Info(fmt.Sprintf("%s applying cmd: %s", s.ID(), cmd.LogString()))
 		if cmd.GetConfigChange() != nil {
-			logger.Info("applying schedule command:", zap.String("command", cmd.LogString()))
+			s.logger.Debug("applying schedule command:", zap.String("command", cmd.LogString()))
 			switch cmd.ConfigChange.ChangeType {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
@@ -58,7 +58,7 @@ func (s *Service) handleAddReplica(cmd pb.ScheduleCommand) {
 	epoch := cmd.ConfigChange.Replica.Epoch
 	target := cmd.ConfigChange.Replica.UUID
 	if err := s.store.addReplica(shardID, replicaID, target, epoch); err != nil {
-		logger.Error("failed to add replica", zap.Error(err))
+		s.logger.Error("failed to add replica", zap.Error(err))
 	}
 }
 
@@ -67,7 +67,7 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	epoch := cmd.ConfigChange.Replica.Epoch
 	if err := s.store.removeReplica(shardID, replicaID, epoch); err != nil {
-		logger.Error("failed to remove replica", zap.Error(err))
+		s.logger.Error("failed to remove replica", zap.Error(err))
 	}
 }
 
@@ -78,12 +78,12 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperReplica(replicaID,
 			cmd.ConfigChange.InitialMembers, join); err != nil {
-			logger.Error("failed to start HAKeeper replica", zap.Error(err))
+			s.logger.Error("failed to start HAKeeper replica", zap.Error(err))
 		}
 	} else {
 		if err := s.store.startReplica(shardID,
 			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
-			logger.Error("failed to start log replica", zap.Error(err))
+			s.logger.Error("failed to start log replica", zap.Error(err))
 		}
 	}
 }
@@ -92,7 +92,7 @@ func (s *Service) handleStopReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	if err := s.store.stopReplica(shardID, replicaID); err != nil {
-		logger.Error("failed to stop replica", zap.Error(err))
+		s.logger.Error("failed to stop replica", zap.Error(err))
 	}
 }
 
@@ -113,7 +113,7 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 		panic("invalid heartbeat interval")
 	}
 	defer func() {
-		logger.Info("heartbeat worker stopped")
+		s.logger.Info("heartbeat worker stopped")
 	}()
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval.Duration)
 	defer ticker.Stop()
@@ -145,7 +145,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 		}
 		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.GetHAKeeperClientConfig())
 		if err != nil {
-			logger.Error("failed to create HAKeeper client", zap.Error(err))
+			s.logger.Error("failed to create HAKeeper client", zap.Error(err))
 			return
 		}
 		s.haClient = cc
@@ -154,7 +154,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	hb := s.store.getHeartbeatMessage()
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
-		logger.Error("failed to send log service heartbeat", zap.Error(err))
+		s.logger.Error("failed to send log service heartbeat", zap.Error(err))
 		return
 	}
 	s.handleCommands(cb.Commands)

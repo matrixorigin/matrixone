@@ -20,21 +20,17 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 )
 
-type MemAllocator = stl.MemAllocator
 type Options = containers.Options
 type Bytes = stl.Bytes
 
-var DefaultAllocator = stl.DefaultAllocator
-
 // var DefaultAllocator = alloc.NewAllocator(int(common.G) * 100)
-
-var NewBytes = stl.NewBytes
 
 type ItOp = func(v any, row int) error
 
@@ -50,12 +46,11 @@ type VectorView interface {
 	Slice() any
 	DataWindow(offset, length int) []byte
 	Get(i int) any
-	GetCopy(i int) any
 
 	Length() int
 	Capacity() int
 	Allocated() int
-	GetAllocator() stl.MemAllocator
+	GetAllocator() *mpool.MPool
 	GetType() types.Type
 	String() string
 
@@ -79,7 +74,7 @@ type Vector interface {
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	Compact(deletes *roaring.Bitmap)
-	CloneWindow(offset, length int, allocator ...MemAllocator) Vector
+	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
 
 	Equals(o Vector) bool
 	Window(offset, length int) Vector

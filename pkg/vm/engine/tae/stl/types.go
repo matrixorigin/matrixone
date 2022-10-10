@@ -17,6 +17,9 @@ package stl
 import (
 	"io"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func Sizeof[T any]() int {
@@ -30,9 +33,25 @@ func SizeOfMany[T any](cnt int) int {
 }
 
 type Bytes struct {
-	Data   []byte
-	Offset []uint32
-	Length []uint32
+	// Specify type size
+	// Positive if it is fixed type
+	// Negtive if it is varlen type
+	TypeSize int
+
+	// Specify whether it retains a window
+	AsWindow bool
+	// Window offset and length
+	WinOffset int
+	WinLength int
+
+	// Used only when IsFixedType is false
+	// Header store data if the size is less than VarlenaSize
+	Header []types.Varlena
+
+	// When IsFixedType is true, here is the data storage
+	// When IsFixedType is false, here is the data storage for big data
+	// When AsWindow is true, here stores all big data
+	Storage []byte
 }
 
 type Vector[T any] interface {
@@ -41,14 +60,14 @@ type Vector[T any] interface {
 	Close()
 
 	// Clone deep copy data from offset to offset+length and create a new vector
-	Clone(offset, length int, allocator ...MemAllocator) Vector[T]
+	Clone(offset, length int, allocator ...*mpool.MPool) Vector[T]
 
 	// ReadBytes reads a serialized buffer and initializes the vector using the buf
 	// as its initial contents.
 
 	// If share is true, vector release allocated memory and use the buf and its data storage
 	// If share is false, vector will copy the data from buf to its own data storage
-	ReadBytes(buf *Bytes, share bool)
+	ReadBytes(data *Bytes, share bool)
 
 	// Reset resets the buffer to be empty
 	// but it retains the underlying storage for use by future writes
@@ -56,8 +75,11 @@ type Vector[T any] interface {
 
 	// IsView returns true if the vector shares the data storage with external buffer
 	IsView() bool
-	// Bytes returns the underlying data storage buffer
+
+	// TODO
 	Bytes() *Bytes
+	WindowAsBytes(offset, length int) *Bytes
+
 	// Data returns the underlying data storage buffer
 	// For Vector[[]byte], it only returns the data buffer
 	Data() []byte
@@ -70,8 +92,6 @@ type Vector[T any] interface {
 	// Get returns the specified element at i
 	// Note: If T is []byte, make sure not to use v after the vector is closed
 	Get(i int) (v T)
-	// GetCopy returns the copy of the specified element at i
-	GetCopy(i int) (v T)
 	// Append appends a element into the vector
 	// If the prediction length is large than Capacity, it will cause the underlying memory reallocation.
 	// Reallocation:
@@ -91,7 +111,7 @@ type Vector[T any] interface {
 	RangeDelete(offset, length int)
 
 	// Returns the underlying memory allocator
-	GetAllocator() MemAllocator
+	GetAllocator() *mpool.MPool
 	// Returns the capacity, which is always >= Length().
 	// It is related to the number of elements. Same as C++ std::vector::capacity
 	Capacity() int

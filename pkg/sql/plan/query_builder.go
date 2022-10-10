@@ -80,7 +80,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -158,92 +158,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				},
 			})
 		}
-	case plan.Node_TABLE_FUNCTION:
-		for _, expr := range node.FilterList {
-			increaseRefCnt(expr, colRefCnt)
-		}
-
-		internalRemapping := &ColRefRemapping{
-			globalToLocal: make(map[[2]int32][2]int32),
-		}
-
-		tag := node.BindingTags[0]
-		newTableDef := &plan.TableDef{
-			Name:          node.TableDef.Name,
-			Defs:          node.TableDef.Defs,
-			Name2ColIndex: node.TableDef.Name2ColIndex,
-			Createsql:     node.TableDef.Createsql,
-			TblFunc:       node.TableDef.TblFunc,
-		}
-
-		for i, col := range node.TableDef.Cols {
-			globalRef := [2]int32{tag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
-				continue
+		if node.NodeType == plan.Node_TABLE_FUNCTION {
+			childId := node.Children[0]
+			childNode := builder.qry.Nodes[childId]
+			if childNode.NodeType != plan.Node_PROJECT {
+				break
 			}
-
-			internalRemapping.addColRef(globalRef)
-
-			newTableDef.Cols = append(newTableDef.Cols, col)
-		}
-
-		if len(newTableDef.Cols) == 0 {
-			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
-		}
-
-		node.TableDef = newTableDef
-
-		for _, expr := range node.FilterList {
-			decreaseRefCnt(expr, colRefCnt)
-			err := builder.remapExpr(expr, internalRemapping.globalToLocal)
+			_, err := builder.remapAllColRefs(childId, colRefCnt)
 			if err != nil {
 				return nil, err
 			}
-		}
-
-		for i, col := range node.TableDef.Cols {
-			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
-				continue
-			}
-
-			remapping.addColRef(internalRemapping.localToGlobal[i])
-
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
-					},
-				},
-			})
-		}
-
-		if len(node.ProjectList) == 0 {
-			globalRef := [2]int32{tag, 0}
-			remapping.addColRef(globalRef)
-
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.TableDef.Cols[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: 0,
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
-		childId := node.Children[0]
-		childNode := builder.qry.Nodes[childId]
-		if childNode.NodeType != plan.Node_PROJECT {
-			break
-		}
-		_, err := builder.remapAllColRefs(childId, colRefCnt)
-		if err != nil {
-			return nil, err
 		}
 
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -973,15 +897,21 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -998,7 +928,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -1302,15 +1232,21 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -1321,7 +1257,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if astLimit != nil {
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -2212,6 +2148,36 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			}, nil)
 		}
 
+		node.Children[1] = childID
+
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		leftChild := builder.qry.Nodes[node.Children[0]]
+		rightChild := builder.qry.Nodes[node.Children[1]]
+		var canPushDownRight []*plan.Expr
+
+		for _, filter := range filters {
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[1]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
 		node.Children[1] = childID
 
 	case plan.Node_PROJECT:

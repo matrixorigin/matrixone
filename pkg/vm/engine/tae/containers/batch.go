@@ -20,6 +20,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
@@ -123,7 +124,7 @@ func (bat *Batch) Window(offset, length int) *Batch {
 	return win
 }
 
-func (bat *Batch) CloneWindow(offset, length int, allocator ...MemAllocator) (cloned *Batch) {
+func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cloned *Batch) {
 	cloned = NewEmptyBatch()
 	cloned.Attrs = make([]string, len(bat.Attrs))
 	copy(cloned.Attrs, bat.Attrs)
@@ -319,7 +320,10 @@ func (bat *Batch) Split(cnt int) []*Batch {
 // extend vector with same name, consume src batch
 func (bat *Batch) Extend(src *Batch) {
 	for i, vec := range bat.Vecs {
-		vec.Extend(src.GetVectorByName(bat.Attrs[i]))
+		attr := bat.Attrs[i]
+		if idx, ok := src.nameidx[attr]; ok {
+			vec.Extend(src.Vecs[idx])
+		}
 	}
 	src.Close()
 }

@@ -58,7 +58,7 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstFixed(rtyp, lv.Length(), ok), nil
+		return vector.NewConstFixed(rtyp, lv.Length(), ok, proc.Mp()), nil
 	case lv.IsScalar() && !rv.IsScalar():
 		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.Nsp, rs)
 		if err != nil {

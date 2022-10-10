@@ -118,7 +118,7 @@ func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 		filter.inner.SegmentCountLength); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeUint8Slice(filter.inner.Fingerprints)); err != nil {
+	if _, err = w.Write(types.EncodeSlice(filter.inner.Fingerprints)); err != nil {
 		return
 	}
 	buf = w.Bytes()
@@ -139,7 +139,7 @@ func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
 	buf = buf[4:]
 	filter.inner.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.Fingerprints = types.DecodeUint8Slice(buf)
+	filter.inner.Fingerprints = types.DecodeSlice[uint8](buf)
 	return nil
 }
 

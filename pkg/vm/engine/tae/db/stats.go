@@ -70,6 +70,20 @@ type WalStats struct {
 	PendingCnt uint64
 }
 
+// Custom serialization for TxnStats
+func (s *TxnStats) MarshalJSON() ([]byte, error) {
+	type Alias TxnStats // avoid recursive loop on MarshalJSON
+	return json.Marshal(&struct {
+		MaxTS  string
+		SafeTS string
+		*Alias
+	}{
+		MaxTS:  s.MaxTS.ToString(),
+		SafeTS: s.SafeTS.ToString(),
+		Alias:  (*Alias)(s),
+	})
+}
+
 func CollectCatalogStats(c *catalog.Catalog) *CatalogStats {
 	return &CatalogStats{
 		MaxDBID: c.CurrDB(),
@@ -81,8 +95,8 @@ func CollectCatalogStats(c *catalog.Catalog) *CatalogStats {
 
 func CollectTxnStats(mgr *txnbase.TxnManager) *TxnStats {
 	return &TxnStats{
-		MaxTS:  mgr.TsAlloc.Get(),
-		MaxID:  mgr.IdAlloc.Get(),
+		//MaxTS:  mgr.TsAlloc.Get(),
+		//MaxID:  mgr.IdAlloc.Get(),
 		SafeTS: mgr.StatSafeTS(),
 	}
 }

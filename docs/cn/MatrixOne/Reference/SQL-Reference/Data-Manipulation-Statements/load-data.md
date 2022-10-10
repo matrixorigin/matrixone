@@ -29,7 +29,7 @@
 
 可以在SSB测试中了解`LOAD DATA`语句的用法，请见
 [Complete a SSB Test with MatrixOne
-](../../../Get-Started/Tutorial/SSB-test-with-matrixone.md)
+](../../../Tutorial/SSB-test-with-matrixone.md)
 
 ```sql
 > LOAD DATA INFILE '/ssb-dbgen-path/lineorder_flat.tbl ' INTO TABLE lineorder_flat;

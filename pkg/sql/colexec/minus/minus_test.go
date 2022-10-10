@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -92,7 +91,7 @@ func TestMinus(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row
-	require.Equal(t, int64(0), mheap.Size(c.proc.Mp()))
+	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
 func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) minusTestCase {

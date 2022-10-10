@@ -16,6 +16,7 @@ package containers
 
 import (
 	"fmt"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,13 +55,6 @@ func (impl *nullableVecImpl[T]) Get(i int) (v any) {
 		return types.Null{}
 	}
 	return impl.derived.stlvec.Get(i)
-}
-
-func (impl *nullableVecImpl[T]) GetCopy(i int) (v any) {
-	if impl.IsNull(i) {
-		return types.Null{}
-	}
-	return impl.derived.stlvec.GetCopy(i)
 }
 
 // Modification
@@ -192,6 +186,11 @@ func (impl *nullableVecImpl[T]) ExtendWithOffset(o Vector, srcOff, srcLen int) {
 			offset := impl.derived.stlvec.Length()
 			for it.HasNext() {
 				pos := it.Next()
+				if pos < uint64(srcOff) {
+					continue
+				} else if pos >= uint64(srcOff+srcLen) {
+					break
+				}
 				impl.derived.nulls.Add(uint64(offset) + pos - uint64(srcOff))
 			}
 			impl.extendData(o, srcOff, srcLen)

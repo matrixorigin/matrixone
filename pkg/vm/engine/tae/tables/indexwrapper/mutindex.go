@@ -25,22 +25,19 @@ import (
 var _ Index = (*mutableIndex)(nil)
 
 type mutableIndex struct {
-	defaultIndexImpl
 	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
-	deletes *DeletesMap
 }
 
 func NewPkMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(keyT),
 		zonemap: index.NewZoneMap(keyT),
-		deletes: NewDeletesMap(keyT),
 	}
 }
 
 func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
-	offset int, ts types.TS) (resp *index.BatchResp, err error) {
+	offset int) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -49,72 +46,21 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
 	// logutil.Infof("Post: %s", idx.art.String())
-	resp, err = idx.art.BatchInsert(keysCtx, uint32(offset), true)
-	if resp != nil {
-		posArr := resp.UpdatedKeys.ToArray()
-		rowArr := resp.UpdatedRows.ToArray()
-		for i := 0; i < len(posArr); i++ {
-			key := keysCtx.Keys.Get(int(posArr[i]))
-			if err = idx.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
-				return
-			}
-		}
-	}
+	err = idx.art.BatchInsert(keysCtx, uint32(offset))
 	return
 }
 
-func (idx *mutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool {
-	return idx.deletes.HasDeleteFrom(key, fromTs)
-}
-
-func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
-	return idx.deletes.IsKeyDeleted(key, ts)
-}
-
-func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.deletes.GetMaxTS() }
-
-func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions,
-	updateRows *roaring.Bitmap, ts types.TS) (err error) {
+func (idx *mutableIndex) Delete(key any) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-
-	delOp := func(key any, _ int) error {
-		_, err := idx.art.Delete(key)
-		return err
-	}
-	if err = keys.Foreach(delOp, nil); err != nil {
+	if _, err = idx.art.Delete(key); err != nil {
 		return
 	}
-	if updatePositions != nil {
-		posArr := updatePositions.ToArray()
-		rowArr := updateRows.ToArray()
-		for i := 0; i < len(posArr); i++ {
-			key := keys.Get(int(posArr[i]))
-			idx.deletes.RemoveOne(key, rowArr[i])
-			if err = idx.art.Insert(key, rowArr[i]); err != nil {
-				return
-			}
-		}
-		idx.deletes.RemoveTs(ts)
-	}
-
 	return
 }
 
-func (idx *mutableIndex) Delete(key any, ts types.TS) (err error) {
-	defer func() {
-		err = TranslateError(err)
-	}()
-	var old uint32
-	if old, err = idx.art.Delete(key); err != nil {
-		return
-	}
-	err = idx.deletes.LogDeletedKey(key, old, ts)
-	return
-}
-
-func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
+func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
 		// logutil.Infof("[Trace][GetActiveRow] key=%v: err=%v", key, err)
@@ -136,7 +82,7 @@ func (idx *mutableIndex) String() string {
 }
 func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
 func (idx *mutableIndex) BatchDedup(keys containers.Vector,
-	rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
@@ -146,9 +92,24 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	ctx.Keys = keys
 	ctx.Selects = keyselects
 	ctx.SelectAll()
-	exist = idx.art.ContainsAny(ctx, rowmask)
-	if exist {
-		err = moerr.NewDuplicate()
+	op := func(v any, _ int) error {
+		rows, err := idx.art.Search(v)
+		if err == index.ErrNotFound {
+			return nil
+		}
+		for _, row := range rows {
+			if err = skipfn(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err = keys.ForeachWindow(0, keys.Length(), op, keyselects); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrDuplicate) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			return
+		} else {
+			panic(err)
+		}
 	}
 	return
 }
@@ -166,7 +127,6 @@ func (idx *mutableIndex) Close() error {
 var _ Index = (*nonPkMutIndex)(nil)
 
 type nonPkMutIndex struct {
-	defaultIndexImpl
 	zonemap *index.ZoneMap
 }
 
@@ -185,9 +145,10 @@ func (idx *nonPkMutIndex) Close() error {
 	idx.zonemap = nil
 	return nil
 }
-
-func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (resp *index.BatchResp, err error) {
-	return nil, TranslateError(idx.zonemap.BatchUpdate(keysCtx))
+func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
+func (idx *nonPkMutIndex) String() string                     { panic("not support") }
+func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
+	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
 
 func (idx *nonPkMutIndex) Dedup(key any) (err error) {
@@ -199,7 +160,7 @@ func (idx *nonPkMutIndex) Dedup(key any) (err error) {
 	return moerr.NewTAEPossibleDuplicate()
 }
 
-func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {

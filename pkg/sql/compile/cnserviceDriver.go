@@ -18,9 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -65,11 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 // messageHandleHelper a structure records some elements to help handle messages.
@@ -223,7 +222,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 		case val = <-messagesReceive:
 		}
 
-		m := val.(*pipeline.Message)
+		m, ok := val.(*pipeline.Message)
+		if !ok {
+			return moerr.NewInternalError("unexpected mo-rpc address %s", s.NodeInfo.Addr)
+		}
 		if err := pipeline.DecodeMessageError(m); err != nil {
 			return err
 		}
@@ -647,7 +649,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *offset.Argument:
 		in.Offset = t.Offset
 	case *order.Argument:
-		in.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.OrderBy = t.Fs
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -683,7 +685,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *top.Argument:
 		in.Limit = uint64(t.Limit)
-		in.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.OrderBy = t.Fs
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Argument: // 1
 		in.Anti = &pipeline.AntiJoin{
@@ -711,9 +713,9 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Offset = t.Offset
 	case *mergetop.Argument:
 		in.Limit = uint64(t.Limit)
-		in.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
-		in.OrderBy = convertToPlanOrderByList(t.Fs)
+		in.OrderBy = t.Fs
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -728,18 +730,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *mark.Argument:
 		in.MarkJoin = &pipeline.MarkJoin{
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
-			Result:       t.Result,
-			LeftCond:     t.Conditions[0],
-			RightCond:    t.Conditions[1],
-			Types:        convertToPlanTypes(t.Typs),
-			Cond:         t.Cond,
-			OnList:       t.OnList,
-			OutputNull:   t.OutputNull,
-			OutputMark:   t.OutputMark,
-			OutputAnyway: t.OutputAnyway,
-			MarkMeaning:  t.MarkMeaning,
+			Ibucket:   t.Ibucket,
+			Nbucket:   t.Nbucket,
+			Result:    t.Result,
+			LeftCond:  t.Conditions[0],
+			RightCond: t.Conditions[1],
+			Types:     convertToPlanTypes(t.Typs),
+			Cond:      t.Cond,
+			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
 		var (
@@ -861,7 +859,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
-		v.Arg = &order.Argument{Fs: convertToColExecField(opr.OrderBy)}
+		v.Arg = &order.Argument{Fs: opr.OrderBy}
 	case vm.Product:
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{
@@ -895,22 +893,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Mark:
 		t := opr.GetMarkJoin()
 		v.Arg = &mark.Argument{
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
-			Result:       t.Result,
-			Conditions:   [][]*plan.Expr{t.LeftCond, t.RightCond},
-			Typs:         convertToTypes(t.Types),
-			Cond:         t.Cond,
-			OnList:       t.OnList,
-			OutputNull:   t.OutputNull,
-			OutputMark:   t.OutputMark,
-			OutputAnyway: t.OutputAnyway,
-			MarkMeaning:  t.MarkMeaning,
+			Ibucket:    t.Ibucket,
+			Nbucket:    t.Nbucket,
+			Result:     t.Result,
+			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Typs:       convertToTypes(t.Types),
+			Cond:       t.Cond,
+			OnList:     t.OnList,
 		}
 	case vm.Top:
 		v.Arg = &top.Argument{
 			Limit: int64(opr.Limit),
-			Fs:    convertToColExecField(opr.OrderBy),
+			Fs:    opr.OrderBy,
 		}
 	// should change next day?
 	case vm.Intersect:
@@ -953,11 +947,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.MergeTop:
 		v.Arg = &mergetop.Argument{
 			Limit: int64(opr.Limit),
-			Fs:    convertToColExecField(opr.OrderBy),
+			Fs:    opr.OrderBy,
 		}
 	case vm.MergeOrder:
 		v.Arg = &mergeorder.Argument{
-			Fs: convertToColExecField(opr.OrderBy),
+			Fs: opr.OrderBy,
 		}
 	case vm.Unnest:
 		param := &unnest.ExternalParam{}
@@ -989,7 +983,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
 	proc := process.New(
 		ctx,
-		mheap.New(guest.New(1<<30, host.New(1<<30))),
+		mpool.MustNewZero(),
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,
@@ -1093,42 +1087,6 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 		}
 	}
 	return result
-}
-
-// convert []colexec.Field to []*plan.OrderBySpec
-func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
-	// default order direction is ASC.
-	convToPlanOrderFlag := func(source colexec.Direction) plan.OrderBySpec_OrderByFlag {
-		if source == colexec.Descending {
-			return plan.OrderBySpec_DESC
-		}
-		return plan.OrderBySpec_ASC
-	}
-
-	res := make([]*plan.OrderBySpec, len(field))
-	for i, f := range field {
-		res[i] = &plan.OrderBySpec{
-			Expr: f.E,
-			Flag: convToPlanOrderFlag(f.Type),
-		}
-	}
-	return res
-}
-
-// convert []*plan.OrderBySpec to []colexec.Field
-func convertToColExecField(list []*plan.OrderBySpec) []colexec.Field {
-	convToColExecDirection := func(source plan.OrderBySpec_OrderByFlag) colexec.Direction {
-		if source == plan.OrderBySpec_ASC {
-			return colexec.Ascending
-		}
-		return colexec.Descending
-	}
-
-	res := make([]colexec.Field, len(list))
-	for i, l := range list {
-		res[i].E, res[i].Type = l.Expr, convToColExecDirection(l.Flag)
-	}
-	return res
 }
 
 // get relation list and column list from []colexec.ResultPos

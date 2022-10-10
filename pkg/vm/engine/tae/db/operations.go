@@ -64,18 +64,18 @@ func init() {
 
 type Request interface {
 	CreateDatabaseReq |
-		DeleteDatabaseReq |
+		DropDatabaseReq |
 		CreateRelationReq |
-		DeleteRelationReq |
+		DropRelationReq |
 		WriteReq |
 		apipb.SyncLogTailReq
 }
 
 type Response interface {
 	CreateDatabaseResp |
-		DeleteDatabaseResp |
+		DropDatabaseResp |
 		CreateRelationResp |
-		DeleteRelationResp |
+		DropRelationResp |
 		WriteResp |
 		apipb.SyncLogTailResp
 }
@@ -102,16 +102,18 @@ type CreateDatabaseResp struct {
 	ID uint64
 }
 
-type DeleteDatabaseReq struct {
+type DropDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
+	ID         uint64
 }
 
-type DeleteDatabaseResp struct {
+type DropDatabaseResp struct {
 	ID uint64
 }
 
 type CreateRelationReq struct {
+	AccessInfo   AccessInfo
 	DatabaseID   uint64
 	DatabaseName string
 	Name         string
@@ -123,13 +125,15 @@ type CreateRelationResp struct {
 	ID uint64
 }
 
-type DeleteRelationReq struct {
+type DropRelationReq struct {
+	AccessInfo   AccessInfo
 	DatabaseID   uint64
 	DatabaseName string
 	Name         string
+	ID           uint64
 }
 
-type DeleteRelationResp struct {
+type DropRelationResp struct {
 	ID uint64
 }
 
@@ -141,6 +145,7 @@ const (
 )
 
 type WriteReq struct {
+	AccessInfo   AccessInfo
 	Type         EntryType
 	TableID      uint64
 	DatabaseName string

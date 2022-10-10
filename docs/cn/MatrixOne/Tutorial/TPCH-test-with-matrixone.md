@@ -6,7 +6,7 @@ TPC Benchmark™H（TPC-H）是决策支持基准。它由一套面向业务的�
 
 ## **准备工作**
 
-确保你已经安装了[单机版MatrixOne](../Get-Started/install-standalone-matrixone.md)并[连接到MatrixOne服务](..Get-Started//connect-to-matrixone-server.md).
+确保你已经安装了[单机版MatrixOne](../Get-Started/install-standalone-matrixone.md)并[连接到MatrixOne服务](../Get-Started//connect-to-matrixone-server.md).
 
 ## **1. 编译dbgen**
 
@@ -342,16 +342,6 @@ where
     and l_quantity < 24;
 
 --Q7
-select
-    sum(l_extendedprice * l_discount) as revenue
-from
-    lineitem
-where
-    l_shipdate >= date '1994-01-01'
-    and l_shipdate < date '1994-01-01' + interval '1' year
-    and l_discount between 0.03 - 0.01 and 0.03 + 0.01
-    and l_quantity < 24;
-
 select
     supp_nation,
     cust_nation,

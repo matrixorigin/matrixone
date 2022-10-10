@@ -1,4 +1,6 @@
+drop account if exists tenant_test;
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
+drop account if exists tenant_test;

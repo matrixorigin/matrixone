@@ -1243,7 +1243,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			panic(err)
 		}
 
-		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		cs, err := newCNService(cfg, context.TODO(), fs, c.opt.task.taskStorage, opt)
 		if err != nil {
 			panic(err)
 		}
@@ -1370,7 +1370,9 @@ func (c *testCluster) getClusterState() *logpb.CheckerState {
 			return false
 		}
 		state = s
-		c.logger.Info("current cluster state", zap.Any("state", s))
+		// XXX MPOOL
+		// Too much logging can break CI.
+		// c.logger.Info("current cluster state", zap.Any("state", s))
 		return true
 	}
 	c.rangeHAKeeperService(fn)

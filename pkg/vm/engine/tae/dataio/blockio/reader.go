@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"bytes"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -51,8 +52,8 @@ func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
 	if size == 0 {
 		return
 	}
-	node := common.GPool.Alloc(uint64(size))
-	defer common.GPool.Free(node)
+	node := mpool.DefaultAllocator.Alloc(size)
+	defer mpool.DefaultAllocator.Free(node)
 	if _, err = f.Read(node.Buf[:size]); err != nil {
 		return
 	}
@@ -68,10 +69,11 @@ func (r *Reader) LoadBlkColumns(
 	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
 
+	metaKey := r.block.getMetaKey()
 	for i := range r.block.columns {
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
-		if r.block.metaKey.End() == 0 {
+		if metaKey.End() == 0 {
 			continue
 		}
 		col, err := r.block.GetMeta().GetColumn(uint16(i))

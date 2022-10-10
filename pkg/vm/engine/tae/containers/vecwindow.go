@@ -21,9 +21,9 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 type windowBase struct {
@@ -130,7 +130,7 @@ func (win *vectorWindow[T]) GetView() VectorView {
 	}
 }
 
-func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...MemAllocator) Vector {
+func (win *vectorWindow[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	return win.ref.CloneWindow(offset+win.offset, length, allocator...)
 }
 
@@ -139,9 +139,6 @@ func (win *vectorWindow[T]) Data() []byte {
 }
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
-}
-func (win *vectorWindow[T]) GetCopy(i int) (v any) {
-	return win.ref.GetCopy(i + win.offset)
 }
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
@@ -156,15 +153,14 @@ func (win *vectorWindow[T]) NullMask() *roaring64.Bitmap {
 func (win *vectorWindow[T]) IsNull(i int) bool {
 	return win.ref.IsNull(i + win.offset)
 }
-func (win *vectorWindow[T]) GetAllocator() MemAllocator { return win.ref.GetAllocator() }
+func (win *vectorWindow[T]) GetAllocator() *mpool.MPool { return win.ref.GetAllocator() }
 func (win *vectorWindow[T]) GetType() types.Type        { return win.ref.GetType() }
 func (win *vectorWindow[T]) String() string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
 	return s
 }
 func (win *vectorWindow[T]) Slice() any {
-	var v T
-	if _, ok := any(v).([]byte); ok {
+	if win.ref.typ.IsVarlen() {
 		base := win.ref.Slice().(*Bytes)
 		return base.Window(win.offset, win.length)
 	} else {
@@ -172,15 +168,9 @@ func (win *vectorWindow[T]) Slice() any {
 	}
 }
 func (win *vectorWindow[T]) Bytes() *Bytes {
-	var v T
-	if _, ok := any(v).([]byte); ok {
-		base := win.ref.Slice().(*Bytes)
-		return base.Window(win.offset, win.length)
-	} else {
-		bs := win.ref.Bytes()
-		bs.Data = bs.Data[win.offset*stl.Sizeof[T]() : (win.offset+win.length)*stl.Sizeof[T]()]
-		return bs
-	}
+	bs := win.ref.Bytes()
+	bs = bs.Window(win.offset, win.length)
+	return bs
 }
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset)

@@ -91,7 +91,6 @@ func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v any, n txnif.UpdateN
 
 func (chain *ColumnChain) OnReplayUpdateNode(updateNode txnif.UpdateNode) {
 	updateNode.(*ColumnUpdateNode).AttachTo(chain)
-	chain.mvcc.TrySetMaxVisible(updateNode.(*ColumnUpdateNode).commitTs)
 	mask := updateNode.GetMask()
 	vals := updateNode.GetValues()
 	iterator := mask.Iterator()
