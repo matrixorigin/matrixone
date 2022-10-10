@@ -92,9 +92,9 @@ type TxnCmd struct {
 }
 
 type TxnStateCmd struct {
-	ID    string
-	State txnif.TxnState
-	Cts   types.TS
+	ID       string
+	State    txnif.TxnState
+	CommitTs types.TS
 }
 
 type BatchCmd struct {
@@ -149,9 +149,9 @@ func NewEmptyTxnStateCmd() *TxnStateCmd {
 
 func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd {
 	return &TxnStateCmd{
-		ID:    id,
-		State: state,
-		Cts:   cts,
+		ID:       id,
+		State:    state,
+		CommitTs: cts,
 	}
 }
 
@@ -183,7 +183,7 @@ func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 4
-	if err = binary.Write(w, binary.BigEndian, c.Cts); err != nil {
+	if err = binary.Write(w, binary.BigEndian, c.CommitTs); err != nil {
 		return
 	}
 	n += types.TxnTsSize
@@ -199,7 +199,7 @@ func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 4
-	if err = binary.Read(r, binary.BigEndian, &c.Cts); err != nil {
+	if err = binary.Read(r, binary.BigEndian, &c.CommitTs); err != nil {
 		return
 	}
 	n += types.TxnTsSize
@@ -220,13 +220,13 @@ func (c *TxnStateCmd) Unmarshal(buf []byte) (err error) {
 }
 func (c *TxnStateCmd) GetType() int16 { return CmdTxnState }
 func (c *TxnStateCmd) Desc() string {
-	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
 }
 func (c *TxnStateCmd) String() string {
-	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
 }
 func (c *TxnStateCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
 }
 func (c *TxnStateCmd) Close() {
 }
@@ -322,13 +322,13 @@ func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
 }
 func (c *TxnCmd) GetType() int16 { return CmdTxn }
 func (c *TxnCmd) Desc() string {
-	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
 }
 func (c *TxnCmd) String() string {
-	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
 }
 func (c *TxnCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
 }
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()
