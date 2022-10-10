@@ -47,7 +47,7 @@ func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 		}
 	}
 	if alloc == nil {
-		alloc = common.TAEDefaultAllocator
+		alloc = common.DefaultAllocator
 	}
 	if vdataOpt.Capacity < capacity {
 		vdataOpt.Capacity = capacity

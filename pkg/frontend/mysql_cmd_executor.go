@@ -1538,15 +1538,13 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(types.T_varchar.ToType())
-	// XXX Memory accounting or not.
-	if err := vector.AppendBytes(vec, vs, nil); err != nil {
-		return err
-	}
+	vec := vector.NewWithBytes(types.T_varchar.ToType(), vs, nil, session.Mp)
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
-	return fill(session, bat)
+	err := fill(session, bat)
+	vec.Free(session.Mp)
+	return err
 }
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
@@ -2339,17 +2337,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				var option *explain.ExplainOptions
 				option, err = getExplainOption(statement.Options)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = explainQuery.ExplainPlan(buffer, option)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				/*
@@ -2362,7 +2360,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			}
-			return nil
 		}
 	handleSucceeded:
 		//load data handle txn failure internally
@@ -2646,7 +2643,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
