@@ -33,7 +33,8 @@ func TestMPool(t *testing.T) {
 	nalloc0 := m.Stats().NumAlloc.Load()
 	nfree0 := m.Stats().NumFree.Load()
 
-	require.True(t, nalloc0 == NumFixedPool, "bad nalloc")
+	// Small has 5 non-zero fixed pool.
+	require.True(t, nalloc0 == 5, "bad nalloc")
 	require.True(t, nfree0 == 0, "bad nfree")
 
 	for i := 1; i <= 10000; i++ {

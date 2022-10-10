@@ -248,14 +248,14 @@ func (d *mpoolDetails) reportJson() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	ret := `{"alloc": {`
-	var allocs []string
+	allocs := make([]string, 0)
 	for k, v := range d.alloc {
 		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
 		allocs = append(allocs, kvs)
 	}
 	ret += strings.Join(allocs, ",")
 	ret += `}, "free": {`
-	var frees []string
+	frees := make([]string, 0)
 	for k, v := range d.free {
 		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
 		frees = append(frees, kvs)
