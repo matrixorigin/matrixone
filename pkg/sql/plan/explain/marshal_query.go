@@ -527,8 +527,8 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	return labels, nil
 }
 
-var InputRows = "Input Rows"
-var InputSize = "Input Size"
+const InputRows = "Input Rows"
+const InputSize = "Input Size"
 
 func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
@@ -536,7 +536,7 @@ func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 		analyzeInfo := m.node.AnalyzeInfo
 		mbps := []StatisticValue{
 			{
-				Name:  "Input Rows",
+				Name:  InputRows,
 				Value: analyzeInfo.InputRows,
 				Unit:  "count",
 			},
@@ -546,7 +546,7 @@ func (m MarshalNodeImpl) GetStatistics(options *ExplainOptions) Statistics {
 				Unit:  "count",
 			},
 			{
-				Name:  "Input Size",
+				Name:  InputSize,
 				Value: analyzeInfo.InputSize,
 				Unit:  "byte",
 			},

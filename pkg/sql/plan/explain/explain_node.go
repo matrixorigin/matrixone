@@ -33,8 +33,8 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	}
 }
 
-var TableScan = "Table Scan"
-var ExternalScan = "External Scan"
+const TableScan = "Table Scan"
+const ExternalScan = "External Scan"
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string, error) {
 	var result string
@@ -47,11 +47,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	case plan.Node_VALUE_SCAN:
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
-		pname = "Table Scan"
+		pname = TableScan
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Function Scan"
 	case plan.Node_EXTERNAL_SCAN:
-		pname = "External Scan"
+		pname = ExternalScan
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
