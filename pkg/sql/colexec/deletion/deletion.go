@@ -54,7 +54,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
 			tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
 
-			maxIndex := int32(len(p.DeleteCtxs))
+			maxIndex := int32(len(bat.Vecs))
 			if i < len(p.DeleteCtxs)-1 {
 				maxIndex = p.DeleteCtxs[i+1].ColIndex
 			}
@@ -73,7 +73,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		} else {
 			tmpBat := &batch.Batch{}
 			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
-			maxIndex := int32(len(p.DeleteCtxs))
+			maxIndex := int32(len(bat.Vecs))
 			if i < len(p.DeleteCtxs)-1 {
 				maxIndex = p.DeleteCtxs[i+1].ColIndex
 			}
