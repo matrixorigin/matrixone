@@ -413,7 +413,7 @@ func (blk *dataBlock) GetColumnDataById(
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
 	if metaLoc == "" {
-		return blk.ResolveColumnFromANode(txn.GetStartTS(), colIdx, buffer, false)
+		return blk.ResolveColumnFromANode(txn.GetStartTS(), colIdx, buffer, false, false)
 	}
 	view, err = blk.ResolveColumnFromMeta(metaLoc, txn.GetStartTS(), colIdx, buffer)
 	return
@@ -450,7 +450,8 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	ts types.TS,
 	colIdx int,
 	buffer *bytes.Buffer,
-	raw bool) (view *model.ColumnView, err error) {
+	raw bool,
+	skipDeletes bool) (view *model.ColumnView, err error) {
 	var (
 		maxRow  uint32
 		visible bool
@@ -469,6 +470,9 @@ func (blk *dataBlock) ResolveColumnFromANode(
 		return
 	}
 	view.SetData(data)
+	if skipDeletes {
+		return
+	}
 	blk.mvcc.RLock()
 	err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
@@ -519,7 +523,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 	view := model.NewColumnView(txn.GetStartTS(), int(col))
 	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
 	if metaLoc == "" {
-		view, _ = blk.ResolveColumnFromANode(txn.GetStartTS(), int(col), nil, true)
+		view, _ = blk.ResolveColumnFromANode(txn.GetStartTS(), int(col), nil, true, true)
 	} else {
 		vec, _ := blk.LoadColumnData(int(col), nil)
 		view.SetData(vec)
