@@ -250,55 +250,32 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, error) {
 	var useKey *ColDef = nil
 	isHideKey := false
-	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
 	tblName := tf.baseNameMap[tableDef.Name]
 
-	psNames := make(map[string]struct{})
-	for _, key := range priKeys {
-		// we will allways append pk to select item
-		if !key.IsCPkey {
-			psNames[key.Name] = struct{}{}
-			e := tree.SetUnresolvedName(tblName, key.Name)
-			ps = append(ps, tree.SelectExpr{Expr: e})
-			useKey = key
-		}
+	// priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
+	// for _, key := range priKeys {
+	// if key.IsCPkey {
+	// 	break
+	// }
+	// if isContainNameInFilter(stmt, key.Name) {
+	// 	psNames[key.Name] = struct{}{}
+	// 	e := tree.SetUnresolvedName(tblName, key.Name)
+	// 	ps = append(ps, tree.SelectExpr{Expr: e})
+	// 	useKey = key
+	// 	break
+	// }
+	// }
 
-		// if key.IsCPkey {
-		// 	break
-		// }
-		// if isContainNameInFilter(stmt, key.Name) {
-		// 	psNames[key.Name] = struct{}{}
-		// 	e := tree.SetUnresolvedName(tblName, key.Name)
-		// 	ps = append(ps, tree.SelectExpr{Expr: e})
-		// 	useKey = key
-		// 	break
-		// }
-	}
-
-	// we will allways return hideKey
+	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
 		return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
 	}
-	psNames[hideKey.Name] = struct{}{}
 	e := tree.SetUnresolvedName(tblName, hideKey.Name)
 	ps = append(ps, tree.SelectExpr{Expr: e})
+	useKey = hideKey
+	isHideKey = true
 
-	if useKey == nil {
-		useKey = hideKey
-		isHideKey = true
-	}
-
-	// if we have no primary key, we return all of the columns
-	// we need columns to hash then choice the DN
-	if len(priKeys) == 0 {
-		for _, col := range tableDef.Cols {
-			if _, ok := psNames[col.Name]; !ok {
-				e := tree.SetUnresolvedName(tblName, col.Name)
-				ps = append(ps, tree.SelectExpr{Expr: e})
-			}
-		}
-	}
 	return ps, useKey, isHideKey, nil
 }
 
