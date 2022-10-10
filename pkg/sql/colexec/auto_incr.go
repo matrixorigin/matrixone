@@ -285,17 +285,15 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
-	/*
-		bat := makeAutoIncrBatch(name, curNum, 1, mp)
-		err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
-		if err != nil {
-			return err
-		}
+	bat := makeAutoIncrBatch(name, curNum, 1, mp)
+	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
+	if err != nil {
+		return err
+	}
 
-		if err = param.rel.Write(param.ctx, bat); err != nil {
-			return err
-		}
-	*/
+	if err = param.rel.Write(param.ctx, bat); err != nil {
+		return err
+	}
 	return nil
 }
 
