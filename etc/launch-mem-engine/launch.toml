@@ -7,5 +7,6 @@ dnservices = [
 ]
 
 cnservices = [
-    "./etc/launch-mem-engine/cn.toml"
+    "./etc/launch-mem-engine/cn.toml",
+    "./etc/launch-mem-engine/cn2.toml",
 ]

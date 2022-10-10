@@ -1,0 +1,34 @@
+service-type = "CN"
+
+[log]
+level = "debug"
+format = "json"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32000",
+]
+
+[cn]
+uuid = "cn2"
+
+[cn.Engine]
+type = "memory"
+
+[cn.Frontend]
+port = 6002
+
+[[fileservice]]
+name = "LOCAL"
+backend = "MEM"
+
+[[fileservice]]
+name = "S3"
+backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "mo-data/etl/cn2"
+
