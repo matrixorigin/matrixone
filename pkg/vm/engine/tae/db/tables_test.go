@@ -396,7 +396,7 @@ func TestTxn6(t *testing.T) {
 			assert.Equal(t, int64(99), v)
 
 			filter.Val = int32(6)
-			v, err = rel.GetValueByFilter(filter, 3)
+			_, err = rel.GetValueByFilter(filter, 3)
 			assert.Error(t, err)
 
 			var buffer bytes.Buffer

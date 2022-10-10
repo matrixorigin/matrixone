@@ -303,7 +303,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	if err != nil {
 		return err
 	}
-	id, offset, left, err := c.GetGoodRepetory(entry.ID)
+	_, _, left, err := c.GetGoodRepetory(entry.ID)
 	if err != nil {
 		return err
 	}
@@ -316,11 +316,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	err = rel.UpdateByFilter(handle.NewEQFilter(entry.ID), uint16(2), newLeft)
-	// err = rel.Update(id, offset, uint16(2), newLeft)
-
 	return err
-	panic(id)
-	panic(offset)
 }
 
 func (g *APP1Goods) String() string {

@@ -474,7 +474,6 @@ func TestReplay2(t *testing.T) {
 
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 	tae2.Close()
-	return
 
 	tae3, err := Open(tae.Dir, nil)
 	assert.Nil(t, err)
