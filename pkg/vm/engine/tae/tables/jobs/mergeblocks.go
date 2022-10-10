@@ -166,7 +166,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
 	vecs := make([]containers.Vector, 0)
-	rows := make([]uint32, len(task.compacted))
+	rows := make([]uint32, 0)
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
@@ -194,7 +194,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			continue
 		}
 		vecs = append(vecs, vec)
-		rows[i] = uint32(vec.Length())
+		rows = append(rows, uint32(vec.Length()))
 		fromAddr = append(fromAddr, uint32(length))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())

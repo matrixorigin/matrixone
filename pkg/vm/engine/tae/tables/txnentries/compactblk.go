@@ -100,7 +100,6 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 		return
 	}
 	if view.DeleteMask != nil && !view.DeleteMask.IsEmpty() {
-		logutil.Infof("lalala compact %d rollback", dataBlock.GetID())
 		return moerr.NewTxnWWConflict()
 	}
 	return
