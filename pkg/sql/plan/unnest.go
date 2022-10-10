@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -108,14 +110,21 @@ func _getDefaultColDefs() []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (int32, error) {
-	paramData, err := tbl.Param.Marshal()
-	if err != nil {
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	var (
+		err             error
+		externParamData []byte
+		externParam     *unnest.ExternalParam
+		scanNode        *plan.Node
+		childId         int32 = -1
+	)
+	if externParam, err = genTblParam(tbl); err != nil {
 		return 0, err
 	}
-	var scanNode *plan.Node
-	var childId int32 = -1
-	switch o := tbl.Param.Origin.(type) {
+	if externParamData, err = json.Marshal(externParam); err != nil {
+		return 0, err
+	}
+	switch o := tbl.Func.Exprs[0].(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
 		if len(schemaName) == 0 {
@@ -194,15 +203,14 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 				break
 			}
 		}
-	case string:
-		if len(o) == 0 {
+	case *tree.NumVal:
+		jsonStr := o.String()
+		if len(jsonStr) == 0 {
 			return 0, moerr.NewInvalidInput("unnest param is empty")
 		}
 		scanNode = &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
-			TableDef: &plan.TableDef{
-				TableFunctionParam: []byte(o),
-			},
+			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: []byte(jsonStr)}},
 			ProjectList: []*plan.Expr{
 				{
 					Typ:  &plan.Type{Id: int32(types.T_varchar)},
@@ -218,13 +226,16 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 	}
 	colDefs := _getDefaultColDefs()
 	node := &plan.Node{
-		NodeType: plan.Node_UNNEST,
+		NodeType: plan.Node_TABLE_FUNCTION,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
-			TableType:          "func_table", //test if ok
-			Name:               tbl.String(),
-			TableFunctionParam: paramData,
-			Cols:               colDefs,
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  "unnest",
+				Param: externParamData,
+			},
+			Cols: colDefs,
 		},
 		BindingTags: []int32{builder.genNewTag()},
 	}
@@ -233,7 +244,17 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 	return nodeID, nil
 }
 
-func IsUnnestValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
-	// node must be a value scan
-	return node.TableDef != nil && len(node.TableDef.TableFunctionParam) > 0
+func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
+	var err error
+	uParam := &unnest.ExternalParam{}
+	switch o := tbl.Func.Exprs[0].(type) {
+	case *tree.UnresolvedName:
+		_, _, uParam.ColName = o.GetNames()
+	case *tree.NumVal:
+	default:
+		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
+	}
+	uParam.Path = tbl.Func.Exprs[1].String()
+	uParam.Outer = tbl.Func.Exprs[2].(*tree.NumVal).String() == "true"
+	return uParam, err
 }
