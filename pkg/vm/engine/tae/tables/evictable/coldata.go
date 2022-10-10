@@ -153,7 +153,10 @@ func (n *ColDataNode) GetData(buf *bytes.Buffer) (containers.Vector, error) {
 }
 
 func (n *ColDataNode) onUnload() {
-	n.Data = nil
+	if n.Data != nil {
+		n.Data.Close()
+		n.Data = nil
+	}
 }
 
 func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, col file.ColumnBlock, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {

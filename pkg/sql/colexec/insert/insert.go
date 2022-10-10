@@ -63,19 +63,20 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	if err != nil {
 		return false, err
 	}
-
 	err = n.TargetTable.Write(ctx, bat)
+	n.Affected += uint64(len(bat.Zs))
+	
 	if err != nil {
 		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return false, err2
 		}
 		return false, err
 	}
-	n.Affected += uint64(len(bat.Zs))
 	err = txnOperator.Commit(ctx)
 	if err != nil {
 		return false, err
 	}
+	
 	return false, err
 }
 

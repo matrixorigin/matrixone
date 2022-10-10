@@ -22,15 +22,15 @@ import (
 )
 
 // A few allocators for TAE
-var TAEDefaultAllocator *mpool.MPool
-var TAEGPool *mpool.MPool
-var TAEImmutableAllocator *mpool.MPool
+var DefaultAllocator *mpool.MPool
+var MutMemAllocator *mpool.MPool
+var LogAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
-	TAEDefaultAllocator = mpool.MustNewZero()
-	TAEGPool = mpool.MustNewZero()
-	TAEImmutableAllocator = mpool.MustNewZero()
+	DefaultAllocator = mpool.MustNewZero()
+	MutMemAllocator = mpool.MustNewZero()
+	LogAllocator = mpool.MustNewZero()
 }
 
 // dn service call this during start up, to get a real cached pool.
@@ -39,18 +39,18 @@ var once sync.Once
 func InitTAEMPool() {
 	onceBody := func() {
 		var err error
-		mpool.DeleteMPool(TAEDefaultAllocator)
-		if TAEDefaultAllocator, err = mpool.NewMPool("tae_default", 0, mpool.Large); err != nil {
+		mpool.DeleteMPool(DefaultAllocator)
+		if DefaultAllocator, err = mpool.NewMPool("tae_default", 0, mpool.Large); err != nil {
 			panic(err)
 		}
 
-		mpool.DeleteMPool(TAEGPool)
-		if TAEGPool, err = mpool.NewMPool("tae_gpool", 0, mpool.Mid); err != nil {
+		mpool.DeleteMPool(MutMemAllocator)
+		if MutMemAllocator, err = mpool.NewMPool("tae_immutable", 0, mpool.Mid); err != nil {
 			panic(err)
 		}
 
-		mpool.DeleteMPool(TAEImmutableAllocator)
-		if TAEGPool, err = mpool.NewMPool("tae_immutable", 0, mpool.Small); err != nil {
+		mpool.DeleteMPool(LogAllocator)
+		if LogAllocator, err = mpool.NewMPool("tae_log", 0, mpool.Mid); err != nil {
 			panic(err)
 		}
 	}

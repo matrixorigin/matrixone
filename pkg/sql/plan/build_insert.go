@@ -24,6 +24,9 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	if stmt.OnDuplicateUpdate != nil {
+		return nil, moerr.NewNotSupported("INSERT ... ON DUPLICATE KEY UPDATE ...")
+	}
 	rows := stmt.Rows
 	switch rows.Select.(type) {
 	case *tree.ValuesClause:

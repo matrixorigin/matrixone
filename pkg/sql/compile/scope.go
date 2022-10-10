@@ -147,6 +147,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	{
 		var err error
+
 		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err

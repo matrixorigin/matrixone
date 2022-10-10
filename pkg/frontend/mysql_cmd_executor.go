@@ -1538,15 +1538,13 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.New(types.T_varchar.ToType())
-	// XXX Memory accounting or not.
-	if err := vector.AppendBytes(vec, vs, nil); err != nil {
-		return err
-	}
+	vec := vector.NewWithBytes(types.T_varchar.ToType(), vs, nil, session.Mp)
 	bat.Vecs[0] = vec
 	bat.InitZsOne(count)
 
-	return fill(session, bat)
+	err := fill(session, bat)
+	vec.Free(session.Mp)
+	return err
 }
 
 var _ ComputationWrapper = &TxnComputationWrapper{}
@@ -2357,17 +2355,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				var option *explain.ExplainOptions
 				option, err = getExplainOption(statement.Options)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = explainQuery.ExplainPlan(buffer, option)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				/*
@@ -2380,7 +2378,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			}
-			return nil
 		}
 	handleSucceeded:
 		//load data handle txn failure internally
@@ -2448,6 +2445,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		return err
 	handleNext:
 	} // end of for
+
 	return nil
 }
 
@@ -2551,6 +2549,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2578,6 +2577,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2611,15 +2611,18 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 		return "", err
 	}
 	sql := fmt.Sprintf("execute %s", stmtName)
+	varStrings := make([]string, len(names))
 	if len(names) > 0 {
 		sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
 		for i := 0; i < len(names); i++ {
+			varStrings[i] = fmt.Sprintf("%v", vars[i])
 			err := mce.ses.SetUserDefinedVar(names[i], vars[i])
 			if err != nil {
 				return "", err
 			}
 		}
 	}
+	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
 	return sql, nil
 }
 
@@ -2656,7 +2659,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:

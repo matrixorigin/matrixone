@@ -125,12 +125,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 		return nil, err
 	}
 
-	var dbNames []string
-	for _, resp := range resps {
-		dbNames = append(dbNames, resp.Names...)
-	}
-
-	return dbNames, nil
+	return resps[0].Names, nil
 }
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
@@ -139,7 +134,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 		ctx,
 		txnOperator,
 		false,
-		e.anyShard,
+		e.allShards,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),
