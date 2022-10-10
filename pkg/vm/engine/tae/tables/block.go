@@ -119,7 +119,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	if meta.GetMetaLoc() != "" {
+	if meta.HasPersistedData() {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -230,7 +230,7 @@ func (blk *dataBlock) estimateABlkRawScore() (score int) {
 }
 
 func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
-	if blk.meta.HasDropped() {
+	if blk.meta.HasDropCommitted() {
 		dropped = true
 		return
 	}
@@ -302,7 +302,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	// If the conditions are met, immediately modify the data block status to NotAppendable
 	blk.FreezeAppend()
 	blk.meta.RLock()
-	dropped := blk.meta.IsDroppedCommitted()
+	dropped := blk.meta.HasDropCommittedLocked()
 	inTxn := blk.meta.IsCreating()
 	blk.meta.RUnlock()
 	if dropped || inTxn {
