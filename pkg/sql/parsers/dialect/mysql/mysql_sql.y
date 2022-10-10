@@ -3533,124 +3533,163 @@ table_function:
         a1 := $3
         a2 := "$"
         a3 := false
-        $$ = &tree.Unnest{
-                Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+        e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' STRING ',' STRING ')'
     {
-        a1 := $3
-        a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
+	a1 := $3
+	a2 := "$"
+	if len($5) > 0 {
+       	    a2 = $5
         }
         a3 := false
-        $$ = &tree.Unnest{
-                Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' STRING ',' STRING ',' TRUE ')'
     {
-        a1 := $3
-        a2 := "$"
+    	a1 := $3
+    	a2 := "$"
         if len($5) > 0 {
             a2 = $5
         }
-        a3 := true
-        $$ = &tree.Unnest{
-                Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+	a3 := true
+	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' STRING ',' STRING ',' FALSE ')'
     {
-        a1 := $3
-        a2 := "$"
-        if len($5) > 0 {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
             a2 = $5
         }
-        a3 := false
-        $$ = &tree.Unnest{
-            Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+    	a3 := false
+	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' column_name ')'
     {
-        a1 := $3
-        a2 := "$"
-        a3 := false
-        $$ = &tree.Unnest{
-            Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+    	a1 := $3
+    	a2 := "$"
+    	a3 := false
+	e1 := a1
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' column_name ',' STRING ')'
     {
-        a1 := $3
-        a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-        a3 := false
-        $$ = &tree.Unnest{
-            Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+	e1 := a1
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' column_name ',' STRING ',' TRUE ')'
     {
-        a1 := $3
-        a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-        a3 := true
-        $$ = &tree.Unnest{
-            Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := true
+	e1 := a1
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
 |   UNNEST '(' column_name ',' STRING ',' FALSE ')'
     {
-        a1 := $3
-        a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-        a3 := false
-        $$ = &tree.Unnest{
-            Param: &tree.UnnestParam{
-                Origin: a1,
-                Path: a2,
-                Outer: a3,
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+	e1 := a1
+        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
+        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
+        exprs := tree.Exprs{e1, e2, e3}
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: exprs,
+                Type: tree.FUNC_TYPE_TABLE,
             },
-        }
+	}
     }
-
 
 
 as_opt:
