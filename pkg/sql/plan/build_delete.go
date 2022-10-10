@@ -248,7 +248,7 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 }
 
 func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, error) {
-	var useKey *ColDef = nil
+	var useKey *ColDef
 	isHideKey := false
 	tblName := tf.baseNameMap[tableDef.Name]
 
