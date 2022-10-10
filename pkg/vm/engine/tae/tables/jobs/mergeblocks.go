@@ -105,6 +105,9 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
 func (task *mergeBlocksTask) mergeColumn(vecs []containers.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []containers.Vector, mapping []uint32) {
+	if len(vecs) == 0 {
+		return
+	}
 	if sort {
 		if isPrimary {
 			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
@@ -187,6 +190,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		view.ApplyDeletes()
 		vec := view.Orphan()
 		defer vec.Close()
+		if vec.Length() == 0 {
+			continue
+		}
 		vecs = append(vecs, vec)
 		rows[i] = uint32(vec.Length())
 		fromAddr = append(fromAddr, uint32(length))

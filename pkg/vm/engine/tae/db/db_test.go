@@ -361,6 +361,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		metaLoc := blockio.EncodeBlkMetaLoc(
 			blockFile.Fingerprint(),
+			types.TS{},
 			blockFile.GetMeta().GetExtent(),
 			uint32(bat.Length()))
 		blk.UpdateMetaLoc(metaLoc)
