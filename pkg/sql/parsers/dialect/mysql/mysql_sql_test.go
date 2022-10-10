@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "show profiles",
+		input:  "truncate t1",
+		output: "truncate table t1",
 	}
 )
 
@@ -94,6 +95,12 @@ var (
 		input: "select * from tables",
 	}, {
 		input: "update t1 set a = default",
+	}, {
+		input:  "truncate t1",
+		output: "truncate table t1",
+	}, {
+		input:  "truncate table t1",
+		output: "truncate table t1",
 	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",

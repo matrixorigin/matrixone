@@ -333,7 +333,7 @@ import (
 
 %type <statement> stmt
 %type <statements> stmt_list
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -569,6 +569,7 @@ stmt:
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
+|   truncate_table_stmt
 |   explain_stmt
 |   prepare_stmt
 |   deallocate_stmt
@@ -2359,6 +2360,16 @@ unresolved_object_name:
 |   ident '.' ident '.' ident
     {
         $$ = tree.SetUnresolvedObjectName(3, [3]string{$5, $3, $1})
+    }
+
+truncate_table_stmt:
+    TRUNCATE table_name
+    {
+    	$$ = tree.NewTruncateTable($2)
+    }
+|   TRUNCATE TABLE table_name
+    {
+	$$ = tree.NewTruncateTable($3)
     }
 
 drop_stmt:
