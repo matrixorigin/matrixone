@@ -60,9 +60,8 @@ func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 
 func TestInitSchemaByInnerExecutor(t *testing.T) {
 	type args struct {
-		ctx  context.Context
-		ch   chan string
-		mode string
+		ctx context.Context
+		ch  chan string
 	}
 	tests := []struct {
 		name string
@@ -71,17 +70,15 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		{
 			name: "dummy",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 		{
 			name: "dummyS3",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 	}
@@ -93,7 +90,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1 + len(initDDLs))
-			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
+			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch))
 			require.Equal(t, nil, err)
 			go func() {
 				wg.Wait()

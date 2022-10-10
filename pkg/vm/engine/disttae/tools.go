@@ -507,33 +507,6 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 	})
 }
 
-// genDeleteExpr used to generate an expression to partition table data
-func genDeleteExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
-	var args []*plan.Expr
-
-	i := 1
-	for _, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
-				i++
-			}
-		}
-	}
-	if len(args) == 0 {
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				args = append(args, newColumnExpr(1, attr.Attr.Type.Oid, attr.Attr.Name))
-				break
-			}
-		}
-	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
-}
-
 func newIntConstVal(v any) *plan.Expr {
 	var val int64
 
@@ -831,6 +804,36 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	}
 	for i := range bats {
 		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
+	}
+	return bats, nil
+}
+
+func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) {
+	txn := tbl.db.txn
+	bats := make([]*batch.Batch, len(tbl.parts))
+	for i := range bats {
+		bats[i] = batch.New(true, bat.Attrs)
+		for j := range bats[i].Vecs {
+			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+	}
+	vec := bat.GetVector(0)
+	vs := vector.MustTCols[types.Rowid](vec)
+	for i, v := range vs {
+		for j, part := range tbl.parts {
+			if part.Get(v, txn.meta.SnapshotTS) {
+				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
+					for _, bat := range bats {
+						bat.Clean(txn.proc.Mp())
+					}
+					return nil, err
+				}
+				break
+			}
+		}
+	}
+	for i := range bats {
+		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
 	}
 	return bats, nil
 }

@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -32,7 +33,6 @@ const (
 	CmdDeleteBitmap
 	CmdBatch
 	CmdAppend
-	CmdUpdate
 	CmdDelete
 	CmdComposed
 	CmdTxn

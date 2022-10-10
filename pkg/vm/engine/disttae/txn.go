@@ -190,11 +190,6 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-	} else {
-		if bat = txn.deleteBatch(bat, databaseId, tableId); bat.Length() == 0 {
-			bat.Clean(txn.proc.Mp())
-			return nil
-		}
 	}
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,

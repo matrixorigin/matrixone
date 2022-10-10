@@ -65,10 +65,6 @@ func (l MOLog) Size() int64 {
 
 func (l MOLog) Free() {}
 
-func (l MOLog) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
-}
-
 func (l MOLog) CsvFields() []string {
 	var result []string
 	result = append(result, l.TraceID.String())
@@ -147,10 +143,6 @@ func (m MOZapLog) Size() int64 {
 }
 
 func (m MOZapLog) Free() {}
-
-func (m MOZapLog) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
-}
 
 func (m MOZapLog) CsvFields() []string {
 	var result []string
