@@ -123,11 +123,9 @@ type Session struct {
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
-func (ss *Session) Dispose() {
-	if ss.Mp != nil {
-		mpool.DeleteMPool(ss.Mp)
-		ss.Mp = nil
-	}
+func (ses *Session) Dispose() {
+	mpool.DeleteMPool(ses.Mp)
+	ses.Mp = nil
 }
 
 type errInfo struct {
