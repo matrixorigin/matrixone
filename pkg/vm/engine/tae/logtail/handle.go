@@ -14,6 +14,12 @@
 
 package logtail
 
+/*
+
+an application on logtail mgr: build reponse to SyncLogTailRequest
+
+*/
+
 import (
 	"encoding/binary"
 	"fmt"

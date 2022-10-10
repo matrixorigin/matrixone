@@ -224,7 +224,7 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
 	names = getSegmentFileNames(tae)
 	assert.Equal(t, 0, len(names))
-	// t.Log(common.GPool.String())
+	// t.Log(common.DefaultAllocator.String())
 }
 
 // Test Steps

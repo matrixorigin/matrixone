@@ -49,7 +49,7 @@ func main() {
 		}
 		e1.SetType(entry.ETUncommitted)
 		e1.SetInfo(uncommitInfo)
-		n, err := common.TAEGPool.Alloc(common.K * 100)
+		n, err := common.LogAllocator.Alloc(common.K * 100)
 		if err != nil {
 			panic(err)
 		}
@@ -70,7 +70,7 @@ func main() {
 		e2 := entry.GetBase()
 		e2.SetType(entry.ETTxn)
 		e2.SetInfo(txnInfo)
-		n, err = common.TAEGPool.Alloc(common.K * 100)
+		n, err = common.LogAllocator.Alloc(common.K * 100)
 		if err != nil {
 			panic(err)
 		}

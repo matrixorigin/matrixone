@@ -52,8 +52,8 @@ func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
 	if size == 0 {
 		return
 	}
-	node := mpool.TAEGPool.Alloc(size)
-	defer mpool.TAEGPool.Free(node)
+	node := mpool.DefaultAllocator.Alloc(size)
+	defer mpool.DefaultAllocator.Free(node)
 	if _, err = f.Read(node.Buf[:size]); err != nil {
 		return
 	}

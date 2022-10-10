@@ -62,7 +62,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool
 	opts := new(Options)
 	// XXX what does the following test mean?
 	if len(allocator) > 0 {
-		opts.Allocator = common.TAEDefaultAllocator
+		opts.Allocator = common.DefaultAllocator
 	} else {
 		opts.Allocator = src.GetAllocator()
 	}
@@ -280,7 +280,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	return bats
 }
 
-var mockMp = common.TAEDefaultAllocator
+var mockMp = common.DefaultAllocator
 
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	vec := movec.New(typ)

@@ -278,7 +278,7 @@ func (b *Base) IsPrintTime() bool {
 func (b *Base) reset() {
 	b.descriptor.reset()
 	if b.node != nil {
-		common.TAEGPool.Free(b.node)
+		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	b.payload = nil
@@ -336,7 +336,7 @@ func (b *Base) GetInfo() any {
 
 func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 	if b.node != nil {
-		common.TAEGPool.Free(b.node)
+		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	if own {
@@ -351,7 +351,7 @@ func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 
 func (b *Base) SetPayload(buf []byte) error {
 	if b.node != nil {
-		common.TAEGPool.Free(b.node)
+		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	b.payload = buf
@@ -391,7 +391,7 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	}
 
 	if b.node == nil {
-		b.node, err = common.TAEGPool.Alloc(b.GetPayloadSize())
+		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
 		if err != nil {
 			panic(err)
 		}
@@ -430,7 +430,7 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 		return n, err
 	}
 	if b.node == nil {
-		b.node, err = common.TAEGPool.Alloc(b.GetPayloadSize())
+		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
 		if err != nil {
 			panic(err)
 		}
