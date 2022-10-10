@@ -78,10 +78,6 @@ func (s *StatementInfo) Size() int64 {
 
 func (s *StatementInfo) Free() {}
 
-func (s *StatementInfo) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
-}
-
 func (s *StatementInfo) CsvFields() []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()

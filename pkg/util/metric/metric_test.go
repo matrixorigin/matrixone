@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	"io"
 	"net/http"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,15 +124,7 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-type dummyTableOptions struct{}
-
-func (o dummyTableOptions) FormatDdl(ddl string) string { return ddl }
-func (o dummyTableOptions) GetCreateOptions() string    { return "" }
-func (o dummyTableOptions) GetTableOptions() string     { return "" }
-
-var dummyOptionsFactory = func(db, tbl string) trace.TableOptions {
-	return &dummyTableOptions{}
-}
+var dummyOptionsFactory = inittool.GetOptionFactory(inittool.NormalTableEngine)
 
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)

@@ -202,15 +202,14 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 		close(descChan)
 	}()
 
-	optFactory := trace.GetOptionFactory(batchProcessMode)
-
 	if !multiTable {
-		mustExec(singleMetricTable.ToCreateSql(true, optFactory))
+		mustExec(singleMetricTable.ToCreateSql(true))
 		for desc := range descChan {
 			sql := createView(desc)
 			mustExec(sql)
 		}
 	} else {
+		optFactory := trace.GetOptionFactory(inittool.ExternalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -221,7 +220,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	createCost = time.Since(instant)
 }
 
-type optionsFactory func(db, tbl string) trace.TableOptions
+type optionsFactory func(db, tbl string) inittool.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
 func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
@@ -340,10 +339,9 @@ var singleMetricTable = &inittool.Table{
 	Table:            `metric`,
 	Columns:          []inittool.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []inittool.Column{},
-	Engine:           "EXTERNAL",
+	Engine:           inittool.ExternalTableEngine,
 	Comment:          `metric data`,
-	CSVOptions:       trace.CommonCsvOptions,
-	BatchMode:        trace.FileService,
+	TableOptions:     trace.GetOptionFactory(inittool.ExternalTableEngine)(MetricDBConst, `metric`),
 }
 
 type ViewWhereCondition struct {

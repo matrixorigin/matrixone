@@ -17,11 +17,11 @@ package inittool
 import (
 	"bytes"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"strings"
 )
 
 type Column struct {
@@ -31,7 +31,20 @@ type Column struct {
 	Comment string
 }
 
+func (col *Column) ToCreateSql() string {
+	sb := strings.Builder{}
+	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
+	if len(col.Default) > 0 {
+		sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
+	}
+	sb.WriteString(fmt.Sprintf("COMMENT %q", col.Comment))
+	return sb.String()
+}
+
 var _ batchpipe.HasName = (*Table)(nil)
+
+var NormalTableEngine = "TABLE"
+var ExternalTableEngine = "EXTERNAL"
 
 type Table struct {
 	Database         string
@@ -40,27 +53,29 @@ type Table struct {
 	PrimaryKeyColumn []Column
 	Engine           string
 	Comment          string
-	CSVOptions       *trace.CsvOptions
-
-	BatchMode string
+	TableOptions     TableOptions
 }
 
 func (tbl *Table) GetName() string {
 	return tbl.Table
 }
 
-type optionsFactory func(db, tbl string) trace.TableOptions
+type TableOptions interface {
+	FormatDdl(ddl string) string
+	// GetCreateOptions return option for `create {option}table`, which should end with ' '
+	GetCreateOptions() string
+	GetTableOptions() string
+}
 
-func (tbl *Table) ToCreateSql(ifNotExists bool, factory optionsFactory) string {
-	TableOptions := factory(tbl.Database, tbl.Table)
+func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 
 	const newLineCharacter = ",\n"
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE ")
 	switch strings.ToUpper(tbl.Engine) {
-	case "EXTERNAL":
-		sb.WriteString(TableOptions.GetCreateOptions())
+	case ExternalTableEngine:
+		sb.WriteString(tbl.TableOptions.GetCreateOptions())
 	default:
 		panic(moerr.NewInternalError("NOT support engine: %s", tbl.Engine))
 	}
@@ -75,11 +90,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool, factory optionsFactory) string {
 		if idx > 0 {
 			sb.WriteString(newLineCharacter)
 		}
-		sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-		if len(col.Default) > 0 {
-			sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
-		}
-		sb.WriteString(fmt.Sprintf("COMMENT %q", col.Comment))
+		sb.WriteString(col.ToCreateSql())
 	}
 	// primary key
 	if len(tbl.PrimaryKeyColumn) > 0 {
@@ -94,7 +105,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool, factory optionsFactory) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
-	sb.WriteString(TableOptions.GetTableOptions())
+	sb.WriteString(tbl.TableOptions.GetTableOptions())
 
 	return sb.String()
 }
@@ -176,10 +187,16 @@ func (r *Row) SetFloat64(col string, val float64) {
 	r.SetVal(col, fmt.Sprintf("%f", val))
 }
 
+func (r *Row) SetInt64(col string, val int64) {
+	r.SetVal(col, fmt.Sprintf("%d", val))
+}
+
+// ToStrings output all column as string
 func (r *Row) ToStrings() []string {
 	return r.Columns
 }
 
+// ToValueString output string like "(column_val[,column_val]*)"
 func (r *Row) ToValueString(buf *bytes.Buffer) {
 	buf.WriteRune('(')
 	for idx, val := range r.Columns {
@@ -190,3 +207,11 @@ func (r *Row) ToValueString(buf *bytes.Buffer) {
 	}
 	buf.WriteRune(')')
 }
+
+var _ TableOptions = (*NoopTableOptions)(nil)
+
+type NoopTableOptions struct{}
+
+func (o NoopTableOptions) FormatDdl(ddl string) string { return ddl }
+func (o NoopTableOptions) GetCreateOptions() string    { return "" }
+func (o NoopTableOptions) GetTableOptions() string     { return "" }
