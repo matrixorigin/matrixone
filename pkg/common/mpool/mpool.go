@@ -16,12 +16,14 @@ package mpool
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 // Mo's extremely simple memory pool.
@@ -54,18 +56,19 @@ func (s *MPoolStats) Report(tab string) string {
 	return ret
 }
 
-func (s *MPoolStats) ReportJson(tag string) string {
+func (s *MPoolStats) ReportJson() string {
 	if s.HighWaterMark.Load() == 0 {
 		return ""
 	}
-	ret := fmt.Sprintf("\"%s\": {", tag)
+	ret := "{"
 	ret += fmt.Sprintf("\"alloc\": %d,", s.NumAlloc.Load())
 	ret += fmt.Sprintf("\"free\": %d,", s.NumFree.Load())
 	ret += fmt.Sprintf("\"goalloc\": %d,", s.NumGoAlloc.Load())
 	ret += fmt.Sprintf("\"allocBytes\": %d,", s.NumAllocBytes.Load())
 	ret += fmt.Sprintf("\"freeBytes\": %d,", s.NumFreeBytes.Load())
 	ret += fmt.Sprintf("\"currBytes\": %d,", s.NumCurrBytes.Load())
-	ret += fmt.Sprintf("\"highWaterMark\": %d}", s.HighWaterMark.Load())
+	ret += fmt.Sprintf("\"highWaterMark\": %d", s.HighWaterMark.Load())
+	ret += "}"
 	return ret
 }
 
@@ -85,22 +88,24 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 }
 
 // Update free stats, return curr bytes.
-func (s *MPoolStats) RecordFree(sz int64) int64 {
+func (s *MPoolStats) RecordFree(tag string, sz int64) int64 {
 	s.NumFree.Add(1)
 	s.NumFreeBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(-sz)
 	if curr < 0 {
+		logutil.Errorf("Mpool %s free bug, stats: %s", tag, s.Report("    "))
 		panic(moerr.NewInternalError("mpool freed more bytes than alloc"))
 	}
 	return curr
 }
 
-func (s *MPoolStats) RecordManyFrees(nfree, sz int64) int64 {
+func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 	s.NumFree.Add(nfree)
 	s.NumFreeBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(-sz)
 	if curr < 0 {
-		panic(moerr.NewInternalError("mpool freed more bytes than alloc"))
+		logutil.Errorf("Mpool %s free many bug, stats: %s", tag, s.Report("    "))
+		panic(moerr.NewInternalError("mpool freemany freed more bytes than alloc"))
 	}
 	return curr
 }
@@ -165,7 +170,7 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 	curr := globalStats.RecordAlloc(tag, int64(nb))
 	if curr > GlobalCap() {
 		// OOM, return nb back to globalStats
-		globalStats.RecordFree(int64(nb))
+		globalStats.RecordFree(tag, int64(nb))
 		return 0, moerr.NewOOM()
 	}
 
@@ -198,14 +203,87 @@ func (fp *fixedPool) destroy() {
 }
 */
 
+type detailInfo struct {
+	cnt, bytes int64
+}
+
+type mpoolDetails struct {
+	mu    sync.Mutex
+	alloc map[string]detailInfo
+	free  map[string]detailInfo
+}
+
+func newMpoolDetails() *mpoolDetails {
+	mpd := mpoolDetails{}
+	mpd.alloc = make(map[string]detailInfo)
+	mpd.free = make(map[string]detailInfo)
+	return &mpd
+}
+
+func (d *mpoolDetails) recordAlloc(nb int64) {
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v", f)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	info := d.alloc[k]
+	info.cnt += 1
+	info.bytes += nb
+	d.alloc[k] = info
+}
+
+func (d *mpoolDetails) recordFree(nb int64) {
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v", f)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	info := d.free[k]
+	info.cnt += 1
+	info.bytes += nb
+	d.free[k] = info
+}
+
+func (d *mpoolDetails) reportJson() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ret := `{"alloc": {`
+	allocs := make([]string, 0)
+	for k, v := range d.alloc {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		allocs = append(allocs, kvs)
+	}
+	ret += strings.Join(allocs, ",")
+	ret += `}, "free": {`
+	frees := make([]string, 0)
+	for k, v := range d.free {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		frees = append(frees, kvs)
+	}
+	ret += strings.Join(frees, ",")
+	ret += "}}"
+	return ret
+}
+
 // The memory pool.
 type MPool struct {
-	id    int64      // mpool generated, used to look up the MPool
-	tag   string     // user supplied, for debug/inspect
-	cap   int64      // pool capacity
-	stats MPoolStats // stats
-	pools [7]fixedPool
-	sels  *sync.Pool // weirdness, keep old API but this should go away.
+	id      int64      // mpool generated, used to look up the MPool
+	tag     string     // user supplied, for debug/inspect
+	cap     int64      // pool capacity
+	stats   MPoolStats // stats
+	pools   [7]fixedPool
+	sels    *sync.Pool // weirdness, keep old API but this should go away.
+	details *mpoolDetails
+}
+
+func (mp *MPool) EnableDetailRecording() {
+	if mp.details == nil {
+		mp.details = newMpoolDetails()
+	}
+}
+
+func (mp *MPool) DisableDetailRecording() {
+	mp.details = nil
 }
 
 func (mp *MPool) Stats() *MPoolStats {
@@ -233,7 +311,7 @@ func (mp *MPool) initPool(sz []int) error {
 		nb, err := mp.pools[i].initPool(mp.tag, mp.id, i, cnt, cap-tot)
 		if err != nil {
 			return err
-		} else {
+		} else if nb > 0 {
 			mp.stats.RecordAlloc(mp.tag, nb)
 		}
 		tot += nb
@@ -251,7 +329,7 @@ func (mp *MPool) destroy() {
 	// Those are not reflected in globalStats.
 	// Here we just compensate whatever left over in mp.stats
 	// into globalStats.
-	globalStats.RecordManyFrees(
+	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
 }
@@ -315,6 +393,27 @@ func (mp *MPool) Report() string {
 	return ret
 }
 
+func (mp *MPool) ReportJson() string {
+	ss := mp.stats.ReportJson()
+	if ss == "" {
+		return fmt.Sprintf("{\"%s\": \"\"}", mp.tag)
+	}
+	ret := fmt.Sprintf("{\"%s\": %s", mp.tag, ss)
+	for i := range mp.pools {
+		ps := mp.FixedPoolStats(i).ReportJson()
+		if ps != "" {
+			ret += fmt.Sprintf(",\n \"Fixed-%d\": %s", i, ps)
+		}
+	}
+
+	if mp.details != nil {
+		ret += `,\n "detailed_alloc": `
+		ret += mp.details.reportJson()
+	}
+
+	return ret + "}"
+}
+
 func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
@@ -361,7 +460,7 @@ func sizeToIdx(size int) int {
 	return NumFixedPool
 }
 
-func (fp *fixedPool) alloc(tag string, sz int) []byte {
+func (fp *fixedPool) alloc(sz int) []byte {
 	if fp.eleCnt == 0 {
 		return nil
 	}
@@ -370,7 +469,7 @@ func (fp *fixedPool) alloc(tag string, sz int) []byte {
 	hdr := fp.flist.get()
 	if hdr != nil {
 		// alloc from fixed pool, record alloc bytes
-		fp.stats.RecordAlloc(tag, int64(sz))
+		fp.stats.RecordAlloc("", int64(sz))
 	} else {
 		// failure to alloc, record this stats
 		fp.stats.NumGoAlloc.Add(1)
@@ -401,7 +500,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 
 	idx := sizeToIdx(sz)
 	if idx < NumFixedPool {
-		bs := mp.pools[idx].alloc(mp.tag, sz)
+		bs := mp.pools[idx].alloc(sz)
 		if bs != nil {
 			return bs, nil
 		}
@@ -410,15 +509,19 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	// fallback to go alloc, first, check we are under cap
 	gcurr := globalStats.RecordAlloc("global", int64(sz))
 	if gcurr > GlobalCap() {
-		globalStats.RecordFree(int64(sz))
+		globalStats.RecordFree("global", int64(sz))
 		return nil, moerr.NewOOM()
 	}
 
 	// check if it is under my cap
 	mycurr := mp.stats.RecordAlloc(mp.tag, int64(sz))
 	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(int64(sz))
+		mp.stats.RecordFree(mp.tag, int64(sz))
 		return nil, moerr.NewInternalError("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+	}
+
+	if mp.details != nil {
+		mp.details.recordAlloc(int64(sz))
 	}
 
 	// allocate!
@@ -434,7 +537,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 func (fp *fixedPool) free(hdr unsafe.Pointer) {
 	pHdr := (*memHdr)(hdr)
 	pHdr.allocSz = 0
-	fp.stats.RecordFree(int64(pHdr.allocSz))
+	fp.stats.RecordFree("", int64(pHdr.allocSz))
 	fp.flist.put(hdr)
 }
 
@@ -453,8 +556,11 @@ func (mp *MPool) Free(bs []byte) {
 		if pHdr.fixedPoolIdx < NumFixedPool {
 			mp.pools[pHdr.fixedPoolIdx].free(hdr)
 		} else {
-			mp.stats.RecordFree(int64(pHdr.allocSz))
-			globalStats.RecordFree(int64(pHdr.allocSz))
+			if mp.details != nil {
+				mp.details.recordFree(int64(pHdr.allocSz))
+			}
+			mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
+			globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
 		}
 	} else {
 		// cross pool free.
@@ -533,22 +639,22 @@ func (mp *MPool) GetSels() []int64 {
 func (mp *MPool) Increase(nb int64) error {
 	gcurr := globalStats.RecordAlloc("global", nb)
 	if gcurr > GlobalCap() {
-		globalStats.RecordFree(nb)
+		globalStats.RecordFree(mp.tag, nb)
 		return moerr.NewOOM()
 	}
 
 	// check if it is under my cap
 	mycurr := mp.stats.RecordAlloc(mp.tag, nb)
 	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(nb)
+		mp.stats.RecordFree(mp.tag, nb)
 		return moerr.NewInternalError("mpool out of space, alloc %d bytes, cap %d", nb, mp.cap)
 	}
 	return nil
 }
 
 func (mp *MPool) Decrease(nb int64) {
-	mp.stats.RecordFree(nb)
-	globalStats.RecordFree(nb)
+	mp.stats.RecordFree(mp.tag, nb)
+	globalStats.RecordFree("global", nb)
 }
 
 func MakeSliceWithCap[T any](n, cap int, mp *MPool) ([]T, error) {
@@ -575,4 +681,50 @@ func MakeSliceArgs[T any](mp *MPool, args ...T) ([]T, error) {
 	}
 	copy(ret, args)
 	return ret, nil
+}
+
+// Report memory usage in json.
+func ReportMemUsage(tag string) string {
+	gstat := fmt.Sprintf("{\"global\":%s}", globalStats.ReportJson())
+	if tag == "global" {
+		return "[" + gstat + "]"
+	}
+
+	var poolStats []string
+	if tag == "" {
+		poolStats = append(poolStats, gstat)
+	}
+
+	gather := func(key, value any) bool {
+		mp := value.(*MPool)
+		if tag == "" || tag == mp.tag {
+			poolStats = append(poolStats, mp.ReportJson())
+		}
+		return true
+	}
+	globalPools.Range(gather)
+
+	return "[" + strings.Join(poolStats, ",") + "]"
+}
+
+func MPoolControl(tag string, cmd string) string {
+	if tag == "" || tag == "global" {
+		return "Cannot enable detail on mpool global stats"
+	}
+
+	cmdFunc := func(key, value any) bool {
+		mp := value.(*MPool)
+		if tag == mp.tag {
+			switch cmd {
+			case "enable_detail":
+				mp.EnableDetailRecording()
+			case "disable_detail":
+				mp.DisableDetailRecording()
+			}
+		}
+		return true
+	}
+
+	globalPools.Range(cmdFunc)
+	return "ok"
 }

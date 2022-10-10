@@ -28,9 +28,9 @@ var LogAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
-	DefaultAllocator = mpool.MustNewZero()
-	MutMemAllocator = mpool.MustNewZero()
-	LogAllocator = mpool.MustNewZero()
+	DefaultAllocator, _ = mpool.NewMPool("tae_default_init", 0, mpool.NoFixed)
+	MutMemAllocator, _ = mpool.NewMPool("tae_immutable_init", 0, mpool.NoFixed)
+	LogAllocator, _ = mpool.NewMPool("tae_log_init", 0, mpool.NoFixed)
 }
 
 // dn service call this during start up, to get a real cached pool.
