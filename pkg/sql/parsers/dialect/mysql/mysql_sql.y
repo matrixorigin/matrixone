@@ -284,7 +284,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -4382,6 +4382,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $2,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING '}'
@@ -4393,6 +4394,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
@@ -4404,7 +4406,34 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: $9,
+            Format: tree.CSV,
         }
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "format" || strings.ToLower($11) != "jsondata" {
+		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s'", $3, $7, $11))
+		return 1
+	    }
+	$$ = &tree.ExternParam{
+	    Filepath: $5,
+	    CompressType: tree.AUTO,
+	    Format: strings.ToLower($9),
+	    JsonData: strings.ToLower($13),
+	}
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+    	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
+    		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
+    		return 1
+    	    }
+    	$$ = &tree.ExternParam{
+    	    Filepath: $5,
+    	    CompressType: $9,
+    	    Format: strings.ToLower($13),
+    	    JsonData: strings.ToLower($17),
+    	}
     }
 
 tail_param_opt:
