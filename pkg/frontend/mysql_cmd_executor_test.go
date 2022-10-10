@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1056,7 +1057,9 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json := serializePlanToJson(plan, uuid.New())
+		json, rows, bytes := serializePlanToJson(plan, uuid.New())
+		require.Equal(t, int64(0), rows)
+		require.Equal(t, int64(0), bytes)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
 }
