@@ -1,10 +1,10 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,9 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package host
+package tree
 
-type Mmu struct {
-	size  int64
-	limit int64
+type TableFunction struct {
+	statementImpl
+	Func *FuncExpr
+}
+
+func (t *TableFunction) Format(ctx *FmtCtx) {
+	t.Func.Format(ctx)
+}
+
+func (t TableFunction) Id() string {
+	_, _, name := t.Func.Func.FunctionReference.(*UnresolvedName).GetNames()
+	return name
 }

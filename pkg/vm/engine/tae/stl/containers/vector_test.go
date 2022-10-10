@@ -20,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,15 +29,12 @@ func withAllocator(opts *Options) *Options {
 	if opts == nil {
 		opts = new(Options)
 	}
-	allocator := stl.NewSimpleAllocator()
-	opts.Allocator = allocator
+	opts.Allocator = mpool.MustNewZero()
 	return opts
 }
 
 func TestVector1(t *testing.T) {
-	opts := new(Options)
-	opts.Capacity = 1
-	opts.Allocator = stl.NewSimpleAllocator()
+	opts := withAllocator(nil)
 	vec := NewVector[int64](opts)
 	now := time.Now()
 
@@ -46,7 +44,7 @@ func TestVector1(t *testing.T) {
 	t.Log(time.Since(now))
 	t.Log(vec.String())
 	allocator := vec.GetAllocator()
-	assert.True(t, allocator.Usage() > 0)
+	assert.True(t, allocator.CurrNB() > 0)
 	now = time.Now()
 	for i := 0; i < 500; i++ {
 		v := vec.Get(i)
@@ -71,7 +69,7 @@ func TestVector1(t *testing.T) {
 
 	vec.Close()
 	vec2.Close()
-	assert.True(t, allocator.Usage() == 0)
+	assert.True(t, allocator.CurrNB() == 0)
 }
 
 func TestVector2(t *testing.T) {
@@ -90,8 +88,7 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	opts := new(Options)
-	opts.Allocator = stl.NewSimpleAllocator()
+	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
@@ -108,16 +105,12 @@ func TestVector3(t *testing.T) {
 	assert.Equal(t, "h3", string(vec.Get(2)))
 	assert.Equal(t, "h4", string(vec.Get(3)))
 	t.Log(vec.String())
-	alloc := vec.GetAllocator()
-	t.Log(alloc.String())
 	vec.Close()
-	assert.Equal(t, 0, alloc.Usage())
+	assert.Equal(t, int64(0), opts.Allocator.CurrNB())
 }
 
 func TestVector4(t *testing.T) {
-	opts := &Options{
-		Allocator: stl.NewSimpleAllocator(),
-	}
+	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
@@ -133,16 +126,12 @@ func TestVector4(t *testing.T) {
 	assert.Equal(t, "h3", string(vec.Get(1)))
 	assert.Equal(t, "h4", string(vec.Get(2)))
 	t.Log(vec.String())
-	alloc := vec.GetAllocator()
-	t.Log(alloc.String())
 	vec.Close()
-	assert.Equal(t, 0, alloc.Usage())
+	assert.Equal(t, int64(0), opts.Allocator.CurrNB())
 }
 
 func TestVector5(t *testing.T) {
-	opts := &Options{
-		Allocator: stl.NewSimpleAllocator(),
-	}
+	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("hh2"))
@@ -188,8 +177,7 @@ func TestVector5(t *testing.T) {
 	assert.Equal(t, "hhhh4", string(vec2.Get(2)))
 	vec2.Close()
 	vec.Close()
-	t.Log(opts.Allocator.String())
-	assert.Equal(t, 0, opts.Allocator.Usage())
+	assert.Equal(t, int64(0), opts.Allocator.CurrNB())
 }
 
 func TestVector6(t *testing.T) {
@@ -226,9 +214,7 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
-	allocator := stl.NewSimpleAllocator()
-	opts := new(Options)
-	opts.Allocator = allocator
+	opts := withAllocator(nil)
 	vec := NewVector[int16](opts)
 	vec.Append(int16(1))
 	vec.Append(int16(2))
@@ -246,7 +232,7 @@ func TestVector7(t *testing.T) {
 	d = vec3.Data()
 	assert.Equal(t, 5, len(d))
 	vec3.Close()
-	assert.Equal(t, 0, allocator.Usage())
+	assert.Equal(t, int64(0), opts.Allocator.CurrNB())
 
 	vec2 := NewVector[[]byte](opts)
 	vec2.Append([]byte("h1"))
@@ -256,10 +242,9 @@ func TestVector7(t *testing.T) {
 	bs := vec2.Bytes()
 	t.Log(vec2.String())
 
-	allocated := allocator.Usage()
+	allocated := opts.Allocator.CurrNB()
 
-	opt2 := new(Options)
-	opt2.Allocator = allocator
+	opt2 := withAllocator(nil)
 	opt2.Data = bs
 
 	vec4 := NewVector[[]byte](opt2)
@@ -268,15 +253,14 @@ func TestVector7(t *testing.T) {
 	assert.Equal(t, vec2.Get(1), vec4.Get(1))
 	assert.Equal(t, vec2.Get(2), vec4.Get(2))
 	assert.Equal(t, vec2.Get(3), vec4.Get(3))
-	assert.Equal(t, allocated, allocator.Usage())
+	assert.Equal(t, allocated, opts.Allocator.CurrNB())
 
 	vec2.Close()
+	assert.Equal(t, int64(0), opts.Allocator.CurrNB())
 }
 
 func TestVector8(t *testing.T) {
-	allocator := stl.NewSimpleAllocator()
-	opts := new(Options)
-	opts.Allocator = allocator
+	opts := withAllocator(nil)
 	vec := NewVector[int32](opts)
 	vec.AppendMany(int32(1), int32(3), int32(9))
 	t.Log(vec.String())
@@ -295,12 +279,11 @@ func TestVector8(t *testing.T) {
 	t.Log(vec2.String())
 	vec.Close()
 	vec2.Close()
-	t.Log(allocator.String())
-	assert.Zero(t, allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestVector9(t *testing.T) {
-	allocator := stl.NewSimpleAllocator()
+	allocator := mpool.MustNewZero()
 	opts := new(Options)
 	opts.Allocator = allocator
 	vec := NewVector[[]byte](opts)
@@ -324,7 +307,7 @@ func TestVector9(t *testing.T) {
 	assert.Equal(t, vec.Get(2), vec2.Get(2))
 	vec.Close()
 	vec2.Close()
-	assert.Zero(t, allocator.Usage())
+	assert.Zero(t, allocator.CurrNB())
 }
 
 func TestVector10(t *testing.T) {
@@ -366,7 +349,7 @@ func TestVector10(t *testing.T) {
 	vec.Close()
 	vec2.Close()
 	vec3.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestVector11(t *testing.T) {
@@ -380,21 +363,21 @@ func TestVector11(t *testing.T) {
 	vec.Append([]byte(h2))
 	vec.Append([]byte(h3))
 	vec.Append([]byte(h4))
-	usage := opts.Allocator.Usage()
+	usage := opts.Allocator.CurrNB()
 	allocted := vec.Allocated()
-	assert.Equal(t, usage, allocted)
+	assert.Equal(t, int(usage), allocted)
 	assert.Equal(t, 4, vec.Length())
 	vec.Reset()
 	assert.Zero(t, vec.Length())
-	assert.Equal(t, usage, opts.Allocator.Usage())
-	assert.Equal(t, usage, vec.Allocated())
+	assert.Equal(t, usage, opts.Allocator.CurrNB())
+	assert.Equal(t, int(usage), vec.Allocated())
 
 	vec.Append([]byte("x1"))
 	assert.Equal(t, 1, vec.Length())
 	assert.Equal(t, "x1", string(vec.Get(0)))
 	t.Log(vec.String())
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestVector12(t *testing.T) {
@@ -424,7 +407,7 @@ func TestVector12(t *testing.T) {
 
 	vec2.Close()
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestStrVector1(t *testing.T) {
@@ -486,7 +469,7 @@ func TestStrVector1(t *testing.T) {
 
 	vec2.Close()
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestStrVector2(t *testing.T) {
@@ -521,7 +504,7 @@ func TestStrVector2(t *testing.T) {
 	vec4.Close()
 	vec3.Close()
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestStrVector3(t *testing.T) {
@@ -590,7 +573,7 @@ func TestStrVector3(t *testing.T) {
 	assert.Equal(t, h6, string(vec.Get(3)))
 
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func getBytes(i int) []byte {
@@ -617,5 +600,5 @@ func TestStrVector4(t *testing.T) {
 
 	t.Log(time.Since(now))
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }

@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Nullable struct {
@@ -43,15 +43,13 @@ func (n Nullable) Equal(n2 Nullable) bool {
 }
 
 func (n Nullable) AppendVector(
-	vec *vector.Vector,
-	heap *mheap.Mheap,
-) {
+	vec *vector.Vector, mp *mpool.MPool) {
 	value := n.Value
 	str, ok := value.(string)
 	if ok {
 		value = []byte(str)
 	}
-	vec.Append(value, false, heap)
+	vec.Append(value, false, mp)
 	if n.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

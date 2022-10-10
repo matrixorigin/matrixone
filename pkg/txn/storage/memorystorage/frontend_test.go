@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -29,10 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 
@@ -64,10 +61,7 @@ func TestFrontend(t *testing.T) {
 	}
 	frontendParameters.SetDefaultValues()
 
-	hostMMU := host.New(frontendParameters.HostMmuLimitation)
-	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
-	heap := mheap.New(guestMMU)
-	memoryPool := mempool.New()
+	mp := mpool.MustNewZero()
 
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,
@@ -83,7 +77,7 @@ func TestFrontend(t *testing.T) {
 	}
 	engine := memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
+		memoryengine.NewDefaultShardPolicy(mp),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
@@ -97,7 +91,7 @@ func TestFrontend(t *testing.T) {
 		return time.Now().Unix()
 	}, math.MaxInt)
 	storage, err := NewMemoryStorage(
-		heap,
+		mp,
 		memtable.SnapshotIsolation,
 		clock,
 		memoryengine.RandomIDGenerator,
@@ -110,8 +104,6 @@ func TestFrontend(t *testing.T) {
 
 	pu := &config.ParameterUnit{
 		SV:            frontendParameters,
-		HostMmu:       hostMMU,
-		Mempool:       memoryPool,
 		StorageEngine: engine,
 		TxnClient:     txnClient,
 		FileService:   testutil.NewFS(),
@@ -134,8 +126,7 @@ func TestFrontend(t *testing.T) {
 			1024,
 			frontendParameters,
 		),
-		guestMMU,
-		memoryPool,
+		nil,
 		pu,
 		globalVars,
 	)

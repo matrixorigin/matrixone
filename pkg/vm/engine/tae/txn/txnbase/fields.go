@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -38,7 +39,8 @@ func (mgr *TxnManager) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 func (txn *Txn) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	txn.RLock()
 	defer txn.RUnlock()
-	enc.AddString("id", txn.ID)
+	enc.AddString("id", fmt.Sprintf("%X", txn.ID))
+	//enc.AddString("id", txn.ID)
 	enc.AddString("startTs", txn.StartTS.ToString())
 	enc.AddString("state", txnif.TxnStrState(txn.State))
 	if !txn.IsActiveLocked() {

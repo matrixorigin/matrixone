@@ -531,7 +531,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%s PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 

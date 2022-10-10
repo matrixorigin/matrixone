@@ -19,12 +19,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -46,10 +44,8 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []connectorTestCase{
-		newTestCase(gm),
+		newTestCase(),
 	}
 }
 
@@ -95,12 +91,12 @@ func TestConnector(t *testing.T) {
 			}
 			bat.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp()), int64(0))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-func newTestCase(gm *guest.Mmu) connectorTestCase {
-	proc := testutil.NewProcessWithMheap(mheap.New(gm))
+func newTestCase() connectorTestCase {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{
