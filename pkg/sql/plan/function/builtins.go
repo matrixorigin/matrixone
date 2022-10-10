@@ -2519,4 +2519,18 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_MEMORY_USAGE: {
+		Id: MO_MEMORY_USAGE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoMemUsage,
+			},
+		},
+	},
 }

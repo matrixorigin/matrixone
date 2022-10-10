@@ -243,15 +243,18 @@ const (
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
 
+	UUID
+	SERIAL
+	BIN //BIN
+
 	ENABLE_FAULT_INJECTION
 	DISABLE_FAULT_INJECTION
 	ADD_FAULT_POINT     // Add a fault point
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
-	UUID
 
-	SERIAL
-	BIN //BIN
+	MO_MEMORY_USAGE // Dump memory usage
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -424,6 +427,7 @@ var functionIdRegister = map[string]int32{
 	"regexp_like":             REGEXP_LIKE,
 	"regexp_replace":          REGEXP_REPLACE,
 	"regexp_substr":           REGEXP_SUBSTR,
+	"mo_memory_usage":         MO_MEMORY_USAGE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

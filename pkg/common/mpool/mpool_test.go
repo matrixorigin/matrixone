@@ -130,3 +130,34 @@ func TestFreelist(t *testing.T) {
 	require.True(t, totalOK1 == totalOK2, "wrong ok counter")
 	require.True(t, totalOK2+totalMiss == 20*1000000, "wrong counter")
 }
+
+func TestReportMemUsage(t *testing.T) {
+	// Just test a mid sized
+	m, err := NewMPool("testjson", 0, Small)
+	require.True(t, err == nil, "new mpool failed %v", err)
+	mem, err := m.Alloc(1000000)
+	require.True(t, err == nil, "mpool alloc failed %v", err)
+
+	j1 := ReportMemUsage("")
+	j2 := ReportMemUsage("global")
+	j3 := ReportMemUsage("testjson")
+	t.Logf("mem usage: %s", j1)
+	t.Logf("global mem usage: %s", j2)
+	t.Logf("testjson mem usage: %s", j3)
+
+	m.Free(mem)
+	j1 = ReportMemUsage("")
+	j2 = ReportMemUsage("global")
+	j3 = ReportMemUsage("testjson")
+	t.Logf("mem usage: %s", j1)
+	t.Logf("global mem usage: %s", j2)
+	t.Logf("testjson mem usage: %s", j3)
+
+	DeleteMPool(m)
+	j1 = ReportMemUsage("")
+	j2 = ReportMemUsage("global")
+	j3 = ReportMemUsage("testjson")
+	t.Logf("mem usage: %s", j1)
+	t.Logf("global mem usage: %s", j2)
+	t.Logf("testjson mem usage: %s", j3)
+}
