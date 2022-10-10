@@ -438,8 +438,9 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 						// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
 						// here, otherwise an old deadline will be out causing io/timeout.
-						if _, ok := f.message.Message.(PayloadMessage); ok {
-							rb.conn.RawConn().SetWriteDeadline(time.Now().Add(v))
+						conn := rb.conn.RawConn()
+						if _, ok := f.message.Message.(PayloadMessage); ok && conn != nil {
+							conn.SetWriteDeadline(time.Now().Add(v))
 						}
 						if err := rb.conn.Write(f.message, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
