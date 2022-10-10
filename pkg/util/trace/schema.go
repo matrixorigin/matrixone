@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	"strings"
 	"time"
 
@@ -115,7 +114,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		return nil
 	}
 
-	optFactory := GetOptionFactory(inittool.ExternalTableEngine)
+	optFactory := GetOptionFactory(ExternalTableEngine)
 
 	if err := mustExec(sqlCreateDBConst); err != nil {
 		return err
@@ -139,7 +138,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
-var _ inittool.TableOptions = (*CsvTableOptions)(nil)
+var _ TableOptions = (*CsvTableOptions)(nil)
 
 type CsvTableOptions struct {
 	Formatter string
@@ -166,14 +165,14 @@ func (o *CsvTableOptions) GetTableOptions() string {
 	return ""
 }
 
-func GetOptionFactory(engine string) func(db, tbl string) inittool.TableOptions {
+func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
 	switch engine {
-	case inittool.NormalTableEngine:
-		return func(_, _ string) inittool.TableOptions { return inittool.NoopTableOptions{} }
-	case inittool.ExternalTableEngine:
+	case NormalTableEngine:
+		return func(_, _ string) TableOptions { return NoopTableOptions{} }
+	case ExternalTableEngine:
 		var infileFormatter = ` infile{"filepath"="etl:%s/%s_*.csv","compression"="none"}` +
 			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
-		return func(db, tbl string) inittool.TableOptions {
+		return func(db, tbl string) TableOptions {
 			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
 		}
 	default:

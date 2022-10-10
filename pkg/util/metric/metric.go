@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -209,7 +208,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			mustExec(sql)
 		}
 	} else {
-		optFactory := trace.GetOptionFactory(inittool.ExternalTableEngine)
+		optFactory := trace.GetOptionFactory(trace.ExternalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -220,7 +219,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	createCost = time.Since(instant)
 }
 
-type optionsFactory func(db, tbl string) inittool.TableOptions
+type optionsFactory func(db, tbl string) trace.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
 func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
@@ -325,35 +324,35 @@ func WithExportInterval(sec int) InitOption {
 }
 
 var (
-	metricNameColumn        = inittool.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	metricCollectTimeColumn = inittool.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
-	metricValueColumn       = inittool.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
-	metricNodeColumn        = inittool.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
-	metricRoleColumn        = inittool.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
-	metricAccountColumn     = inittool.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
-	metricTypeColumn        = inittool.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
+	metricNameColumn        = trace.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	metricCollectTimeColumn = trace.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
+	metricValueColumn       = trace.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
+	metricNodeColumn        = trace.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
+	metricRoleColumn        = trace.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
+	metricAccountColumn     = trace.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
+	metricTypeColumn        = trace.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
 )
 
-var singleMetricTable = &inittool.Table{
+var singleMetricTable = &trace.Table{
 	Database:         MetricDBConst,
 	Table:            `metric`,
-	Columns:          []inittool.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
-	PrimaryKeyColumn: []inittool.Column{},
-	Engine:           inittool.ExternalTableEngine,
+	Columns:          []trace.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
+	PrimaryKeyColumn: []trace.Column{},
+	Engine:           trace.ExternalTableEngine,
 	Comment:          `metric data`,
-	TableOptions:     trace.GetOptionFactory(inittool.ExternalTableEngine)(MetricDBConst, `metric`),
+	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
 }
 
 type ViewWhereCondition struct {
 	Table string
 }
 
-func NewMetricView(tbl string, opts ...inittool.ViewOption) *inittool.View {
-	view := &inittool.View{
+func NewMetricView(tbl string, opts ...trace.ViewOption) *trace.View {
+	view := &trace.View{
 		Database:    MetricDBConst,
 		Table:       tbl,
 		OriginTable: singleMetricTable,
-		Columns:     []inittool.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
+		Columns:     []trace.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
 		Condition:   &ViewWhereCondition{Table: tbl},
 	}
 	for _, opt := range opts {
@@ -362,12 +361,12 @@ func NewMetricView(tbl string, opts ...inittool.ViewOption) *inittool.View {
 	return view
 }
 
-func NewMetricViewWithLabels(tbl string, lbls []string) *inittool.View {
-	var options []inittool.ViewOption
+func NewMetricViewWithLabels(tbl string, lbls []string) *trace.View {
+	var options []trace.ViewOption
 	for _, label := range lbls {
 		for _, col := range singleMetricTable.Columns {
 			if strings.EqualFold(label, col.Name) {
-				options = append(options, inittool.WithColumn(col))
+				options = append(options, trace.WithColumn(col))
 			}
 		}
 	}
@@ -379,15 +378,15 @@ func (tbl *ViewWhereCondition) String() string {
 }
 
 var gView struct {
-	content map[string]*inittool.View
+	content map[string]*trace.View
 	mu      sync.Mutex
 }
 
-func GetMetricViewWithLabels(tbl string, lbls []string) *inittool.View {
+func GetMetricViewWithLabels(tbl string, lbls []string) *trace.View {
 	gView.mu.Lock()
 	defer gView.mu.Unlock()
 	if len(gView.content) == 0 {
-		gView.content = make(map[string]*inittool.View)
+		gView.content = make(map[string]*trace.View)
 	}
 	view, exist := gView.content[tbl]
 	if !exist {

@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/inittool"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -383,7 +382,7 @@ func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) *trace.CSVRequest {
 func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) *trace.CSVRequest {
 	buf.Reset()
 	writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable)
-	writeValues := func(row *inittool.Row) {
+	writeValues := func(row *trace.Row) {
 		s.writeCsvOneLine(buf, row.ToStrings())
 	}
 

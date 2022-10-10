@@ -17,7 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/inittool"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net/http"
 	"strings"
@@ -124,7 +124,7 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-var dummyOptionsFactory = inittool.GetOptionFactory(inittool.NormalTableEngine)
+var dummyOptionsFactory = trace.GetOptionFactory(trace.NormalTableEngine)
 
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)
