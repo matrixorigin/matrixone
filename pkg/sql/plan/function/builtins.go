@@ -2541,7 +2541,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
-				Args:      []types.T{types.T_int64, types.T_datetime, types.T_datetime},
+				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.TimeStampDiff,
 			},

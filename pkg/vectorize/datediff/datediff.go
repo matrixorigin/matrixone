@@ -44,12 +44,12 @@ func DateDiffAllConst(lv, rv types.Date, rs []int64) []int64 {
 	return rs
 }
 
-func TimeStampDiff(unit int64, expr1, expr2 types.Datetime) (int64, error) {
-	return (expr2 - expr1).ConvertToInterval(types.IntervalType(unit))
+func TimeStampDiff(unit string, expr1, expr2 types.Datetime) (int64, error) {
+	return (expr2 - expr1).ConvertToInterval(unit)
 }
 
-func TimeStampDiffWithCols(units []int64, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error {
-	var unit int64
+func TimeStampDiffWithCols(units []string, expr1, expr2 []types.Datetime, unitNs, firstNs, secondNs, rsNs *nulls.Nulls, rs []int64, maxLen int) error {
+	var unit string
 	if len(expr1) == 1 && len(expr2) == 1 {
 		unitsLen := len(units)
 		for i := 0; i < maxLen; i++ {

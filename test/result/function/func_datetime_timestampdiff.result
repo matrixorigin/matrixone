@@ -58,26 +58,17 @@ null
 SELECT TIMESTAMPDIFF( SECOND, '2018-01-01 7:18:20', NULL);
 timestampdiff(time_stamp_unit(second), 2018-01-01 7:18:20, null)
 null
-SELECT TIMESTAMPDIFF( NULL, '2018-01-01 7:18:20','2017-12-01 12:15:12');
-timestampdiff(null, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
-null
 SELECT TIMESTAMPDIFF( HOUR, NULL,'2017-12-01 12:15:12');
 timestampdiff(time_stamp_unit(hour), null, 2017-12-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( DAY, '2018-01-01 7:18:20', NULL);
 timestampdiff(time_stamp_unit(day), 2018-01-01 7:18:20, null)
 null
-SELECT TIMESTAMPDIFF( NULL, '2018-01-08 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(null, 2018-01-08 12:15:12, 2018-01-01 12:15:12)
-null
 SELECT TIMESTAMPDIFF( MONTH, NULL, '2017-11-01 12:15:12');
 timestampdiff(time_stamp_unit(month), null, 2017-11-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( QUARTER,  '2018-01-01 12:15:12', NULL);
 timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, null)
-null
-SELECT TIMESTAMPDIFF( NULL, '2018-01-01 12:15:12', '2017-01-01 12:15:12');
-timestampdiff(null, 2018-01-01 12:15:12, 2017-01-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2019-11-01 12:15:12');
 timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2019-11-01 12:15:12)

@@ -26,7 +26,7 @@ func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	firstVector := vectors[0]
 	secondVector := vectors[1]
 	thirdVector := vectors[2]
-	firstValues := vector.MustTCols[int64](firstVector)
+	firstValues := vector.MustStrCols(firstVector)
 	secondValues := vector.MustTCols[types.Datetime](secondVector)
 	thirdValues := vector.MustTCols[types.Datetime](thirdVector)
 	resultType := types.T_int64.ToType()

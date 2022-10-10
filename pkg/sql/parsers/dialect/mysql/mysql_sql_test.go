@@ -410,9 +410,9 @@ var (
 	}, {
 		input: "explain (analyze true,verbose false) select * from emp",
 	}, {
-		input: "select * from ontime limit 1",
+		input: "select quarter from ontime limit 1",
 	}, {
-		input: "select * from ontime limit 1",
+		input: "select month from ontime limit 1",
 	}, {
 		input: "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
 	}, {

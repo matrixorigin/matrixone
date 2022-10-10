@@ -298,7 +298,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR
+%token <str> SEPARATOR TIMESTAMPDIFF
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -424,7 +424,7 @@ import (
 
 %type <expr> literal
 %type <expr> predicate
-%type <expr> bit_expr interval_expr timediff_expr
+%type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
@@ -5438,10 +5438,6 @@ simple_expr:
     {
         $$ = $1
     }
-|	timediff_expr
-    {
- 	    $$ = $1
-    }   
 |   subquery
     {
         $$ = $1
@@ -6023,7 +6019,15 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-
+|	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
+	{   
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
@@ -6225,16 +6229,7 @@ interval_expr:
             Exprs: tree.Exprs{$2, arg2},
         }
     }
-timediff_expr:
-    time_stamp_unit
-    {
- 		name := tree.SetUnresolvedName("time_stamp_unit")
-		arg2 := tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{arg2},
-        }
-    }
+
 func_type_opt:
     {
         $$ = tree.FUNC_TYPE_DEFAULT
@@ -7704,6 +7699,7 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+|	TIMESTAMPDIFF
 
 //mo_keywords:
 //    PROPERTIES
