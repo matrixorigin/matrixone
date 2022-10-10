@@ -285,8 +285,14 @@ message TableDef {
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
-	bytes table_function_param = 8;
+	TableFunction tbl_func = 8;
 }
+
+message TableFunction{
+	string name = 1;
+	bytes param = 2;
+}
+
 
 message Cost {
 	double card		= 1;
@@ -411,7 +417,7 @@ message Node {
 		MINUS_ALL = 57;
 
 		//
-		UNNEST = 58;
+		TABLE_FUNCTION = 58;
 	}
 
 	enum JoinFlag {
