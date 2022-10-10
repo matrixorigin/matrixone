@@ -21,37 +21,27 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type TableIter[
+type TreeIter[
 	K Ordered[K],
 	V any,
 ] struct {
 	tx       *Transaction
-	iter     btree.GenericIter[*TreeItem[K, V]]
+	iter     btree.GenericIter[*PhysicalRow[K, V]]
 	readTime Time
 }
 
-func (t *Table[K, V, R]) NewIter(tx *Transaction) *TableIter[K, V] {
-	iter := t.tree.Load().Iter()
-	ret := &TableIter[K, V]{
+func (t *Tree[K, V, R]) NewIter(tx *Transaction) Iter[K, V] {
+	iter := t.rows.Copy().Iter()
+	ret := &TreeIter[K, V]{
 		tx:       tx,
 		iter:     iter,
 		readTime: tx.Time,
 	}
-	ret.seekFirst()
 	return ret
 }
 
-func (t *TableIter[K, V]) seekFirst() {
-	var zero K
-	t.iter.Seek(&TreeItem[K, V]{
-		Row: &PhysicalRow[K, V]{
-			Key: zero,
-		},
-	})
-}
-
-func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	physicalRow := t.iter.Item().Row
+func (t *TreeIter[K, V]) Read() (key K, value V, err error) {
+	physicalRow := t.iter.Item()
 	if physicalRow == nil {
 		panic("impossible")
 	}
@@ -63,21 +53,18 @@ func (t *TableIter[K, V]) Read() (key K, value V, err error) {
 	return
 }
 
-func (t *TableIter[K, V]) Item() (row *PhysicalRow[K, V]) {
-	return t.iter.Item().Row
+func (t *TreeIter[K, V]) Item() any {
+	return t.iter.Item()
 }
 
-func (t *TableIter[K, V]) Next() bool {
+func (t *TreeIter[K, V]) Next() bool {
 	for {
 		if ok := t.iter.Next(); !ok {
 			return false
 		}
 		// skip unreadable values
 		item := t.iter.Item()
-		if item.Row == nil {
-			return false
-		}
-		_, err := item.Row.Read(t.readTime, t.tx)
+		_, err := item.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -85,18 +72,14 @@ func (t *TableIter[K, V]) Next() bool {
 	}
 }
 
-func (t *TableIter[K, V]) First() bool {
+func (t *TreeIter[K, V]) First() bool {
 	if ok := t.iter.First(); !ok {
 		return false
 	}
-	t.seekFirst()
 	for {
 		// skip unreadable values
 		item := t.iter.Item()
-		if item.Row == nil {
-			return false
-		}
-		_, err := item.Row.Read(t.readTime, t.tx)
+		_, err := item.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
@@ -107,11 +90,9 @@ func (t *TableIter[K, V]) First() bool {
 	}
 }
 
-func (t *TableIter[K, V]) Seek(key K) bool {
-	pivot := &TreeItem[K, V]{
-		Row: &PhysicalRow[K, V]{
-			Key: key,
-		},
+func (t *TreeIter[K, V]) Seek(key K) bool {
+	pivot := &PhysicalRow[K, V]{
+		Key: key,
 	}
 	if ok := t.iter.Seek(pivot); !ok {
 		return false
@@ -119,10 +100,7 @@ func (t *TableIter[K, V]) Seek(key K) bool {
 	for {
 		// skip unreadable values
 		item := t.iter.Item()
-		if item.Row == nil {
-			return false
-		}
-		_, err := item.Row.Read(t.readTime, t.tx)
+		_, err := item.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
@@ -133,7 +111,7 @@ func (t *TableIter[K, V]) Seek(key K) bool {
 	}
 }
 
-func (t *TableIter[K, V]) Close() error {
+func (t *TreeIter[K, V]) Close() error {
 	t.iter.Release()
 	return nil
 }

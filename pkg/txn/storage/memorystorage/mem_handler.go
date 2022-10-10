@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -75,7 +76,7 @@ type Iter[
 	K memtable.Ordered[K],
 	V any,
 ] struct {
-	TableIter *memtable.TableIter[K, V]
+	TableIter memtable.Iter[K, V]
 	TableID   ID
 	AttrsMap  map[string]*AttributeRow
 	Expr      *plan.Expr
@@ -1035,18 +1036,17 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 
 	maxRows := 4096
 	type Row struct {
-		Value       DataValue
-		PhysicalRow *memtable.PhysicalRow[DataKey, DataValue]
+		Value      DataValue
+		LastUpdate time.Time
 	}
 	var rows []Row
 
 	for ok := fn(); ok; ok = iter.TableIter.Next() {
-		item := iter.TableIter.Item()
-		value, err := item.Read(iter.ReadTime, iter.Tx)
+		key, value, err := iter.TableIter.Read()
 		if err != nil {
 			return err
 		}
-		if item.Key.tableID != iter.TableID {
+		if key.tableID != iter.TableID {
 			break
 		}
 
@@ -1055,10 +1055,15 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 			panic(iter.Expr)
 		}
 
-		rows = append(rows, Row{
-			Value:       value,
-			PhysicalRow: item,
-		})
+		row := Row{
+			Value: value,
+		}
+		physicalRow, ok := iter.TableIter.Item().(*memtable.PhysicalRow[DataKey, DataValue])
+		if ok {
+			row.LastUpdate = physicalRow.LastUpdate
+		}
+
+		rows = append(rows, row)
 		if len(rows) >= maxRows {
 			break
 		}
@@ -1066,8 +1071,8 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Before(
-			rows[j].PhysicalRow.LastUpdate,
+		return rows[i].LastUpdate.Before(
+			rows[j].LastUpdate,
 		)
 	})
 

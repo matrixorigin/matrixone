@@ -30,7 +30,7 @@ import (
 
 type PartitionReader struct {
 	typsMap     map[string]types.Type
-	iter        *memtable.TableIter[RowID, DataValue]
+	iter        memtable.Iter[RowID, DataValue]
 	firstCalled bool
 	readTime    memtable.Time
 	tx          *memtable.Transaction
