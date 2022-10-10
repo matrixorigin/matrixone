@@ -201,7 +201,6 @@ type table struct {
 	meta       *tableMeta
 	parts      Partitions
 	insertExpr *plan.Expr
-	deleteExpr *plan.Expr
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
 	proc       *process.Process
