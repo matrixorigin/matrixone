@@ -276,7 +276,7 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		Certificates: []tls.Certificate{tlsCert},
 		ClientCAs:    certPool,
 		ClientAuth:   clientAuthPolicy,
-		MinVersion:   tls.VersionTLS13,
+		// MinVersion:   tls.VersionTLS13,
 		// CipherSuites: cipherSuites,
 	}
 	logutil.Info("init TLS config finished")
