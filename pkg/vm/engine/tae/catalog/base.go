@@ -39,7 +39,6 @@ type BaseEntry interface {
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index
-	GetCurrOp() OpT
 	GetLogIndex() *wal.Index
 
 	GetNodeLocked() txnif.MVCCNode

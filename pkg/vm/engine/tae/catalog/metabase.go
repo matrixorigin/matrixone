@@ -308,17 +308,6 @@ func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 	}
 }
 
-func (be *MetaBaseEntry) GetCurrOp() OpT {
-	un := be.GetNodeLocked()
-	if un == nil {
-		return OpCreate
-	}
-	if !un.(*MetadataMVCCNode).HasDropped() {
-		return OpCreate
-	}
-	return OpSoftDelete
-}
-
 func (be *MetaBaseEntry) GetCreatedAt() types.TS {
 	un := be.GetNodeLocked()
 	if un == nil {

@@ -261,17 +261,6 @@ func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 	}
 }
 
-func (be *DBBaseEntry) GetCurrOp() OpT {
-	un := be.GetNodeLocked()
-	if un == nil {
-		return OpCreate
-	}
-	if !un.(*DBMVCCNode).HasDropped() {
-		return OpCreate
-	}
-	return OpSoftDelete
-}
-
 func (be *DBBaseEntry) GetCreatedAt() types.TS {
 	un := be.GetNodeLocked()
 	if un == nil {
