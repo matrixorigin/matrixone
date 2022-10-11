@@ -107,8 +107,9 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string, tableId uint64,
-	databaseId uint64, databaseName string, comment string, m *mpool.MPool) (*batch.Batch, error) {
+func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string,
+	tableId uint64, databaseId uint64, databaseName string,
+	relKind string, comment string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	bat.SetZs(1, m)
@@ -140,7 +141,7 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relkind
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(relKind), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
@@ -668,6 +669,8 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].isAutoIncrement = row[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8)
 		cols[i].constraintType = string(row[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte))
 		cols[i].typ = row[catalog.MO_COLUMNS_ATTTYP_IDX].([]byte)
+		cols[i].hasDef = row[catalog.MO_COLUMNS_ATTHASDEF_IDX].(int8)
+		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
 	}
 	return cols
 }
