@@ -32,7 +32,7 @@ import (
 )
 
 var AUTO_INCR_TABLE = "%!%mo_increment_columns"
-var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.PhyAddrColumnName, "name", "offset", "step"}
+var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset", "step"}
 
 type AutoIncrParam struct {
 	eg      engine.Engine

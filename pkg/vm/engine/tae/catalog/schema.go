@@ -24,7 +24,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -640,8 +639,8 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	}
 	if !rebuild {
 		phyAddrDef := &ColDef{
-			Name:        catalog.PhyAddrColumnName,
-			Comment:     catalog.PhyAddrColumnComment,
+			Name:        PhyAddrColumnName,
+			Comment:     PhyAddrColumnComment,
 			Type:        PhyAddrColumnType,
 			Hidden:      true,
 			NullAbility: false,

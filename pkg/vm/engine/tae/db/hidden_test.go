@@ -18,7 +18,6 @@ import (
 	"sort"
 	"testing"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -76,7 +75,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -118,7 +117,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
+			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -159,7 +158,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
+			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)

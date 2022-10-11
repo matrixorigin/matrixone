@@ -29,7 +29,6 @@ import (
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -166,7 +165,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataByName(pkgcatalog.PhyAddrColumnName, nil)
+		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()

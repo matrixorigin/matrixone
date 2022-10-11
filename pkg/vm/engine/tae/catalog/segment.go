@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -94,11 +93,11 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e.CreateWithTS(types.SystemDBTS)
 	var bid uint64
 	if table.schema.Name == SystemTableSchema.Name {
-		bid = catalog.SystemBlock_Table_ID
+		bid = SystemBlock_Table_ID
 	} else if table.schema.Name == SystemDBSchema.Name {
-		bid = catalog.SystemBlock_DB_ID
+		bid = SystemBlock_DB_ID
 	} else if table.schema.Name == SystemColumnSchema.Name {
-		bid = catalog.SystemBlock_Columns_ID
+		bid = SystemBlock_Columns_ID
 	} else {
 		panic("not supported")
 	}

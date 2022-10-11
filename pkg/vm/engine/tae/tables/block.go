@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -551,7 +550,7 @@ func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err erro
 		return nil, nil
 	}
 	bat = containers.NewBatch()
-	colNames := []string{pkgcatalog.PhyAddrColumnName, pkgcatalog.AttrCommitTs, pkgcatalog.AttrAborted}
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 	for i := 0; i < 3; i++ {
 		vec, err := evictable.FetchDeltaData(nil, blk.bufMgr, blk.file, deltaloc, uint16(i), colTypes[i])
@@ -867,8 +866,8 @@ func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers
 	if err != nil {
 		return nil, err
 	}
-	batch.AddVector(pkgcatalog.AttrCommitTs, commitTSVec)
-	batch.AddVector(pkgcatalog.AttrAborted, abortVec)
+	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(catalog.AttrAborted, abortVec)
 	return batch, nil
 }
 
@@ -878,9 +877,9 @@ func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Bat
 		return nil, nil
 	}
 	batch := containers.NewBatch()
-	batch.AddVector(pkgcatalog.PhyAddrColumnName, rowID)
-	batch.AddVector(pkgcatalog.AttrCommitTs, ts)
-	batch.AddVector(pkgcatalog.AttrAborted, abort)
+	batch.AddVector(catalog.PhyAddrColumnName, rowID)
+	batch.AddVector(catalog.AttrCommitTs, ts)
+	batch.AddVector(catalog.AttrAborted, abort)
 	return batch, nil
 }
 
