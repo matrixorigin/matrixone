@@ -540,7 +540,7 @@ func (catalog *Catalog) ReplayTableRows() {
 		if err != nil {
 			panic(err)
 		}
-		tbl.rows = rows
+		tbl.rows.Store(rows)
 		return nil
 	}
 	err := catalog.RecurLoop(processor)
