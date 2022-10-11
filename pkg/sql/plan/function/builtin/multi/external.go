@@ -32,14 +32,9 @@ type tpDecimal interface {
 	types.Decimal64 | types.Decimal128
 }
 
-func ParseNumber[T tpNumber](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseNumber[T tpNumber](xs []string, nullList []string, outputVec *vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
-	inputVec := vectors[0]
-	outputVec := vectors[1]
-	nullVec := vectors[2]
-	xs := vector.MustStrCols(inputVec)
 	rs := vector.MustTCols[T](outputVec)
-	nullList := vector.MustStrCols(nullVec)
 	xs, err = external.TrimSpace(xs)
 	if err != nil {
 		return nil, err
@@ -54,14 +49,9 @@ func ParseNumber[T tpNumber](vectors []*vector.Vector, proc *process.Process, cb
 	return outputVec, nil
 }
 
-func ParseTime[T tpTime](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, precision int32, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseTime[T tpTime](xs []string, nullList []string, outputVec *vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, precision int32, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
-	inputVec := vectors[0]
-	outputVec := vectors[1]
-	nullVec := vectors[2]
-	xs := vector.MustStrCols(inputVec)
 	rs := vector.MustTCols[T](outputVec)
-	nullList := vector.MustStrCols(nullVec)
 	xs, err = external.TrimSpace(xs)
 	if err != nil {
 		return nil, err
@@ -76,14 +66,9 @@ func ParseTime[T tpTime](vectors []*vector.Vector, proc *process.Process, cb fun
 	return outputVec, nil
 }
 
-func ParseDecimal[T tpDecimal](vectors []*vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, width int32, scale int32, rs []T) ([]T, error)) (*vector.Vector, error) {
+func ParseDecimal[T tpDecimal](xs []string, nullList []string, outputVec *vector.Vector, proc *process.Process, cb func(xs []string, nsp *nulls.Nulls, width int32, scale int32, rs []T) ([]T, error)) (*vector.Vector, error) {
 	var err error
-	inputVec := vectors[0]
-	outputVec := vectors[1]
-	nullVec := vectors[2]
-	xs := vector.MustStrCols(inputVec)
 	rs := vector.MustTCols[T](outputVec)
-	nullList := vector.MustStrCols(nullVec)
 	xs, err = external.TrimSpace(xs)
 	if err != nil {
 		return nil, err
@@ -97,12 +82,7 @@ func ParseDecimal[T tpDecimal](vectors []*vector.Vector, proc *process.Process, 
 	vector.SetCol(outputVec, rs)
 	return outputVec, nil
 }
-func ParseString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVec := vectors[0]
-	outputVec := vectors[1]
-	nullVec := vectors[2]
-	xs := vector.MustStrCols(inputVec)
-	nullList := vector.MustStrCols(nullVec)
+func ParseString(xs []string, nullList []string, outputVec *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	nullFlags := external.ParseNullFlagStrings(xs, nullList)
 	external.InsertNsp(nullFlags, outputVec.Nsp)
 	for i, r := range xs {
@@ -114,14 +94,9 @@ func ParseString(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	return outputVec, nil
 }
 
-func ParseJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func ParseJson(xs []string, nullList []string, outputVec *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	inputVec := vectors[0]
-	outputVec := vectors[1]
-	nullVec := vectors[2]
-	xs := vector.MustStrCols(inputVec)
 	rs := vector.MustBytesCols(outputVec)
-	nullList := vector.MustStrCols(nullVec)
 	xs, err = external.TrimSpace(xs)
 	nullFlags := external.ParseNullFlagStrings(xs, nullList)
 	external.InsertNsp(nullFlags, outputVec.Nsp)

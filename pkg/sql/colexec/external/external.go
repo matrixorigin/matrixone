@@ -40,6 +40,7 @@ import (
 	"path"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -85,6 +86,7 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	t1 := time.Now()
 	param := arg.(*Argument).Es
 	if param.End {
 		proc.SetInputBatch(nil)
@@ -97,6 +99,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	proc.SetInputBatch(bat)
+	fmt.Println("Call time:", time.Since(t1))
 	return false, nil
 }
 
@@ -230,12 +233,17 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat := makeBatch(param, plh, proc.Mp())
-	originBat := makeOriginBatch(param, plh, proc.Mp())
+	//originBat := makeOriginBatch(param, plh, proc.Mp())
 	var (
 		Line []string
 		err  error
 	)
 	deleteEnclosed(param, plh)
+	t1 := time.Now()
+	origin := make([][]string, len(param.Attrs))
+	for i := 0; i < len(param.Attrs); i++ {
+		origin[i] = make([]string, plh.batchSize)
+	}
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if param.extern.Format == tree.JSONLINE {
@@ -250,15 +258,17 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 
 		for j := 0; j < len(param.Attrs); j++ {
-			vec := originBat.GetVector(int32(j))
+			//vec := originBat.GetVector(int32(j))
 			field := Line[param.Name2ColIndex[param.Attrs[j]]]
-			err = vector.SetStringAt(vec, rowIdx, field, proc.Mp())
-			if err != nil {
-				return nil, err
-			}
+			origin[j][rowIdx] = field
+			//err = vector.SetStringAt(vec, rowIdx, field, proc.Mp())
+			//if err != nil {
+			//	return nil, err
+			//}
 		}
 	}
-
+	fmt.Println("setStringAt cost:", time.Since(t1))
+	t1 = time.Now()
 	for i := 0; i < len(param.Attrs); i++ {
 		id := types.T(param.Cols[i].Typ.Id)
 		nullList := param.extern.NullMap[param.Attrs[i]]
@@ -270,48 +280,43 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				return nil, err
 			}
 		}
-		vectors := []*vector.Vector{
-			originBat.GetVector(int32(i)),
-			bat.GetVector(int32(i)),
-			nullVec,
-		}
 		switch id {
 		case types.T_bool:
-			bat.Vecs[i], err = multi.ParseNumber[bool](vectors, proc, external.ParseBool)
+			bat.Vecs[i], err = multi.ParseNumber[bool](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseBool)
 		case types.T_int8:
-			bat.Vecs[i], err = multi.ParseNumber[int8](vectors, proc, external.ParseInt8)
+			bat.Vecs[i], err = multi.ParseNumber[int8](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseInt8)
 		case types.T_int16:
-			bat.Vecs[i], err = multi.ParseNumber[int16](vectors, proc, external.ParseInt16)
+			bat.Vecs[i], err = multi.ParseNumber[int16](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseInt16)
 		case types.T_int32:
-			bat.Vecs[i], err = multi.ParseNumber[int32](vectors, proc, external.ParseInt32)
+			bat.Vecs[i], err = multi.ParseNumber[int32](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseInt32)
 		case types.T_int64:
-			bat.Vecs[i], err = multi.ParseNumber[int64](vectors, proc, external.ParseInt64)
+			bat.Vecs[i], err = multi.ParseNumber[int64](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseInt64)
 		case types.T_uint8:
-			bat.Vecs[i], err = multi.ParseNumber[uint8](vectors, proc, external.ParseUint8)
+			bat.Vecs[i], err = multi.ParseNumber[uint8](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseUint8)
 		case types.T_uint16:
-			bat.Vecs[i], err = multi.ParseNumber[uint16](vectors, proc, external.ParseUint16)
+			bat.Vecs[i], err = multi.ParseNumber[uint16](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseUint16)
 		case types.T_uint32:
-			bat.Vecs[i], err = multi.ParseNumber[uint32](vectors, proc, external.ParseUint32)
+			bat.Vecs[i], err = multi.ParseNumber[uint32](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseUint32)
 		case types.T_uint64:
-			bat.Vecs[i], err = multi.ParseNumber[uint64](vectors, proc, external.ParseUint64)
+			bat.Vecs[i], err = multi.ParseNumber[uint64](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseUint64)
 		case types.T_float32:
-			bat.Vecs[i], err = multi.ParseNumber[float32](vectors, proc, external.ParseFloat32)
+			bat.Vecs[i], err = multi.ParseNumber[float32](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseFloat32)
 		case types.T_float64:
-			bat.Vecs[i], err = multi.ParseNumber[float64](vectors, proc, external.ParseFloat64)
+			bat.Vecs[i], err = multi.ParseNumber[float64](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseFloat64)
 		case types.T_date:
-			bat.Vecs[i], err = multi.ParseNumber[types.Date](vectors, proc, external.ParseDate)
+			bat.Vecs[i], err = multi.ParseNumber[types.Date](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseDate)
 		case types.T_datetime:
-			bat.Vecs[i], err = multi.ParseTime[types.Datetime](vectors, proc, external.ParseDateTime)
+			bat.Vecs[i], err = multi.ParseTime[types.Datetime](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseDateTime)
 		case types.T_timestamp:
-			bat.Vecs[i], err = multi.ParseTime[types.Timestamp](vectors, proc, external.ParseTimeStamp)
+			bat.Vecs[i], err = multi.ParseTime[types.Timestamp](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseTimeStamp)
 		case types.T_decimal64:
-			bat.Vecs[i], err = multi.ParseDecimal[types.Decimal64](vectors, proc, external.ParseDecimal64)
+			bat.Vecs[i], err = multi.ParseDecimal[types.Decimal64](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseDecimal64)
 		case types.T_decimal128:
-			bat.Vecs[i], err = multi.ParseDecimal[types.Decimal128](vectors, proc, external.ParseDecimal128)
+			bat.Vecs[i], err = multi.ParseDecimal[types.Decimal128](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseDecimal128)
 		case types.T_char, types.T_varchar, types.T_blob:
-			bat.Vecs[i], err = multi.ParseString(vectors, proc)
+			bat.Vecs[i], err = multi.ParseString(origin[i], nullList, bat.GetVector(int32(i)), proc)
 		case types.T_json:
-			bat.Vecs[i], err = multi.ParseJson(vectors, proc)
+			bat.Vecs[i], err = multi.ParseJson(origin[i], nullList, bat.GetVector(int32(i)), proc)
 		default:
 			err = moerr.NewNotSupported("the value type %d is not support now", param.Cols[i].Typ.Id)
 		}
@@ -329,7 +334,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for k := 0; k < n; k++ {
 		bat.Zs[k] = 1
 	}
-
+	fmt.Println("parse cost:", time.Since(t1))
 	return bat, nil
 }
 
