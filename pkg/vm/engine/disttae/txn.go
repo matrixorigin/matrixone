@@ -79,7 +79,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		txn.dnStores[:1],
-		catalog.MoDatabaseTableDefs, []string{
+		catalog.MoTablesTableDefs, []string{
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
