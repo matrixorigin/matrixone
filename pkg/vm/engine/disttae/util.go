@@ -220,3 +220,40 @@ func getNameFromMeta(blkInfo BlockMeta) string {
 func getExtentFromMeta(blkInfo BlockMeta) objectio.Extent {
 	return objectio.NewExtent(blkInfo.localExtent.offset, blkInfo.localExtent.length, blkInfo.localExtent.originSize)
 }
+
+// computeRange compute
+func computeRange(expr *plan.Expr, pkIdx int32) (canCompute bool, min int64, max int64) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "and", "or", ">", "<", ">=", "<=", "=":
+		default:
+			return
+		}
+		for _, arg := range exprImpl.F.Args {
+			canCompute, min, max = _computeRange(arg, pkIdx, min, max)
+			if !canCompute {
+				return
+			}
+		}
+	}
+	return
+}
+
+func _computeRange(expr *plan.Expr, pkIdx int32, min int64, max int64) (bool, int64, int64) {
+	canCompute := false
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			canCompute, min, max = _computeRange(arg, pkIdx, min, max)
+			if !canCompute {
+				return false, 0, 0
+			}
+		}
+	case *plan.Expr_Col:
+		if exprImpl.Col.ColPos != pkIdx {
+			return false, 0, 0
+		}
+	}
+	return false, 0, 0
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -559,4 +560,32 @@ func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs file
 	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
 
 	return bat, nil
+}
+
+func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {
+	// get primay keys index(that was colPos in expr)
+	pkIndex := int32(-1)
+	for _, key := range priKeys {
+		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
+		if isCPkey {
+			continue
+		}
+		// if primary key is not int or uint, return all the list
+		if !key.Type.IsIntOrUint() {
+			return list
+		}
+
+		pkIndex = tableDef.Name2ColIndex[key.Name]
+		break
+	}
+
+	// have no PrimaryKey, return all the list
+	if pkIndex == -1 {
+		return list
+	}
+
+	//对于以下情况，我们支持根据hash计算出所需要的DN节点
+	// 1、Expr的root节点，是 >,<,=,<=,>=,and,or
+	// 2、表达式中的列只包含PrimaryKey
+	return list
 }
