@@ -18,7 +18,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -421,7 +420,7 @@ func BenchmarkAddDec128(b *testing.B) {
 	}
 }
 
-func TestDateDiff(t *testing.T) {
+func TestDatetimeDesc(t *testing.T) {
 	cases := []struct {
 		name string
 		vecs []*vector.Vector
@@ -430,9 +429,40 @@ func TestDateDiff(t *testing.T) {
 	}{
 		{
 			name: "TEST01",
-			vecs: makeDatetimeSubVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", testutil.NewProc()),
+			vecs: makeDatetimeSubVectors("2018-01-01 7:18:20", "2017-12-01 12:15:12" , testutil.NewProc()),
 			proc: testutil.NewProc(),
 			want: 2660588,
+		},
+		
+		{
+			name: "TEST02",
+			vecs: makeDatetimeSubVectors("2017-12-01 12:15:12" ,"2018-01-01 7:18:20", testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: -2660588,
+		},
+		{
+			name: "TEST03",
+			vecs: makeDatetimeSubVectors("2018-01-01 00:00:00", "2018-01-01 00:00:00" , testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: 0,
+		},
+		{
+			name: "TEST04",
+			vecs: makeDatetimeSubVectors("2018-01-01 00:00:01", "2018-01-01 00:00:00" , testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: 1,
+		},
+		{
+			name: "TEST05",
+			vecs: makeDatetimeSubVectors("2018-01-01 00:00:59", "2018-01-01 00:00:00" , testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: 59,
+		},
+		{
+			name: "TEST06",
+			vecs: makeDatetimeSubVectors("2018-01-01 00:01:00", "2018-01-01 00:00:00" , testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: 60,
 		},
 	}
 
@@ -454,17 +484,5 @@ func makeDatetimeSubVectors(firstStr, secondStr string,  proc *process.Process) 
 	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, proc.Mp())
 	vec[2] = proc.AllocScalarVector(types.T_int64.ToType())
 	 
-	return vec
-}
-
-func makeTimeStampDiffReverseVectors(firstStr, secondStr, unit string, mp *mpool.MPool) []*vector.Vector {
-	vec := make([]*vector.Vector, 3)
-
-	firstDate, _ := types.ParseDatetime(firstStr, 0)
-	secondDate, _ := types.ParseDatetime(secondStr, 0)
-
-	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
-	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, unit, mp)
 	return vec
 }
