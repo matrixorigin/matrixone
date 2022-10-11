@@ -54,7 +54,7 @@ type Relation interface {
 
 	Write(context.Context, *batch.Batch) error
 
-	Delete(context.Context, *vector.Vector, string) error
+	Delete(context.Context, *batch.Batch, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error
 

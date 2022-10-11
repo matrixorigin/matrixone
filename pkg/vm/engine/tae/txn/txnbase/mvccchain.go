@@ -58,10 +58,10 @@ func (be *MVCCChain) StringLocked() string {
 
 // for replay
 func (be *MVCCChain) GetPrepareTs() types.TS {
-	return be.GetNodeLocked().GetPrepare()
+	return be.GetLatestNodeLocked().GetPrepare()
 }
 
-func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetNodeLocked().GetTxn() }
+func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetLatestNodeLocked().GetTxn() }
 
 func (be *MVCCChain) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
@@ -116,10 +116,10 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	return
 }
 
-// GetNodeLocked gets the latest mvcc node.
+// GetLatestNodeLocked gets the latest mvcc node.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *MVCCChain) GetNodeLocked() txnif.MVCCNode {
+func (be *MVCCChain) GetLatestNodeLocked() txnif.MVCCNode {
 	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
@@ -132,9 +132,9 @@ func (be *MVCCChain) GetNodeLocked() txnif.MVCCNode {
 	return entry
 }
 
-// GetCommittedNode gets the latest committed mvcc node.
+// GetLatestCommittedNode gets the latest committed mvcc node.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MVCCChain) GetCommittedNode() (node txnif.MVCCNode) {
+func (be *MVCCChain) GetLatestCommittedNode() (node txnif.MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		if !un.IsActive() && !un.IsCommitting() {
@@ -185,7 +185,7 @@ func (be *MVCCChain) LoopChain(fn func(txnif.MVCCNode) bool) {
 }
 
 func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -193,7 +193,7 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 }
 
 func (be *MVCCChain) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -201,14 +201,14 @@ func (be *MVCCChain) IsCreating() bool {
 }
 
 func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
-	node := be.GetNodeLocked()
+	node := be.GetLatestNodeLocked()
 	err = node.CheckConflict(txn.GetStartTS())
 	return
 }
 
 func (be *MVCCChain) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	var n2 int64
-	n2, err = be.GetNodeLocked().WriteTo(w)
+	n2, err = be.GetLatestNodeLocked().WriteTo(w)
 	if err != nil {
 		return
 	}
@@ -273,24 +273,24 @@ func (be *MVCCChain) IsEmpty() bool {
 func (be *MVCCChain) ApplyRollback(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetNodeLocked().ApplyRollback(index)
+	return be.GetLatestNodeLocked().ApplyRollback(index)
 
 }
 
 func (be *MVCCChain) ApplyCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetNodeLocked().ApplyCommit(index)
+	return be.GetLatestNodeLocked().ApplyCommit(index)
 }
 
 func (be *MVCCChain) Apply1PCCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetNodeLocked().ApplyCommit(index)
+	return be.GetLatestNodeLocked().ApplyCommit(index)
 }
 
 func (be *MVCCChain) GetLogIndex() *wal.Index {
-	node := be.GetNodeLocked()
+	node := be.GetLatestNodeLocked()
 	if node == nil {
 		return nil
 	}
@@ -302,7 +302,7 @@ func (be *MVCCChain) CloneLatestNode() (*MVCCChain, txnif.MVCCNode) {
 		MVCC:    common.NewGenericSortedDList(be.comparefn),
 		RWMutex: &sync.RWMutex{},
 	}
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	uncloned := un.CloneData()
 	cloned.Insert(uncloned)
 	return cloned, uncloned
@@ -313,7 +313,7 @@ func (be *MVCCChain) CloneLatestNode() (*MVCCChain, txnif.MVCCNode) {
 // It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
 // It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
 func (be *MVCCChain) IsCommitting() bool {
-	node := be.GetNodeLocked()
+	node := be.GetLatestNodeLocked()
 	if node == nil {
 		return false
 	}
@@ -323,7 +323,7 @@ func (be *MVCCChain) IsCommitting() bool {
 func (be *MVCCChain) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetNodeLocked().PrepareCommit()
+	return be.GetLatestNodeLocked().PrepareCommit()
 }
 
 func (be *MVCCChain) PrepareRollback() (bool, error) {
@@ -336,7 +336,7 @@ func (be *MVCCChain) PrepareRollback() (bool, error) {
 }
 
 func (be *MVCCChain) IsCommitted() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}

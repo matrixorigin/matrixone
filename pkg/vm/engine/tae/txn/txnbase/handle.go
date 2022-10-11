@@ -71,7 +71,6 @@ func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)     
 func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }
-func (rel *TxnRelation) UpdateByPhyAddrKey(any, int, any) (err error)                { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)          { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                          { return }
 func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)           { return }
