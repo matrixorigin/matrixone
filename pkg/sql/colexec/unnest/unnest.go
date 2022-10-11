@@ -16,7 +16,6 @@ package unnest
 
 import (
 	"bytes"
-	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -24,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -82,22 +80,40 @@ func callByFunc(param *Param, proc *process.Process) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Vecs) != 1 {
-		return false, moerr.NewInvalidInput("unnest: invalid input batch")
-	}
-	funcBytes := bat.GetVector(0).GetBytes(0)
-	expr := tree.FuncExpr{}
-	err := json.Unmarshal(funcBytes, &expr)
+	tmpBat := batch.NewWithSize(0)
+	tmpBat.Zs = []int64{1}
+	vec, err := colexec.EvalExpr(tmpBat, proc, param.ExprList[0])
 	if err != nil {
 		return false, err
 	}
-	tmpBat := batch.NewWithSize(0)
-	tmpBat.Zs = []int64{1}
-	vec, err := colexec.EvalExpr(tmpBat, proc, &expr)
+	col := vector.MustStrCols(vec)
 	path, err := types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
+	rbat := batch.New(false, param.Attrs)
+	for i := range param.Cols {
+		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+	}
+	rows := 0
+	for i := range col {
+		json, err := types.ParseStringToByteJson(col[i])
+		if err != nil {
+			return false, err
+		}
+		ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+		if err != nil {
+			return false, err
+		}
+		rbat, err = makeBatch(rbat, ures, param, proc)
+		if err != nil {
+			return false, err
+		}
+		rows += len(ures)
+	}
+	rbat.InitZsOne(rows)
+	proc.SetInputBatch(rbat)
+	return false, nil
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {

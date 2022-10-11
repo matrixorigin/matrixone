@@ -47,3 +47,4 @@ create view v1 as (select * from unnest(t1.a) u);
 select * from v1;
 select * from v1 where `index` is null;
 select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;
+select `key`,path,value from unnest(substring('{"a":1}...',1,7), '$') u;

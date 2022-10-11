@@ -361,9 +361,10 @@ func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalPa
 	}
 	return &unnest.Argument{
 		Es: &unnest.Param{
-			Attrs:  attrs,
-			Cols:   n.TableDef.Cols,
-			Extern: param,
+			Attrs:    attrs,
+			Cols:     n.TableDef.Cols,
+			Extern:   param,
+			ExprList: n.TblFuncExprList,
 		},
 	}
 }

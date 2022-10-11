@@ -118,6 +118,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		externParam     *unnest.ExternalParam
 		scanNode        *plan.Node
 		childId         int32 = -1
+		exprs           []*plan.Expr
 	)
 	if externParam, err = genTblParam(tbl); err != nil {
 		return 0, err
@@ -220,13 +221,14 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			},
 		}
 	case *tree.FuncExpr:
-		dt, err := json.Marshal(o)
+		ctx.binder = NewTableFunctionBinder(builder, ctx)
+		expr, err := ctx.binder.BindExpr(tbl.Func.Exprs[0], 0, false)
 		if err != nil {
 			return 0, err
 		}
+		exprs = append(exprs, expr)
 		scanNode = &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
-			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: dt}},
 			ProjectList: []*plan.Expr{
 				{
 					Typ:  &plan.Type{Id: int32(types.T_varchar)},
@@ -253,7 +255,8 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			},
 			Cols: colDefs,
 		},
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs, // now only support one func expr in unnest
 	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
@@ -282,7 +285,6 @@ func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
 	} else {
 		uParam.Path = "$"
 	}
-	uParam.Path = tbl.Func.Exprs[1].String()
 	if len(tbl.Func.Exprs) > 2 {
 		uParam.Outer = strings.ToLower(tbl.Func.Exprs[2].String()) == "true"
 	} else {

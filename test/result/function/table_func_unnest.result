@@ -204,3 +204,6 @@ count(seq)	seq
 3	0
 1	1
 1	2
+select `key`,path,value from unnest(substring('{"a":1}...',1,7), '$') u;
+key	path	value
+a	$.a	1

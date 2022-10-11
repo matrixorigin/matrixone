@@ -210,6 +210,10 @@ type TableBinder struct {
 	baseBinder
 }
 
+type TableFunctionBinder struct {
+	baseBinder
+}
+
 type WhereBinder struct {
 	baseBinder
 }
@@ -248,6 +252,7 @@ var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
+var _ Binder = (*TableFunctionBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32

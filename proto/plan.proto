@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package plan;
 
@@ -473,6 +473,8 @@ message Node {
 	repeated int32 binding_tags = 23;
 
     AnalyzeInfo analyze_info = 24;
+
+	repeated Expr tbl_func_expr_list = 25;
 }
 
 message DeleteTableCtx {

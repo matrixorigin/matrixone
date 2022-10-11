@@ -1716,7 +1716,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
 	case *tree.TableFunction:
-		return builder.buildTableFunction(tbl, ctx)
+		subCtx := NewBindContext(builder, ctx)
+		return builder.buildTableFunction(tbl, subCtx)
 
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx)

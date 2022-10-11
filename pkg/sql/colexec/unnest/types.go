@@ -19,15 +19,16 @@ import (
 )
 
 type Param struct {
-	Attrs   []string
-	Cols    []*plan.ColDef
-	Extern  *ExternalParam
-	filters []string
-	colName string
-	seq     int32
-	path    string
-	outer   bool
-	typ     string
+	Attrs    []string
+	Cols     []*plan.ColDef
+	Extern   *ExternalParam
+	ExprList []*plan.Expr
+	filters  []string
+	colName  string
+	seq      int32
+	path     string
+	outer    bool
+	typ      string
 }
 
 type Argument struct {
