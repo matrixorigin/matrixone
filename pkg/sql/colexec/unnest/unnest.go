@@ -32,7 +32,6 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg any) error {
-	var err error
 	param := arg.(*Argument).Es
 	param.colName = "UNNEST_DEFAULT"
 	if len(param.Extern.ColName) != 0 {
@@ -41,9 +40,6 @@ func Prepare(_ *process.Process, arg any) error {
 	param.path = param.Extern.Path
 	param.outer = param.Extern.Outer
 	param.typ = param.Extern.Typ
-	if err != nil {
-		return err
-	}
 	param.seq = 0
 	var filters []string
 	for i := range param.Attrs {

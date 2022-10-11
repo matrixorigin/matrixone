@@ -33,7 +33,6 @@ import (
 type unnestTestCase struct {
 	arg        *Argument
 	proc       *process.Process
-	isCol      bool
 	jsons      []string
 	inputTimes int
 }
@@ -102,12 +101,13 @@ var (
 
 func init() {
 	utc = []unnestTestCase{
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, []string{`{"a": 1}`}, 0),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "str", `{"a":1}`, "$", false, []string{`{"a": 1}`}, 0),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "col", tree.SetUnresolvedName("t1", "a"), "$", true, []string{`{"a":1}`}, 3),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "func", nil, "$", false, []string{`{"a":1}`}, 0),
 	}
 }
 
-func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
+func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, typ string, origin interface{}, path string, outer bool, jsons []string, inputTimes int) unnestTestCase {
 	proc := testutil.NewProcessWithMPool(m)
 	ret := unnestTestCase{
 		proc: proc,
@@ -118,10 +118,10 @@ func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, origin 
 				Extern: &ExternalParam{
 					Path:  path,
 					Outer: outer,
+					Typ:   typ,
 				},
 			},
 		},
-		isCol:      isCol,
 		jsons:      jsons,
 		inputTimes: inputTimes,
 	}
@@ -146,7 +146,8 @@ func TestUnnest(t *testing.T) {
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
 			err := Prepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			if !ut.isCol {
+			switch ut.arg.Es.Extern.Typ {
+			case "str":
 				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
 				require.Nil(t, err)
 				end, err := Call(0, ut.proc, ut.arg)
@@ -158,22 +159,24 @@ func TestUnnest(t *testing.T) {
 				require.Nil(t, err)
 				require.True(t, end)
 				require.Nil(t, ut.proc.InputBatch())
-				return
-			}
-
-			for i := 0; i < ut.inputTimes; i++ {
-				ut.proc.Reg.InputBatch, err = makeTestBatch2(ut.jsons, ut.proc)
-				require.Nil(t, err)
+			case "col":
+				for i := 0; i < ut.inputTimes; i++ {
+					ut.proc.Reg.InputBatch, err = makeTestBatch2(ut.jsons, ut.proc)
+					require.Nil(t, err)
+					end, err := Call(0, ut.proc, ut.arg)
+					require.Nil(t, err)
+					require.False(t, end)
+					require.Nil(t, err)
+					require.NotNil(t, ut.proc.InputBatch())
+				}
+				ut.proc.Reg.InputBatch = nil
 				end, err := Call(0, ut.proc, ut.arg)
 				require.Nil(t, err)
-				require.False(t, end)
-				require.Nil(t, err)
-				require.NotNil(t, ut.proc.InputBatch())
+				require.True(t, end)
+			case "func":
+				ut.proc.Reg.InputBatch = nil
+				end, err := Call(0, ut.proc, ut.arg)
 			}
-			ut.proc.Reg.InputBatch = nil
-			end, err := Call(0, ut.proc, ut.arg)
-			require.Nil(t, err)
-			require.True(t, end)
 		})
 	}
 }
