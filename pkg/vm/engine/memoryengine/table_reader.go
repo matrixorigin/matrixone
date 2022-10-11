@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,11 +53,25 @@ func (t *Table) NewReader(
 
 	var shards []Shard
 	if len(shardIDs) == 0 {
-		// all
-		var err error
-		shards, err = t.engine.allShards()
-		if err != nil {
-			return nil, err
+		switch t.id {
+
+		case catalog.MO_DATABASE_ID,
+			catalog.MO_TABLES_ID,
+			catalog.MO_COLUMNS_ID:
+			// sys table
+			var err error
+			shards, err = t.engine.anyShard()
+			if err != nil {
+				return nil, err
+			}
+
+		default:
+			// all
+			var err error
+			shards, err = t.engine.allShards()
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	} else {
