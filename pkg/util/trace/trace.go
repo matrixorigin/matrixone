@@ -134,7 +134,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	config := &GetTracerProvider().tracerProviderConfig
 	switch config.batchProcessMode {
 	case InternalExecutor, FileService:
-		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor, config.batchProcessMode); err != nil {
+		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
 			return err
 		}
 	default:

@@ -15,12 +15,9 @@
 package plan
 
 import (
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -189,8 +186,10 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 	var err error
 	isHideKeyArr := make([]bool, tableCount)
 	useKeys := make([]*ColDef, tableCount)
+	colIndex := make([]int32, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
+		colIndex[i] = int32(len(useProjectExprs))
 		useProjectExprs, useKeys[i], isHideKeyArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
@@ -223,6 +222,7 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			UseDeleteKey: useKeys[i].Name,
 			IsHideKey:    isHideKeyArr[i],
 			CanTruncate:  false,
+			ColIndex:     colIndex[i],
 		}
 	}
 	node := &Node{
@@ -248,54 +248,58 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 }
 
 func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, error) {
-	var useKey *ColDef = nil
+	var useKey *ColDef
 	isHideKey := false
-	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	for _, key := range priKeys {
-		if key.IsCPkey {
-			break
-		}
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
-		if isContainNameInFilter(stmt, key.Name) {
-			ps = append(ps, tree.SelectExpr{Expr: e})
-			useKey = key
-			break
-		}
+	tblName := tf.baseNameMap[tableDef.Name]
+
+	// priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
+	// for _, key := range priKeys {
+	// if key.IsCPkey {
+	// 	break
+	// }
+	// if isContainNameInFilter(stmt, key.Name) {
+	// 	psNames[key.Name] = struct{}{}
+	// 	e := tree.SetUnresolvedName(tblName, key.Name)
+	// 	ps = append(ps, tree.SelectExpr{Expr: e})
+	// 	useKey = key
+	// 	break
+	// }
+	// }
+
+	// we will allways return hideKey now
+	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
+	if hideKey == nil {
+		return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
 	}
-	if useKey == nil {
-		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
-		if hideKey == nil {
-			return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
-		}
-		useKey = hideKey
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], hideKey.Name)
-		ps = append(ps, tree.SelectExpr{Expr: e})
-		isHideKey = true
-	}
+	e := tree.SetUnresolvedName(tblName, hideKey.Name)
+	ps = append(ps, tree.SelectExpr{Expr: e})
+	useKey = hideKey
+	isHideKey = true
+
 	return ps, useKey, isHideKey, nil
 }
 
 // isContainNameInFilter is to find out if contain primary key in expr.
 // it works any way. Chose other way to delete when it is not accurate judgment
-func isContainNameInFilter(stmt *tree.Delete, name string) bool {
-	if stmt.TableRefs != nil {
-		for _, e := range stmt.TableRefs {
-			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
-				return true
-			}
-		}
-	}
-	if stmt.OrderBy != nil {
-		for _, e := range stmt.OrderBy {
-			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
-				return true
-			}
-		}
-	}
-	if stmt.Where != nil {
-		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
-			return true
-		}
-	}
-	return false
-}
+// func isContainNameInFilter(stmt *tree.Delete, name string) bool {
+// 	if stmt.TableRefs != nil {
+// 		for _, e := range stmt.TableRefs {
+// 			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
+// 				return true
+// 			}
+// 		}
+// 	}
+// 	if stmt.OrderBy != nil {
+// 		for _, e := range stmt.OrderBy {
+// 			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
+// 				return true
+// 			}
+// 		}
+// 	}
+// 	if stmt.Where != nil {
+// 		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }

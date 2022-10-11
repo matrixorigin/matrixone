@@ -42,3 +42,6 @@ Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_dat
 drop database db11111111111;
 show grants for 'test'@'localhost';
 Grants for test@localhost
+show variables where value = 'MatrixOne';
+Variable_name    Value
+version_comment    MatrixOne
