@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,10 +42,101 @@ type mockHandle struct {
 	m *mpool.MPool
 }
 
-func (h *mockHandle) HandleClose() error {
-	err := h.Handle.HandleClose()
-	//TODO::free h.m?
+type CmdType int32
+
+const (
+	CmdPreCommitWrite CmdType = iota
+	CmdPrepare
+	CmdCommitting
+	CmdCommit
+	CmdRollback
+)
+
+type txnCommand struct {
+	typ CmdType
+	cmd any
+}
+
+func (h *mockHandle) HandleClose(ctx context.Context) error {
+	err := h.Handle.HandleClose(ctx)
 	return err
+}
+
+func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) error {
+	//2PC
+	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
+		meta.CommitTS = meta.PreparedTS.Next()
+	}
+	return h.Handle.HandleCommit(ctx, *meta)
+}
+
+func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
+	//meta.CommitTS = h.eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	if meta.PreparedTS.IsEmpty() {
+		return moerr.NewInternalError("PreparedTS is empty")
+	}
+	meta.CommitTS = meta.PreparedTS.Next()
+	return h.Handle.HandleCommitting(ctx, *meta)
+}
+
+func (h *mockHandle) HandlePrepare(ctx context.Context, meta *txn.TxnMeta) error {
+	pts, err := h.Handle.HandlePrepare(ctx, *meta)
+	if err != nil {
+		return err
+	}
+	meta.PreparedTS = pts
+	return nil
+}
+
+func (h *mockHandle) HandleRollback(ctx context.Context, meta *txn.TxnMeta) error {
+	return h.Handle.HandleRollback(ctx, *meta)
+}
+
+func (h *mockHandle) HandlePreCommit(
+	ctx context.Context,
+	meta *txn.TxnMeta,
+	req api.PrecommitWriteCmd,
+	resp *api.SyncLogTailResp) error {
+
+	return h.Handle.HandlePreCommit(ctx, *meta, req, resp)
+}
+
+func (h *mockHandle) handleCmds(
+	ctx context.Context,
+	txn *txn.TxnMeta,
+	cmds []txnCommand) (err error) {
+	for _, e := range cmds {
+		switch e.typ {
+		case CmdPreCommitWrite:
+			cmd, ok := e.cmd.(api.PrecommitWriteCmd)
+			if !ok {
+				return moerr.NewInfo("cmd is not PreCommitWriteCmd")
+			}
+			if err = h.Handle.HandlePreCommit(ctx, *txn,
+				cmd, new(api.SyncLogTailResp)); err != nil {
+				return
+			}
+		case CmdPrepare:
+			if err = h.HandlePrepare(ctx, txn); err != nil {
+				return
+			}
+		case CmdCommitting:
+			if err = h.HandleCommitting(ctx, txn); err != nil {
+				return
+			}
+		case CmdCommit:
+			if err = h.HandleCommit(ctx, txn); err != nil {
+				return
+			}
+		case CmdRollback:
+			if err = h.HandleRollback(ctx, txn); err != nil {
+				return
+			}
+		default:
+			panic(moerr.NewInfo("Invalid CmdType"))
+		}
+	}
+	return
 }
 
 func initDB(t *testing.T, opts *options.Options) *db.DB {
@@ -65,8 +157,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	return mh
 }
 
-func mock1PCTxn(eng moengine.TxnEngine) txn.TxnMeta {
-	txnMeta := txn.TxnMeta{}
+func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
@@ -83,13 +175,13 @@ func mockDNShard(id uint64) metadata.DNShard {
 	}
 }
 
-func mock2PCTxn(eng moengine.TxnEngine) (txn.TxnMeta, error) {
-	txnMeta := txn.TxnMeta{}
+func mock2PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
-	return txnMeta, nil
+	return txnMeta
 }
 
 const (
@@ -223,7 +315,8 @@ func genCreateDatabaseTuple(
 	userId,
 	roleId uint32,
 	name string,
-	m *mpool.MPool) (*batch.Batch, error) {
+	m *mpool.MPool,
+) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	{
@@ -271,7 +364,10 @@ func genCreateDatabaseTuple(
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
+func genCreateColumnTuple(
+	col column,
+	m *mpool.MPool,
+) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 	{
