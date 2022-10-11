@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -201,6 +202,7 @@ func (p *Partition) NewReader(
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
