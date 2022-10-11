@@ -40,14 +40,17 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
+// the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 
+	// last batch of block
 	if bat == nil {
 		return true, nil
 	}
 
+	// empty batch
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
