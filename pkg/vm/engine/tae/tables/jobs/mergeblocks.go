@@ -268,6 +268,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			defer view.Close()
 			view.ApplyDeletes()
 			vec := view.Orphan()
+			if vec.Length() == 0 {
+				continue
+			}
 			defer vec.Close()
 			vecs = append(vecs, vec)
 		}
