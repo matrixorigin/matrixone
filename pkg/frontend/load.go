@@ -878,11 +878,11 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						json, err := types.ParseStringToByteJson(field)
 						if err != nil {
-							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, base+uint64(offset))
 						}
 						jsonBytes, err := types.EncodeJson(json)
 						if err != nil {
-							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, base+uint64(offset))
 						}
 						// XXX What about memory accounting?
 						vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
@@ -1038,7 +1038,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 
 			//put it into batch
 			vec := batchData.Vecs[colIdx]
-
+			vecAttr := batchData.Attrs[colIdx]
 			columnFLags[j] = 1
 
 			switch vec.Typ.Oid {
@@ -1401,7 +1401,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return err
+								return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, i)
 							}
 							result.Warnings++
 							//break
@@ -1410,7 +1410,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							logutil.Errorf("encode field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return err
+								return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, i)
 							}
 							result.Warnings++
 							//break

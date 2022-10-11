@@ -2746,6 +2746,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_NULL)
 	case types.T_json:
 		col.SetColumnType(defines.MYSQL_TYPE_JSON)
+		//_, ret, _ := gSysVariables.GetGlobalSysVar("max_allowed_packet")
+		//col.SetLength(5)
 	case types.T_bool:
 		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:
