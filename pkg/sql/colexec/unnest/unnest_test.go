@@ -101,14 +101,26 @@ var (
 
 func init() {
 	utc = []unnestTestCase{
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "str", `{"a":1}`, "$", false, []string{`{"a": 1}`}, 0),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "col", tree.SetUnresolvedName("t1", "a"), "$", true, []string{`{"a":1}`}, 3),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, "func", nil, "$", false, []string{`{"a":1}`}, 0),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, "str", `{"a":1}`, "$", false, []string{`{"a": 1}`}, 0),
+		newTestCase(mpool.MustNewZero(), []string{"key", "col"}, "str", `{"a":1}`, "$", false, []string{`{"a": 1}`, `{"a": 2}`}, 1),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, "col", tree.SetUnresolvedName("t1", "a"), "$", true, []string{`{"a":1}`}, 3),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, "func", nil, "$", false, []string{`{"a":1}`}, 0),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, "xxsa", `{"a":1}`, "$", false, []string{`{"a": 1}`}, 0),
 	}
 }
 
-func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, typ string, origin interface{}, path string, outer bool, jsons []string, inputTimes int) unnestTestCase {
+func newTestCase(m *mpool.MPool, attrs []string, typ string, origin interface{}, path string, outer bool, jsons []string, inputTimes int) unnestTestCase {
 	proc := testutil.NewProcessWithMPool(m)
+	colDefs := make([]*plan.ColDef, len(attrs))
+	for i := range attrs {
+		for j := range defaultColDefs {
+			if attrs[i] == defaultColDefs[j].Name {
+				colDefs[i] = defaultColDefs[j]
+				break
+			}
+		}
+	}
+
 	ret := unnestTestCase{
 		proc: proc,
 		arg: &Argument{
@@ -173,6 +185,9 @@ func TestUnnest(t *testing.T) {
 				end, err := Call(0, ut.proc, ut.arg)
 				require.Nil(t, err)
 				require.True(t, end)
+				ut.jsons[0] = ut.jsons[0][1:]
+				ut.proc.Reg.InputBatch, err = makeTestBatch2(ut.jsons, ut.proc)
+				require.NotNil(t, err)
 			case "func":
 				ut.proc.Reg.InputBatch = nil
 				end, err := Call(0, ut.proc, ut.arg)
@@ -180,15 +195,24 @@ func TestUnnest(t *testing.T) {
 				require.True(t, end)
 				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
 				require.Nil(t, err)
+
 				ut.arg.Es.ExprList = []*plan.Expr{
 					{
 						Typ: &plan.Type{
 							Id:       int32(types.T_varchar),
-						}
+							Nullable: false,
+							Size:     24,
+						},
 					},
 				}
 				end, err = Call(0, ut.proc, ut.arg)
 
+				require.NotNil(t, err)
+				require.False(t, end)
+			default:
+				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
+				require.Nil(t, err)
+				end, err := Call(0, ut.proc, ut.arg)
 				require.NotNil(t, err)
 				require.False(t, end)
 			}
