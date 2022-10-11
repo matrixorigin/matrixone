@@ -17,19 +17,18 @@ package objectio
 import (
 	"fmt"
 
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
-	"os"
-	"path"
-	"path/filepath"
-	"testing"
 )
 
 const (
@@ -128,9 +127,7 @@ func TestNewObjectWriter(t *testing.T) {
 }
 
 func newBatch() *batch.Batch {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	mp := mheap.New(gm)
+	mp := mpool.MustNewZero()
 	types := []types.Type{
 		{Oid: types.T_int8},
 		{Oid: types.T_int16},

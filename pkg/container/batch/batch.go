@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -163,7 +163,7 @@ func (bat *Batch) Shrink(sels []int64) {
 	bat.Zs = bat.Zs[:len(sels)]
 }
 
-func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
+func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -218,22 +218,19 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 }
 
 func (bat *Batch) GetSubBatch(cols []string) *Batch {
+	mp := make(map[string]int)
+	for i, attr := range bat.Attrs {
+		mp[attr] = i
+	}
 	rbat := NewWithSize(len(cols))
-	i := 0
-	for j, attr := range bat.Attrs {
-		if attr == cols[i] {
-			rbat.Vecs[i] = bat.Vecs[j]
-			i++
-			if i == len(cols) {
-				break
-			}
-		}
+	for i, col := range cols {
+		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
 	rbat.Zs = bat.Zs
 	return rbat
 }
 
-func (bat *Batch) Clean(m *mheap.Mheap) {
+func (bat *Batch) Clean(m *mpool.MPool) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
@@ -241,7 +238,7 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 		if vec != nil {
 			vec.Free(m)
 			if vec.IsLowCardinality() {
-				vec.Index().(*index.LowCardinalityIndex).Free()
+				//vec.Index().(*index.LowCardinalityIndex).Free()
 			}
 		}
 	}
@@ -269,7 +266,7 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
@@ -307,6 +304,14 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
 	return bat, nil
+}
+
+// XXX I will slowly remove all code that uses InitZsone.
+func (bat *Batch) SetZs(len int, m *mpool.MPool) {
+	bat.Zs = m.GetSels()
+	for i := 0; i < len; i++ {
+		bat.Zs = append(bat.Zs, 1)
+	}
 }
 
 // InitZsOne init Batch.Zs and values are all 1

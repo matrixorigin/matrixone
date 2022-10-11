@@ -18,13 +18,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Nodes []Node
@@ -161,7 +161,7 @@ type Relation interface {
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mheap.Mheap) (*batch.Batch, error)
+	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {

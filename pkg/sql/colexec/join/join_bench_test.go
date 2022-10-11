@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,11 +31,11 @@ import (
 )
 
 const (
-	benchFlag        = false
+	benchFlag        = true
 	benchCardinality = 1024
 
 	benchBuildTargetRows = 2_500
-	benchProbeTargetRows = 100_000
+	benchProbeTargetRows = 500_000
 )
 
 var (
@@ -52,7 +53,7 @@ func init() {
 	for len(benchProbeData) < benchProbeTargetRows {
 		// there is 1/3 probability picking a not existed string
 		if rand.Intn(3) == 0 {
-			benchProbeData = append(benchProbeData, "_hello_world") // '_' is not existed
+			benchProbeData = append(benchProbeData, "hello_world") // '_' is not existed
 		} else {
 			src := benchBuildData[rand.Intn(len(benchBuildData))]
 			benchProbeData = append(benchProbeData, string(append([]byte{}, src...)))
@@ -71,7 +72,7 @@ func init() {
 
 func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 	var err error
-	m := testutil.NewMheap()
+	m := mpool.MustNewZero()
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), m, false, values)
 	idx, err := index.New(v.Typ, m)
 	if err != nil {
@@ -164,7 +165,7 @@ func TestJoinPerf(t *testing.T) {
 
 func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, probeIdx, buildIdx *index.LowCardinalityIndex) {
 	totalStart := time.Now().UnixNano()
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, types.T_varchar.ToType())},
 			{newExpr(0, types.T_varchar.ToType())},
@@ -198,10 +199,9 @@ func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, probeIdx
 	// probe part
 	probeStart := time.Now().UnixNano()
 	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
+	require.NotNil(t, rbat)
 	probeEnd := time.Now().UnixNano()
 	metricMp["probeCost"][pos] = probeEnd - probeStart
-
-	rbat.Clean(tc.proc.Mp())
 
 	totalEnd := time.Now().UnixNano()
 	metricMp["totalCost"][pos] = totalEnd - totalStart
@@ -241,7 +241,7 @@ func BenchmarkCommonJoin(b *testing.B) {
 
 func mockBenchCase(probeIdx, buildIdx *index.LowCardinalityIndex) {
 	t := new(testing.T)
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{
 				newExpr(0, types.T_varchar.ToType()),

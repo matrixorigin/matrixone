@@ -71,7 +71,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		meta:       meta,
 		parts:      parts,
 		insertExpr: genInsertExpr(defs, len(parts)),
-		deleteExpr: genDeleteExpr(defs, len(parts)),
 	}
 	db.txn.tableMap[key] = tbl
 	return tbl, nil
@@ -84,7 +83,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.GetMheap())
+	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -121,7 +120,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		}
 	}
 	for _, col := range cols {
-		bat, err := genCreateColumnTuple(col, db.txn.proc.GetMheap())
+		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}

@@ -18,13 +18,13 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -62,7 +62,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				ctr.state = End
 				ctr.mp.Free()
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.GetMheap())
+					ctr.bat.Clean(proc.Mp())
 				}
 				continue
 			}
@@ -70,7 +70,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.GetMheap())
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
@@ -95,10 +95,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
@@ -224,10 +224,10 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
-		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
+		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.GetMheap())
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
 				}
 			}
 			return err
@@ -242,7 +242,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 			}
 		}
 
-		if *flg, err = ctr.dictEncoding(proc.GetMheap()); err != nil {
+		if *flg, err = ctr.dictEncoding(proc.Mp()); err != nil {
 			return err
 		}
 	}
@@ -252,12 +252,12 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 func (ctr *container) freeJoinCondition(proc *process.Process) {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.GetMheap())
+			ctr.evecs[i].vec.Free(proc.Mp())
 		}
 	}
 }
 
-func (ctr *container) dictEncoding(m *mheap.Mheap) (bool, error) {
+func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	// find out whether hashbuild is built by low cardinality index
 	idx := ctr.mp.Index()
 	if idx == nil {
@@ -302,7 +302,7 @@ func (ctr *container) dictEncoding(m *mheap.Mheap) (bool, error) {
 	return true, nil
 }
 
-func populateIndex(result, selected *vector.Vector, row int64, m *mheap.Mheap) error {
+func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) error {
 	if !selected.IsLowCardinality() {
 		return nil
 	}

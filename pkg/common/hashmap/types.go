@@ -15,11 +15,11 @@
 package hashmap
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -84,7 +84,7 @@ type StrHashMap struct {
 	strHashStates    [][3]uint64
 	ibucket, nbucket uint64
 
-	m       *mheap.Mheap
+	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
 }
 
@@ -102,18 +102,18 @@ type IntHashMap struct {
 	hashes           []uint64
 	ibucket, nbucket uint64
 
-	m       *mheap.Mheap
+	m       *mpool.MPool
 	hashMap *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {
-	m                *mheap.Mheap
+	m                *mpool.MPool
 	mp               *StrHashMap
 	ibucket, nbucket uint64
 }
 
 type intHashMapIterator struct {
 	ibucket, nbucket uint64
-	m                *mheap.Mheap
+	m                *mpool.MPool
 	mp               *IntHashMap
 }

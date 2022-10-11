@@ -192,16 +192,12 @@ func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	return
 }
 
-func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
-	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
-}
-
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetBlockRows(blk.entry)
 	}
-	return blk.entry.GetBlockData().Rows(blk.Txn, true)
+	return blk.entry.GetBlockData().Rows()
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {

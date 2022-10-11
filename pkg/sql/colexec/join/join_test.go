@@ -19,6 +19,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +54,7 @@ var (
 
 func init() {
 	tcs = []joinTestCase{
-		newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -63,7 +63,7 @@ func init() {
 					newExpr(0, types.Type{Oid: types.T_int8}),
 				},
 			}),
-		newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.Type{Oid: types.T_int8}),
@@ -84,6 +84,7 @@ func TestString(t *testing.T) {
 
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
+		nb0 := tc.proc.Mp().CurrNB()
 		bat := hashBuild(t, tc)
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
@@ -100,12 +101,13 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		nb1 := tc.proc.Mp().CurrNB()
+		require.Equal(t, nb0, nb1)
 	}
 }
 
 func TestLowCardinalityJoin(t *testing.T) {
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		[][]*plan.Expr{
 			{
 				newExpr(0, types.T_varchar.ToType()),
@@ -141,7 +143,7 @@ func TestLowCardinalityJoin(t *testing.T) {
 }
 
 func TestLowCardinalityIndexesJoin(t *testing.T) {
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{
 				newExpr(0, types.T_varchar.ToType()),
@@ -180,7 +182,7 @@ func TestLowCardinalityIndexesJoin(t *testing.T) {
 func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []joinTestCase{
-			newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -189,7 +191,7 @@ func BenchmarkJoin(b *testing.B) {
 						newExpr(0, types.Type{Oid: types.T_int8}),
 					},
 				}),
-			newTestCase(testutil.NewMheap(), []bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 				[][]*plan.Expr{
 					{
 						newExpr(0, types.Type{Oid: types.T_int8}),
@@ -237,8 +239,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMheap(m)
+func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -337,7 +339,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
+func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	idx, err := index.New(v.Typ, m)
 	require.NoError(t, err)
 

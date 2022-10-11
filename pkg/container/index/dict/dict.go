@@ -15,22 +15,22 @@
 package dict
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Dict struct {
 	typ types.Type
 
-	m      *mheap.Mheap
+	m      *mpool.MPool
 	idx    reverseIndex
 	unique *vector.Vector
 
 	ref int
 }
 
-func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
+func New(typ types.Type, m *mpool.MPool) (*Dict, error) {
 	d := &Dict{
 		typ: typ,
 		m:   m,
@@ -242,7 +242,7 @@ func (d *Dict) findFixedData(pos int) *vector.Vector {
 }
 
 func (d *Dict) findVarData(pos int) *vector.Vector {
-	return vector.NewConstBytes(d.typ, 1, d.getVarData(pos))
+	return vector.NewConstBytes(d.typ, 1, d.getVarData(pos), d.m)
 }
 
 func (d *Dict) getFixedData(n int) uint64 {

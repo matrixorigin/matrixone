@@ -17,11 +17,11 @@ package index
 import (
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index/dict"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 type LowCardinalityIndex struct {
 	typ types.Type
 
-	m    *mheap.Mheap
+	m    *mpool.MPool
 	dict *dict.Dict
 	// poses is the positions of original data in the dictionary.
 	// Currently, the type of poses[i] is `T_uint16` which means
@@ -40,7 +40,7 @@ type LowCardinalityIndex struct {
 	poses *vector.Vector
 }
 
-func New(typ types.Type, m *mheap.Mheap) (*LowCardinalityIndex, error) {
+func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 	// TODO: int8, int16, uint8, uint16
 	if typ.Oid == types.T_decimal128 || typ.Oid == types.T_json {
 		return nil, ErrNotSupported

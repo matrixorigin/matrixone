@@ -20,14 +20,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initMemoryEngine(
@@ -49,11 +47,13 @@ func (s *service) initMemoryEngine(
 	}
 
 	// engine
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
+	mp, err := mpool.NewMPool("cnservice_mem_engine", 0, mpool.Mid)
+	if err != nil {
+		return err
+	}
 	pu.StorageEngine = memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
+		memoryengine.NewDefaultShardPolicy(mp),
 		memoryengine.GetClusterDetailsFromHAKeeper(
 			ctx,
 			hakeeper,
@@ -74,8 +74,12 @@ func (s *service) initMemoryEngineNonDist(
 		}, math.MaxInt)
 	}
 
+	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.Mid)
+	if err != nil {
+		return err
+	}
 	storage, err := memorystorage.NewMemoryStorage(
-		testutil.NewMheap(),
+		mp,
 		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
@@ -102,11 +106,10 @@ func (s *service) initMemoryEngineNonDist(
 		ServiceAddress: "1",
 		Shards:         shards,
 	}
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
+
 	engine := memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
+		memoryengine.NewDefaultShardPolicy(mp),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{

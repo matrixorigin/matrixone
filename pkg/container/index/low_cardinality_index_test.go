@@ -17,11 +17,9 @@ package index
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,8 +88,5 @@ func TestEncode(t *testing.T) {
 }
 
 func newTestIndex(typ types.Type) (*LowCardinalityIndex, error) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	m := mheap.New(gm)
-	return New(typ, m)
+	return New(typ, mpool.MustNewZero())
 }

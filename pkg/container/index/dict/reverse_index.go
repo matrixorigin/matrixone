@@ -17,8 +17,8 @@ package dict
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -40,11 +40,11 @@ type reverseIndex interface {
 }
 
 type fixedReverseIndex struct {
-	m  *mheap.Mheap
+	m  *mpool.MPool
 	ht *hashtable.Int64HashMap
 }
 
-func newFixedReverseIndex(m *mheap.Mheap) (*fixedReverseIndex, error) {
+func newFixedReverseIndex(m *mpool.MPool) (*fixedReverseIndex, error) {
 	ht := &hashtable.Int64HashMap{}
 	if err := ht.Init(m); err != nil {
 		ht.Free(m)
@@ -95,12 +95,12 @@ func (idx *fixedReverseIndex) free() {
 }
 
 type varReverseIndex struct {
-	m          *mheap.Mheap
+	m          *mpool.MPool
 	ht         *hashtable.StringHashMap
 	hashStates [][3]uint64
 }
 
-func newVarReverseIndex(m *mheap.Mheap) (*varReverseIndex, error) {
+func newVarReverseIndex(m *mpool.MPool) (*varReverseIndex, error) {
 	ht := &hashtable.StringHashMap{}
 	if err := ht.Init(m); err != nil {
 		ht.Free(m)

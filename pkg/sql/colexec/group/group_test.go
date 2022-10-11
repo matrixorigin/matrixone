@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,9 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -51,40 +49,38 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []groupTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 			{Oid: types.T_int32},
 			{Oid: types.T_int64},
 		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
 		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
@@ -122,14 +118,14 @@ func TestGroup(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func TestLowCardinalityGroup(t *testing.T) {
 	{
 		// SELECT COUNT(*) FROM t GROUP BY t.values
-		tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_varchar}},
+		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
 			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
 
 		// a->4, b->3, c->3, d->2
@@ -158,7 +154,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 	}
 	{
 		// SELECT SUM(t.values) FROM t GROUP BY t.values
-		tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_int64}},
+		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_int64}},
 			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}})
 		tc.arg.NeedEval = true
 
@@ -184,11 +180,9 @@ func TestLowCardinalityGroup(t *testing.T) {
 
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []groupTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -213,11 +207,11 @@ func BenchmarkGroup(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
 	return groupTestCase{
 		types: ts,
 		flgs:  flgs,
-		proc:  testutil.NewProcessWithMheap(m),
+		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
 			Aggs:  aggs,
 			Exprs: exprs,
@@ -241,7 +235,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
+func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	idx, err := index.New(v.Typ, m)
 	require.NoError(t, err)
 

@@ -206,7 +206,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsScalar() {
 			if !input.IsScalarNull() {
 				cols := vector.MustStrCols(input)
-				return vector.NewConstString(typ, input.Length(), cols[0]), nil
+				return vector.NewConstString(typ, input.Length(), cols[0], proc.Mp()), nil
 			}
 		} else {
 			startIdx = i

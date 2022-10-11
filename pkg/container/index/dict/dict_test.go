@@ -17,11 +17,9 @@ package dict
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -161,7 +159,7 @@ func TestInsertBatchVarLen(t *testing.T) {
 		[]byte("name"),
 		[]byte("is"),
 		[]byte("Tom"),
-	}, nil))
+	}, dict.m))
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -177,7 +175,7 @@ func TestInsertBatchVarLen(t *testing.T) {
 		[]byte("is"),
 		[]byte("My"),
 		[]byte("friend"),
-	}, nil))
+	}, dict.m))
 
 	ips, err = dict.InsertBatch(v1)
 	require.NoError(t, err)
@@ -199,7 +197,7 @@ func TestFindBatchVarLen(t *testing.T) {
 		[]byte("name"),
 		[]byte("is"),
 		[]byte("Tom"),
-	}, nil))
+	}, dict.m))
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -216,7 +214,7 @@ func TestFindBatchVarLen(t *testing.T) {
 		[]byte("My"),
 		[]byte("friend"),
 		[]byte("name"),
-	}, nil))
+	}, dict.m))
 
 	poses := dict.FindBatch(v1)
 	require.Equal(t, uint16(0), poses[0])
@@ -240,7 +238,7 @@ func TestFindDataVarLen(t *testing.T) {
 		[]byte("Tom"),
 		[]byte("is"),
 		[]byte("Tom"),
-	}, nil))
+	}, dict.m))
 
 	ips, err := dict.InsertBatch(v0)
 	require.NoError(t, err)
@@ -269,8 +267,5 @@ func TestFindDataVarLen(t *testing.T) {
 }
 
 func newTestDict(typ types.Type) (*Dict, error) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	m := mheap.New(gm)
-	return New(typ, m)
+	return New(typ, mpool.MustNewZero())
 }

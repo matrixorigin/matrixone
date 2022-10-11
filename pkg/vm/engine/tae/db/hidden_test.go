@@ -18,7 +18,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -188,59 +187,6 @@ func TestHiddenWithPK1(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
-func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 12)
-	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*6))
-	defer bat.Close()
-	bats := bat.Split(10)
-
-	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
-	err := rel.Append(bats[0])
-	assert.NoError(t, err)
-	blk := getOneBlock(rel)
-	view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName, nil)
-	assert.NoError(t, err)
-	defer view.Close()
-	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-		sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
-		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-		expectV := bats[0].Vecs[3].Get(int(offset))
-		cv, err := rel.GetValueByPhyAddrKey(v, 3)
-		assert.NoError(t, err)
-		assert.Equal(t, expectV, cv)
-		if offset == 3 {
-			err = rel.DeleteByPhyAddrKey(v)
-			assert.NoError(t, err)
-		} else {
-			err = rel.UpdateByPhyAddrKey(v, 3, int64(9999))
-			assert.NoError(t, err)
-			err2 := rel.UpdateByPhyAddrKey(v, schema.PhyAddrKey.Idx, v)
-			assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrTAEError))
-		}
-		return
-	}, nil)
-	assert.NoError(t, txn.Commit())
-
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	blk = getOneBlock(rel)
-
-	assert.Equal(t, bats[0].Length()-1, int(rel.Rows()))
-	view, err = blk.GetColumnDataById(3, nil)
-	assert.NoError(t, err)
-	defer view.Close()
-	assert.Equal(t, bats[0].Length()-1, view.Length())
-	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
-		assert.Equal(t, int64(9999), v)
-		return
-	}, nil)
-	assert.NoError(t, txn.Commit())
-}
-
 // Testing Steps
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
@@ -314,18 +260,9 @@ func TestHidden2(t *testing.T) {
 			if offset == 1 {
 				err = rel.DeleteByPhyAddrKey(key)
 				assert.NoError(t, err)
-			} else {
-				err = rel.UpdateByPhyAddrKey(key, 2, int32(8888))
-				assert.NoError(t, err)
 			}
 			return
 		}, nil)
-		fp := blk.Fingerprint()
-		key := model.EncodePhyAddrKey(fp.SegmentID, fp.BlockID, 2)
-		v, err := rel.GetValueByPhyAddrKey(key, 2)
-		assert.NoError(t, err)
-		assert.Equal(t, int32(8888), v.(int32))
-		t.Log(v)
 	}
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)

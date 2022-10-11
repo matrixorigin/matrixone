@@ -20,12 +20,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,9 +32,7 @@ const (
 )
 
 func TestInsert(t *testing.T) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	m := mheap.New(gm)
+	m := mpool.MustNewZero()
 	mp, err := NewStrMap(false, 0, 0, m)
 	require.NoError(t, err)
 	ts := []types.Type{
@@ -57,13 +53,11 @@ func TestInsert(t *testing.T) {
 		vec.Free(m)
 	}
 	mp.Free()
-	require.Equal(t, int64(0), m.Size())
+	require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 }
 
 func TestInsertValue(t *testing.T) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	m := mheap.New(gm)
+	m := mpool.MustNewZero()
 	mp, err := NewStrMap(false, 0, 0, m)
 	require.NoError(t, err)
 	ok, err := mp.InsertValue(int8(0))
@@ -109,14 +103,12 @@ func TestInsertValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, ok)
 	mp.Free()
-	require.Equal(t, int64(0), m.Size())
+	require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 }
 
 func TestIterator(t *testing.T) {
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewStrMap(false, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -138,12 +130,10 @@ func TestIterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewStrMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -165,12 +155,10 @@ func TestIterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewStrMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -192,11 +180,11 @@ func TestIterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 }
 
-func newVectors(ts []types.Type, random bool, n int, m *mheap.Mheap) []*vector.Vector {
+func newVectors(ts []types.Type, random bool, n int, m *mpool.MPool) []*vector.Vector {
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
@@ -205,7 +193,7 @@ func newVectors(ts []types.Type, random bool, n int, m *mheap.Mheap) []*vector.V
 	return vecs
 }
 
-func newVectorsWithNull(ts []types.Type, random bool, n int, m *mheap.Mheap) []*vector.Vector {
+func newVectorsWithNull(ts []types.Type, random bool, n int, m *mpool.MPool) []*vector.Vector {
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
@@ -220,7 +208,7 @@ func newVectorsWithNull(ts []types.Type, random bool, n int, m *mheap.Mheap) []*
 	return vecs
 }
 
-func newVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interface{}) *vector.Vector {
+func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interface{}) *vector.Vector {
 	switch typ.Oid {
 	case types.T_int8:
 		if vs, ok := Values.([]int8); ok {
@@ -267,7 +255,7 @@ func newVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 	}
 }
 
-func newInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8) *vector.Vector {
+func newInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int8) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -291,7 +279,7 @@ func newInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8
 	return vec
 }
 
-func newInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int16) *vector.Vector {
+func newInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int16) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -315,7 +303,7 @@ func newInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func newInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int32) *vector.Vector {
+func newInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int32) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -339,7 +327,7 @@ func newInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func newInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int64) *vector.Vector {
+func newInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []int64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -363,7 +351,7 @@ func newInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	return vec
 }
 
-func newUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []uint32) *vector.Vector {
+func newUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint32) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -387,7 +375,7 @@ func newUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 	return vec
 }
 
-func newDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal64) *vector.Vector {
+func newDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal64) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -413,7 +401,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 	return vec
 }
 
-func newDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []types.Decimal128) *vector.Vector {
+func newDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal128) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
@@ -438,7 +426,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 	return vec
 }
 
-func newStringVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []string) *vector.Vector {
+func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {

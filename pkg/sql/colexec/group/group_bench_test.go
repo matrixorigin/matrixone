@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,10 +30,10 @@ import (
 )
 
 const (
-	benchFlag        = true
+	benchFlag        = false
 	benchCardinality = 1024
 
-	benchTargetRows = 3_000_000
+	benchTargetRows = 1_000_000
 )
 
 var (
@@ -51,7 +52,7 @@ func init() {
 
 func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 	var err error
-	m := testutil.NewMheap()
+	m := mpool.MustNewZero()
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), m, false, values)
 	idx, err := index.New(v.Typ, m)
 	if err != nil {
@@ -122,7 +123,7 @@ func TestGroupPerf(t *testing.T) {
 func mockTimingCase(t *testing.T, metricMp map[string][]int64, pos int, idx *index.LowCardinalityIndex) {
 	totalStart := time.Now().UnixNano()
 	// SELECT COUNT(*) FROM t GROUP BY t.col
-	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{{Oid: types.T_varchar}},
+	tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
 		[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
 
 	// construct group data part
