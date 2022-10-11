@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -43,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -185,7 +188,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			stm.SetTxnID(handler.GetTxn().Txn().ID)
 		}
@@ -349,7 +352,7 @@ func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
-		if colName == "PADDR" {
+		if colName == catalog.PhyAddrColumnName {
 			continue
 		}
 		row[0] = colName
@@ -1161,18 +1164,22 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+	if sv.Like != nil && sv.Where != nil {
+		return moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+	}
+
 	var err error = nil
 	ses := mce.GetSession()
 	proto := mce.GetSession().protocol
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col1.SetName("VARIABLE_NAME")
+	col1.SetName("Variable_name")
 
 	col2 := new(MysqlColumn)
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2.SetName("VARIABLE_VALUE")
+	col2.SetName("Value")
 
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
@@ -1187,12 +1194,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	var sysVars map[string]interface{}
 	if sv.Global {
 		sysVars = make(map[string]interface{})
-		for name := range sysVars {
-			if val, err := ses.GetGlobalVar(name); err == nil {
-				sysVars[name] = val
-			} else if !goErrors.Is(err, errorSystemVariableSessionEmpty) {
-				return err
-			}
+		for k, v := range gSysVarsDefs {
+			sysVars[k] = v.Default
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1221,10 +1224,48 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		rows = append(rows, row)
 	}
 
+	if sv.Where != nil {
+		bat, err := mce.constructVarBatch(rows)
+		if err != nil {
+			return err
+		}
+		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar)}, []string{"variable_name", "value"})
+		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
+		if err != nil {
+			return err
+		}
+
+		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		if err != nil {
+			return err
+		}
+		bs := vector.GetColumn[bool](vec)
+		sels := proc.Mp().GetSels()
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		bat.Shrink(sels)
+		proc.Mp().PutSels(sels)
+		v0 := vector.MustStrCols(bat.Vecs[0])
+		v1 := vector.MustStrCols(bat.Vecs[1])
+		rows = rows[:len(v0)]
+		for i := range v0 {
+			rows[i][0] = v0[i]
+			rows[i][1] = v1[i]
+		}
+		bat.Clean(proc.Mp())
+	}
+
 	//sort by name
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
+
+	for _, row := range rows {
+		ses.Mrs.AddRow(row)
+	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -1233,6 +1274,25 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
+}
+
+func (mce *MysqlCmdExecutor) constructVarBatch(rows [][]interface{}) (*batch.Batch, error) {
+	bat := batch.New(true, []string{"Variable_name", "Value"})
+	typ := types.New(types.T_varchar, 0, 0, 0)
+	cnt := len(rows)
+	bat.Zs = make([]int64, cnt)
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
+	}
+	v0 := make([]string, cnt)
+	v1 := make([]string, cnt)
+	for i, row := range rows {
+		v0[i] = row[0].(string)
+		v1[i] = fmt.Sprintf("%v", row[1])
+	}
+	bat.Vecs[0] = vector.NewWithStrings(typ, v0, nil, mce.ses.Mp)
+	bat.Vecs[1] = vector.NewWithStrings(typ, v1, nil, mce.ses.Mp)
+	return bat, nil
 }
 
 func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
@@ -2021,7 +2081,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st)
+			err = mce.handleShowVariables(st, proc)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2462,7 +2522,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted))))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError("invalid query"))
@@ -2533,7 +2593,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2561,7 +2621,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2606,7 +2666,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
+	logutil.Info("query trace", logutil.ConnectionIdField(mce.ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 
@@ -2808,8 +2868,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
-	var jsonBytes []byte
+func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -2818,6 +2877,7 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(uuid, options)
+		rows, size = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -2832,16 +2892,16 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes
+	return jsonBytes, rows, size
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
 		return serializePlanToJson(nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(queryPlan, uuid)

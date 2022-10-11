@@ -31,9 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 )
 
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {

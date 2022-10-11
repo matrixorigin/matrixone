@@ -37,6 +37,10 @@ func init() {
 	for i, name := range MoColumnsSchema {
 		MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
 	}
+	MoTableMetaDefs = make([]engine.TableDef, len(MoDatabaseSchema))
+	for i, name := range MoTableMetaSchema {
+		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
+	}
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {

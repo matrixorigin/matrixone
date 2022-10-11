@@ -97,10 +97,10 @@ func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (entry *BlockEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *BlockEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level))
@@ -220,10 +220,7 @@ func (entry *BlockEntry) IsActive() bool {
 	if !segment.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }
 
 // GetTerminationTS is coarse API: no consistency check

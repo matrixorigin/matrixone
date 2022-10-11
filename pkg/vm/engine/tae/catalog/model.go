@@ -34,11 +34,11 @@ var (
 )
 
 const (
-	PhyAddrColumnName    = "PADDR"
+	PhyAddrColumnName    = catalog.Row_ID
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
-	AttrRowID    = "__rowid"
+	AttrRowID    = PhyAddrColumnName
 	AttrCommitTs = "commit_time"
 	AttrAborted  = "aborted"
 

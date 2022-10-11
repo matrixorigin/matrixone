@@ -25,7 +25,6 @@ type Relation interface {
 	io.Closer
 	ID() uint64
 	Rows() int64
-	Size(attr string) int64
 	String() string
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64

@@ -298,7 +298,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR
+%token <str> SEPARATOR TIMESTAMPDIFF
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -6080,7 +6080,15 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-
+|	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
+	{   
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
@@ -7779,6 +7787,7 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+|	TIMESTAMPDIFF
 
 //mo_keywords:
 //    PROPERTIES

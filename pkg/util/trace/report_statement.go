@@ -46,15 +46,18 @@ type StatementInfo struct {
 	StatementFingerprint string        `json:"statement_fingerprint"`
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
-	ExecPlan             any           `json:"exec_plan"`
-	// SerializeExecPlan
-	SerializeExecPlan func(plan any, uuid2 uuid.UUID) []byte // see SetExecPlan, ExecPlan2Json
 
 	// after
 	Status     StatementInfoStatus `json:"status"`
 	Error      error               `json:"error"`
 	ResponseAt util.TimeNano       `json:"response_at"`
 	Duration   uint64              `json:"duration"` // unit: ns
+	ExecPlan   any                 `json:"exec_plan"`
+	// RowsRead, BytesScan generated from ExecPlan
+	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
+	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	// SerializeExecPlan
+	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	// flow ctrl
 	end bool
@@ -105,10 +108,14 @@ func (s *StatementInfo) CsvFields() []string {
 		result = append(result, fmt.Sprintf("%s", s.Error))
 	}
 	result = append(result, s.ExecPlan2Json())
+	result = append(result, fmt.Sprintf("%d", s.RowsRead))
+	result = append(result, fmt.Sprintf("%d", s.BytesScan))
 
 	return result
 }
 
+// ExecPlan2Json return ExecPlan Serialized json-str
+// and set RowsRead, BytesScan from ExecPlan
 func (s *StatementInfo) ExecPlan2Json() string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
@@ -117,14 +124,15 @@ func (s *StatementInfo) ExecPlan2Json() string {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
 		} else {
-			jsonByte = f(s.ExecPlan, uuid.UUID(s.StatementID))
+			jsonByte, s.RowsRead, s.BytesScan = f(s.ExecPlan, uuid.UUID(s.StatementID))
 		}
 	} else {
 		// use s.SerializeExecPlan
+		// get real ExecPlan json-str
+		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
 		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-			jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
-		} else {
-			jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+			// get nil ExecPlan json-str
+			jsonByte, _, _ = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 		}
 	}
 	return string(jsonByte)
@@ -132,7 +140,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 
 var defaultSerializeExecPlan atomic.Value
 
-type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) []byte
+type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
 
 func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
 	defaultSerializeExecPlan.Store(f)
@@ -147,7 +155,7 @@ func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
 }
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
-func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc func(plan any, uuid uuid.UUID) []byte) {
+func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc SerializeExecPlanFunc) {
 	s.ExecPlan = execPlan
 	s.SerializeExecPlan = SerializeFunc
 }
