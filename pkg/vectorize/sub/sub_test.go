@@ -18,9 +18,12 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestI32SubOf(t *testing.T) {
@@ -416,4 +419,52 @@ func BenchmarkAddDec128(b *testing.B) {
 			b.Fail()
 		}
 	}
+}
+
+func TestDateDiff(t *testing.T) {
+	cases := []struct {
+		name string
+		vecs []*vector.Vector
+		proc *process.Process
+		want int64
+	}{
+		{
+			name: "TEST01",
+			vecs: makeDatetimeSubVectors("2017-12-01 12:15:12", "2018-01-01 7:18:20", testutil.NewProc()),
+			proc: testutil.NewProc(),
+			want: 2660588,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			DatetimeSub(c.vecs[0], c.vecs[1], c.vecs[2])
+			require.Equal(t, c.want, c.vecs[2].Col.([]int64)[0])
+		})
+	}
+}
+
+func makeDatetimeSubVectors(firstStr, secondStr string,  proc *process.Process) []*vector.Vector {
+	vec := make([]*vector.Vector, 3)
+
+	firstDate, _ := types.ParseDatetime(firstStr, 0)
+	secondDate, _ := types.ParseDatetime(secondStr, 0)
+
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, proc.Mp())
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, proc.Mp())
+	vec[2] = proc.AllocScalarVector(types.T_int64.ToType())
+	 
+	return vec
+}
+
+func makeTimeStampDiffReverseVectors(firstStr, secondStr, unit string, mp *mpool.MPool) []*vector.Vector {
+	vec := make([]*vector.Vector, 3)
+
+	firstDate, _ := types.ParseDatetime(firstStr, 0)
+	secondDate, _ := types.ParseDatetime(secondStr, 0)
+
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
+	vec[2] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
+	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, unit, mp)
+	return vec
 }
