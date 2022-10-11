@@ -64,12 +64,12 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 			for _, ts := range tasks {
 				if ts.Metadata.ID == "test_only" {
 					if ts.TaskRunner == uuid {
-						t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
+						t.Logf("task %d is still on %s", ts.ID, ts.TaskRunner)
 						time.Sleep(1 * time.Second)
 						i++
 						continue
 					} else {
-						t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+						t.Logf("task %d reallocated on %s", ts.ID, ts.TaskRunner)
 						return
 					}
 				}
@@ -156,7 +156,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	err = c.CloseCNService(uuid1)
 	require.NoError(t, err)
 
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel1()
 	waitTaskRescheduled(t, ctx1, taskService, uuid1)
 }
