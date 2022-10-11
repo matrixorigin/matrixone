@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "truncate t1",
-		output: "truncate table t1",
+		input:  "truncate db1.t1",
+		output: "truncate table db1.t1",
 	}
 )
 
@@ -101,6 +101,12 @@ var (
 	}, {
 		input:  "truncate table t1",
 		output: "truncate table t1",
+	}, {
+		input:  "truncate db1.t1",
+		output: "truncate table db1.t1",
+	}, {
+		input:  "truncate table db1.t1",
+		output: "truncate table db1.t1",
 	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
