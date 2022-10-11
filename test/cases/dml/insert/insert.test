@@ -114,3 +114,7 @@ create table t1(a int, b int, c int);
 insert into t1 values(1, 2, 3) on duplicate key update a=5;
 insert into t1 values(1, 2, 3) on duplicate key update a=5, b=6, c=7;
 insert into t1 values(1, 2, 3) on duplicate key update a=values(b)+values(c);
+
+drop table if exists t1;
+create table t1(a int, primary key(b));
+create table t1(a int, b int, primary key(b, c));

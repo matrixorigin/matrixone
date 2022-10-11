@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -191,9 +190,9 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
+func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	// bat := batch.NewWithSize(1)
+	// bat.Vecs[0] = vec
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil

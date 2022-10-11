@@ -87,20 +87,23 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			TblName:      deleteTablesCtx.TblName,
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
+			IsHideKey:    deleteTablesCtx.IsHideKey,
+			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
 
 	for i, updateCtx := range node.UpdateCtxs {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
-			DbName:     updateCtx.DbName,
-			TblName:    updateCtx.TblName,
-			PriKey:     updateCtx.PriKey,
-			PriKeyIdx:  updateCtx.PriKeyIdx,
-			HideKey:    updateCtx.HideKey,
-			HideKeyIdx: updateCtx.HideKeyIdx,
-			OrderAttrs: make([]string, len(updateCtx.OrderAttrs)),
-			UpdateCols: make([]*ColDef, len(updateCtx.UpdateCols)),
-			OtherAttrs: make([]string, len(updateCtx.OtherAttrs)),
+			DbName:        updateCtx.DbName,
+			TblName:       updateCtx.TblName,
+			PriKey:        updateCtx.PriKey,
+			PriKeyIdx:     updateCtx.PriKeyIdx,
+			HideKey:       updateCtx.HideKey,
+			HideKeyIdx:    updateCtx.HideKeyIdx,
+			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
+			OtherAttrs:    make([]string, len(updateCtx.OtherAttrs)),
+			OrderAttrs:    make([]string, len(updateCtx.OrderAttrs)),
+			CompositePkey: DeepCopyColDef(updateCtx.GetCompositePkey()),
 		}
 		for j, col := range updateCtx.UpdateCols {
 			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)

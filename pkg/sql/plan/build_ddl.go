@@ -387,6 +387,11 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	}
 
 	if len(primaryKeys) > 0 {
+		for _, primaryKey := range primaryKeys {
+			if _, ok := colNameMap[primaryKey]; !ok {
+				return moerr.NewInvalidInput("column '%s' doesn't exist in table", primaryKey)
+			}
+		}
 		if len(primaryKeys) == 1 {
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{

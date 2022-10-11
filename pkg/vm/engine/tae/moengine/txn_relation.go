@@ -65,7 +65,8 @@ func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vect
 	return rel.handle.DeleteByPhyAddrKeys(tvec)
 }
 
-func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col string) error {
+func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) error {
+	data := bat.Vecs[0]
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
