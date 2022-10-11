@@ -585,6 +585,33 @@ func (mp *MPool) Realloc(old []byte, sz int) ([]byte, error) {
 	return ret, nil
 }
 
+// alignUp rounds n up to a multiple of a. a must be a power of 2.
+func alignUp(n, a int) int {
+	return (n + a - 1) &^ (a - 1)
+}
+
+// divRoundUp returns ceil(n / a).
+func divRoundUp(n, a int) int {
+	// a is generally a power of two. This will get inlined and
+	// the compiler will optimize the division.
+	return (n + a - 1) / a
+}
+
+// Returns size of the memory block that mallocgc will allocate if you ask for the size.
+func roundupsize(size int) int {
+	if size < _MaxSmallSize {
+		if size <= smallSizeMax-8 {
+			return int(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
+		} else {
+			return int(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
+		}
+	}
+	if size+_PageSize < size {
+		return size
+	}
+	return alignUp(size, _PageSize)
+}
+
 // Grow is like Realloc but we try to be a little bit more aggressive on growing
 // the slice.
 func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
@@ -595,18 +622,27 @@ func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
 		return old[:sz], nil
 	}
 
-	// double old cap
-	nsz := cap(old) + cap(old)
-	// too big, let's revert to linear growth
-	if nsz > 64*1024 {
-		nsz = cap(old) + 4*1024
+	// copy-paste go slice's grow strategy
+	newcap := cap(old)
+	doublecap := newcap + newcap
+	if sz > doublecap {
+		newcap = sz
+	} else {
+		const threshold = 256
+		if newcap < threshold {
+			newcap = doublecap
+		} else {
+			for 0 < newcap && newcap < sz {
+				newcap += (newcap + 3*threshold) / 4
+			}
+			if newcap <= 0 {
+				newcap = sz
+			}
+		}
 	}
-	// at least sz.
-	if nsz < sz {
-		nsz = sz
-	}
+	newcap = roundupsize(newcap)
 
-	ret, err := mp.Realloc(old, nsz)
+	ret, err := mp.Realloc(old, newcap)
 	if err != nil {
 		return ret, err
 	}

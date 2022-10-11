@@ -966,7 +966,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
 `,
 		},
 		{
@@ -1006,8 +1006,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}"
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000002""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000002""}",0,0
 `,
 		},
 		{
@@ -1047,7 +1047,7 @@ func Test_genCsvData(t *testing.T) {
 	}
 }
 
-func Test_genCsvData_LongQueryTIme(t *testing.T) {
+func Test_genCsvData_LongQueryTime(t *testing.T) {
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
 	type args struct {
@@ -1115,9 +1115,9 @@ func Test_genCsvData_LongQueryTIme(t *testing.T) {
 				buf:    buf,
 				queryT: int64(time.Second),
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}"
-00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}"
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}",0,0
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}",1,1
 `,
 		},
 	}

@@ -15,6 +15,10 @@
 package blockio
 
 import (
+	"os"
+	"path"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,9 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"os"
-	"path"
-	"sync"
 )
 
 type blockFile struct {
@@ -46,7 +47,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 		SegmentID: seg.id.SegmentID,
 		BlockID:   id,
 	}
-	name := EncodeBlkName(blockID)
+	name := EncodeBlkName(blockID, types.TS{})
 	bf := &blockFile{
 		seg:     seg,
 		id:      blockID,
@@ -69,6 +70,10 @@ func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objecti
 	return block, err
 }
 
+func (bf *blockFile) UpdateName(name string) {
+	bf.writer = NewWriter(bf.seg.fs, name)
+	bf.reader = NewReader(bf.seg.fs, bf, name)
+}
 func (bf *blockFile) GetWriter() objectio.Writer {
 	return bf.writer.writer
 }

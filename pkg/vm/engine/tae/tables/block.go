@@ -413,7 +413,7 @@ func (blk *dataBlock) GetColumnDataById(
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
 	if metaLoc == "" {
-		return blk.ResolveColumnFromANode(txn.GetStartTS(), colIdx, buffer, false)
+		return blk.ResolveColumnFromANode(txn.GetStartTS(), colIdx, buffer, false, false)
 	}
 	view, err = blk.ResolveColumnFromMeta(metaLoc, txn.GetStartTS(), colIdx, buffer)
 	return
@@ -450,7 +450,8 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	ts types.TS,
 	colIdx int,
 	buffer *bytes.Buffer,
-	raw bool) (view *model.ColumnView, err error) {
+	raw bool,
+	skipDeletes bool) (view *model.ColumnView, err error) {
 	var (
 		maxRow  uint32
 		visible bool
@@ -469,6 +470,9 @@ func (blk *dataBlock) ResolveColumnFromANode(
 		return
 	}
 	view.SetData(data)
+	if skipDeletes {
+		return
+	}
 	blk.mvcc.RLock()
 	err = blk.FillColumnDeletes(view, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
@@ -519,7 +523,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 	view := model.NewColumnView(txn.GetStartTS(), int(col))
 	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
 	if metaLoc == "" {
-		view, _ = blk.ResolveColumnFromANode(txn.GetStartTS(), int(col), nil, true)
+		view, _ = blk.ResolveColumnFromANode(txn.GetStartTS(), int(col), nil, true, true)
 	} else {
 		vec, _ := blk.LoadColumnData(int(col), nil)
 		view.SetData(vec)
@@ -659,12 +663,51 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
+	if blk.meta != nil && blk.meta.GetVisibleMetaLoc(ts) != "" {
+		err = blk.pkIndex.Dedup(key)
+		if err == nil {
+			err = moerr.NewNotFound()
+			return
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+			return
+		}
+		err = nil
+		var sortKey containers.Vector
+		if sortKey, err = blk.LoadColumnData(blk.meta.GetSchema().GetSingleSortKeyIdx(), nil); err != nil {
+			return
+		}
+		defer sortKey.Close()
+		err = sortKey.Foreach(func(v any, offset int) error {
+			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
+				row = uint32(offset)
+				return moerr.NewDuplicate()
+			}
+			return nil
+		}, nil)
+		if err == nil {
+			return 0, moerr.NewNotFound()
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+			return
+		}
+
+		var deleted bool
+		deleted, err = blk.mvcc.IsDeletedLocked(row, ts, blk.mvcc.RWMutex)
+		if err != nil {
+			return
+		}
+		if deleted {
+			err = moerr.NewNotFound()
+		}
+		return
+	}
 	rows, err := blk.pkIndex.GetActiveRow(key)
 	if err != nil {
 		return
 	}
 	for i := len(rows) - 1; i >= 0; i-- {
-		row := rows[i]
+		row = rows[i]
 		appendnode := blk.GetAppendNodeByRow(row)
 		needWait, txn := appendnode.NeedWaitCommitting(ts)
 		if needWait {
@@ -675,18 +718,13 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
 			continue
 		}
-		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
-		if deleteNode == nil {
-			return row, nil
+		var deleted bool
+		deleted, err = blk.mvcc.IsDeletedLocked(row, ts, blk.mvcc.RWMutex)
+		if err != nil {
+			return
 		}
-		needWait, txn = deleteNode.NeedWaitCommitting(ts)
-		if needWait {
-			blk.mvcc.RUnlock()
-			txn.GetTxnState(true)
-			blk.mvcc.RLock()
-		}
-		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
-			return row, nil
+		if !deleted {
+			return
 		}
 	}
 	return 0, moerr.NewNotFound()
@@ -738,11 +776,36 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
-		if err != nil {
-			return err
+		var keyselects *roaring.Bitmap
+		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
+		if err == nil {
+			return
 		}
-
+		if moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+			if keyselects == nil {
+				panic("unexpected error")
+			}
+			metaLoc := blk.meta.GetMetaLoc()
+			var sortKey *model.ColumnView
+			sortKey, err = blk.ResolveColumnFromMeta(
+				metaLoc,
+				txn.GetStartTS(),
+				blk.meta.GetSchema().GetSingleSortKeyIdx(),
+				nil)
+			if err != nil {
+				return
+			}
+			defer sortKey.Close()
+			deduplicate := func(v1 any, _ int) error {
+				return sortKey.GetData().Foreach(func(v2 any, row int) error {
+					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
+						return moerr.NewDuplicate()
+					}
+					return nil
+				}, nil)
+			}
+			err = pks.Foreach(deduplicate, keyselects)
+		}
 		return err
 	}
 	if blk.indexes == nil {

@@ -69,3 +69,11 @@ func (t *Transaction) Abort() {
 	}
 	t.State.Store(Aborted)
 }
+
+func (t *Transaction) Copy() *Transaction {
+	newTx := *t
+	newTx.State = new(Atomic[TransactionState])
+	newTx.State.Store(t.State.Load())
+	newTx.committers = make(map[TxCommitter]struct{})
+	return &newTx
+}
