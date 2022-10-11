@@ -425,6 +425,8 @@ var functionIdRegister = map[string]int32{
 	"serial":                         SERIAL,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
+	"datediff":                       DATEDIFF,
+	"timestampdiff":                  TIMESTAMPDIFF,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,

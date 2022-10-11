@@ -2563,4 +2563,32 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	DATEDIFF: {
+		Id: DATEDIFF,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_date, types.T_date},
+				ReturnTyp: types.T_int64,
+				Fn:        binary.DateDiff,
+			},
+		},
+	},
+	TIMESTAMPDIFF: {
+		Id: TIMESTAMPDIFF,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.TimeStampDiff,
+			},
+		},
+	},
 }
