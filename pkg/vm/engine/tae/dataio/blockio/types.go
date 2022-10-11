@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -28,8 +29,8 @@ const (
 	SegmentExt = "seg"
 )
 
-func EncodeBlkName(id *common.ID) (name string) {
-	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, BlockExt)
+func EncodeBlkName(id *common.ID, ts types.TS) (name string) {
+	basename := fmt.Sprintf("%d-%d-%d.%s.%s", id.TableID, id.SegmentID, id.BlockID, ts.ToString(), BlockExt)
 	return basename
 }
 
@@ -83,9 +84,9 @@ func DecodeSegName(name string) (id *common.ID, err error) {
 	return
 }
 
-func EncodeBlkMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
+func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows uint32) string {
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
-		EncodeBlkName(id),
+		EncodeBlkName(id, ts),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),
@@ -105,9 +106,9 @@ func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string
 	return metaLoc
 }
 
-func EncodeBlkDeltaLoc(id *common.ID, extent objectio.Extent) string {
+func EncodeBlkDeltaLoc(id *common.ID, ts types.TS, extent objectio.Extent) string {
 	deltaLoc := fmt.Sprintf("%s:%d_%d_%d",
-		EncodeBlkName(id),
+		EncodeBlkName(id, ts),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),
