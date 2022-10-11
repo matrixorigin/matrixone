@@ -10,6 +10,8 @@ insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
 select * from t1;
 select * from t1 where b=1;
 select * from t1 where b=2;
+insert into t1 values ('{"t1":"c"',3);
+select count(a) from t1;
 
 
 #Test cases of update and delete
