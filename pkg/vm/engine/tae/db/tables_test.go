@@ -203,136 +203,6 @@ func TestTxn2(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
-func TestTxn3(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
-	defer db.Close()
-
-	schema := catalog.MockSchemaAll(4, 3)
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 8
-	rows := uint32(30)
-	colIdx := uint16(0)
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db")
-		rel, _ := database.CreateRelation(schema)
-		bat := catalog.MockBatch(schema, int(rows))
-		defer bat.Close()
-		for i := 0; i < 1; i++ {
-			err := rel.Append(bat)
-			assert.Nil(t, err)
-		}
-		err := txn.Commit()
-		assert.Nil(t, err)
-		t.Log(bat.Vecs[colIdx].String())
-	}
-	{
-		// 1. Update ROW=5, VAL=99 -- PASS
-		// 2. Update ROW=5, VAL=100 -- PASS
-		// 3. Delete ROWS=[0,2] -- PASS
-		// 4. Update ROW=1 -- FAIL
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		assert.True(t, it.Valid())
-		blk := it.GetBlock()
-		err := blk.Update(5, colIdx, int8(99))
-		// err := blk.Update(5, colIdx, uint32(99))
-		assert.Nil(t, err)
-
-		// Txn can update a resource many times in a txn
-		err = blk.Update(5, colIdx, int8(100))
-		// err = blk.Update(5, colIdx, int32(100))
-		assert.Nil(t, err)
-
-		err = blk.RangeDelete(0, 2, handle.DT_Normal)
-		assert.Nil(t, err)
-
-		// err = blk.Update(1, 0, int32(11))
-		err = blk.Update(1, colIdx, int8(11))
-		assert.NotNil(t, err)
-
-		var buffer bytes.Buffer
-		view, err := blk.GetColumnDataById(0, &buffer)
-		assert.Nil(t, err)
-		defer view.Close()
-		assert.Equal(t, int(rows), view.Length())
-		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
-		assert.Equal(t, int8(100), view.GetData().Get(5))
-		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
-		// Check w-w with uncommitted col update
-		{
-			txn, _ := db.StartTxn(nil)
-			database, _ := txn.GetDatabase("db")
-			rel, _ := database.GetRelationByName(schema.Name)
-			it := rel.MakeBlockIt()
-			assert.True(t, it.Valid())
-			blk := it.GetBlock()
-			err := blk.Update(5, colIdx, int8(99))
-			// err := blk.Update(5, colIdx, int32(99))
-			assert.NotNil(t, err)
-			err = blk.Update(8, colIdx, int8(88))
-			// err = blk.Update(8, colIdx, int32(88))
-			assert.Nil(t, err)
-
-			err = blk.RangeDelete(2, 2, handle.DT_Normal)
-			assert.NotNil(t, err)
-			err = blk.Update(0, colIdx, int8(50))
-			// err = blk.Update(0, colIdx, int32(200))
-			assert.NotNil(t, err)
-
-			err = txn.Rollback()
-			assert.Nil(t, err)
-		}
-		err = txn.Commit()
-		assert.Nil(t, err)
-	}
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		assert.True(t, it.Valid())
-		blk := it.GetBlock()
-		err := blk.Update(5, colIdx, int8(99))
-		// err := blk.Update(5, colIdx, int32(99))
-		assert.Nil(t, err)
-		err = blk.Update(8, colIdx, int8(88))
-		// err = blk.Update(8, colIdx, int32(88))
-		assert.Nil(t, err)
-
-		txn2, _ := db.StartTxn(nil)
-		db2, _ := txn2.GetDatabase("db")
-		rel2, _ := db2.GetRelationByName(schema.Name)
-		it2 := rel2.MakeBlockIt()
-		assert.True(t, it.Valid())
-		blk2 := it2.GetBlock()
-		err = blk2.Update(20, colIdx, int8(40))
-		// err = blk2.Update(20, colIdx, int32(2000))
-		assert.Nil(t, err)
-		// chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
-		// t.Log(chain.StringLocked())
-		var buffer bytes.Buffer
-		view, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &buffer)
-		assert.Nil(t, err)
-		vec := view.GetData()
-		defer view.Close()
-		assert.Equal(t, int(rows), vec.Length())
-		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
-		assert.Equal(t, int8(100), vec.Get(5))
-		assert.Equal(t, int8(40), vec.Get(20))
-
-		assert.Nil(t, txn.Commit())
-		view, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &buffer)
-		assert.Nil(t, err)
-		defer view.Close()
-		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
-		// t.Log(chain.StringLocked())
-	}
-}
-
 func TestTxn4(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
@@ -457,71 +327,77 @@ func TestTxn6(t *testing.T) {
 		filter := new(handle.Filter)
 		filter.Op = handle.FilterEq
 		filter.Val = int32(5)
-		id, row, err := rel.GetByFilter(filter)
-		assert.Nil(t, err)
 
-		err = rel.Update(id, row, uint16(3), int64(33))
-		assert.Nil(t, err)
+		err := rel.UpdateByFilter(filter, uint16(3), int64(33))
+		assert.NoError(t, err)
 
-		err = rel.Update(id, row, uint16(3), int64(44))
-		assert.Nil(t, err)
-		v, err := rel.GetValue(id, row, uint16(3))
-		assert.Nil(t, err)
+		err = rel.UpdateByFilter(filter, uint16(3), int64(44))
+		assert.NoError(t, err)
+		v, err := rel.GetValueByFilter(filter, 3)
+		assert.NoError(t, err)
 		assert.Equal(t, int64(44), v)
 
-		err = rel.Update(id, row+1, uint16(3), int64(77))
-		assert.Nil(t, err)
+		filter.Val = int32(6)
+		err = rel.UpdateByFilter(filter, uint16(3), int64(77))
+		assert.NoError(t, err)
 
-		err = rel.RangeDelete(id, row+1, row+1, handle.DT_Normal)
-		assert.Nil(t, err)
+		err = rel.DeleteByFilter(filter)
+		assert.NoError(t, err)
 
 		// Double delete in a same txn -- FAIL
-		err = rel.RangeDelete(id, row+1, row+1, handle.DT_Normal)
-		assert.NotNil(t, err)
+		err = rel.DeleteByFilter(filter)
+		assert.Error(t, err)
 
 		{
 			txn, _ := db.StartTxn(nil)
 			database, _ := txn.GetDatabase("db")
 			rel, _ := database.GetRelationByName(schema.Name)
 
-			v, err := rel.GetValue(id, row, uint16(3))
-			assert.Nil(t, err)
+			filter.Val = int32(5)
+			v, err := rel.GetValueByFilter(filter, 3)
+			assert.NoError(t, err)
 			assert.NotEqual(t, int64(44), v)
 
-			err = rel.Update(id, row, uint16(3), int64(55))
-			assert.NotNil(t, err)
+			err = rel.UpdateByFilter(filter, uint16(3), int64(55))
+			assert.Error(t, err)
 
-			err = rel.Update(id, row+2, uint16(3), int64(88))
-			assert.Nil(t, err)
+			filter.Val = int32(7)
+			err = rel.UpdateByFilter(filter, uint16(3), int64(88))
+			assert.NoError(t, err)
 
 			// Update row that has uncommitted delete -- FAIL
-			err = rel.Update(id, row+1, uint16(3), int64(55))
-			assert.NotNil(t, err)
-			_, err = rel.GetValue(id, row+1, uint16(3))
-			assert.Nil(t, err)
+			filter.Val = int32(6)
+			err = rel.UpdateByFilter(filter, uint16(3), int64(55))
+			assert.Error(t, err)
+			_, err = rel.GetValueByFilter(filter, 3)
+			assert.NoError(t, err)
 			err = txn.Rollback()
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 		}
-		err = rel.Update(id, row+2, uint16(3), int64(99))
-		assert.Nil(t, err)
+		filter.Val = int32(7)
+		err = rel.UpdateByFilter(filter, uint16(3), int64(99))
+		assert.NoError(t, err)
 
-		assert.Nil(t, txn.Commit())
+		assert.NoError(t, txn.Commit())
 
 		{
 			txn, _ := db.StartTxn(nil)
 			database, _ := txn.GetDatabase("db")
 			rel, _ := database.GetRelationByName(schema.Name)
 
-			v, err := rel.GetValue(id, row, uint16(3))
-			assert.Nil(t, err)
+			filter.Val = int32(5)
+			v, err := rel.GetValueByFilter(filter, 3)
+			assert.NoError(t, err)
 			assert.Equal(t, int64(44), v)
 
-			v, err = rel.GetValue(id, row+2, uint16(3))
-			assert.Nil(t, err)
+			filter.Val = int32(7)
+			v, err = rel.GetValueByFilter(filter, 3)
+			assert.NoError(t, err)
 			assert.Equal(t, int64(99), v)
 
-			_, err = rel.GetValue(id, row+1, uint16(3))
-			assert.NotNil(t, err)
+			filter.Val = int32(6)
+			_, err = rel.GetValueByFilter(filter, 3)
+			assert.Error(t, err)
 
 			var buffer bytes.Buffer
 			it := rel.MakeBlockIt()
@@ -531,13 +407,11 @@ func TestTxn6(t *testing.T) {
 				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &buffer)
 				assert.Nil(t, err)
 				defer view.Close()
-				assert.Equal(t, bats[0].Length(), view.Length())
-				assert.True(t, view.DeleteMask.Contains(row+1))
+				assert.NotEqual(t, bats[0].Length(), view.Length())
 				t.Log(view.DeleteMask.String())
+				assert.Equal(t, bats[0].Length()-1, view.ApplyDeletes().Length())
 				it.Next()
 			}
-
-			t.Log(rel.SimplePPString(common.PPL1))
 		}
 	}
 }
@@ -596,12 +470,7 @@ func TestMergeBlocks1(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 			it := rel.MakeBlockIt()
 			blk := it.GetBlock()
-			err := blk.Update(2, 3, int64(22))
-			assert.Nil(t, err)
-			pkv, err := rel.GetValue(blk.Fingerprint(), 2, uint16(schema.GetSingleSortKeyIdx()))
-			mapping[pkv.(int32)] = int64(22)
-			assert.Nil(t, err)
-			err = blk.RangeDelete(4, 4, handle.DT_Normal)
+			err := blk.RangeDelete(4, 4, handle.DT_Normal)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}

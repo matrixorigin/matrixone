@@ -184,7 +184,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
+	if entry.HasDropCommittedLocked() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
 			gcNeeded = checkpointed >= logIndex.LSN
@@ -224,7 +224,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
+	if entry.HasDropCommittedLocked() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
 			gcNeeded = checkpointed >= logIndex.LSN
@@ -255,7 +255,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
+	if entry.HasDropCommittedLocked() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
 			gcNeeded = checkpointed >= logIndex.LSN
 		}
@@ -285,7 +285,7 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
+	if entry.HasDropCommittedLocked() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
 			gcNeeded = checkpointed >= logIndex.LSN
 		}
