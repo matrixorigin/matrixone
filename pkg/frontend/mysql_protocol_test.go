@@ -31,7 +31,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+
+	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -300,16 +301,12 @@ func TestReadStringLenEnc(t *testing.T) {
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
 // func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 // 	//before anything using the configuration
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 // 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 // 	if err != nil {
 // 		panic(err)
 // 	}
 // 	pu.SV.EnableTls = true
-
-// 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-// 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-
 // 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 // 	rm, _ := NewRoutineManager(ctx, pu)
 // 	rm.SetSkipCheckUser(true)
@@ -1292,7 +1289,7 @@ func TestMysqlResultSet(t *testing.T) {
 // 		log.Fatal("Failed to append PEM.")
 // 	}
 // 	clientCert := make([]tls.Certificate, 0, 1)
-// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+// 	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
 // 	if err != nil {
 // 		setServer(1)
 // 		require.NoError(t, err)

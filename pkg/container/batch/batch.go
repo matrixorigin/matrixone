@@ -217,16 +217,13 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 }
 
 func (bat *Batch) GetSubBatch(cols []string) *Batch {
+	mp := make(map[string]int)
+	for i, attr := range bat.Attrs {
+		mp[attr] = i
+	}
 	rbat := NewWithSize(len(cols))
-	i := 0
-	for j, attr := range bat.Attrs {
-		if attr == cols[i] {
-			rbat.Vecs[i] = bat.Vecs[j]
-			i++
-			if i == len(cols) {
-				break
-			}
-		}
+	for i, col := range cols {
+		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
 	rbat.Zs = bat.Zs
 	return rbat
@@ -291,6 +288,14 @@ func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
 	return bat, nil
+}
+
+// XXX I will slowly remove all code that uses InitZsone.
+func (bat *Batch) SetZs(len int, m *mpool.MPool) {
+	bat.Zs = m.GetSels()
+	for i := 0; i < len; i++ {
+		bat.Zs = append(bat.Zs, 1)
+	}
 }
 
 // InitZsOne init Batch.Zs and values are all 1

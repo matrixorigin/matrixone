@@ -54,7 +54,6 @@ type BlockAppender interface {
 
 type BlockReplayer interface {
 	OnReplayDelete(node txnif.DeleteNode) (err error)
-	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
@@ -76,7 +75,6 @@ type Block interface {
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
-	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
 	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)

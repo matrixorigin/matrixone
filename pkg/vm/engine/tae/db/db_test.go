@@ -81,6 +81,11 @@ func TestAppend2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
+	beater.Start()
+	defer beater.Stop()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
 	schema.SegmentMaxBlocks = 10
@@ -387,8 +392,8 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.Update(txn, 3, 2, int32(999))
-		assert.Nil(t, err)
+		// _, err = dataBlk.Update(txn, 3, 2, int32(999))
+		// assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(txn, 2, nil)
 		assert.Nil(t, err)
@@ -396,8 +401,8 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
-		v = view.GetData().Get(3)
-		assert.Equal(t, int32(999), v)
+		// v = view.GetData().Get(3)
+		// assert.Equal(t, int32(999), v)
 
 		assert.Nil(t, txn.Commit())
 	}
@@ -502,7 +507,8 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 			assert.Nil(t, err)
-			err = rel.Update(id, offset+1, 3, int64(99))
+			f2 := handle.NewEQFilter(v.(int32) + 1)
+			err = rel.UpdateByFilter(f2, 3, int64(99))
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
@@ -525,14 +531,14 @@ func TestCompactBlock1(t *testing.T) {
 			preparer, err := task.PrepareData(blkMeta.MakeKey())
 			assert.Nil(t, err)
 			defer preparer.Close()
-			assert.Equal(t, bat.Vecs[0].Length()-2, preparer.Columns.Vecs[0].Length())
+			assert.Equal(t, bat.Vecs[0].Length()-3, preparer.Columns.Vecs[0].Length())
 			maxTs = txn.GetStartTS()
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
+		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
@@ -586,8 +592,6 @@ func TestCompactBlock2(t *testing.T) {
 		assert.True(t, view.GetData().Equals(bat.Vecs[3]))
 		err = blk.RangeDelete(1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
-		err = blk.Update(3, 3, int64(999))
-		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -617,10 +621,8 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.Nil(t, view.DeleteMask)
-		v := view.GetData().Get(1)
 		// t.Logf("view: %v", view.GetData().String())
 		// t.Logf("raw : %v", bat.Vecs[3].String())
-		assert.Equal(t, int64(999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
 		cnt := 0
@@ -644,8 +646,6 @@ func TestCompactBlock2(t *testing.T) {
 			assert.NoError(t, err)
 			err = blk.RangeDelete(4, 5, handle.DT_Normal)
 			assert.NoError(t, err)
-			err = blk.Update(3, 3, int64(1999))
-			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit())
 		}
 		assert.NoError(t, txn.Commit())
@@ -663,8 +663,6 @@ func TestCompactBlock2(t *testing.T) {
 		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(4))
 		assert.True(t, view.DeleteMask.Contains(5))
-		v := view.GetData().Get(3)
-		assert.Equal(t, int64(1999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
 		txn2, rel2 := getDefaultRelation(t, db, schema.Name)
@@ -1635,25 +1633,6 @@ func TestScan2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
-func TestUpdatePrimaryKey(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 12)
-	bat := catalog.MockBatch(schema, 100)
-	defer bat.Close()
-	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-
-	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
-	filter := handle.NewEQFilter(v)
-	id, row, err := rel.GetByFilter(filter)
-	assert.NoError(t, err)
-	err = rel.Update(id, row, uint16(schema.GetSingleSortKeyIdx()), v)
-	assert.Error(t, err)
-	assert.NoError(t, txn.Commit())
-}
-
 func TestADA(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -1968,7 +1947,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3333), v.(int64))
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -2247,7 +2226,7 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	uv, err = rel.GetValueByFilter(filter_4, 3)
 	assert.NoError(t, err)
 	assert.True(t, types.IsNull(uv))
@@ -2706,6 +2685,15 @@ func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
+
+	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
+	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
+	beater.Start()
+	defer func() {
+		// sleep to see more blocks flush
+		time.Sleep(500 * time.Millisecond)
+		beater.Stop()
+	}()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -3557,4 +3545,154 @@ func TestTxnIdempotent(t *testing.T) {
 		}()
 		wg.Wait()
 	}
+}
+
+// insert 200 rows and do quick compaction
+// expect that there are some dirty tables at first and then zero dirty table found
+func TestWatchDirty(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	logMgr := tae.LogtailMgr
+
+	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(logMgr, opts.Clock, tae.Catalog, visitor)
+	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
+	watcher.WithDelay(10 * time.Nanosecond)
+
+	tbl, seg, blk := watcher.DirtyCount()
+	assert.Zero(t, blk)
+	assert.Zero(t, seg)
+	assert.Zero(t, tbl)
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	appendCnt := 200
+	bat := catalog.MockBatch(schema, appendCnt)
+	bats := bat.Split(appendCnt)
+
+	tae.createRelAndAppend(bats[0], true)
+	tae.checkRowsByScan(1, false)
+
+	wg := &sync.WaitGroup{}
+	pool, _ := ants.NewPool(5)
+	worker := func(i int) func() {
+		return func() {
+			txn, _ := tae.getRelation()
+			err := tae.doAppendWithTxn(bats[i], txn, true)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+			wg.Done()
+		}
+	}
+	for i := 1; i < appendCnt; i++ {
+		wg.Add(1)
+		pool.Submit(worker(i))
+	}
+
+	stopCh := make(chan int)
+	defer close(stopCh)
+	dirtyCountCh := make(chan int, 100)
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				close(dirtyCountCh)
+				return
+			default:
+			}
+			time.Sleep(5 * time.Millisecond)
+			watcher.Run()
+			_, _, blkCnt := watcher.DirtyCount()
+			dirtyCountCh <- blkCnt
+		}
+	}()
+
+	wg.Wait()
+	seenDirty := false
+	prevVal, prevCount := 0, 0
+	// wait two seconds for ch to produce consecutive zeros
+	assert.NoError(t, testutils.WaitChTimeout(1*time.Second, dirtyCountCh, func(count int, closed bool) (moveOn bool, err error) {
+		if closed {
+			return false, moerr.NewInternalError("unexpected close on chan")
+		}
+		if count > 0 {
+			seenDirty = true
+		}
+
+		if prevVal != count {
+			t.Logf("dirty count %d appears %d times", prevVal, prevCount)
+			prevVal, prevCount = count, 1
+		} else {
+			prevCount++
+		}
+
+		if seenDirty && count == 0 {
+			// expect that all following count is zero
+			sum := 0
+			for i := 0; i < 10; i++ {
+				c := <-dirtyCountCh
+				sum += c
+			}
+			if sum == 0 {
+				// 10 zeros were found, can stop
+				return false, nil
+			}
+		}
+		return true, nil
+	}))
+}
+
+func TestDirtyWatchRace(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+
+	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
+
+	visitor := &catalog.LoopProcessor{}
+	watcher := NewDirtyWatcher(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher.WithDelay(10 * time.Nanosecond)
+
+	wg := &sync.WaitGroup{}
+
+	addRow := func() {
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		tbl.Append(catalog.MockBatch(schema, 1))
+		assert.NoError(t, txn.Commit())
+		wg.Done()
+	}
+
+	pool, _ := ants.NewPool(5)
+
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		pool.Submit(addRow)
+	}
+
+	// test race
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			for j := 0; j < 300; j++ {
+				time.Sleep(5 * time.Millisecond)
+				watcher.Run()
+				// tbl, seg, blk := watcher.DirtyCount()
+				// t.Logf("t%d: tbl %d, seg %d, blk %d", i, tbl, seg, blk)
+				_, _, _ = watcher.DirtyCount()
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
 }
