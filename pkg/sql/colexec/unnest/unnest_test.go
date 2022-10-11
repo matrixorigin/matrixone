@@ -176,6 +176,21 @@ func TestUnnest(t *testing.T) {
 			case "func":
 				ut.proc.Reg.InputBatch = nil
 				end, err := Call(0, ut.proc, ut.arg)
+				require.Nil(t, err)
+				require.True(t, end)
+				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
+				require.Nil(t, err)
+				ut.arg.Es.ExprList = []*plan.Expr{
+					{
+						Typ: &plan.Type{
+							Id:       int32(types.T_varchar),
+						}
+					},
+				}
+				end, err = Call(0, ut.proc, ut.arg)
+
+				require.NotNil(t, err)
+				require.False(t, end)
 			}
 		})
 	}
