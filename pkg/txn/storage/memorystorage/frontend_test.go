@@ -14,25 +14,14 @@
 
 package memorystorage
 
-import (
-	"context"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/prashantv/gostub"
-)
-
-func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
-	stm := &trace.StatementInfo{}
-	ctx = trace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time) context.Context {
-		return ctx
-	})
-	return ctx, stubs
-}
+// func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+// 	stm := &trace.StatementInfo{}
+// 	ctx = trace.ContextWithStatement(ctx, stm)
+// 	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time) context.Context {
+// 		return ctx
+// 	})
+// 	return ctx, stubs
+// }
 
 // now we will use hideKey for each delete operator.
 // but now tae use PADDR as hideKey, but memengine haven't this hideKey. so this UT will fail.
