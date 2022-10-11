@@ -1,0 +1,24 @@
+drop database if exists test;
+create database test;
+use test;
+create table t1(a int not null, b int);
+create table t2(a int, b int);
+create table t3(a int, b int);
+insert into t1 values (null, 0);
+insert into t2 values (null, null);
+insert into t3 values (0, 0);
+insert into t1 select * from t3;
+select * from t1;
+insert into t1 select * from t2;
+select * from t1;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+
+create table t1(a int not null auto_increment,b int);
+insert into t1 values (null, 1);
+insert into t1(b) values (1);
+select * from t1;
+create table t2(a int, b int);
+insert into t2 values (null, null);
+insert into t1 select * from t2;
