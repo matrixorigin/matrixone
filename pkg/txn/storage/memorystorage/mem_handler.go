@@ -24,6 +24,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -458,7 +459,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	return nil
 }
 
-const rowIDColumnName = "__rowid"
+const rowIDColumnName = catalog.Row_ID
 
 func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
@@ -539,6 +540,15 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	tx := m.getTx(meta)
 	reqVecLen := req.Vector.Length()
 
+	// check table existence
+	_, err := m.relations.Get(tx, ID(req.TableID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			panic(fmt.Sprintf("no such table: %v, %v", req.TableID, req.TableName))
+		}
+		return err
+	}
+
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
@@ -596,8 +606,11 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if err != nil {
 		return err
 	}
+	if len(entries) == 0 {
+		return moerr.NewInternalError("no such column: %s", req.ColumnName)
+	}
 	if len(entries) != 1 {
-		return moerr.NewInternalError("wrong column name: %s", req.ColumnName)
+		panic("impossible")
 	}
 	attrIndex := entries[0].Value.Order
 	iter := m.data.NewIter(tx)
