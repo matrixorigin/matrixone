@@ -15,10 +15,11 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -129,25 +130,6 @@ type SyncTxn interface {
 	TxnChanger
 }
 
-type UpdateChain interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-	GetID() *common.ID
-
-	// DeleteNode(*common.DLNode)
-	// DeleteNodeLocked(*common.DLNode)
-
-	AddNode(txn AsyncTxn) UpdateNode
-	AddNodeLocked(txn AsyncTxn) UpdateNode
-	PrepareUpdate(uint32, UpdateNode) error
-
-	GetValueLocked(row uint32, ts types.TS) (any, error)
-	TryUpdateNodeLocked(row uint32, v any, n UpdateNode) error
-	// CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
-	// CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
-}
-
 type DeleteChain interface {
 	sync.Locker
 	RLock()
@@ -215,18 +197,6 @@ type DeleteNode interface {
 	OnApply() error
 }
 
-type UpdateNode interface {
-	TxnEntry
-	GetID() *common.ID
-	String() string
-	GetChain() UpdateChain
-	// GetDLNode() *common.DLNode
-	GetMask() *roaring.Bitmap
-	GetValues() map[uint32]interface{}
-
-	UpdateLocked(row uint32, v any) error
-}
-
 type TxnStore interface {
 	Txn2PC
 	io.Closer
@@ -241,7 +211,6 @@ type TxnStore interface {
 	Append(dbId, id uint64, data *containers.Batch) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
-	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
 

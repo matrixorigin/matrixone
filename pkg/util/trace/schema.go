@@ -101,7 +101,7 @@ var initDDLs = []struct{ sqlPrefix, filePrefix string }{
 }
 
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
-func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor, mode string) error {
+func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	exec := ieFactory()
 	if exec == nil {
 		return nil
@@ -114,7 +114,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		return nil
 	}
 
-	optFactory := GetOptionFactory(mode)
+	optFactory := GetOptionFactory(ExternalTableEngine)
 
 	if err := mustExec(sqlCreateDBConst); err != nil {
 		return err
@@ -138,23 +138,16 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
-func getExternalTableDDLPrefix(sql string) string {
-	return strings.Replace(sql, "CREATE TABLE", "CREATE EXTERNAL TABLE", 1)
-}
-
-type TableOptions interface {
-	FormatDdl(ddl string) string
-	// GetCreateOptions return option for `create {option}table`, which should end with ' '
-	GetCreateOptions() string
-	GetTableOptions() string
-}
-
 var _ TableOptions = (*CsvTableOptions)(nil)
 
 type CsvTableOptions struct {
-	formatter string
-	dbName    string
-	tblName   string
+	Formatter string
+	DbName    string
+	TblName   string
+}
+
+func getExternalTableDDLPrefix(sql string) string {
+	return strings.Replace(sql, "CREATE TABLE", "CREATE EXTERNAL TABLE", 1)
 }
 
 func (o *CsvTableOptions) FormatDdl(ddl string) string {
@@ -166,29 +159,24 @@ func (o *CsvTableOptions) GetCreateOptions() string {
 }
 
 func (o *CsvTableOptions) GetTableOptions() string {
-	return fmt.Sprintf(o.formatter, o.dbName, o.tblName)
+	if len(o.Formatter) > 0 {
+		return fmt.Sprintf(o.Formatter, o.DbName, o.TblName)
+	}
+	return ""
 }
 
-var _ TableOptions = (*noopTableOptions)(nil)
-
-type noopTableOptions struct{}
-
-func (o noopTableOptions) FormatDdl(ddl string) string { return ddl }
-func (o noopTableOptions) GetCreateOptions() string    { return "" }
-func (o noopTableOptions) GetTableOptions() string     { return "" }
-
-func GetOptionFactory(mode string) func(db, tbl string) TableOptions {
-	switch mode {
-	case InternalExecutor:
-		return func(_, _ string) TableOptions { return noopTableOptions{} }
-	case FileService:
+func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+	switch engine {
+	case NormalTableEngine:
+		return func(_, _ string) TableOptions { return NoopTableOptions{} }
+	case ExternalTableEngine:
 		var infileFormatter = ` infile{"filepath"="etl:%s/%s_*.csv","compression"="none"}` +
 			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 		return func(db, tbl string) TableOptions {
-			return &CsvTableOptions{formatter: infileFormatter, dbName: db, tblName: tbl}
+			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
 		}
 	default:
-		panic(moerr.NewInternalError("unknown batch process mode: %s", mode))
+		panic(moerr.NewInternalError("unknown engine: %s", engine))
 	}
 }
 

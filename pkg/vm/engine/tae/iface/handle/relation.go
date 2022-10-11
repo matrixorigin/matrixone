@@ -34,7 +34,6 @@ type Relation interface {
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
-	UpdateByPhyAddrKey(key any, col int, v any) error
 	GetValueByPhyAddrKey(key any, col int) (any, error)
 
 	DeleteByPhyAddrKeys(keys containers.Vector) error

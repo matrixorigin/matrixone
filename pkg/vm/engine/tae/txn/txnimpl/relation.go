@@ -210,10 +210,6 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		return
 	}
 	schema := h.table.entry.GetSchema()
-	if !schema.IsPartOfPK(int(col)) {
-		err = h.Update(id, row, col, v)
-		return
-	}
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -239,20 +235,6 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	err = h.Append(bat)
 	// FIXME!: We need to revert previous delete if append fails.
 	return
-}
-
-func (h *txnRelation) UpdateByPhyAddrKey(key any, col int, v any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
-	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, uint16(col), v)
-}
-
-func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error {
-	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
 func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {

@@ -256,17 +256,6 @@ func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx u
 	return db.GetValue(id, row, colIdx)
 }
 
-func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	db, err := store.getOrSetDB(dbId)
-	if err != nil {
-		return err
-	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
-	return db.Update(id, row, colIdx, v)
-}
-
 func (store *txnStore) DatabaseNames() (names []string) {
 	it := newDBIt(store.txn, store.catalog)
 	for it.Valid() {
