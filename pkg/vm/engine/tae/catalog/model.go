@@ -34,7 +34,7 @@ var (
 )
 
 const (
-	PhyAddrColumnName    = "PADDR"
+	PhyAddrColumnName    = catalog.Row_ID
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
