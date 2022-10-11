@@ -84,7 +84,9 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
-	defer c.Close()
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 	require.NoError(t, err)
 
 	indexed, err := c.GetCNServiceIndexed(0)
@@ -122,7 +124,9 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
-	defer c.Close()
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 	require.NoError(t, err)
 
 	cn1, err := c.GetCNServiceIndexed(0)
@@ -179,7 +183,9 @@ func TestTaskRunner(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
-	defer c.Close()
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 	require.NoError(t, err)
 
 	indexed, err := c.GetCNServiceIndexed(0)
@@ -219,7 +225,9 @@ func TestNoErrorOccursWhenTaskRunnerWithNoExecutor(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
-	defer c.Close()
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 	require.NoError(t, err)
 
 	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
@@ -248,7 +256,9 @@ func TestSysTablesCanInit(t *testing.T) {
 
 	// start the cluster
 	err = c.Start()
-	defer c.Close()
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)

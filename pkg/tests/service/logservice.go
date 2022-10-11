@@ -251,6 +251,12 @@ func (c *testCluster) setInitialClusterInfo() error {
 		}
 
 		c.logger.Info("cluster information initialized")
+		for _, s := range c.log.svcs {
+			if err = s.(*logService).svc.CreateInitTasks(); err != nil {
+				c.logger.Error("failed to create init tasks", zap.Error(err))
+				return
+			}
+		}
 	}
 
 	// initialize cluster only once

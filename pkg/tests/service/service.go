@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -311,13 +312,16 @@ func (c *testCluster) Start() error {
 	}
 
 	if c.opt.initial.cnServiceNum != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 		defer cancel()
 		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+	c.waitInitSchemaComplete(ctx)
 
 	c.mu.running = true
 	return nil
@@ -857,6 +861,28 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 	require.NoError(c.t, err)
 
 	c.WaitLogStoreReported(ctx, ls.ID())
+}
+
+func (c *testCluster) waitInitSchemaComplete(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"failed to init tables",
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+			tasks, err := c.opt.task.taskStorage.Query(context.Background(),
+				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
+			if err != nil {
+				panic(err)
+			}
+			if len(tasks) == 1 {
+				return
+			}
+		}
+	}
 }
 
 // --------------------------------------------------------------

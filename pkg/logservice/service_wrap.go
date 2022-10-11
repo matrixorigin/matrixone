@@ -41,7 +41,7 @@ func NewWrappedService(
 }
 
 func (w *WrappedService) Start() error {
-	return w.svc.createInitTasks(context.Background())
+	return nil
 }
 
 func (w *WrappedService) Close() error {
@@ -69,6 +69,11 @@ func (w *WrappedService) SetInitialClusterInfo(
 	)
 }
 
+func (w *WrappedService) CreateInitTasks() error {
+	return w.svc.createInitTasks(context.Background())
+}
+
+// StartHAKeeperReplica
 // TODO: start hakeeper with specified log store, specified by caller
 func (w *WrappedService) StartHAKeeperReplica(
 	replicaID uint64, replicas map[uint64]dragonboat.Target, join bool,
