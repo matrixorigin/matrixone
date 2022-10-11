@@ -202,7 +202,8 @@ type baseBinder struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ *Type
+	typ  *Type
+	cols []string
 }
 
 type TableBinder struct {

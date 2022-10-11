@@ -513,7 +513,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 				txnToWait.GetTxnState(true)
 				seg.RLock()
 			}
-			invalid := seg.IsDroppedCommitted() || seg.IsCreating()
+			invalid := seg.HasDropCommittedLocked() || seg.IsCreating()
 			seg.RUnlock()
 			if invalid {
 				segIt.Next()
@@ -538,7 +538,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			}
 			{
 				blk.RLock()
-				invalid := blk.IsDroppedCommitted() || blk.IsCreating()
+				invalid := blk.HasDropCommittedLocked() || blk.IsCreating()
 				blk.RUnlock()
 				if invalid {
 					blkIt.Next()

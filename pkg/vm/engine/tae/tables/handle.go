@@ -85,13 +85,13 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			panic(err)
 		}
 	}
-	dropped := h.block.meta.HasDropped()
+	dropped := h.block.meta.HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped {
 		return h.ThrowAppenderAndErr()
 	}
 	h.block.Ref()
 	// Similar to optimistic locking
-	dropped = h.block.meta.HasDropped()
+	dropped = h.block.meta.HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped {
 		h.block.Unref()
 		return h.ThrowAppenderAndErr()

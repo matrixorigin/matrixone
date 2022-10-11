@@ -153,10 +153,6 @@ func (s *MOSpan) GetName() string {
 	return MOSpanType
 }
 
-func (s *MOSpan) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
-}
-
 func (s *MOSpan) CsvFields() []string {
 	var result []string
 	result = append(result, s.SpanID.String())
