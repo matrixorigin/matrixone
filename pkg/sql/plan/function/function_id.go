@@ -110,6 +110,8 @@ const (
 	DATE_PART         // DATE_PART
 	DATEADD           // DATEADD
 	DATEDIFF          // DATEDIFF
+	TIMEDIFF          // TIMEDIFF
+	TIMESTAMPDIFF     // TIMESTAMPDIFF
 	DENSE_RANK        // DENSE_RANK
 	EMPTY
 	ENDSWITH // ENDSWITH
@@ -423,6 +425,8 @@ var functionIdRegister = map[string]int32{
 	"serial":                         SERIAL,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
+	"datediff":                       DATEDIFF,
+	"timestampdiff":                  TIMESTAMPDIFF,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
