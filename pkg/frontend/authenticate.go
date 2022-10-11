@@ -139,6 +139,19 @@ func GetDefaultRole() string {
 	return moAdminRoleName
 }
 
+func isCaseInsensitiveEqual(n string, role string) bool {
+	return strings.ToLower(n) == role
+}
+
+func isPublicRole(n string) bool {
+	return isCaseInsensitiveEqual(n, publicRoleName)
+}
+
+func isPredefinedRole(r string) bool {
+	n := strings.ToLower(r)
+	return n == publicRoleName || n == accountAdminRoleName || n == moAdminRoleName
+}
+
 //GetTenantInfo extract tenant info from the input of the user.
 /**
 The format of the user
@@ -169,8 +182,8 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			return &TenantInfo{
-				Tenant: strings.ToLower(tenant),
-				User:   strings.ToLower(user),
+				Tenant: tenant,
+				User:   user,
 			}, nil
 		} else {
 			user := userRole[:p2]
@@ -184,9 +197,9 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 				return &TenantInfo{}, moerr.NewInternalError("invalid role name '%s'", role)
 			}
 			return &TenantInfo{
-				Tenant:      strings.ToLower(tenant),
-				User:        strings.ToLower(user),
-				DefaultRole: strings.ToLower(role),
+				Tenant:      tenant,
+				User:        user,
+				DefaultRole: role,
 			}, nil
 		}
 	}
@@ -1767,8 +1780,6 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 
-	verifiedRoles := make([]*verifiedRole, len(du.Users))
-
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -1777,31 +1788,30 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 
 	//step1: check users exists or not.
 	//handle "IF EXISTS"
-	for i, user := range du.Users {
+	for _, user := range du.Users {
 		sql := getSqlForPasswordOfUser(user.Username)
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
 		}
-		verifiedRoles[i] = vr
+
 		if vr == nil {
 			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
 				err = moerr.NewInternalError("there is no user %s", user.Username)
 				goto handleFailed
 			}
 		}
-	}
 
-	//step2 : delete mo_user
-	//step3 : delete mo_user_grant
-	for _, user := range verifiedRoles {
-		if user == nil {
+		if vr == nil {
 			continue
 		}
-		sqls := getSqlForDeleteUser(user.id)
-		for _, sql := range sqls {
+
+		//step2 : delete mo_user
+		//step3 : delete mo_user_grant
+		sqls := getSqlForDeleteUser(vr.id)
+		for _, sqlx := range sqls {
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
+			err = bh.Exec(ctx, sqlx)
 			if err != nil {
 				goto handleFailed
 			}
@@ -1837,8 +1847,6 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 
-	verifiedRoles := make([]*verifiedRole, len(dr.Roles))
-
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -1847,33 +1855,31 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 
 	//step1: check roles exists or not.
 	//handle "IF EXISTS"
-	for i, role := range dr.Roles {
+	for _, role := range dr.Roles {
 		sql := getSqlForRoleIdOfRole(role.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
 		}
-		verifiedRoles[i] = vr
+
 		if vr == nil {
 			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
 				err = moerr.NewInternalError("there is no role %s", role.UserName)
 				goto handleFailed
 			}
 		}
-	}
 
-	//step2 : delete mo_role
-	//step3 : delete mo_user_grant
-	//step4 : delete mo_role_grant
-	//step5 : delete mo_role_privs
-	for _, role := range verifiedRoles {
-		if role == nil {
+		//step2 : delete mo_role
+		//step3 : delete mo_user_grant
+		//step4 : delete mo_role_grant
+		//step5 : delete mo_role_privs
+		if vr == nil {
 			continue
 		}
-		sqls := getSqlForDeleteRole(role.id)
-		for _, sql := range sqls {
+		sqls := getSqlForDeleteRole(vr.id)
+		for _, sqlx := range sqls {
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
+			err = bh.Exec(ctx, sqlx)
 			if err != nil {
 				goto handleFailed
 			}
@@ -1978,7 +1984,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 			if role == nil {
 				continue
 			}
-			if privType == PrivilegeTypeConnect && strings.ToLower(role.name) == publicRoleName {
+			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
 				err = moerr.NewInternalError("the privilege %s can not be revoked from the role %s", privType, role.name)
 				goto handleFailed
 			}
@@ -2420,7 +2426,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 				//check Revoke moadmin(accountadmin) from roleX
 				err = moerr.NewInternalError("the role %s can not be revoked", from.name)
 				goto handleFailed
-			} else if strings.ToLower(from.name) == publicRoleName {
+			} else if isPublicRole(from.name) {
 				//
 				err = moerr.NewInternalError("the role %s can not be revoked", from.name)
 				goto handleFailed
@@ -2431,7 +2437,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 				if account.IsNameOfAdminRoles(to.name) {
 					err = moerr.NewInternalError("the role %s can not be revoked from the role %s", from.name, to.name)
 					goto handleFailed
-				} else if strings.ToLower(to.name) == publicRoleName {
+				} else if isPublicRole(to.name) {
 					//check Revoke roleX from public
 					err = moerr.NewInternalError("the role %s can not be revoked from the role %s", from.name, to.name)
 					goto handleFailed
@@ -2488,7 +2494,7 @@ func verifySpecialRolesInGrant(account *TenantInfo, from, to *verifiedRole) erro
 				return moerr.NewInternalError("the role %s can not be granted to the other role %s", from.name, to.name)
 			}
 		}
-	} else if strings.ToLower(from.name) == publicRoleName && to.typ == roleType {
+	} else if isPublicRole(from.name) && to.typ == roleType {
 		return moerr.NewInternalError("the role %s can not be granted to the other role %s", from.name, to.name)
 	}
 
@@ -2496,7 +2502,7 @@ func verifySpecialRolesInGrant(account *TenantInfo, from, to *verifiedRole) erro
 		//check Grant roleX to moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(to.name) {
 			return moerr.NewInternalError("the role %s can not be granted to the role %s", from.name, to.name)
-		} else if strings.ToLower(to.name) == publicRoleName {
+		} else if isPublicRole(to.name) {
 			//check Grant roleX to public
 			return moerr.NewInternalError("the role %s can not be granted to the role %s", from.name, to.name)
 		}
@@ -4795,8 +4801,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	}
 
 	for _, r := range cr.Roles {
-		n := strings.ToLower(r.UserName)
-		if n == publicRoleName || n == accountAdminRoleName || n == moAdminRoleName {
+		if isPredefinedRole(r.UserName) {
 			exists = 3
 		} else {
 			//dedup with role
