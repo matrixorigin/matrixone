@@ -5,6 +5,7 @@ drop database test01;
 show databases;
 Database
 mo_catalog
-information_schema
 system
 system_metrics
+mysql
+information_schema

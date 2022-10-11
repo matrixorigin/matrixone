@@ -49,10 +49,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Input(bat)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
-		bat.Clean(proc.GetMheap())
+		bat.Clean(proc.Mp())
 		return false, err
 	}
-	defer vec.Free(proc.GetMheap())
+	defer vec.Free(proc.Mp())
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
 		return false, moerr.NewOOM()
 	}
@@ -66,14 +66,14 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat.Shrink(nil)
 		}
 	} else {
-		sels := proc.GetMheap().GetSels()
+		sels := proc.Mp().GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
 			}
 		}
 		bat.Shrink(sels)
-		proc.GetMheap().PutSels(sels)
+		proc.Mp().PutSels(sels)
 	}
 	anal.Output(bat)
 	proc.SetInputBatch(bat)

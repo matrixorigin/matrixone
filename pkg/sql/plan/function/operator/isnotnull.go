@@ -26,9 +26,9 @@ func IsNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
 		if input.IsScalarNull() {
-			return vector.NewConstFixed(retType, input.Length(), false), nil
+			return vector.NewConstFixed(retType, input.Length(), false, proc.Mp()), nil
 		} else {
-			return vector.NewConstFixed(retType, input.Length(), true), nil
+			return vector.NewConstFixed(retType, input.Length(), true, proc.Mp()), nil
 		}
 	} else {
 		vlen := input.Length()

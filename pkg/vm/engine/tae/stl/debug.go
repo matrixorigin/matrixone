@@ -16,11 +16,9 @@ package stl
 
 import (
 	"bytes"
-	"fmt"
 	"runtime"
 	"strconv"
 	"sync"
-	"unsafe"
 )
 
 var (
@@ -82,47 +80,4 @@ func (c *Callers) String() string {
 		buffer.WriteString(strconv.Itoa(frame.Line))
 	}
 	return buffer.String()
-}
-
-type debugAllocatorWrapper struct {
-	sync.RWMutex
-	MemAllocator
-	traces map[uintptr]*Callers
-}
-
-func DebugOneAllocator(wrapped MemAllocator) MemAllocator {
-	return &debugAllocatorWrapper{
-		MemAllocator: wrapped,
-		traces:       make(map[uintptr]*Callers),
-	}
-}
-
-func (wrapper *debugAllocatorWrapper) Alloc(size int) MemNode {
-	node := wrapper.MemAllocator.Alloc(size)
-	wrapper.Lock()
-	defer wrapper.Unlock()
-	ptr := (uintptr)(unsafe.Pointer(&node.GetBuf()[0]))
-	wrapper.traces[ptr] = GetCalllers(2)
-	return node
-}
-
-func (wrapper *debugAllocatorWrapper) Free(n MemNode) {
-	wrapper.Lock()
-	delete(wrapper.traces, (uintptr)(unsafe.Pointer(&n.GetBuf()[0])))
-	wrapper.Unlock()
-	wrapper.MemAllocator.Free(n)
-}
-
-func (wrapper *debugAllocatorWrapper) String() string {
-	var w bytes.Buffer
-	w.WriteString(wrapper.MemAllocator.String())
-	w.WriteByte('\n')
-	i := 1
-	for _, callers := range wrapper.traces {
-		w.WriteString(fmt.Sprintf("==== [%d] ====\n", i))
-		w.WriteString(callers.String())
-		w.WriteByte('\n')
-		i++
-	}
-	return w.String()
 }

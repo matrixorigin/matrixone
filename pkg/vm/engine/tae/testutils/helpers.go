@@ -20,7 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,6 +30,28 @@ func WaitExpect(timeout int, expect func() bool) {
 	interval := time.Duration(timeout) * time.Millisecond / 400
 	for time.Now().Before(end) && !expect() {
 		time.Sleep(interval)
+	}
+}
+
+func WaitChTimeout[T any](
+	after time.Duration,
+	ch <-chan T,
+	onRecvCheck func(element T, closed bool) (moveOn bool, err error),
+) error {
+	timeout := time.After(after)
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError("timeout")
+		case item, ok := <-ch:
+			moveOn, err := onRecvCheck(item, !ok)
+			if err != nil {
+				return err
+			}
+			if !ok || !moveOn {
+				return nil
+			}
+		}
 	}
 }
 
@@ -54,8 +77,9 @@ func InitTestEnv(module string, t *testing.T) string {
 }
 
 func EnsureNoLeak(t *testing.T) {
-	// assert.Zerof(t, stl.DefaultAllocator.Usage(), stl.DefaultAllocator.String())
-	if stl.DefaultAllocator.Usage() != 0 {
-		t.Log(stl.DefaultAllocator.String())
+	// assert.Zerof(t, common.DefaultAllocator.CurrNB(), common.DefaultAllocator.Stats().Report(""))
+	// XXX MPOOL: Too noisy
+	if common.DefaultAllocator.CurrNB() != 0 {
+		t.Log(common.DefaultAllocator.Stats().Report(""))
 	}
 }

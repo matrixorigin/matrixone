@@ -16,8 +16,9 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -152,7 +153,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
+	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(), task.txn.GetStartTS(),
 		ioTask.file.GetMeta().GetExtent(),
 		uint32(preparer.Columns.Length()))
 	logutil.Infof("node: %v", metaLoc)
@@ -197,14 +198,14 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
+		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
 			ablockTask.file.GetMeta().GetExtent(),
 			uint32(data.Length()))
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
 		if deletes != nil {
-			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
+			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
 				ablockTask.file.GetDelta().GetExtent())
 			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
 				return err
@@ -213,7 +214,6 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = aBlkData.ReplayIndex(); err != nil {
 			return err
 		}
-		aBlkData.FreeData()
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {

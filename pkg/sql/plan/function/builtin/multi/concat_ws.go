@@ -15,6 +15,7 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,7 +46,7 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		}
 		separator := vectors[0].GetString(0)
 		if AllConst {
-			return concatWsWithConstSeparatorAllConst(inputCleaned, separator)
+			return concatWsWithConstSeparatorAllConst(inputCleaned, separator, proc.Mp())
 		}
 		return concatWsWithConstSeparator(inputCleaned, separator, vectorIsConst, proc)
 	} else {
@@ -131,7 +132,7 @@ func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, p
 }
 
 // the inputs are guaranteed to be scalar non-NULL
-func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator string) (*vector.Vector, error) {
+func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	res := ""
 	for i := range inputCleaned {
@@ -142,7 +143,7 @@ func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator
 			res += separator
 		}
 	}
-	return vector.NewConstString(resultType, 1, res), nil
+	return vector.NewConstString(resultType, 1, res, mp), nil
 }
 
 // inputCleaned does not have NULL const

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -32,11 +31,17 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg any) error {
+	var err error
 	param := arg.(*Argument).Es
 	param.colName = "UNNEST_DEFAULT"
-	if uName, ok := param.Extern.Origin.(*tree.UnresolvedName); ok {
-		_, _, param.colName = uName.GetNames()
+	if len(param.Extern.ColName) != 0 {
+		param.colName = param.Extern.ColName
 		param.isCol = true
+	}
+	param.path = param.Extern.Path
+	param.outer = param.Extern.Outer
+	if err != nil {
+		return err
 	}
 	param.seq = 0
 	var filters []string
@@ -73,11 +78,11 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	path, err := types.ParseStringToPath(param.Extern.Path)
+	path, err := types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
-	ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
+	ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
 	if err != nil {
 		return false, err
 	}
@@ -106,7 +111,7 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 	if vec.Typ.Oid != types.T_json {
 		return false, moerr.NewInvalidArg("unnest: invalid column type:%s", vec.Typ)
 	}
-	path, err := types.ParseStringToPath(param.Extern.Path)
+	path, err := types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
@@ -118,7 +123,7 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 	rows := 0
 	for i := 0; i < len(col); i++ {
 		json := types.DecodeJson(col[i])
-		ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
+		ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
 		if err != nil {
 			return false, err
 		}

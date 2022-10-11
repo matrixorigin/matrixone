@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,7 +38,7 @@ func testDatabase(
 	t *testing.T,
 	newStorage func() (*Storage, error),
 ) {
-	heap := testutil.NewMheap()
+	mp := mpool.MustNewZero()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
@@ -226,7 +227,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1, 2, 3, 4, 5,
@@ -235,7 +236,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6, 7, 8, 9, 10,
@@ -289,7 +290,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -339,7 +340,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				8,
@@ -389,7 +390,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -398,7 +399,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6,
@@ -479,7 +480,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1, 2, 3, 4, 5,
@@ -488,7 +489,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6, 7, 8, 9, 10,
@@ -514,7 +515,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -564,7 +565,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				8,

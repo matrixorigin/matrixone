@@ -168,7 +168,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			} else {
 				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0]), nil
+			return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0], proc.Mp()), nil
 		} else { //has third parameter
 			lengthVector := inputVecs[2]
 			if lengthVector.IsScalar() {
@@ -190,7 +190,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 				} else {
 					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0]), nil
+				return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0], proc.Mp()), nil
 			} else {
 				columnStartCol := castTVecAsInt64(startVector)
 				columnLengthCol := castTVecAsInt64(lengthVector)

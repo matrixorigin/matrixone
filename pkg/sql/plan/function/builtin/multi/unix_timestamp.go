@@ -27,7 +27,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if len(lv) == 0 {
 		rs := make([]int64, 1)
 		unixtimestamp.UnixTimestamp([]types.Timestamp{types.CurrentTimestamp()}, rs)
-		return vector.NewConstFixed(types.T_int64.ToType(), 1, rs[0]), nil
+		return vector.NewConstFixed(types.T_int64.ToType(), 1, rs[0], proc.Mp()), nil
 	}
 
 	inVec := lv[0]
@@ -40,7 +40,7 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if inVec.IsScalar() {
 		rs := make([]int64, 1)
 		unixtimestamp.UnixTimestamp(times, rs)
-		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0]), nil
+		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0], proc.Mp()), nil
 	}
 
 	vec, err := proc.AllocVectorOfRows(types.T_int64.ToType(), int64(len(times)), inVec.Nsp)
@@ -70,7 +70,7 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 		rs := make([]int64, 1)
 		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))
 		unixtimestamp.UnixTimestamp(tms, rs)
-		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0]), nil
+		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0], proc.Mp()), nil
 	}
 
 	vlen := inVec.Length()

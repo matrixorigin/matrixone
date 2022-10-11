@@ -9,12 +9,11 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
-	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
-	mheap "github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // MockStatistics is a mock of Statistics interface.
@@ -157,7 +156,8 @@ func (mr *MockRelationMockRecorder) DelTableDef(arg0, arg1 interface{}) *gomock.
 }
 
 // Delete mocks base method.
-func (m *MockRelation) Delete(arg0 context.Context, arg1 *vector.Vector, arg2 string) error {
+func (m *MockRelation) Delete(arg0 context.Context, bat *batch.Batch, arg2 string) error {
+	arg1 := bat.Vecs[0]
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
@@ -370,7 +370,7 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 }
 
 // Read mocks base method.
-func (m *MockReader) Read(arg0 []string, arg1 *plan.Expr, arg2 *mheap.Mheap) (*batch.Batch, error) {
+func (m *MockReader) Read(arg0 []string, arg1 *plan.Expr, arg2 *mpool.MPool) (*batch.Batch, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2)
 	ret0, _ := ret[0].(*batch.Batch)

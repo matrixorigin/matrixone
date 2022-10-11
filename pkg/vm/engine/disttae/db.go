@@ -18,9 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func newDB(cli client.TxnClient, dnList []DNStore) *DB {
@@ -37,7 +37,7 @@ func newDB(cli client.TxnClient, dnList []DNStore) *DB {
 }
 
 // init is used to insert some data that will not be synchronized by logtail.
-func (db *DB) init(ctx context.Context, m *mheap.Mheap) error {
+func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {

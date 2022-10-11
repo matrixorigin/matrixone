@@ -34,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 type CloseFlag struct {
@@ -308,13 +306,8 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-
-	hostMmu := host.New(sv.HostMmuLimitation)
-	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
-
 	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
-
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, txnClient, engine.Nodes{})
+	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
 }
@@ -456,8 +449,8 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.Pu.SV.LengthOfQueryPrinted))
 	if status == success {
-		logutil.Infof("Connection id: %d Status: %s Statement: %s", ses.GetConnectionID(), status, str)
+		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
-		logutil.Errorf("Connection id: %d Status: %s Statement: %s Error: %v", ses.GetConnectionID(), status, str, err)
+		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
 }

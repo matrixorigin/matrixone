@@ -20,14 +20,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initMemoryEngine(
@@ -49,15 +47,15 @@ func (s *service) initMemoryEngine(
 	}
 
 	// engine
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
+	mp, err := mpool.NewMPool("cnservice_mem_engine", 0, mpool.Mid)
+	if err != nil {
+		return err
+	}
 	pu.StorageEngine = memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
-		memoryengine.GetClusterDetailsFromHAKeeper(
-			ctx,
-			hakeeper,
-		),
+		memoryengine.NewDefaultShardPolicy(mp),
+		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
+		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
 
 	return nil
@@ -74,8 +72,26 @@ func (s *service) initMemoryEngineNonDist(
 		}, math.MaxInt)
 	}
 
+	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.Mid)
+	if err != nil {
+		return err
+	}
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnAddr := "1"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
 	storage, err := memorystorage.NewMemoryStorage(
-		testutil.NewMheap(),
+		mp,
 		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
@@ -86,27 +102,15 @@ func (s *service) initMemoryEngineNonDist(
 
 	txnClient := memorystorage.NewStorageTxnClient(
 		ck,
-		storage,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
 	)
 	pu.TxnClient = txnClient
 
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
-		Shards:         shards,
-	}
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
 	engine := memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
+		memoryengine.NewDefaultShardPolicy(mp),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
@@ -114,6 +118,7 @@ func (s *service) initMemoryEngineNonDist(
 				},
 			}, nil
 		},
+		memoryengine.RandomIDGenerator,
 	)
 	pu.StorageEngine = engine
 

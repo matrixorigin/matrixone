@@ -159,11 +159,11 @@ func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	if cmd.entry == nil {
 		return nil
 	}
-	return cmd.entry.GetNodeLocked().GetLogIndex()
+	return cmd.entry.GetLatestNodeLocked().GetLogIndex()
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
-	ts := cmd.entry.GetNodeLocked().GetPrepare()
+	ts := cmd.entry.GetLatestNodeLocked().GetPrepare()
 	return ts
 }
 func (cmd *EntryCommand) IDString() string {

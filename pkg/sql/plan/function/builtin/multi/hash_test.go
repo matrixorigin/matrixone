@@ -17,12 +17,10 @@ package multi
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -42,17 +40,15 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []hashTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}),
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 			{Oid: types.T_int32},
 			{Oid: types.T_int64},
 		}),
-		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
+		newTestCase([]bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 			{Oid: types.T_varchar},
@@ -66,17 +62,17 @@ func TestHash(t *testing.T) {
 		bat := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		vec, err := Hash(bat.Vecs, tc.proc)
 		require.NoError(t, err)
-		bat.Clean(tc.proc.GetMheap())
-		vec.Free(tc.proc.GetMheap())
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		bat.Clean(tc.proc.Mp())
+		vec.Free(tc.proc.Mp())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type) hashTestCase {
+func newTestCase(flgs []bool, ts []types.Type) hashTestCase {
 	return hashTestCase{
 		types: ts,
 		flgs:  flgs,
-		proc:  testutil.NewProcessWithMheap(m),
+		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
 	}
 }
 

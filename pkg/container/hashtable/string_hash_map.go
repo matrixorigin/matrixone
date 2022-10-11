@@ -18,7 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type StringRef struct {
@@ -39,6 +39,7 @@ type StringHashMap struct {
 	elemCnt     uint64
 	maxElemCnt  uint64
 	cells       []StringHashMapCell
+	rawData     []byte
 	//confCnt     uint64
 }
 
@@ -48,20 +49,24 @@ func init() {
 	strCellSize = int64(unsafe.Sizeof(StringHashMapCell{}))
 }
 
-func (ht *StringHashMap) Free(m *mheap.Mheap) {
-	m.Decrease(strCellSize * int64(ht.cellCnt))
+func (ht *StringHashMap) Free(m *mpool.MPool) {
+	m.Free(unsafe.Slice((*byte)(unsafe.Pointer(&ht.cells[0])), ht.cellCnt*uint64(strCellSize)))
 }
 
-func (ht *StringHashMap) Init(m *mheap.Mheap) error {
+func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 	ht.cellCntBits = kInitialCellCntBits
 	ht.cellCnt = kInitialCellCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.cells = make([]StringHashMapCell, kInitialCellCnt)
-	return m.Increase(kInitialCellCnt * strCellSize)
+
+	if ht.rawData, err = m.Alloc(int(ht.cellCnt) * int(strCellSize)); err == nil {
+		ht.cells = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0])), ht.cellCnt)
+	}
+
+	return
 }
 
-func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -144,7 +149,7 @@ func (ht *StringHashMap) InsertHashStateBatch(states [][3]uint64, values []uint6
 }
 */
 
-func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
 	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
@@ -329,7 +334,7 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) resizeOnDemand(n uint64, m *mheap.Mheap) error {
+func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= ht.maxElemCnt {
 		return nil
@@ -346,14 +351,18 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mheap.Mheap) error {
 
 	oldCellCnt := ht.cellCnt
 	oldCells := ht.cells
+	oldData := ht.rawData
 
 	ht.cellCntBits = newCellCntBits
 	ht.cellCnt = newCellCnt
 	ht.maxElemCnt = newMaxElemCnt
-	if err := m.Increase(int64(newCellCnt-oldCellCnt) * strCellSize); err != nil {
+	if newData, err := m.Alloc(int(newCellCnt) * int(strCellSize)); err != nil {
 		return err
+	} else {
+		ht.rawData = newData
+		ht.cells = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&newData[0])), newCellCnt)
 	}
-	ht.cells = make([]StringHashMapCell, newCellCnt)
+
 	for i := uint64(0); i < oldCellCnt; i++ {
 		cell := &oldCells[i]
 		if cell.Mapped != 0 {
@@ -361,6 +370,9 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mheap.Mheap) error {
 			*newCell = *cell
 		}
 	}
+
+	m.Free(oldData)
+
 	return nil
 }
 

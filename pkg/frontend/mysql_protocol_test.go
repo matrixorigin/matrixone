@@ -31,7 +31,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+
+	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,9 +42,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -303,16 +301,12 @@ func TestReadStringLenEnc(t *testing.T) {
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
 // func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 // 	//before anything using the configuration
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 // 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 // 	if err != nil {
 // 		panic(err)
 // 	}
 // 	pu.SV.EnableTls = true
-
-// 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-// 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-
 // 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 // 	rm, _ := NewRoutineManager(ctx, pu)
 // 	rm.SetSkipCheckUser(true)
@@ -1229,14 +1223,11 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
-
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
 	trm := NewTestRoutineManager(pu)
 
@@ -1298,7 +1289,7 @@ func TestMysqlResultSet(t *testing.T) {
 // 		log.Fatal("Failed to append PEM.")
 // 	}
 // 	clientCert := make([]tls.Certificate, 0, 1)
-// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+// 	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
 // 	if err != nil {
 // 		setServer(1)
 // 		require.NoError(t, err)
@@ -1940,10 +1931,9 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -1973,10 +1963,9 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2006,10 +1995,9 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2042,10 +2030,9 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Cmd = int(COM_STMT_EXECUTE)
 		proto.ses = ses

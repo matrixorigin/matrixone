@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MemHandler struct {
@@ -65,7 +65,7 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap                  *mheap.Mheap
+	mheap                  *mpool.MPool
 	defaultIsolationPolicy IsolationPolicy
 	clock                  clock.Clock
 	idGenerator            memoryengine.IDGenerator
@@ -85,7 +85,7 @@ type Iter[
 }
 
 func NewMemHandler(
-	mheap *mheap.Mheap,
+	mp *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
@@ -96,7 +96,7 @@ func NewMemHandler(
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
 		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mheap:                  mheap,
+		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 		idGenerator:            idGenerator,
@@ -539,6 +539,15 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	tx := m.getTx(meta)
 	reqVecLen := req.Vector.Length()
 
+	// check table existence
+	_, err := m.relations.Get(tx, ID(req.TableID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			panic(fmt.Sprintf("no such table: %v, %v", req.TableID, req.TableName))
+		}
+		return err
+	}
+
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
@@ -596,8 +605,11 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if err != nil {
 		return err
 	}
+	if len(entries) == 0 {
+		return moerr.NewInternalError("no such column: %s", req.ColumnName)
+	}
 	if len(entries) != 1 {
-		return moerr.NewInternalError("wrong column name: %s", req.ColumnName)
+		panic("impossible")
 	}
 	attrIndex := entries[0].Value.Order
 	iter := m.data.NewIter(tx)
@@ -1260,7 +1272,7 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 
 func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(memtable.Now(m.clock)); err != nil {
+	if err := tx.Commit(tx.Time); err != nil {
 		return err
 	}
 	return nil
