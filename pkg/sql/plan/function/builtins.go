@@ -2519,31 +2519,47 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	DATEDIFF: {
-		Id: DATEDIFF,
+
+	MO_MEMORY_USAGE: {
+		Id: MO_MEMORY_USAGE,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_INTERNAL,
 				Layout:    STANDARD_FUNCTION,
-				Args:      []types.T{types.T_date, types.T_date},
-				ReturnTyp: types.T_int64,
-				Fn:        binary.DateDiff,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoMemUsage,
 			},
 		},
 	},
-	TIMESTAMPDIFF: {
-		Id: TIMESTAMPDIFF,
+
+	MO_ENABLE_MEMORY_USAGE_DETAIL: {
+		Id: MO_ENABLE_MEMORY_USAGE_DETAIL,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_INTERNAL,
 				Layout:    STANDARD_FUNCTION,
-				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
-				ReturnTyp: types.T_int64,
-				Fn:        multi.TimeStampDiff,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoEnableMemUsageDetail,
+			},
+		},
+	},
+	MO_DISABLE_MEMORY_USAGE_DETAIL: {
+		Id: MO_DISABLE_MEMORY_USAGE_DETAIL,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoDisableMemUsageDetail,
 			},
 		},
 	},
