@@ -484,7 +484,6 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		}
 		objs = append(objs, types.ObjectIdentifier{Key: ptrTo(s.pathToKey(path.File))})
 		if len(objs) == 1000 {
-			// fixme: parse err
 			if err := s.deleteMultiObj(ctx, objs); err != nil {
 				return err
 			}
@@ -503,7 +502,7 @@ func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier
 		Delete: &types.Delete{
 			Objects: objs,
 			// In quiet mode the response includes only keys where the delete action encountered an error.
-			// Quiet: false,
+			Quiet: true,
 		},
 	})
 	// delete api failed
