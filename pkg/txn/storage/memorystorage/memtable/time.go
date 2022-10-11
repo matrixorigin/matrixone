@@ -58,6 +58,16 @@ func (t Time) Before(t2 Time) bool {
 	return t.Statement < t2.Statement
 }
 
+func (t Time) Equal(t2 Time) bool {
+	if !t.Timestamp.Equal(t2.Timestamp) {
+		return false
+	}
+	if t.Statement != t2.Statement {
+		return false
+	}
+	return true
+}
+
 func (t Time) String() string {
 	return fmt.Sprintf("Time{%d, %d, %d}",
 		t.Timestamp.PhysicalTime,
