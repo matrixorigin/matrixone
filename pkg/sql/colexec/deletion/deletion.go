@@ -47,26 +47,45 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ctx := context.TODO()
 
 	for i := range p.DeleteCtxs {
-
+		filterColIndex := p.DeleteCtxs[i].ColIndex
 		if p.DeleteCtxs[i].IsHideKey {
 			var cnt uint64
 			tmpBat := &batch.Batch{}
-			tmpBat.Vecs = []*vector.Vector{bat.Vecs[i]}
+			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
 			tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
-
-			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat.GetVector(0), p.DeleteCtxs[i].UseDeleteKey)
+			// maxIndex := int32(len(bat.Vecs))
+			// if i < len(p.DeleteCtxs)-1 {
+			// 	maxIndex = p.DeleteCtxs[i+1].ColIndex
+			// }
+			// for j := filterColIndex + 1; j < maxIndex; j++ {
+			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
+			// }
+			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 			affectedRows += cnt
 
 			tmpBat.Clean(proc.Mp())
 		} else {
-			err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey)
+			tmpBat := &batch.Batch{}
+			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
+			// maxIndex := int32(len(bat.Vecs))
+			// if i < len(p.DeleteCtxs)-1 {
+			// 	maxIndex = p.DeleteCtxs[i+1].ColIndex
+			// }
+			// for j := filterColIndex + 1; j < maxIndex; j++ {
+			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
+			// }
+			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 			affectedRows += uint64(batLen)
+
+			tmpBat.Clean(proc.Mp())
 		}
 
 	}
