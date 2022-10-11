@@ -2521,7 +2521,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted))))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError("invalid query"))
@@ -2592,7 +2592,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2620,7 +2620,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2665,7 +2665,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
+	logutil.Info("query trace", logutil.ConnectionIdField(mce.ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 

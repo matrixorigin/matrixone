@@ -143,14 +143,6 @@ func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Fiel
 
 const MOInternalFiledKeyNoopReport = "MOInternalFiledKeyNoopReport"
 
-func NoReportFiled() zap.Field {
-	return zap.Bool(MOInternalFiledKeyNoopReport, true)
-}
-
-func ErrorField(err error) zap.Field {
-	return zap.Error(err)
-}
-
 func newTraceLogEncoder() *TraceLogEncoder {
 	// default like zap.NewProductionEncoderConfig(), but clean core-elems ENCODE
 	e := &TraceLogEncoder{

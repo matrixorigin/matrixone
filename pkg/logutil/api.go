@@ -34,7 +34,7 @@ func Warn(msg string, fields ...zap.Field) {
 }
 
 func Error(msg string, fields ...zap.Field) {
-	GetSkip1Logger().Error(msg, fields...)
+	GetErrorLogger().Error(msg, fields...)
 }
 
 func Panic(msg string, fields ...zap.Field) {
