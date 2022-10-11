@@ -124,7 +124,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	entry.RUnlock()
 	for _, node := range mvccNodes {
 		dbNode := node.(*catalog.DBMVCCNode)
-		if dbNode.HasDropped() {
+		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts / abort
 			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
 		} else {
@@ -142,7 +142,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		tblNode := node.(*catalog.TableMVCCNode)
 		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
-			if !tblNode.HasDropped() {
+			if !tblNode.HasDropCommitted() {
 				dstBatch = b.insBatch
 				// fill unique syscol fields if inserting
 				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
@@ -164,7 +164,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 				abortVec.Append(aborted)
 			}
 		} else {
-			if tblNode.HasDropped() {
+			if tblNode.HasDropCommitted() {
 				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
 			} else {
 				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
@@ -349,7 +349,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
 	for _, node := range mvccNodes {
 		metaNode := node.(*catalog.MetadataMVCCNode)
 		var dstBatch *containers.Batch
-		if !metaNode.HasDropped() {
+		if !metaNode.HasDropCommitted() {
 			dstBatch = b.blkMetaInsBatch
 			dstBatch.GetVectorByName(blkMetaAttrBlockID).Append(e.ID)
 			dstBatch.GetVectorByName(blkMetaAttrEntryState).Append(e.IsAppendable())

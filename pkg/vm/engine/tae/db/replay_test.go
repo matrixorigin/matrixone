@@ -450,7 +450,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	blkh, err := seg.GetBlock(blk.ID)
 	assert.Nil(t, err)
-	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).IsDroppedCommitted())
+	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).HasDropCommittedLocked())
 
 	val, err := rel.GetValueByFilter(filter, 0)
 	assert.Nil(t, err)

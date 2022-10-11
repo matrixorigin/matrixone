@@ -62,11 +62,11 @@ func (be *TableBaseEntry) PPString(level common.PPLevel, depth int, prefix strin
 }
 
 func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return
 	}
-	if node.(*TableMVCCNode).HasDropped() {
+	if node.(*TableMVCCNode).HasDropCommitted() {
 		return true, node.(*TableMVCCNode).DeletedAt
 	}
 	return
@@ -94,7 +94,7 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *TableMVCCNode) {
-	entry := be.GetNodeLocked()
+	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*TableMVCCNode)
 	} else {
@@ -121,7 +121,7 @@ func (be *TableBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -129,19 +129,25 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 }
 
 func (be *TableBaseEntry) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
 	return un.IsActive()
 }
 
-func (be *TableBaseEntry) IsDroppedCommitted() bool {
-	un := be.GetCommittedNode()
+func (be *TableBaseEntry) HasDropCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDropCommittedLocked()
+}
+
+func (be *TableBaseEntry) HasDropCommittedLocked() bool {
+	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
 	}
-	return un.(*TableMVCCNode).HasDropped()
+	return un.(*TableMVCCNode).HasDropCommitted()
 }
 
 func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
@@ -151,14 +157,6 @@ func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
 	oe.RLock()
 	defer oe.RUnlock()
 	return CompareUint64(be.ID, oe.ID)
-}
-
-func (be *TableBaseEntry) HasDropped() bool {
-	node := be.GetCommittedNode()
-	if node == nil {
-		return false
-	}
-	return node.(*TableMVCCNode).HasDropped()
 }
 
 func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -174,11 +172,12 @@ func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped boo
 	if un == nil {
 		return
 	}
-	if un.(*TableMVCCNode).HasDropped() {
-		visible, dropped = true, true
-		return
+	visible = true
+	if un.IsSameTxn(ts) {
+		dropped = un.(*TableMVCCNode).HasDropIntent()
+	} else {
+		dropped = un.(*TableMVCCNode).HasDropCommitted()
 	}
-	visible, dropped = true, un.(*TableMVCCNode).HasDropped()
 	return
 }
 
@@ -193,21 +192,12 @@ func (be *TableBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err
 	return
 }
 
-func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
-	cloned, uncloned := be.CloneLatestNode()
-	uncloned.(*TableMVCCNode).DeletedAt = types.TS{}
-	return &TableBaseEntry{
-		MVCCChain: cloned,
-		ID:        be.ID,
-	}
-}
-
 func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
 	err = be.CheckConflict(txnCtx)
 	if err != nil {
 		return
 	}
-	if be.HasDropped() {
+	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
@@ -230,7 +220,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 		}
 	}
 	if txn == nil || be.GetTxn() != txn {
-		if !be.HasDropped() {
+		if !be.HasDropCommitted() {
 			return moerr.NewDuplicate()
 		}
 	} else {
@@ -242,7 +232,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *TableBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -260,19 +250,8 @@ func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 	}
 }
 
-func (be *TableBaseEntry) GetCurrOp() OpT {
-	un := be.GetNodeLocked()
-	if un == nil {
-		return OpCreate
-	}
-	if !un.(*TableMVCCNode).HasDropped() {
-		return OpCreate
-	}
-	return OpSoftDelete
-}
-
 func (be *TableBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -280,7 +259,7 @@ func (be *TableBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *TableBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

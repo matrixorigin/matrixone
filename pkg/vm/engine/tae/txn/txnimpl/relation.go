@@ -152,7 +152,6 @@ func (h *txnRelation) Rows() int64 {
 	}
 	return int64(h.table.entry.GetRows())
 }
-func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
 func (h *txnRelation) BatchDedup(col containers.Vector) error {
