@@ -137,7 +137,7 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	return
 }
 
-func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
+func (h *mockDBHandle) TruncateByName(name string, tableId string) (rel handle.Relation, err error) {
 	panic("not implemented")
 }
 

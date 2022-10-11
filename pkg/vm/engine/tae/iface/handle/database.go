@@ -23,8 +23,7 @@ type Database interface {
 	GetName() string
 	CreateRelation(def any) (Relation, error)
 	DropRelationByName(name string) (Relation, error)
-	TruncateByName(name string) (Relation, error)
-
+	TruncateByName(name string, tableId string) (Relation, error)
 	GetRelationByName(name string) (Relation, error)
 	RelationCnt() int64
 	Relations() []Relation

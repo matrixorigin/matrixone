@@ -101,7 +101,6 @@ func (s *Scope) TruncateTable(c *Compile) (uint64, error) {
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		return 0, err
 	}
-	//affect, err := rel.Truncate(c.ctx, rel.GetTableID(c.ctx))
 	affect, err := rel.Truncate(c.ctx)
 	if err != nil {
 		return 0, err

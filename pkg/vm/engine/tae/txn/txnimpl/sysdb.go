@@ -74,10 +74,10 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 	return db.txnDatabase.DropRelationByName(name)
 }
 
-func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
+func (db *txnSysDB) TruncateByName(name string, tableId string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
 		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
 		return
 	}
-	return db.txnDatabase.TruncateByName(name)
+	return db.txnDatabase.TruncateByName(name, tableId)
 }
