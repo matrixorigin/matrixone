@@ -374,7 +374,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
-		b.dataInsBatch.GetVectorByName(catalog.AttrRowID).Extend(insBatch.GetVectorByName(catalog.PhyAddrColumnName))
+		// b.dataInsBatch.GetVectorByName(catalog.AttrRowID).Extend(insBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataInsBatch.Extend(insBatch)
 		// insBatch is freed, don't use anymore
 	}
@@ -383,7 +383,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
-		b.dataDelBatch.GetVectorByName(catalog.AttrRowID).Extend(delBatch.GetVectorByName(catalog.PhyAddrColumnName))
+		// b.dataDelBatch.GetVectorByName(catalog.AttrRowID).Extend(delBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
 	}

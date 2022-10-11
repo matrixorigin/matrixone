@@ -146,6 +146,8 @@ type Transaction struct {
 	tableMap map[tableKey]*table
 	// use to cache database
 	databaseMap map[databaseKey]*database
+
+	createTableMap map[uint64]uint8
 }
 
 // Entry represents a delete/insert

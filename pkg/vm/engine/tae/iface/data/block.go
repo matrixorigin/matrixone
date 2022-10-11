@@ -92,6 +92,7 @@ type Block interface {
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
+	ReplayImmutIndex() error
 	Close()
 	FreeData()
 	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
