@@ -663,6 +663,45 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
+	if blk.meta != nil && blk.meta.GetVisibleMetaLoc(ts) != "" {
+		err = blk.pkIndex.Dedup(key)
+		if err == nil {
+			err = moerr.NewNotFound()
+			return
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+			return
+		}
+		err = nil
+		var sortKey containers.Vector
+		if sortKey, err = blk.LoadColumnData(blk.meta.GetSchema().GetSingleSortKeyIdx(), nil); err != nil {
+			return
+		}
+		defer sortKey.Close()
+		err = sortKey.Foreach(func(v any, offset int) error {
+			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
+				row = uint32(offset)
+				return moerr.NewDuplicate()
+			}
+			return nil
+		}, nil)
+		if err == nil {
+			return 0, moerr.NewNotFound()
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+			return
+		}
+
+		var deleted bool
+		deleted, err = blk.mvcc.IsDeletedLocked(row, ts, blk.mvcc.RWMutex)
+		if err != nil {
+			return
+		}
+		if deleted {
+			err = moerr.NewNotFound()
+		}
+		return
+	}
 	rows, err := blk.pkIndex.GetActiveRow(key)
 	if err != nil {
 		return
@@ -737,11 +776,36 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
-		if err != nil {
-			return err
+		var keyselects *roaring.Bitmap
+		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
+		if err == nil {
+			return
 		}
-
+		if moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+			if keyselects == nil {
+				panic("unexpected error")
+			}
+			metaLoc := blk.meta.GetMetaLoc()
+			var sortKey *model.ColumnView
+			sortKey, err = blk.ResolveColumnFromMeta(
+				metaLoc,
+				txn.GetStartTS(),
+				blk.meta.GetSchema().GetSingleSortKeyIdx(),
+				nil)
+			if err != nil {
+				return
+			}
+			defer sortKey.Close()
+			deduplicate := func(v1 any, _ int) error {
+				return sortKey.GetData().Foreach(func(v2 any, row int) error {
+					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
+						return moerr.NewDuplicate()
+					}
+					return nil
+				}, nil)
+			}
+			err = pks.Foreach(deduplicate, keyselects)
+		}
 		return err
 	}
 	if blk.indexes == nil {
