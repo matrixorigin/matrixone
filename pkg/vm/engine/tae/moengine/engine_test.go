@@ -128,7 +128,9 @@ func TestEngine(t *testing.T) {
 	defer bat.Close()
 	newbat = mobat.New(true, bat.Attrs)
 	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
-	err = rel.Delete(ctx, newbat.Vecs[12], key.Name)
+	testBat := mobat.New(true, []string{bat.Attrs[0]})
+	testBat.Vecs = containers.CopyToMoVecs([]containers.Vector{bat.Vecs[12]})
+	err = rel.Delete(ctx, testBat, key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -232,7 +234,9 @@ func TestEngineAllType(t *testing.T) {
 	defer bat.Close()
 	newbat1 := mobat.New(true, bat.Attrs)
 	newbat1.Vecs = containers.CopyToMoVecs(bat.Vecs)
-	err = rel.Delete(ctx, newbat1.Vecs[12], key.Name)
+	testBat := mobat.New(true, []string{bat.Attrs[0]})
+	testBat.Vecs = containers.CopyToMoVecs([]containers.Vector{bat.Vecs[12]})
+	err = rel.Delete(ctx, testBat, key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -338,7 +342,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, attr)
 	keys, _ := rel.GetHideKeys(ctx)
 	key := keys[0]
-	err = rel.Delete(ctx, delete.Vecs[0], key.Name)
+	err = rel.Delete(ctx, delete, key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
