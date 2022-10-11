@@ -723,8 +723,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
-		if len(args) == 0{
-			return nil, moerr.NewInvalidArg(name + " function have invalid input args length", len(args))
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
 			return appendCastBeforeExpr(args[0], &Type{
@@ -856,8 +856,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return args[1], nil
 		}
 	case "unary_minus":
-		if len(args) == 0{
-			return nil, moerr.NewInvalidArg(name + " function have invalid input args length", len(args))
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
@@ -869,8 +869,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			}
 		}
 	case "oct", "bit_and", "bit_or", "bit_xor":
-		if len(args) == 0{
-			return nil, moerr.NewInvalidArg(name + " function have invalid input args length", len(args))
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
@@ -883,8 +883,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "like":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) == 0{
-			return nil, moerr.NewInvalidArg(name + " function have invalid input args length", len(args))
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
 			args[0].Typ.Id = int32(types.T_varchar)
