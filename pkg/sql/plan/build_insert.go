@@ -171,7 +171,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 						return nil, err
 					}
 					// do null check for case 3, for more details, please refer to comments of Function InsertValues in dml.go : 90
-					if !col.Default.NullAbility {
+					if col.Default != nil && !col.Default.NullAbility {
 						if isExprC := resExpr.GetC(); isExprC != nil {
 							if isExprC.Isnull {
 								return nil, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", col.Name))
