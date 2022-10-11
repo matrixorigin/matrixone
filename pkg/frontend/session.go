@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"time"
 
@@ -121,6 +122,12 @@ type Session struct {
 	errInfo *errInfo
 }
 
+// Clean up all resources hold by the session.  As of now, the mpool
+func (ses *Session) Dispose() {
+	mpool.DeleteMPool(ses.Mp)
+	ses.Mp = nil
+}
+
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
@@ -190,6 +197,10 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
+
+	runtime.SetFinalizer(ses, func(ss *Session) {
+		ss.Dispose()
+	})
 	return ses
 }
 
