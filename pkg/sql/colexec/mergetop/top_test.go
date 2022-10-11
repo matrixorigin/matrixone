@@ -97,6 +97,7 @@ func TestTop(t *testing.T) {
 				}
 			}
 		}
+		tc.arg.Free(tc.proc)
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
 }

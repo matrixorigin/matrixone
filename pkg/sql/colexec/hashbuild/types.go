@@ -66,7 +66,9 @@ func (arg *Argument) Free(proc *process.Process) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)
-		ctr.cleanHashMap()
+		if !arg.NeedHashMap {
+			ctr.cleanHashMap()
+		}
 	}
 }
 

@@ -90,11 +90,6 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {
-			for j := 0; j < i; j++ {
-				if ctr.vecs[j].needFree {
-					vector.Clean(ctr.vecs[j].vec, proc.Mp())
-				}
-			}
 			return false, err
 		}
 		ctr.vecs[i].vec = vec
@@ -106,13 +101,6 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 			}
 		}
 	}
-	defer func() {
-		for i := range ctr.vecs {
-			if ctr.vecs[i].needFree {
-				vector.Clean(ctr.vecs[i].vec, proc.Mp())
-			}
-		}
-	}()
 	ovec := ctr.vecs[0].vec
 	var strCol []string
 	n := len(bat.Zs)

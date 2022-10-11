@@ -99,7 +99,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
 		return false, err
 	}
-	defer ctr.freeAggVector(proc)
+	defer ctr.cleanAggVectors(proc.Mp())
 	if ctr.bat == nil {
 		var err error
 
@@ -115,7 +115,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		}
 		for _, ag := range ctr.bat.Aggs {
 			if err := ag.Grows(1, proc.Mp()); err != nil {
-				ctr.bat.Clean(proc.Mp())
 				return false, err
 			}
 		}
@@ -124,7 +123,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
-		ctr.bat.Clean(proc.Mp())
 		return false, err
 	}
 	return false, nil
@@ -140,8 +138,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				for i, agg := range ctr.bat.Aggs {
 					vec, err := agg.Eval(proc.Mp())
 					if err != nil {
-						ctr.clean()
-						ctr.bat.Clean(proc.Mp())
 						return false, err
 					}
 					ctr.bat.Aggs[i] = nil
@@ -152,7 +148,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.bat.Zs[i] = 1
 				}
 			}
-			ctr.clean()
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat)
 			proc.SetInputBatch(ctr.bat)
@@ -172,11 +167,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
-		ctr.clean()
-		ctr.cleanBatch(proc.Mp())
 		return false, err
 	}
-	defer ctr.freeAggVector(proc)
+	defer ctr.cleanAggVectors(proc.Mp())
 	if len(ctr.groupVecs) == 0 {
 		ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
@@ -189,8 +182,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.groupVecs[i].vec.Free(proc.Mp())
 				}
 			}
-			ctr.clean()
-			ctr.cleanBatch(proc.Mp())
 			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
@@ -243,13 +234,11 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		case size <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				ctr.cleanBatch(proc.Mp())
 				return false, err
 			}
 		default:
 			ctr.typ = HStr
 			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				ctr.cleanBatch(proc.Mp())
 				return false, err
 			}
 		}
@@ -261,8 +250,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		ctr.clean()
-		ctr.cleanBatch(proc.Mp())
 		return false, err
 	}
 	return false, err
@@ -364,11 +351,6 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.aggVecs[j].needFree {
-					ctr.aggVecs[i].vec.Free(proc.Mp())
-				}
-			}
 			return err
 		}
 		ctr.aggVecs[i].vec = vec
@@ -381,23 +363,4 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeAggVector(proc *process.Process) {
-	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].needFree {
-			ctr.aggVecs[i].vec.Free(proc.Mp())
-		}
-	}
-}
-
-func (ctr *container) clean() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
 }

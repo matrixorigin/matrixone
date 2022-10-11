@@ -17,10 +17,7 @@ package pipeline
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -111,26 +108,8 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
-	// XXX Here is the big problem.   In side defer, we call cleanup
-	// which in turn can calls Run.   Using defer to trigger normal
-	// execution flow is simply WRONG.   Calling Run in cleanup, at
-	// best is extremely bad naming.
-	//
-	// I have observed a panic within, calls defer, calls cleanup,
-	// calls Run, may create a deadlock.
-	//
-	// Will try to repro it with fault inj.
-	//
 	defer func() {
 		cleanup(p, proc)
-		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(proc.Mp())
-				}
-			}
-		}
 		proc.Cancel()
 	}()
 	if p.reg != nil { // used to handle some push-down request
@@ -150,33 +129,26 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	}
 }
 
+// cleanup do memory release work for a whole pipeline.
+// clean the coming batches and template space of each pipeline operator.
 func cleanup(p *Pipeline, proc *process.Process) {
-	proc.Reg.InputBatch = nil
-	_, _ = vm.Run(p.instructions, proc)
-	for i, in := range p.instructions {
-		if in.Op == vm.Connector {
-			arg := p.instructions[i].Arg.(*connector.Argument)
-			if len(arg.Reg.Ch) > 0 {
-				break
+	// clean all the coming batches.
+	bat := proc.InputBatch()
+	if bat != nil {
+		bat.Clean(proc.Mp())
+	}
+	proc.SetInputBatch(nil)
+	for i := range proc.Reg.MergeReceivers {
+		for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
+			bat := <-proc.Reg.MergeReceivers[i].Ch
+			if bat != nil {
+				bat.Clean(proc.Mp())
 			}
-			select {
-			case <-arg.Reg.Ctx.Done():
-			case arg.Reg.Ch <- nil:
-			}
-			break
 		}
-		if in.Op == vm.Dispatch {
-			arg := p.instructions[i].Arg.(*dispatch.Argument)
-			for _, reg := range arg.Regs {
-				if len(reg.Ch) > 0 {
-					break
-				}
-				select {
-				case <-reg.Ctx.Done():
-				case reg.Ch <- nil:
-				}
-			}
-			break
-		}
+	}
+
+	// clean operator space.
+	for i := range p.instructions {
+		p.instructions[i].Arg.Free(proc)
 	}
 }

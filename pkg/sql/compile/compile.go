@@ -665,7 +665,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = dupType(expr.Typ)
+		typs[i] = plan2.MakeTypeByPlan2Type(expr.Typ)
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
@@ -1130,15 +1130,5 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return false, plan.Node_MARK
 	default:
 		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
-	}
-}
-
-func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:       types.T(typ.Id),
-		Size:      typ.Size,
-		Width:     typ.Width,
-		Scale:     typ.Scale,
-		Precision: typ.Precision,
 	}
 }
