@@ -2379,7 +2379,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
+				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable,
 				*tree.Deallocate, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")

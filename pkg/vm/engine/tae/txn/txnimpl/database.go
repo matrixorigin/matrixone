@@ -112,7 +112,7 @@ func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err
 	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
 }
 
-func (db *txnDatabase) TruncateByName(name string, tableId string) (rel handle.Relation, err error) {
+func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	old, err := db.DropRelationByName(name)
 	if err != nil {
 		err = moerr.NewInternalError("%v: truncate %s error", err, name)

@@ -431,7 +431,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 }
 
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
-	var truncateTable *plan.TruncateTable
+	truncateTable := &plan.TruncateTable{}
 
 	truncateTable.Database = string(stmt.Name.SchemaName)
 	if truncateTable.Database == "" {

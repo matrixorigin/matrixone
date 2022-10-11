@@ -106,7 +106,7 @@ func (rel *txnRelation) Truncate(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = db.TruncateByName(name, rel.GetTableID(ctx))
+	_, err = db.TruncateByName(name)
 	if err != nil {
 		return 0, err
 	}
