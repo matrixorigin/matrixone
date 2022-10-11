@@ -882,7 +882,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	//start a db reader.
 	go func() {
 		//start 1pc txn ,read "dbtest"'s ID
-		ctx = context.TODO()
+		ctx := context.TODO()
 		txn, err := txnEngine.StartTxn(nil)
 		assert.Nil(t, err)
 		dbNames, _ = txnEngine.DatabaseNames(ctx, txn)
@@ -898,9 +898,10 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	assert.Nil(t, err)
 	//start reader after preparing success.
 	startTime := time.Now()
+	wg.Add(1)
 	go func() {
 		//start 1pc txn ,read "dbtest"'s ID
-		ctx = context.TODO()
+		ctx := context.TODO()
 		txn, err := txnEngine.StartTxn(nil)
 		assert.Nil(t, err)
 		//reader should wait until the writer committed.
@@ -911,6 +912,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		dbTestId = dbHandle.GetDatabaseID(ctx)
 		err = txn.Commit()
 		assert.Nil(t, err)
+		wg.Done()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
 
@@ -922,6 +924,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{typ: CmdCommitting}, {typ: CmdCommit},
 	})
 	assert.Nil(t, err)
+	wg.Wait()
 
 	//create table from "dbtest"
 	defs, err := moengine.SchemaToDefs(schema)
@@ -981,10 +984,12 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	assert.Nil(t, err)
 	var tbTestId uint64
 	startTime = time.Now()
+	wg.Add(1)
 	go func() {
 		//start 1pc txn ,read table ID
 		txn, err := txnEngine.StartTxn(nil)
 		assert.Nil(t, err)
+		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
 		assert.NoError(t, err)
 		dbId := dbHandle.GetDatabaseID(ctx)
@@ -1003,6 +1008,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.Equal(t, "expr2", rAttr.Default.OriginString)
 		err = txn.Commit()
 		assert.NoError(t, err)
+		wg.Done()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
 	}()
@@ -1011,6 +1017,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{typ: CmdCommitting}, {typ: CmdCommit},
 	})
 	assert.Nil(t, err)
+	wg.Wait()
 
 	//DML::insert batch into table
 	moBat := containers.CopyToMoBatch(catalog.MockBatch(schema, 100))
@@ -1033,10 +1040,12 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
 	startTime = time.Now()
+	wg.Add(1)
 	go func() {
 		//start 1PC txn , read table
 		txn, err := txnEngine.StartTxn(nil)
 		assert.NoError(t, err)
+		ctx := context.TODO()
 		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
 		assert.NoError(t, err)
 		tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
@@ -1056,6 +1065,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		txn.Commit()
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
+		wg.Done()
 	}()
 	time.Sleep(1 * time.Second)
 	//insertTxn 's CommitTS = PreparedTS + 1.
@@ -1063,22 +1073,27 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{typ: CmdCommitting}, {typ: CmdCommit},
 	})
 	assert.Nil(t, err)
+	wg.Wait()
 
 	//DML:delete rows
 	//read row ids
-	txn, err := txnEngine.StartTxn(nil)
-	assert.NoError(t, err)
-	dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
-	assert.NoError(t, err)
-	tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
-	assert.NoError(t, err)
-	hideCol, err := tbHandle.GetHideKeys(ctx)
-	assert.NoError(t, err)
-	reader, _ := tbHandle.NewReader(ctx, 1, nil, nil)
-	hideBat, err := reader[0].Read([]string{hideCol[0].Name}, nil, handle.m)
-	assert.Nil(t, err)
-	err = txn.Commit()
-	assert.Nil(t, err)
+	var hideBat *batch.Batch
+	{
+		txn, err := txnEngine.StartTxn(nil)
+		assert.NoError(t, err)
+		ctx = context.TODO()
+		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
+		assert.NoError(t, err)
+		tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
+		assert.NoError(t, err)
+		hideCol, err := tbHandle.GetHideKeys(ctx)
+		assert.NoError(t, err)
+		reader, _ := tbHandle.NewReader(ctx, 1, nil, nil)
+		hideBat, err = reader[0].Read([]string{hideCol[0].Name}, nil, handle.m)
+		assert.Nil(t, err)
+		err = txn.Commit()
+		assert.Nil(t, err)
+	}
 
 	hideBats := containers.SplitBatch(hideBat, 5)
 	//delete 20 rows by 2PC txn
@@ -1104,16 +1119,19 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 		{typ: CmdPrepare},
 	}
-	err = handle.handleCmds(context.TODO(), deleteTxn, txnCmds)
+	ctx = context.TODO()
+	err = handle.handleCmds(ctx, deleteTxn, txnCmds)
 	assert.Nil(t, err)
 	startTime = time.Now()
+	wg.Add(1)
 	go func() {
 		//read, there should be 80 rows left.
-		txn, err = txnEngine.StartTxn(nil)
+		txn, err := txnEngine.StartTxn(nil)
 		assert.NoError(t, err)
-		dbHandle, err = txnEngine.GetDatabase(ctx, dbName, txn)
+		ctx := context.TODO()
+		dbHandle, err := txnEngine.GetDatabase(ctx, dbName, txn)
 		assert.NoError(t, err)
-		tbHandle, err = dbHandle.GetRelation(ctx, schema.Name)
+		tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
 		assert.NoError(t, err)
 		tbReaders, _ := tbHandle.NewReader(ctx, 2, nil, nil)
 		for _, reader := range tbReaders {
@@ -1128,6 +1146,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.Nil(t, err)
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
+		wg.Done()
 
 	}()
 	time.Sleep(1 * time.Second)
@@ -1136,4 +1155,5 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		{typ: CmdCommitting}, {typ: CmdCommit},
 	})
 	assert.Nil(t, err)
+	wg.Wait()
 }
