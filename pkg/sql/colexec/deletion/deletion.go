@@ -37,9 +37,15 @@ func Prepare(_ *process.Process, _ any) error {
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+
+	if bat == nil {
+		return true, nil
+	}
+
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
+
 	defer bat.Clean(proc.Mp())
 	batLen := batch.Length(bat)
 	var affectedRows uint64
