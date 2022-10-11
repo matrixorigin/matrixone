@@ -155,27 +155,27 @@ var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize fun
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
+var dummySerializeExecPlan = func(plan any, _ uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult)
+		return []byte(dummyNoExecPlanJsonResult), 0, 0
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), 0, 0
 	}
-	return json
+	return json, 1, 1
 }
 
-var dummySerializeExecPlan2 = func(plan any, _ uuid.UUID) []byte {
+var dummySerializeExecPlan2 = func(plan any, _ uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2)
+		return []byte(dummyNoExecPlanJsonResult2), 0, 0
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error()))
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), 0, 0
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val)
+	return []byte(val), 0, 0
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
