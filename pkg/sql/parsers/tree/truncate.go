@@ -14,8 +14,6 @@
 
 package tree
 
-import "fmt"
-
 // truncate table statement
 type TruncateTable struct {
 	statementImpl
@@ -27,7 +25,6 @@ func NewTruncateTable(name *TableName) *TruncateTable {
 }
 
 func (node *TruncateTable) Format(ctx *FmtCtx) {
-	fmt.Println()
 	ctx.WriteString("truncate table")
 	ctx.WriteByte(' ')
 	node.Name.Format(ctx)
