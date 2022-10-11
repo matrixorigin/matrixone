@@ -81,7 +81,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	for _, col := range tableDef.Cols {
 
 		colName := col.Name
-		if colName == catalog.PhyAddrColumnName {
+		if colName == catalog.Row_ID {
 			continue
 		}
 		nullOrNot := "NOT NULL"

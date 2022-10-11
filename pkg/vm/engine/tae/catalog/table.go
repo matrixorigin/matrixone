@@ -173,10 +173,10 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (entry *TableEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *TableEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
@@ -255,7 +255,7 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropped()
+		dropped := itSeg.HasDropCommitted()
 		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
@@ -394,22 +394,11 @@ func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 	}
 }
 
-func (entry *TableEntry) CloneCreateEntry() *TableEntry {
-	return &TableEntry{
-		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
-		db:             entry.db,
-		schema:         entry.schema,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
 	if !db.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }

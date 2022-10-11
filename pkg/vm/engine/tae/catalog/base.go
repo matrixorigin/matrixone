@@ -39,10 +39,9 @@ type BaseEntry interface {
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index
-	GetCurrOp() OpT
 	GetLogIndex() *wal.Index
 
-	GetNodeLocked() txnif.MVCCNode
+	GetLatestNodeLocked() txnif.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool

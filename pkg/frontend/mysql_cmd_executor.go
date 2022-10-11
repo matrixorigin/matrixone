@@ -31,25 +31,26 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -1162,18 +1163,22 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+	if sv.Like != nil && sv.Where != nil {
+		return moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+	}
+
 	var err error = nil
 	ses := mce.GetSession()
 	proto := mce.GetSession().protocol
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col1.SetName("VARIABLE_NAME")
+	col1.SetName("Variable_name")
 
 	col2 := new(MysqlColumn)
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2.SetName("VARIABLE_VALUE")
+	col2.SetName("Value")
 
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
@@ -1188,12 +1193,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	var sysVars map[string]interface{}
 	if sv.Global {
 		sysVars = make(map[string]interface{})
-		for name := range sysVars {
-			if val, err := ses.GetGlobalVar(name); err == nil {
-				sysVars[name] = val
-			} else if !goErrors.Is(err, errorSystemVariableSessionEmpty) {
-				return err
-			}
+		for k, v := range gSysVarsDefs {
+			sysVars[k] = v.Default
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1222,10 +1223,48 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		rows = append(rows, row)
 	}
 
+	if sv.Where != nil {
+		bat, err := mce.constructVarBatch(rows)
+		if err != nil {
+			return err
+		}
+		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar)}, []string{"variable_name", "value"})
+		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
+		if err != nil {
+			return err
+		}
+
+		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		if err != nil {
+			return err
+		}
+		bs := vector.GetColumn[bool](vec)
+		sels := proc.Mp().GetSels()
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		bat.Shrink(sels)
+		proc.Mp().PutSels(sels)
+		v0 := vector.MustStrCols(bat.Vecs[0])
+		v1 := vector.MustStrCols(bat.Vecs[1])
+		rows = rows[:len(v0)]
+		for i := range v0 {
+			rows[i][0] = v0[i]
+			rows[i][1] = v1[i]
+		}
+		bat.Clean(proc.Mp())
+	}
+
 	//sort by name
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
+
+	for _, row := range rows {
+		ses.Mrs.AddRow(row)
+	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -1234,6 +1273,25 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
+}
+
+func (mce *MysqlCmdExecutor) constructVarBatch(rows [][]interface{}) (*batch.Batch, error) {
+	bat := batch.New(true, []string{"Variable_name", "Value"})
+	typ := types.New(types.T_varchar, 0, 0, 0)
+	cnt := len(rows)
+	bat.Zs = make([]int64, cnt)
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
+	}
+	v0 := make([]string, cnt)
+	v1 := make([]string, cnt)
+	for i, row := range rows {
+		v0[i] = row[0].(string)
+		v1[i] = fmt.Sprintf("%v", row[1])
+	}
+	bat.Vecs[0] = vector.NewWithStrings(typ, v0, nil, mce.ses.Mp)
+	bat.Vecs[1] = vector.NewWithStrings(typ, v1, nil, mce.ses.Mp)
+	return bat, nil
 }
 
 func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
@@ -2022,7 +2080,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st)
+			err = mce.handleShowVariables(st, proc)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2656,6 +2714,8 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		return true
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+		return true
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Execute, *tree.Deallocate:
 		return true
 	case *tree.Use:
 		/*

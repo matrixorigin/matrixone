@@ -46,7 +46,13 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	proc := process.New(ctx, mpool.MustNewZero(), pu.TxnClient, txnOperator, pu.FileService)
+
+	// Should be no fixed or some size?
+	mp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	proc := process.New(ctx, mp, pu.TxnClient, txnOperator, pu.FileService)
 
 	// engine
 	pu.StorageEngine = disttae.New(

@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -191,9 +190,9 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
+func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	// bat := batch.NewWithSize(1)
+	// bat.Vecs[0] = vec
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
@@ -215,6 +214,20 @@ func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) e
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {
+	key := genTableKey(ctx, tbl.tableName, tbl.db.databaseId)
+	delete(tbl.db.txn.tableMap, key)
+	bat, err := genDropTableTuple(tbl.tableId, tbl.db.databaseId,
+		tbl.tableName, tbl.db.databaseName, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return 0, err
+	}
+	if err := tbl.db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0]); err != nil {
+		return 0, err
+	}
+	if err := tbl.db.Create(ctx, tbl.tableName, tbl.defs); err != nil {
+		return 0, err
+	}
 	return 0, nil
 }
 

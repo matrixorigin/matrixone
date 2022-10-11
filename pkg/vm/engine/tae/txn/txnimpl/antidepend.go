@@ -130,7 +130,7 @@ func (checker *warChecker) check() (err error) {
 		if entry != nil {
 			commitTs := checker.txn.GetCommitTS()
 			entry.RLock()
-			needWait, txnToWait := entry.GetNodeLocked().NeedWaitCommitting(commitTs)
+			needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(commitTs)
 			if needWait {
 				entry.RUnlock()
 				txnToWait.GetTxnState(true)

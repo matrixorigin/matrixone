@@ -398,6 +398,7 @@ func init() {
 		"then":                     THEN,
 		"time":                     TIME,
 		"timestamp":                TIMESTAMP,
+		"timestampdiff":            TIMESTAMPDIFF,
 		"tinyblob":                 TINYBLOB,
 		"tinyint":                  TINYINT,
 		"tinytext":                 TINYTEXT,
