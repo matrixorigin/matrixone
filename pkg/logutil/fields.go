@@ -20,4 +20,9 @@ import (
 
 func ConnectionIdField(val uint32) zap.Field { return zap.Uint32("connection_id", val) }
 func QueryField(val string) zap.Field        { return zap.String("query", val) }
+func StatementField(val string) zap.Field    { return zap.String("statement", val) }
 func VarsField(val string) zap.Field         { return zap.String("vars", val) }
+func StatusField(val string) zap.Field       { return zap.String("status", val) }
+func ErrorField(err error) zap.Field         { return zap.Error(err) }
+
+func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }
