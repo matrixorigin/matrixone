@@ -17,6 +17,8 @@ package memtable
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,7 +167,7 @@ func (t *Table[K, V, R]) Insert(
 
 		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
 			version := physicalRow.Versions[i]
-			if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy) {
+			if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy.Read) {
 				return moerr.NewDuplicate()
 			}
 		}
@@ -419,15 +421,15 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				return err
 			}
 
-			// set born time or lock time to commit time
+			// set born time and lock time to commit time
 			physicalRow := entry.Row.clone()
 			for i, version := range physicalRow.Versions {
 				if version.ID == item.WriteEntry.VersionID {
-					if version.BornTx == tx {
-						version.BornTime = tx.CommitTime
-					}
 					if version.LockTx == tx {
 						version.LockTime = tx.CommitTime
+					}
+					if version.BornTx == tx {
+						version.BornTime = tx.CommitTime
 					}
 					physicalRow.Versions[i] = version
 				}
@@ -514,4 +516,15 @@ func validate[
 	}
 
 	return nil
+}
+
+func (t *Table[K, V, R]) Dump(out io.Writer) {
+	iter := t.NewPhysicalIter()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		item := iter.Item()
+		fmt.Fprintf(out, "key: %+v\n", item.Key)
+		for _, version := range item.Versions {
+			fmt.Fprintf(out, "\tversion: %+v\n", version)
+		}
+	}
 }
