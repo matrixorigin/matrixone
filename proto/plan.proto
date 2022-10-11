@@ -481,6 +481,7 @@ message DeleteTableCtx {
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
 	bool isHideKey = 5;
+	int32 colIndex = 6;
 }
 
 message Query {
