@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
 
 var (
@@ -218,6 +219,21 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 				},
 			},
 		}
+	case *tree.FuncExpr:
+		dt, err := json.Marshal(o)
+		if err != nil {
+			return 0, err
+		}
+		scanNode = &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: dt}},
+			ProjectList: []*plan.Expr{
+				{
+					Typ:  &plan.Type{Id: int32(types.T_varchar)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+			},
+		}
 	default:
 		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
 	}
@@ -245,16 +261,32 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 }
 
 func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
+	if len(tbl.Func.Exprs) > 3 || len(tbl.Func.Exprs) < 1 {
+		return nil, moerr.NewInvalidInput("the number of unnest param is not valid")
+	}
 	var err error
 	uParam := &unnest.ExternalParam{}
 	switch o := tbl.Func.Exprs[0].(type) {
 	case *tree.UnresolvedName:
 		_, _, uParam.ColName = o.GetNames()
+		uParam.Typ = "col"
+	case *tree.FuncExpr:
+		uParam.Typ = "func"
 	case *tree.NumVal:
+		uParam.Typ = "str"
 	default:
 		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
 	}
+	if len(tbl.Func.Exprs) > 1 {
+		uParam.Path = tbl.Func.Exprs[1].String()
+	} else {
+		uParam.Path = "$"
+	}
 	uParam.Path = tbl.Func.Exprs[1].String()
-	uParam.Outer = tbl.Func.Exprs[2].(*tree.NumVal).String() == "true"
+	if len(tbl.Func.Exprs) > 2 {
+		uParam.Outer = strings.ToLower(tbl.Func.Exprs[2].String()) == "true"
+	} else {
+		uParam.Outer = false
+	}
 	return uParam, err
 }

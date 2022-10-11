@@ -25,9 +25,9 @@ type Param struct {
 	filters []string
 	colName string
 	seq     int32
-	isCol   bool // use to mark the unnest args is from column in table
 	path    string
 	outer   bool
+	typ     string
 }
 
 type Argument struct {
@@ -37,6 +37,7 @@ type ExternalParam struct {
 	ColName string
 	Path    string
 	Outer   bool
+	Typ     string
 }
 
 var (

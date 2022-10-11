@@ -16,12 +16,15 @@ package unnest
 
 import (
 	"bytes"
+	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -36,10 +39,10 @@ func Prepare(_ *process.Process, arg any) error {
 	param.colName = "UNNEST_DEFAULT"
 	if len(param.Extern.ColName) != 0 {
 		param.colName = param.Extern.ColName
-		param.isCol = true
 	}
 	param.path = param.Extern.Path
 	param.outer = param.Extern.Outer
+	param.typ = param.Extern.Typ
 	if err != nil {
 		return err
 	}
@@ -63,10 +66,38 @@ func Prepare(_ *process.Process, arg any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.isCol {
+	switch param.typ {
+	case "str":
+		return callByStr(param, proc)
+	case "col":
 		return callByCol(param, proc)
+	case "func":
+		return callByFunc(param, proc)
 	}
-	return callByStr(param, proc)
+	return false, moerr.NewInvalidArg("unnest: invalid type:%s", param.typ)
+}
+
+func callByFunc(param *Param, proc *process.Process) (bool, error) {
+	bat := proc.InputBatch()
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Vecs) != 1 {
+		return false, moerr.NewInvalidInput("unnest: invalid input batch")
+	}
+	funcBytes := bat.GetVector(0).GetBytes(0)
+	expr := tree.FuncExpr{}
+	err := json.Unmarshal(funcBytes, &expr)
+	if err != nil {
+		return false, err
+	}
+	tmpBat := batch.NewWithSize(0)
+	tmpBat.Zs = []int64{1}
+	vec, err := colexec.EvalExpr(tmpBat, proc, &expr)
+	path, err := types.ParseStringToPath(param.path)
+	if err != nil {
+		return false, err
+	}
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {
