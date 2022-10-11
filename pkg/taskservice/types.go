@@ -20,15 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
-// All task executor codes are listed here.
-const (
-	// TestOnly only used for tests
-	TestOnly uint32 = iota
-
-	// SystemInit initializes system tables
-	SystemInit
-)
-
 // Condition options for query tasks
 type Condition func(*conditions)
 
@@ -53,11 +44,6 @@ var (
 		GE: ">=",
 		LT: "<",
 		LE: "<=",
-	}
-
-	TaskName = map[uint32]string{
-		TestOnly:   "test-only",
-		SystemInit: "system initial",
 	}
 )
 

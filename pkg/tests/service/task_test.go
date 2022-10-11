@@ -95,7 +95,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	}(c)
 	require.NoError(t, err)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -129,7 +129,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-	cn1.GetTaskRunner().RegisterExecutor(taskservice.TestOnly,
+	cn1.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly),
 		func(ctx context.Context, task task.Task) error {
 			for {
 				select {
@@ -142,7 +142,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		},
 	)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -188,8 +188,8 @@ func TestTaskRunner(t *testing.T) {
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	indexed.GetTaskRunner().RegisterExecutor(taskservice.TestOnly, taskExecutor)
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
+	indexed.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -227,7 +227,7 @@ func TestNoErrorOccursWhenTaskRunnerWithNoExecutor(t *testing.T) {
 	}(c)
 	require.NoError(t, err)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))

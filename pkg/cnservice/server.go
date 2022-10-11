@@ -267,7 +267,7 @@ func (s *service) registerTaskExecutors(moServerCtx context.Context, ieFactory f
 		},
 	}
 
-	s.taskRunner.RegisterExecutor(taskservice.SystemInit,
+	s.taskRunner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
 		func(ctx context.Context, task task.Task) error {
 			for _, init := range inits {
 				if err := init(moServerCtx, ieFactory); err != nil {

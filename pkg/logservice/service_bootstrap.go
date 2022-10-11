@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"go.uber.org/zap"
 	"time"
 
@@ -69,19 +68,13 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 }
 
 func (s *Service) createInitTasks(ctx context.Context) error {
-	initTasks := map[string]uint32{
-		taskservice.TaskName[taskservice.SystemInit]: taskservice.SystemInit,
+	if err := s.store.taskScheduler.Create(ctx, task.TaskMetadata{
+		ID:       task.TaskCode_SystemInit.String(),
+		Executor: uint32(task.TaskCode_SystemInit),
+	}); err != nil {
+		s.logger.Error(fmt.Sprintf("failed to create %s task.",
+			task.TaskCode_SystemInit.String()))
+		return err
 	}
-
-	for id, executor := range initTasks {
-		if err := s.store.taskScheduler.Create(ctx, task.TaskMetadata{
-			ID:       id,
-			Executor: executor,
-		}); err != nil {
-			s.logger.Error(fmt.Sprintf("failed to create %s task.", id))
-			return err
-		}
-	}
-
 	return nil
 }
