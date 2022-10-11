@@ -33,15 +33,18 @@ func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservic
 			assert.FailNow(t, "task not allocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO(),
-				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+			tasks, err := taskService.QueryTask(context.TODO())
 			require.NoError(t, err)
+			require.Equal(t, 2, len(tasks))
 
-			if len(tasks) == 1 {
-				t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-				return tasks[0].TaskRunner
+			for _, ts := range tasks {
+				if ts.Metadata.ID == "test_only" && ts.TaskRunner != "" {
+					t.Logf("task %d allocated on %s", ts.ID, ts.TaskRunner)
+					return ts.TaskRunner
+				}
 			}
-			time.Sleep(300 * time.Millisecond)
+
+			time.Sleep(500 * time.Millisecond)
 			i++
 		}
 	}
@@ -55,18 +58,21 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 			assert.FailNow(t, "task not reallocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO(),
-				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+			tasks, err := taskService.QueryTask(context.TODO())
 			require.NoError(t, err)
-			require.Equal(t, 1, len(tasks))
-			if tasks[0].TaskRunner == uuid {
-				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
-				time.Sleep(1 * time.Second)
-				i++
-				continue
-			} else {
-				t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-				return
+			require.Equal(t, 2, len(tasks))
+			for _, ts := range tasks {
+				if ts.Metadata.ID == "test_only" {
+					if ts.TaskRunner == uuid {
+						t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
+						time.Sleep(1 * time.Second)
+						i++
+						continue
+					} else {
+						t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+						return
+					}
+				}
 			}
 		}
 	}
@@ -89,22 +95,14 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	}(c)
 	require.NoError(t, err)
 
-	indexed, err := c.GetCNServiceIndexed(0)
-	require.NoError(t, err)
-	indexed.GetTaskRunner().RegisterExecutor(0,
-		func(ctx context.Context, task task.Task) error {
-			return nil
-		},
-	)
-
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
 }
@@ -131,28 +129,27 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-	cn1.GetTaskRunner().RegisterExecutor(0,
+	cn1.GetTaskRunner().RegisterExecutor(taskservice.TestOnly,
 		func(ctx context.Context, task task.Task) error {
-			return nil
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+					time.Sleep(1 * time.Second)
+				}
+			}
 		},
 	)
 
-	cn2, err := c.GetCNServiceIndexed(1)
-	require.NoError(t, err)
-	cn2.GetTaskRunner().RegisterExecutor(0,
-		func(ctx context.Context, task task.Task) error {
-			return nil
-		},
-	)
-
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 	uuid1 := waitTaskScheduled(t, ctx, taskService)
 
@@ -192,7 +189,7 @@ func TestTaskRunner(t *testing.T) {
 	require.NoError(t, err)
 
 	indexed.GetTaskRunner().RegisterExecutor(taskservice.TestOnly, taskExecutor)
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -230,7 +227,7 @@ func TestNoErrorOccursWhenTaskRunnerWithNoExecutor(t *testing.T) {
 	}(c)
 	require.NoError(t, err)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: taskservice.TestOnly})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "test_only", Executor: taskservice.TestOnly})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -240,7 +237,7 @@ func TestNoErrorOccursWhenTaskRunnerWithNoExecutor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
-	// make sure task is not allocated.
+	// make sure task is not running.
 	time.Sleep(3 * time.Second)
 }
 
