@@ -372,10 +372,10 @@ func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
 }
 
 func (e *DBEntry) Set1PC() {
-	e.GetNodeLocked().Set1PC()
+	e.GetLatestNodeLocked().Set1PC()
 }
 func (e *DBEntry) Is1PC() bool {
-	return e.GetNodeLocked().Is1PC()
+	return e.GetLatestNodeLocked().Is1PC()
 }
 func (e *DBEntry) GetCatalog() *Catalog { return e.catalog }
 
@@ -473,18 +473,7 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 	}
 }
 
-func (e *DBEntry) CloneCreateEntry() *DBEntry {
-	return &DBEntry{
-		acInfo:      e.acInfo,
-		DBBaseEntry: e.DBBaseEntry.CloneCreateEntry().(*DBBaseEntry),
-		name:        e.name,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
-	e.RLock()
-	defer e.RUnlock()
-	dropped := e.IsDroppedCommitted()
-	return !dropped
+	return !e.HasDropCommitted()
 }

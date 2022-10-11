@@ -1440,6 +1440,15 @@ var (
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		}, {
+			input:  `DO SLEEP(5)`,
+			output: `do sleep(5)`,
+		}, {
+			input:  `DECLARE a, b INT`,
+			output: `declare a b int default null`,
+		}, {
+			input:  `DECLARE a, b INT DEFAULT 1`,
+			output: `declare a b int default 1`,
+		}, {
 			input: "grant truncate on table *.* to r1",
 		}, {
 			input: "grant reference on table *.* to r1",

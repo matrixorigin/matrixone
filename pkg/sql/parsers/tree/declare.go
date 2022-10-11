@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package tree
 
-type OpT int8
-
-const (
-	OpCreate OpT = iota
-	OpUpdate
-	OpSoftDelete
-	OpHardDelete
-)
-
-var OpNames = map[OpT]string{
-	OpCreate:     "Create",
-	OpUpdate:     "Update",
-	OpSoftDelete: "SoftDelete",
-	OpHardDelete: "HardDelete",
+// Declare statement
+type Declare struct {
+	statementImpl
+	Variables  []string
+	ColumnType *T
+	DefaultVal Expr
 }
 
-func OpName(op OpT) string {
-	return OpNames[op]
+func (node *Declare) Format(ctx *FmtCtx) {
+	ctx.WriteString("declare ")
+	for _, v := range node.Variables {
+		ctx.WriteString(v + " ")
+	}
+	node.ColumnType.InternalType.Format(ctx)
+	ctx.WriteString(" default ")
+	node.DefaultVal.Format(ctx)
 }
