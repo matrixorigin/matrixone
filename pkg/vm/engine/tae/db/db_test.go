@@ -366,6 +366,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		metaLoc := blockio.EncodeBlkMetaLoc(
 			blockFile.Fingerprint(),
+			types.TS{},
 			blockFile.GetMeta().GetExtent(),
 			uint32(bat.Length()))
 		blk.UpdateMetaLoc(metaLoc)
@@ -545,17 +546,9 @@ func TestCompactBlock1(t *testing.T) {
 		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler, nil, nil)
 		err = txn.LogTxnEntry(m.GetSegment().GetTable().GetDB().ID, destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
 		assert.Nil(t, err)
-		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
-		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		assert.Nil(t, err)
 		err = txn.Commit()
-		assert.Nil(t, err)
-		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
-
-		var zeroV types.TS
-		view, err := destBlockData.CollectChangesInRange(zeroV, types.MaxTs())
-		assert.NoError(t, err)
-		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 }
 
@@ -2405,7 +2398,7 @@ func TestGetColumnData(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
-func TestCompactBlk(t *testing.T) {
+func TestCompactBlk1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2471,53 +2464,19 @@ func TestCompactBlk(t *testing.T) {
 			_ = rel.DeleteByFilter(filter)
 			assert.Nil(t, txn2.Commit())
 		}
-		{
-			v := getSingleSortKeyValue(bat, schema, 4)
-			t.Logf("v is %v**********", v)
-			filter := handle.NewEQFilter(v)
-			txn2, rel := tae.getRelation()
-			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 3, true)
-			_ = rel.DeleteByFilter(filter)
-			assert.Nil(t, txn2.Commit())
-		}
-		{
-			v := getSingleSortKeyValue(bat, schema, 3)
-			t.Logf("v is %v**********", v)
-			filter := handle.NewEQFilter(v)
-			txn2, rel := tae.getRelation()
-			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 2, true)
-			_ = rel.UpdateByFilter(filter, 0, int8(111))
-			assert.Nil(t, txn2.Commit())
-		}
 
 		err = txn.Commit()
-		assert.NoError(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 2, true)
-	assert.Equal(t, int64(2), rel.Rows())
-
-	v := getSingleSortKeyValue(bat, schema, 3)
-	filter := handle.NewEQFilter(v)
-	val, err := rel.GetValueByFilter(filter, 0)
-	assert.Nil(t, err)
-	assert.Equal(t, int8(111), val)
-
-	v = getSingleSortKeyValue(bat, schema, 2)
-	filter = handle.NewEQFilter(v)
-	_, _, err = rel.GetByFilter(filter)
-	assert.NotNil(t, err)
-
-	v = getSingleSortKeyValue(bat, schema, 4)
-	filter = handle.NewEQFilter(v)
-	_, _, err = rel.GetByFilter(filter)
-	assert.NotNil(t, err)
+	checkAllColRowsByScan(t, rel, 3, true)
+	assert.Equal(t, int64(3), rel.Rows())
 
 	tae.restart()
-	assert.Equal(t, int64(2), rel.Rows())
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 3, true)
+	assert.Equal(t, int64(3), rel.Rows())
 }
 
 func TestCompactBlk2(t *testing.T) {
@@ -2664,6 +2623,62 @@ func TestCompactblk3(t *testing.T) {
 	}
 	err = tae.Catalog.RecurLoop(processor)
 	assert.NoError(t, err)
+}
+
+func TestImmutableIndexInAblk(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	bats := bat.Split(5)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bats[2], true)
+	txn, rel := tae.getRelation()
+	_ = rel.Append(bats[1])
+	assert.Nil(t, txn.Commit())
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[3])
+	assert.Nil(t, txn.Commit())
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[4])
+	assert.Nil(t, txn.Commit())
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[0])
+	assert.Nil(t, txn.Commit())
+
+	v := getSingleSortKeyValue(bat, schema, 1)
+	filter := handle.NewEQFilter(v)
+	txn2, rel := tae.getRelation()
+	_ = rel.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	txn, rel = tae.getRelation()
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	meta := blk.GetMeta().(*catalog.BlockEntry)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	assert.NoError(t, err)
+	err = task.OnExec()
+	assert.NoError(t, err)
+	err = txn.Commit()
+	assert.NoError(t, err)
+
+	txn, _ = tae.getRelation()
+	_, err = meta.GetBlockData().GetByFilter(txn, filter)
+	assert.Error(t, err)
+	v = getSingleSortKeyValue(bat, schema, 2)
+	filter = handle.NewEQFilter(v)
+	_, err = meta.GetBlockData().GetByFilter(txn, filter)
+	assert.NoError(t, err)
+
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil)
+	assert.Error(t, err)
 }
 
 func TestDelete3(t *testing.T) {

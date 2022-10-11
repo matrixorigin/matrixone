@@ -262,6 +262,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
 			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
+			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
 		}
 	}
 

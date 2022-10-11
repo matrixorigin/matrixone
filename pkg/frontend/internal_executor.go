@@ -119,6 +119,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
+	defer sess.Dispose()
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, sql)
@@ -128,6 +129,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
+	defer sess.Dispose()
 	ie.executor.PrepareSessionBeforeExecRequest(sess)
 	ie.proto.stashResult = true
 	err := ie.executor.doComQuery(ctx, sql)
