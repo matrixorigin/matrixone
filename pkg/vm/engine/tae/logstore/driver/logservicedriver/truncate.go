@@ -81,7 +81,9 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 			cancel()
 			return err == nil
 		})
-		panic(err)
+		if err != nil {
+			panic(err)
+		}
 	}
 	logutil.Infof("Logservice Driver: Truncate %d", lsn)
 }
@@ -104,7 +106,9 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 			cancel()
 			return err == nil
 		})
-		panic(err)
+		if err != nil {
+			panic(err)
+		}
 	}
 	logutil.Infof("Logservice Driver: Get Truncate %d", lsn)
 	return
