@@ -156,17 +156,6 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 	return table.GetValue(id, row, colIdx)
 }
 
-func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	table, err := db.getOrSetTable(id.TableID)
-	if err != nil {
-		return err
-	}
-	if table.IsDeleted() {
-		return moerr.NewNotFound()
-	}
-	return table.Update(id, row, colIdx, v)
-}
-
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory

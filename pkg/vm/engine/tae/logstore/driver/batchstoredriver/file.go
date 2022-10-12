@@ -35,20 +35,20 @@ func MakeVersionFile(dir, name string, version uint64) string {
 	return fmt.Sprintf("%s-%d%s", filepath.Join(dir, name), version, suffix)
 }
 
-func ParseVersion(name, prefix, suffix string) (int, error) {
+func ParseVersion(name, prefix, suffix string) (n int, ok bool) {
 	woPrefix := strings.TrimPrefix(name, prefix+"-")
 	if len(woPrefix) == len(name) {
-		return 0, moerr.NewInternalError("parse version error")
+		return 0, false
 	}
 	strVersion := strings.TrimSuffix(woPrefix, suffix)
 	if len(strVersion) == len(woPrefix) {
-		return 0, moerr.NewInternalError("parse version error")
+		return 0, false
 	}
 	v, err := strconv.Atoi(strVersion)
 	if err != nil {
-		return 0, moerr.NewInternalError("parse version error")
+		return 0, false
 	}
-	return v, nil
+	return v, true
 }
 
 type rotateFile struct {
@@ -106,8 +106,8 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 		}
 		vfiles := make([]VFile, 0)
 		for _, f := range files {
-			version, err := ParseVersion(f.Name(), rf.name, suffix)
-			if err != nil {
+			version, ok := ParseVersion(f.Name(), rf.name, suffix)
+			if !ok {
 				continue
 			}
 			file, err := os.OpenFile(

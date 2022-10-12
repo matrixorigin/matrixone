@@ -20,7 +20,8 @@ import (
 )
 
 type sizeLimiter struct {
-	maxactivesize, activesize uint64
+	maxactivesize uint64
+	activesize    atomic.Uint64
 }
 
 func newSizeLimiter(maxactivesize uint64) *sizeLimiter {
@@ -30,17 +31,17 @@ func newSizeLimiter(maxactivesize uint64) *sizeLimiter {
 }
 
 func (l *sizeLimiter) RetuernQuota(size uint64) uint64 {
-	return atomic.AddUint64(&l.activesize, ^uint64(size-1))
+	return l.activesize.Add(^uint64(size - 1))
 }
 
 func (l *sizeLimiter) ApplyQuota(size uint64) bool {
-	pre := atomic.LoadUint64(&l.activesize)
+	pre := l.activesize.Load()
 	post := pre + size
 	if post > l.maxactivesize {
 		return false
 	}
-	for !atomic.CompareAndSwapUint64(&l.activesize, pre, post) {
-		pre = atomic.LoadUint64(&l.activesize)
+	for !l.activesize.CompareAndSwap(pre, post) {
+		pre = l.activesize.Load()
 		post = pre + size
 		if post > l.maxactivesize {
 			return false
@@ -50,7 +51,7 @@ func (l *sizeLimiter) ApplyQuota(size uint64) bool {
 }
 
 func (l *sizeLimiter) Total() uint64 {
-	return atomic.LoadUint64(&l.activesize)
+	return l.activesize.Load()
 }
 
 func (l *sizeLimiter) String() string {

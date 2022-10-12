@@ -284,7 +284,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -298,7 +298,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR
+%token <str> SEPARATOR TIMESTAMPDIFF
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -334,6 +334,12 @@ import (
 
 %token <str> UNUSED BINDINGS
 
+// Do
+%token <str> DO
+
+// Declare
+%token <str> DECLARE
+
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
@@ -353,6 +359,8 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> do_stmt
+%type <statement> declare_stmt
 %type <statement> values_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
@@ -464,6 +472,7 @@ import (
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
 %type <str> var_name equal_or_assignment
+%type <strs> var_name_list
 %type <expr> set_expr
 //%type <setRole> set_role_opt
 %type <setDefaultRole> set_default_role_opt
@@ -587,6 +596,8 @@ stmt:
 |   grant_stmt
 |   load_data_stmt
 |   import_data_stmt
+|   do_stmt
+|   declare_stmt
 |   values_stmt
 |   select_stmt
     {
@@ -1581,6 +1592,16 @@ var_name:
 |   ident '.' ident
     {
         $$ = $1 + "." + $3
+    }
+
+var_name_list:
+    var_name
+    {
+        $$ = []string{$1}
+    }
+|   var_name_list ',' var_name
+    {
+        $$ = append($1, $3)
     }
 
 transaction_stmt:
@@ -4396,6 +4417,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $2,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING '}'
@@ -4407,6 +4429,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
@@ -4418,7 +4441,34 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: $9,
+            Format: tree.CSV,
         }
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "format" || strings.ToLower($11) != "jsondata" {
+		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s'", $3, $7, $11))
+		return 1
+	    }
+	$$ = &tree.ExternParam{
+	    Filepath: $5,
+	    CompressType: tree.AUTO,
+	    Format: strings.ToLower($9),
+	    JsonData: strings.ToLower($13),
+	}
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+    	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
+    		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
+    		return 1
+    	    }
+    	$$ = &tree.ExternParam{
+    	    Filepath: $5,
+    	    CompressType: $9,
+    	    Format: strings.ToLower($13),
+    	    JsonData: strings.ToLower($17),
+    	}
     }
 
 tail_param_opt:
@@ -6033,7 +6083,15 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-
+|	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
+	{   
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
@@ -7154,7 +7212,32 @@ char_type:
     }
 }
 
+do_stmt:
+    DO expression_list
+    {
+        $$ = &tree.Do {
+            Exprs: $2,
+        }
+    }
 
+declare_stmt:
+    DECLARE var_name_list column_type
+    {
+        $$ = &tree.Declare {
+            Variables: $2,
+            ColumnType: $3,
+            DefaultVal: tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null),
+        }
+    }
+    |
+    DECLARE var_name_list column_type DEFAULT expression
+    {
+        $$ = &tree.Declare {
+            Variables: $2,
+            ColumnType: $3,
+            DefaultVal: $5,
+        }
+    }
 
 spatial_type:
     GEOMETRY
@@ -7481,6 +7564,7 @@ reserved_keyword:
 |   PASSWORD_LOCK_TIME
 |   UNBOUNDED
 |   SECONDARY
+|   DECLARE
 
 non_reserved_keyword:
     ACCOUNT
@@ -7513,6 +7597,7 @@ non_reserved_keyword:
 |   DECIMAL
 |   DYNAMIC
 |   DISK
+|   DO
 |   DOUBLE
 |   DIRECTORY
 |   DUPLICATE
@@ -7706,6 +7791,7 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+|	TIMESTAMPDIFF
 
 //mo_keywords:
 //    PROPERTIES

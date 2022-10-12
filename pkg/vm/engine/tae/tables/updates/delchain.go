@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -32,8 +33,9 @@ import (
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain
-	mvcc *MVCCHandle
-	cnt  uint32
+	mvcc  *MVCCHandle
+	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
+	cnt   atomic.Uint32
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -43,17 +45,18 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
+		links:     make(map[uint32]*common.GenericSortedDList[txnif.MVCCNode]),
 		mvcc:      mvcc,
 	}
 	return chain
 }
 
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
-	atomic.AddUint32(&chain.cnt, cnt)
+	chain.cnt.Add(cnt)
 }
 
 func (chain *DeleteChain) GetDeleteCnt() uint32 {
-	return atomic.LoadUint32(&chain.cnt)
+	return chain.cnt.Load()
 }
 
 func (chain *DeleteChain) StringLocked() string {
@@ -73,29 +76,17 @@ func (chain *DeleteChain) StringLocked() string {
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
 func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
-	chain.LoopChain(
-		func(vn txnif.MVCCNode) (goNext bool) {
-			n := vn.(*DeleteNode)
-			if n.GetStartTS().Greater(ts) {
-				return true
-			}
-			if n.HasOverlapLocked(row, row) {
-				needWait, txnToWait := n.NeedWaitCommitting(ts)
-				if needWait {
-					rwlocker.RUnlock()
-					txnToWait.GetTxnState(true)
-					rwlocker.RLock()
-				}
-				if n.IsVisible(ts) {
-					deleted = true
-				}
-			}
-			if n.IsMerged() || deleted || err != nil {
-				return false
-			}
-			return true
-		})
-	return
+	deleteNode := chain.GetDeleteNodeByRow(row)
+	if deleteNode == nil {
+		return false, nil
+	}
+	needWait, txn := deleteNode.NeedWaitCommitting(ts)
+	if needWait {
+		rwlocker.RUnlock()
+		txn.GetTxnState(true)
+		rwlocker.RLock()
+	}
+	return deleteNode.IsVisible(ts), nil
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
@@ -130,8 +121,34 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	node.AttachTo(chain)
 	return node
 }
-
+func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
+	var link *common.GenericSortedDList[txnif.MVCCNode]
+	if link = chain.links[row]; link == nil {
+		link = common.NewGenericSortedDList(compareDeleteNode)
+		n := link.Insert(deleteNode)
+		deleteNode.viewNodes[row] = n
+		chain.links[row] = link
+		return
+	}
+	link.Insert(deleteNode)
+}
+func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
+	it := deleteNode.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		link := chain.links[row]
+		link.Delete(deleteNode.viewNodes[row])
+		if link.Depth() == 0 {
+			delete(chain.links, row)
+		}
+	}
+}
 func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
+	it := deleteNode.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.InsertInDeleteView(row, deleteNode)
+	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
 }
@@ -234,12 +251,13 @@ func (chain *DeleteChain) CollectDeletesLocked(
 }
 
 func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
-	chain.LoopChain(func(un txnif.MVCCNode) bool {
-		if un.(*DeleteNode).mask.Contains(row) {
-			n = un.(*DeleteNode)
-			return false
-		}
-		return true
-	})
+	link := chain.links[row]
+	if link == nil {
+		return
+	}
+	link.Loop(func(vn *common.GenericDLNode[txnif.MVCCNode]) bool {
+		n = vn.GetPayload().(*DeleteNode)
+		return n.Aborted
+	}, false)
 	return
 }

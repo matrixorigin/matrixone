@@ -17,6 +17,7 @@ package disttae
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -59,8 +60,6 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		if _, err := b.Append(mp, bat); err != nil {
 			return nil, err
 		}
-
-		b.InitZsOne(b.GetVector(0).Length())
 		return b, nil
 	}
 
@@ -78,7 +77,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 	maxRows := 4096
 	rows := 0
 	for ok := fn(); ok; ok = p.iter.Next() {
-		_, dataValue, err := p.iter.Read()
+		dataKey, dataValue, err := p.iter.Read()
 		if err != nil {
 			return nil, err
 		}
@@ -87,6 +86,10 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		_ = p.expr
 
 		for i, name := range b.Attrs {
+			if name == catalog.Row_ID {
+				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
+				continue
+			}
 			value, ok := dataValue[name]
 			if !ok {
 				panic(fmt.Sprintf("invalid column name: %v", name))

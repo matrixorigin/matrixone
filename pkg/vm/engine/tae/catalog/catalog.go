@@ -62,8 +62,8 @@ type Catalog struct {
 
 	nodesMu sync.RWMutex
 
-	tableCnt  int32
-	columnCnt int32
+	tableCnt  atomic.Int32
+	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -191,7 +191,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}
-	un := cmd.entry.GetNodeLocked().(*DBMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
 	if cmdType == txnif.CmdCommit {
 		un.onReplayCommit(commitTS)
 		return
@@ -208,7 +208,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
-		cmd.entry.GetNodeLocked().SetLogIndex(idx)
+		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
 		err = catalog.AddEntryLocked(cmd.DB, nil)
 		if err != nil {
 			panic(err)
@@ -275,7 +275,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
 
-	un := cmd.entry.GetNodeLocked().(*TableMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
 	if cmdType == txnif.CmdCommit {
 		un.onReplayCommit(commitTS)
 	}
@@ -356,7 +356,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		}
 	}
 
-	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	if un.Is1PC() {
 		cmdType = txnif.Cmd1PC
 	}
@@ -457,7 +457,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	if un.Is1PC() {
 		cmdType = txnif.Cmd1PC
 	}
@@ -540,7 +540,7 @@ func (catalog *Catalog) ReplayTableRows() {
 		if err != nil {
 			panic(err)
 		}
-		tbl.rows = rows
+		tbl.rows.Store(rows)
 		return nil
 	}
 	err := catalog.RecurLoop(processor)
@@ -562,23 +562,21 @@ func (catalog *Catalog) CoarseDBCnt() int {
 }
 
 func (catalog *Catalog) CoarseTableCnt() int {
-	return int(atomic.LoadInt32(&catalog.tableCnt))
+	return int(catalog.tableCnt.Load())
 }
 
 func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(atomic.LoadInt32(&catalog.columnCnt))
+	return int(catalog.columnCnt.Load())
 }
 
 func (catalog *Catalog) AddTableCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.tableCnt, int32(cnt))
-	if n < 0 {
+	if catalog.tableCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }
 
 func (catalog *Catalog) AddColumnCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.columnCnt, int32(cnt))
-	if n < 0 {
+	if catalog.columnCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }
@@ -684,50 +682,49 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
+func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	fullName := genDBFullName(txnCtx.GetTenantID(), name)
+	fullName := genDBFullName(txn.GetTenantID(), name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
 		return nil, moerr.NewNotFound()
 	}
-	return node.TxnGetNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(txn)
 }
 
-func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
-	n, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
+func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
+	n, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return nil, err
 	}
 	return n.GetPayload(), nil
 }
 
-func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
+func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == pkgcatalog.MO_CATALOG {
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
+	dn, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return
 	}
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	newEntry, err = entry.DropEntryLocked(txnCtx)
-	if err == nil {
+	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
 		deleted = entry
 	}
 	return
 }
 
-func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, txnCtx)
-	err = catalog.AddEntryLocked(entry, txnCtx)
+	entry := NewDBEntry(catalog, name, txn)
+	err = catalog.AddEntryLocked(entry, txn)
 
 	return entry, err
 }

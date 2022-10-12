@@ -86,7 +86,7 @@ func (segment *dataSegment) EstimateScore(interval int64) int { return 0 }
 func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
 	if segment.meta.IsAppendable() {
 		segment.meta.RLock()
-		dropped := segment.meta.IsDroppedCommitted()
+		dropped := segment.meta.HasDropCommittedLocked()
 		inTxn := segment.meta.IsCreating()
 		segment.meta.RUnlock()
 		if dropped || inTxn {

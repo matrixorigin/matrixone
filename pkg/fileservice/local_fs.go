@@ -408,7 +408,16 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	return
 }
 
-func (l *LocalFS) Delete(ctx context.Context, filePath string) error {
+func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
+	for _, filePath := range filePaths {
+		if err := l.deleteSingle(ctx, filePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err

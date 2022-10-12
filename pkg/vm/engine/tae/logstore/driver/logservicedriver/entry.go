@@ -141,7 +141,7 @@ type recordEntry struct {
 	entries []*entry.Entry
 
 	payload     []byte
-	unmarshaled uint32
+	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
 }
 
@@ -231,14 +231,12 @@ func (r *recordEntry) prepareRecord() (size int) {
 }
 
 func (r *recordEntry) unmarshal() {
-	marshaled := atomic.LoadUint32(&r.unmarshaled)
-	if marshaled == 1 {
+	if r.unmarshaled.Load() == 1 {
 		return
 	}
 	r.mashalMu.Lock()
 	defer r.mashalMu.Unlock()
-	marshaled = atomic.LoadUint32(&r.unmarshaled)
-	if marshaled == 1 {
+	if r.unmarshaled.Load() == 1 {
 		return
 	}
 	buf := r.payload
@@ -247,7 +245,7 @@ func (r *recordEntry) unmarshal() {
 	if err != nil {
 		panic(err)
 	}
-	atomic.StoreUint32(&r.unmarshaled, 1)
+	r.unmarshaled.Store(1)
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {

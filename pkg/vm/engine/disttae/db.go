@@ -84,7 +84,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			return err
 		}
 		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
 		if err != nil {
 			return err
 		}
