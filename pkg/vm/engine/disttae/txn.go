@@ -584,8 +584,10 @@ func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attr
 		return list
 	}
 
-	//对于以下情况，我们支持根据hash计算出所需要的DN节点
-	// 1、Expr的root节点，是 >,<,=,<=,>=,and,or
-	// 2、表达式中的列只包含PrimaryKey
-	return list
+	canComputeRange, pkRange := computeRange(expr, pkIndex)
+	if !canComputeRange {
+		return list
+	}
+
+	return getListByRange(list, pkRange)
 }
