@@ -883,7 +883,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "like":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) == 0 {
+		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
