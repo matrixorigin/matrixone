@@ -125,7 +125,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 func (w *OpWorker) Start() {
 	logutil.Debugf("%s Started", w.Name)
 	if w.State.Load() != CREATED {
-		panic(fmt.Sprintf("logic error: %v", w.State))
+		panic(fmt.Sprintf("logic error: %v", w.State.Load()))
 	}
 	w.State.Store(RUNNING)
 	go func() {
