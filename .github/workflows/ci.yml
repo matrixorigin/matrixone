@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
   workflow_dispatch:
-  
-concurrency: 
+
+concurrency:
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
 
@@ -17,7 +17,7 @@ jobs:
   ut-linux-x86:
     runs-on: ubuntu-latest
     name: UT Test on Ubuntu/x64
-      
+
     steps:
       - uses: actions/checkout@v2
         with:
@@ -27,7 +27,7 @@ jobs:
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
-        
+
       - name: Set env
         run: |
           echo "endpoint=${{ secrets.S3ENDPOINT }}" >> $GITHUB_ENV
@@ -35,12 +35,10 @@ jobs:
           echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
           echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
           echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
-
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -49,7 +47,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-          
+
   ut-mac-x86:
     runs-on: macos-12
     name: UT Test on Darwin/x86
@@ -68,7 +66,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -77,7 +74,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-          
+
   ut-linux-arm:
     runs-on: arm64-runner
     name: UT Test on Linux/Arm
@@ -96,7 +93,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -127,12 +123,10 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
           ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
-
       - name: Clone test-tool repository
         uses: actions/checkout@v2
         with:
@@ -152,13 +146,12 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
-
+          ./run.sh -n -g -e load_data.sql,explain.test,import_data.sql -p $GITHUB_WORKSPACE/head/test/cases 2>&1
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-        
+
       - name: remove some files
         continue-on-error: true
         run: |
@@ -166,7 +159,6 @@ jobs:
           if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -175,7 +167,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-          
+
   bvt-linux-arm:
     runs-on: arm64-runner
     name: BVT Test on Linux/Arm
@@ -197,12 +189,10 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
           ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
-
       - name: Clone test-tool repository
         uses: actions/checkout@v2
         with:
@@ -224,13 +214,12 @@ jobs:
           locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
-
+          ./run.sh -n -g -e load_data.sql,explain.test,import_data.sql -p $GITHUB_WORKSPACE/head/test/cases 2>&1
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-        
+
       - name: remove some files
         continue-on-error: true
         run: |
@@ -238,7 +227,6 @@ jobs:
           if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -247,7 +235,7 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-          
+
   bvt-darwin-x86:
     runs-on: macos-12
     name: BVT Test on Darwin/x86
@@ -269,12 +257,10 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD
-
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
           ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
-
       - name: Clone test-tool repository
         uses: actions/checkout@v2
         with:
@@ -294,13 +280,12 @@ jobs:
         run: |
           sleep 60
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
-
+          ./run.sh -n -g -e load_data.sql,explain.test,import_data.sql -p $GITHUB_WORKSPACE/head/test/cases 2>&1
       - name: Check MO-Service Status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-        
+
       - name: remove some files
         continue-on-error: true
         run: |
@@ -308,7 +293,6 @@ jobs:
           if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
-
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
@@ -323,7 +307,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: 'echo "No build required" '
-       
+
   sca:
     runs-on: ubuntu-latest
     name: SCA Test on Ubuntu/x64
@@ -337,14 +321,13 @@ jobs:
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
-          
+
       - name: Prepare ENV
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config && make build
           make install-static-check-tools
-          
+
       - name: Static Code Analysis
         run: |
           cd $GITHUB_WORKSPACE
           make static-check
-          
