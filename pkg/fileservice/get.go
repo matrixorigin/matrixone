@@ -31,7 +31,6 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 		}
 		res, ok = f.(T)
 		if !ok {
-			panic(5)
 			err = moerr.NewNoService(name)
 			return
 		}
