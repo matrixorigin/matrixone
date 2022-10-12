@@ -56,7 +56,7 @@ type Node struct {
 	key               any
 	state             base.NodeState
 	size              uint64
-	iter              uint64
+	iter              atomic.Uint64
 	closed            bool
 	impl              base.INode
 	HardEvictableFunc func() bool
@@ -223,9 +223,9 @@ func (n *Node) rollbackExpand(delta uint64) {
 func (n *Node) IsLoaded() bool { return n.state == base.NodeLoaded }
 
 func (n *Node) IncIteration() uint64 {
-	return atomic.AddUint64(&n.iter, uint64(1))
+	return n.iter.Add(1)
 }
 
 func (n *Node) Iteration() uint64 {
-	return atomic.LoadUint64(&n.iter)
+	return n.iter.Load()
 }
