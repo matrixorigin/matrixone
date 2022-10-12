@@ -16,44 +16,19 @@ package trace
 
 import (
 	"context"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
 // ========================
 // handle merge
 // ========================
-
-type CSVPath interface {
-	Table() string
-	Timestamp() []string
-}
-
-// PathBuilder hold strategy to build filepath
-type PathBuilder interface {
-	Clone() PathBuilder
-	// Build directory path
-	Build(string /*account*/, MergeLogType, time.Time, *Table) string
-	// DirectoryPath return last call Build result
-	DirectoryPath() string
-	// Join return DirectoryPath + "/" + filename
-	Join(filename string) string
-	// ParsePath
-	//
-	// switch path {
-	// case "{timestamp_writedown}_{node_uuid}_{ndoe_type}.csv":
-	// case "{timestamp_start}_{timestamp_end}_merged.csv"
-	// }
-	ParsePath(path string) (CSVPath, error)
-	NewMergeFilename(timestampStart, timestampEnd string) string
-}
 
 // FileName handle filename maker logic.
 type FileName interface {
@@ -79,7 +54,7 @@ type Merge struct {
 	Table       *Table                  // see With?
 	Datetime    time.Time               // see With?
 	FS          fileservice.FileService // see With?
-	pathBuilder PathBuilder
+	pathBuilder export.PathBuilder
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
 	MaxFileSize int64 // see With?
@@ -148,7 +123,7 @@ func (m *Merge) Main() error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLog, m.Datetime, m.Table)
+		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.Table)
 		// get all file entry
 		fileEntry, err := m.FS.List(m.ctx, rootPath)
 		if err != nil {
@@ -175,7 +150,7 @@ var runningJobs int64
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder PathBuilder) error {
+func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder export.PathBuilder) error {
 
 	// fixme: Control task concurrency
 	for runningJobs > m.MaxMergeJobs {
@@ -210,7 +185,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder PathBui
 	timestamp_end := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
-	pathBuilder.Build(account, MergeLogTypeMerged, m.Datetime, m.Table)
+	pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.Table)
 	merge_filename := pathBuilder.NewMergeFilename(timestamp_start, timestamp_end)
 	merge_filepath := pathBuilder.Join(merge_filename)
 	new_file_writer := NewCSVWriter(m.FS, WithPath(merge_filepath))
@@ -352,122 +327,4 @@ func (r *Row) Size() (size int64) {
 		size += int64(len(col))
 	}
 	return
-}
-
-var _ CSVPath = (*MetricLogPath)(nil)
-
-type MetricLogPath struct {
-	// path raw data
-	path string
-	// table parsed from path
-	table string
-	// filename
-	filename string
-	// timestamps parsed from filename in path
-	timestamps []string
-	// fileType, val in [log, merged]
-	fileType MergeLogType
-}
-
-const PathElems = 7
-const PathIdxFilename = 6
-const PathIdxTable = 5
-const PathIdxAccount = 0
-const FilenameElems = 3
-const FilenameIdxType = 2
-
-const FilenameSeparator = "_"
-const CsvExtension = ".csv"
-
-type MergeLogType string
-
-const MergeLogTypeMerged MergeLogType = "merged"
-const MergeLogTypeLog MergeLogType = "log"
-
-// NewMetricLogPath
-//
-// path like: sys/[log|merged]/yyyy/mm/dd/table/***.csv
-// ##    idx: 0   1            2    3  4  5     6
-// filename like: {timestamp}_{node_uuid}_{node_type}.csv
-// ##         or: {timestamp_start}_{timestamp_end}_merged.csv
-func NewMetricLogPath(path string) *MetricLogPath {
-	return &MetricLogPath{path: path}
-}
-
-func (p *MetricLogPath) Parse() error {
-	// parse path => filename, table
-	elems := strings.Split(p.path, "/")
-	if len(elems) != PathElems {
-		return moerr.NewInternalError("metric/log invalid path: %s", p.path)
-	}
-	p.filename = elems[PathIdxFilename]
-	p.table = elems[PathIdxTable]
-
-	// parse filename => fileType, timestamps
-	filename := strings.Trim(p.filename, CsvExtension)
-	fnElems := strings.Split(filename, FilenameSeparator)
-	if len(fnElems) != FilenameElems {
-		return moerr.NewInternalError("metric/log invalid filename: %s", p.path)
-	}
-	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
-		p.fileType = MergeLogTypeMerged
-		p.timestamps = fnElems[:2]
-	} else {
-		p.fileType = MergeLogTypeLog
-		p.timestamps = fnElems[:1]
-	}
-
-	return nil
-}
-
-func (p *MetricLogPath) Table() string {
-	return p.table
-}
-
-func (p *MetricLogPath) Timestamp() []string {
-	return p.timestamps
-}
-
-var _ PathBuilder = (*MetricLogPathBuilder)(nil)
-
-type MetricLogPathBuilder struct {
-	directory string
-}
-
-func (m *MetricLogPathBuilder) Clone() PathBuilder {
-	builder := NewMetricLogPathBuilder()
-	builder.directory = m.directory
-	return builder
-}
-
-func NewMetricLogPathBuilder() *MetricLogPathBuilder {
-	return &MetricLogPathBuilder{}
-}
-
-func (m *MetricLogPathBuilder) Build(account string, datatype MergeLogType, timestamp time.Time, table *Table) string {
-	m.directory = path.Join(account,
-		string(datatype),
-		fmt.Sprintf("%d", timestamp.Year()),
-		fmt.Sprintf("%02d", timestamp.Month()),
-		fmt.Sprintf("%02d", timestamp.Day()),
-		table.GetName(),
-	)
-	return m.directory
-}
-
-func (m MetricLogPathBuilder) DirectoryPath() string {
-	return m.directory
-}
-
-func (m *MetricLogPathBuilder) Join(filename string) string {
-	return path.Join(m.directory, filename)
-}
-
-func (m *MetricLogPathBuilder) ParsePath(path string) (CSVPath, error) {
-	p := NewMetricLogPath(path)
-	return p, p.Parse()
-}
-
-func (m *MetricLogPathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
-	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + CsvExtension
 }

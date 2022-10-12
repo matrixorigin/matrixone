@@ -29,7 +29,6 @@ import (
 )
 
 const etlFileServiceName = "ETL"
-const csvExtension = ".csv"
 
 var _ stringWriter = (*FSWriter)(nil)
 
@@ -59,7 +58,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		fs:       fs,
 		prefix:   "info",
 		dir:      "",
-		nodeUUID: "00000000-0000-0000-0000-000000000000",
+		nodeUUID: "0",
 		nodeType: "standalone",
 
 		fileServiceName: etlFileServiceName,
@@ -113,7 +112,7 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + csvExtension,
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + CsvExtension,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),
