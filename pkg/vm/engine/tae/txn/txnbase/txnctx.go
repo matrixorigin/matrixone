@@ -68,7 +68,13 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("ctx[%s][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf(
+		"ctx[%X][%s->%s][%s]",
+		ctx.ID,
+		ctx.StartTS.ToString(),
+		ctx.CommitTS.ToString(),
+		txnif.TxnStrState(ctx.State),
+	)
 	return repr
 }
 
