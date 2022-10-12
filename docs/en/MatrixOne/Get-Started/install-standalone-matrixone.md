@@ -18,7 +18,7 @@ Go version 1.19 is required.
 
 ### 2. Install MySQL Client
 
-MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is required.
+MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended.
 
 ### 3. Get the MatrixOne code to build MatrixOne
 
@@ -88,7 +88,7 @@ For each release, you can download binary packages directly to run MatrixOne in 
 
 ### 1. Install MySQL Client
 
-MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is required.
+MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended.
 
 ### 2. Download binary packages and decompress
 
