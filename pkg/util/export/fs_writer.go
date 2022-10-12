@@ -35,9 +35,10 @@ var _ stringWriter = (*FSWriter)(nil)
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
+	ts  time.Time               // New args
 
 	mux      sync.Mutex
-	prefix   string // see WithPrefix, as filename prefix, see GetNewFileName
+	name     string // see WithName, as filename name, see GetNewFileName
 	dir      string // see WithDir, default: ""
 	nodeUUID string // see WithNode
 	nodeType string // see WithNode
@@ -48,15 +49,17 @@ type FSWriter struct {
 	offset int // see Write, should not have size bigger than 2GB
 }
 
-type FSWriterOption interface {
-	Apply(*FSWriter)
+type FSWriterOption func(*FSWriter)
+
+func (f FSWriterOption) Apply(w *FSWriter) {
+	f(w)
 }
 
 func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWriterOption) *FSWriter {
 	w := &FSWriter{
 		ctx:      ctx,
 		fs:       fs,
-		prefix:   "info",
+		name:     "info",
 		dir:      "",
 		nodeUUID: "0",
 		nodeType: "standalone",
@@ -70,37 +73,31 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 	return w
 }
 
-type fsWriterOptionFunc func(*FSWriter)
-
-func (f fsWriterOptionFunc) Apply(w *FSWriter) {
-	f(w)
-}
-
-func WithPrefix(item batchpipe.HasName) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
-		w.prefix = item.GetName()
+func WithName(item batchpipe.HasName) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.name = item.GetName()
 	})
 }
 
-func WithDir(dir string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
+func WithDir(dir string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
 		w.dir = dir
 	})
 }
-func WithNode(uuid, nodeType string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
+func WithNode(uuid, nodeType string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
 		w.nodeUUID, w.nodeType = uuid, nodeType
 	})
 }
 
-func WithFileServiceName(serviceName string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
+func WithFileServiceName(serviceName string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
 		w.fileServiceName = serviceName
 	})
 }
 
 func (w *FSWriter) GetNewFileName(ts time.Time) string {
-	return fmt.Sprintf(`%s_%s_%s_%s`, w.prefix, w.nodeUUID, w.nodeType, ts.Format("20060102.150405.000000"))
+	return fmt.Sprintf(`%s_%s_%s_%s`, w.name, w.nodeUUID, w.nodeType, ts.Format("20060102.150405.000000"))
 }
 
 // Write implement io.Writer, Please execute in series
@@ -142,7 +139,7 @@ type FSWriterFactory func(context.Context, string, batchpipe.HasName) io.StringW
 func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
 	return func(_ context.Context, dir string, i batchpipe.HasName) io.StringWriter {
 		return NewFSWriter(DefaultContext(), fs,
-			WithPrefix(i),
+			WithName(i),
 			WithDir(dir),
 			WithNode(nodeUUID, nodeType),
 		)

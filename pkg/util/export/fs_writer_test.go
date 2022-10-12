@@ -192,7 +192,7 @@ func TestFSWriter_Write(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				WithPrefix(tt.fields.prefix),
+				WithName(tt.fields.prefix),
 				WithDir(tt.fields.dir),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
 				WithFileServiceName(""),
