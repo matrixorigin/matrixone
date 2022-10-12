@@ -145,6 +145,9 @@ When the io is closed, the Quit will be called.
 */
 func (routine *Routine) Quit() {
 	routine.closeOnce.Do(func() {
+		if routine.ses != nil {
+			routine.ses.Dispose()
+		}
 		routine.notifyClose()
 
 		if routine.cancelRoutineFunc != nil {

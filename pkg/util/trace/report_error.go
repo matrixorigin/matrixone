@@ -45,10 +45,6 @@ func (h MOErrorHolder) Size() int64 {
 }
 func (h MOErrorHolder) Free() {}
 
-func (h MOErrorHolder) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
-}
-
 func (h MOErrorHolder) CsvFields() []string {
 	var span Span
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {

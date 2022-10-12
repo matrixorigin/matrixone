@@ -23,10 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type State = int32
-
 const (
-	Created State = iota
+	Created int32 = iota
 	Running
 	ReceiverStopped
 	PrepareStop
@@ -38,8 +36,8 @@ type safeQueue struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
-	state     State
-	pending   int64
+	state     atomic.Int32
+	pending   atomic.Int64
 	batchSize int
 	onItemsCB OnItemsCB
 }
@@ -47,16 +45,16 @@ type safeQueue struct {
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
 		queue:     make(chan any, queueSize),
-		state:     Created,
 		batchSize: batchSize,
 		onItemsCB: onItem,
 	}
+	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
 	return q
 }
 
 func (q *safeQueue) Start() {
-	q.state = Running
+	q.state.Store(Running)
 	q.wg.Add(1)
 	items := make([]any, 0, q.batchSize)
 	go func() {
@@ -82,7 +80,7 @@ func (q *safeQueue) Start() {
 				cnt := len(items)
 				q.onItemsCB(items...)
 				items = items[:0]
-				atomic.AddInt64(&q.pending, int64(cnt)*(-1))
+				q.pending.Add(-1 * int64(cnt))
 			}
 		}
 	}()
@@ -95,31 +93,23 @@ func (q *safeQueue) Stop() {
 }
 
 func (q *safeQueue) stopReceiver() {
-	state := atomic.LoadInt32(&q.state)
+	state := q.state.Load()
 	if state >= ReceiverStopped {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&q.state, state, ReceiverStopped) {
-		return
-	}
+	q.state.CompareAndSwap(state, ReceiverStopped)
 }
 
 func (q *safeQueue) waitStop() {
-	state := atomic.LoadInt32(&q.state)
-	if state <= Running {
+	if q.state.Load() <= Running {
 		panic("logic error")
 	}
-	if state == Stopped {
+	if q.state.Load() == Stopped {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&q.state, ReceiverStopped, PrepareStop) {
-		pending := atomic.LoadInt64(&q.pending)
-		for {
-			if pending == 0 {
-				break
-			}
+	if q.state.CompareAndSwap(ReceiverStopped, PrepareStop) {
+		for q.pending.Load() != 0 {
 			runtime.Gosched()
-			pending = atomic.LoadInt64(&q.pending)
 		}
 		q.cancel()
 	}
@@ -127,13 +117,12 @@ func (q *safeQueue) waitStop() {
 }
 
 func (q *safeQueue) Enqueue(item any) (any, error) {
-	state := atomic.LoadInt32(&q.state)
-	if state != Running {
+	if q.state.Load() != Running {
 		return item, common.ErrClose
 	}
-	atomic.AddInt64(&q.pending, int64(1))
-	if atomic.LoadInt32(&q.state) != Running {
-		atomic.AddInt64(&q.pending, int64(-1))
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
 		return item, common.ErrClose
 	}
 	q.queue <- item

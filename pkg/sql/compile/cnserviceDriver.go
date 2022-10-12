@@ -968,9 +968,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 
 // newCompile generates a new compile for remote run.
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
+	// compile is almost surely wanting a small or mid pool.  Later.
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
 	proc := process.New(
-		ctx,
-		mpool.MustNewZero(),
+		ctx, mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,

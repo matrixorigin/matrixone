@@ -11,7 +11,6 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
-	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -157,7 +156,8 @@ func (mr *MockRelationMockRecorder) DelTableDef(arg0, arg1 interface{}) *gomock.
 }
 
 // Delete mocks base method.
-func (m *MockRelation) Delete(arg0 context.Context, arg1 *vector.Vector, arg2 string) error {
+func (m *MockRelation) Delete(arg0 context.Context, bat *batch.Batch, arg2 string) error {
+	arg1 := bat.Vecs[0]
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)

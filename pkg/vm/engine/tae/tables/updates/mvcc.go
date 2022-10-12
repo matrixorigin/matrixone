@@ -34,11 +34,10 @@ import (
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice
-	changes         uint32
+	changes         atomic.Uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
 }
@@ -46,17 +45,12 @@ type MVCCHandle struct {
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	node := &MVCCHandle{
 		RWMutex: new(sync.RWMutex),
-		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
 	node.deletes = NewDeleteChain(nil, node)
 	if meta == nil {
 		return node
-	}
-	for i := uint16(0); i < uint16(len(meta.GetSchema().ColDefs)); i++ {
-		col := NewColumnChain(nil, i, node)
-		node.columns[i] = col
 	}
 	return node
 }
@@ -84,15 +78,11 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
-	atomic.AddUint32(&n.changes, uint32(1))
+	n.changes.Add(1)
 }
 
 func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
-	return atomic.LoadUint32(&n.changes)
-}
-
-func (n *MVCCHandle) GetColumnUpdateCnt(colIdx uint16) uint32 {
-	return n.columns[colIdx].LoadUpdateCnt()
+	return n.changes.Load()
 }
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
@@ -106,21 +96,8 @@ func (n *MVCCHandle) StringLocked() string {
 	if n.deletes.DepthLocked() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
 	}
-	for _, chain := range n.columns {
-		chain.RLock()
-		if chain.DepthLocked() > 0 {
-			s = fmt.Sprintf("%s\n%s", s, chain.StringLocked())
-		}
-		chain.RUnlock()
-	}
 	s = fmt.Sprintf("%s\n%s", s, n.appends.StringLocked())
 	return s
-}
-
-func (n *MVCCHandle) GetColumnExclusiveLock(idx uint16) sync.Locker {
-	col := n.columns[idx]
-	col.Lock()
-	return col.RWMutex
 }
 
 func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
@@ -133,37 +110,6 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-}
-
-func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
-	chain := n.columns[colIdx]
-	return chain.AddNodeLocked(txn)
-}
-
-func (n *MVCCHandle) DropUpdateNode(colIdx uint16, node txnif.UpdateNode) {
-	chain := n.columns[colIdx]
-	chain.DeleteNodeLocked(node.(*ColumnUpdateNode))
-}
-
-func (n *MVCCHandle) PrepareUpdate(row uint32, colIdx uint16, update txnif.UpdateNode) error {
-
-	chain := n.columns[colIdx]
-	return chain.PrepareUpdate(row, update)
-}
-
-func (n *MVCCHandle) CheckNotUpdated(start, end uint32, ts types.TS) (err error) {
-	for _, chain := range n.columns {
-		for i := start; i <= end; i++ {
-			if err = chain.view.PrepapreInsert(i, ts); err != nil {
-				return
-			}
-		}
-	}
-	return
-}
-
-func (n *MVCCHandle) GetColumnChain(colIdx uint16) *ColumnChain {
-	return n.columns[colIdx]
 }
 
 func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
@@ -288,8 +234,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 		return 0
 	}
 	an := van.(*AppendNode)
-	delets := n.deletes.cnt
-	return an.maxRow - delets
+	return an.maxRow - n.deletes.cnt.Load()
 }
 
 func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
