@@ -1956,7 +1956,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			tenant = ses.GetTenantInfo().GetTenant()
 			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 		}
 
@@ -1976,7 +1976,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if ses.InActiveTransaction() {
 			err = mce.canExecuteStatementInUncommittedTransaction(stmt)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 		}
 
