@@ -32,7 +32,7 @@ var _ stringWriter = (*FSWriter)(nil)
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
-	ts  time.Time               // WithTimestamp ?
+	ts  time.Time               // WithTimestamp
 	// pathBuilder
 	pathBuilder PathBuilder // WithPathBuilder
 
@@ -106,6 +106,11 @@ func WithFileServiceName(serviceName string) FSWriterOption {
 	})
 }
 
+func WithTimestamp(ts time.Time) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.ts = ts
+	})
+}
 func WithPathBuilder(builder PathBuilder) FSWriterOption {
 	return FSWriterOption(func(w *FSWriter) {
 		w.pathBuilder = builder
@@ -147,14 +152,11 @@ func (w *FSWriter) WriteString(s string) (n int, err error) {
 	return w.Write(b)
 }
 
-type FSWriterFactory func(context.Context, string, batchpipe.HasName) io.StringWriter
+type FSWriterFactory func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter
 
 func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
-	return func(_ context.Context, dir string, i batchpipe.HasName) io.StringWriter {
-		return NewFSWriter(DefaultContext(), fs,
-			WithName(i),
-			WithDatabase(dir),
-			WithNode(nodeUUID, nodeType),
-		)
+	return func(_ context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
+		options = append(options, WithDatabase(db), WithName(name), WithNode(nodeUUID, nodeType))
+		return NewFSWriter(DefaultContext(), fs, options...)
 	}
 }

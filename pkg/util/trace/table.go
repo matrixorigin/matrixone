@@ -53,6 +53,8 @@ type Table struct {
 	Engine           string
 	Comment          string
 	TableOptions     TableOptions
+
+	AccountColumn *Column
 }
 
 func (tbl *Table) GetName() string {
@@ -160,6 +162,7 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 
 type Row struct {
 	Table          *Table
+	AccountIdx     int
 	Columns        []string
 	Name2ColumnIdx map[string]int
 }
@@ -167,13 +170,35 @@ type Row struct {
 func (tbl *Table) GetRow() *Row {
 	row := &Row{
 		Table:          tbl,
+		AccountIdx:     -1,
 		Columns:        make([]string, len(tbl.Columns)),
 		Name2ColumnIdx: make(map[string]int),
 	}
 	for idx, col := range tbl.Columns {
 		row.Name2ColumnIdx[col.Name] = idx
 	}
+	if tbl.AccountColumn != nil {
+		idx, exist := row.Name2ColumnIdx[tbl.AccountColumn.Name]
+		if !exist {
+			panic(moerr.NewInternalError("%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+		}
+		row.AccountIdx = idx
+	}
 	return row
+}
+
+func (r *Row) Reset() {
+	for idx, _ := range r.Columns {
+		r.Columns[idx] = ""
+	}
+}
+
+// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0, else return "sys"
+func (r *Row) GetAccount() string {
+	if r.AccountIdx >= 0 {
+		return r.Columns[r.AccountIdx]
+	}
+	return "sys"
 }
 
 func (r *Row) SetVal(col string, val string) {

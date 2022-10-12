@@ -419,6 +419,8 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	return newBuffer2Sql(opts...)
 }
 
+type CSVRequests []*CSVRequest
+
 type CSVRequest struct {
 	writer  io.StringWriter
 	content string

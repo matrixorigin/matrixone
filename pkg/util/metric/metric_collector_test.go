@@ -149,7 +149,7 @@ func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 }
 
 func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
-	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName, opts ...export.FSWriterOption) io.StringWriter {
 		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
