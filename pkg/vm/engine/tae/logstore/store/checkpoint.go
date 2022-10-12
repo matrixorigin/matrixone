@@ -15,8 +15,6 @@
 package store
 
 import (
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -166,7 +164,7 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 			panic("logic error")
 		}
 	}
-	atomic.StoreUint64(&w.driverCheckpointing, driverLsn)
+	w.driverCheckpointing.Store(driverLsn)
 	_, err := w.truncateQueue.Enqueue(struct{}{})
 	if err != nil {
 		panic(err)
@@ -174,11 +172,11 @@ func (w *StoreImpl) onTruncatingQueue(items ...any) {
 }
 
 func (w *StoreImpl) onTruncateQueue(items ...any) {
-	lsn := atomic.LoadUint64(&w.driverCheckpointing)
+	lsn := w.driverCheckpointing.Load()
 	if lsn != w.driverCheckpointed {
 		err := w.driver.Truncate(lsn)
 		for err != nil {
-			lsn = atomic.LoadUint64(&w.driverCheckpointing)
+			lsn = w.driverCheckpointing.Load()
 			err = w.driver.Truncate(lsn)
 		}
 		w.driverCheckpointed = lsn

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -39,8 +40,8 @@ type driverInfo struct {
 	syncedMu    sync.RWMutex
 	driverLsnMu sync.RWMutex
 
-	truncating             uint64 //
-	truncatedLogserviceLsn uint64 //
+	truncating             atomic.Uint64 //
+	truncatedLogserviceLsn uint64        //
 
 	appending  uint64
 	appended   *common.ClosedIntervals
@@ -65,7 +66,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 	info.synced = r.maxDriverLsn
 	info.syncing = r.maxDriverLsn
 	if r.minDriverLsn != math.MaxUint64 {
-		info.truncating = r.minDriverLsn - 1
+		info.truncating.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
 }

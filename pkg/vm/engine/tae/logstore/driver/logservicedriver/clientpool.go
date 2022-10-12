@@ -78,7 +78,7 @@ type clientpool struct {
 	count      int
 	getTimeout time.Duration
 
-	closed int32
+	closed atomic.Int32
 
 	freeClients   []*clientWithRecord
 	clientFactory func() *clientWithRecord
@@ -123,7 +123,7 @@ func (c *clientpool) Close() {
 	for _, client := range c.freeClients {
 		c.closefn(client)
 	}
-	atomic.StoreInt32(&c.closed, 1)
+	c.closed.Store(1)
 	c.mu.Unlock()
 }
 
@@ -163,8 +163,7 @@ func (c *clientpool) Get() (*clientWithRecord, error) {
 }
 
 func (c *clientpool) IsClosed() bool {
-	closed := atomic.LoadInt32(&c.closed)
-	return closed == 1
+	return c.closed.Load() == 1
 }
 
 func (c *clientpool) Put(client *clientWithRecord) {

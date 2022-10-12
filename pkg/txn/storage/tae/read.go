@@ -37,7 +37,8 @@ func (s *taeStorage) Read(
 
 	case uint32(apipb.OpCode_OpGetLogTail):
 		return handleRead(
-			s, txnMeta, payload,
+			ctx, s,
+			txnMeta, payload,
 			s.taeHandler.HandleGetLogTail,
 		)
 	default:
@@ -47,10 +48,12 @@ func (s *taeStorage) Read(
 }
 
 func handleRead[Req any, Resp any](
+	ctx context.Context,
 	s *taeStorage,
 	txnMeta txn.TxnMeta,
 	payload []byte,
 	fn func(
+		ctx context.Context,
 		meta txn.TxnMeta,
 		req Req,
 		resp *Resp,
@@ -75,7 +78,7 @@ func handleRead[Req any, Resp any](
 		}
 	}()
 
-	err = fn(txnMeta, req, &resp)
+	err = fn(ctx, txnMeta, req, &resp)
 	if err != nil {
 		return nil, err
 	}

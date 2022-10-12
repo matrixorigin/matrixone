@@ -208,13 +208,12 @@ drop table t2;
 
 #HAVING & 算术运算
 
--- @bvt:issue#3291
+
 drop table if exists t1;
 create table t1(a INT,  b datetime);
 insert into t1 values(1, "2017-06-15 09:34:21"),(1, "2019-06-25 10:12:21"),(2, "2019-06-25 18:20:49"),(3, "2019-06-25 18:20:49");
 select b from t1 group by b having (date_add(t1.b, INTERVAL 1 day)-date_add(t1.b, INTERVAL 1 hour))>10;
 drop table t1;
--- @bvt:issue
 
 SELECT
 DATE_SUB('2007-08-03', INTERVAL 1 MINUTE) AS field_str1,
