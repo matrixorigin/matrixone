@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -95,6 +96,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 		}
+	}
+	// XXX The original logic was buggy and I had to temporarily circumvent it
+	if bat.Length() == 0 {
+		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
 	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))

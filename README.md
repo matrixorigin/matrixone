@@ -159,7 +159,7 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
 **Step 1. Install Go (version 1.19 is required)**
 
-**Step 2. Install MySQL Client (version [8.0.30](https://dev.mysql.com/downloads/installer/) is required)**
+**Step 2. Install MySQL Client (version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended)**
 
 **Step 3. Get the MatrixOne code to build MatrixOne**
 
