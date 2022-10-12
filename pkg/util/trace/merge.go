@@ -17,6 +17,7 @@ package trace
 import (
 	"context"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -132,12 +133,12 @@ func (m *Merge) Main() error {
 			return err
 		}
 		for _, f := range fileEntry {
-			filepath := m.pathBuilder.Join(f.Name)
+			filepath := path.Join(rootPath, f.Name)
 			totalSize += f.Size
 			files = append(files, filepath)
 		}
 
-		go m.doMergeFiles(account.Name, files, m.pathBuilder.Clone())
+		go m.doMergeFiles(account.Name, files)
 
 	}
 
@@ -151,7 +152,7 @@ var runningJobs int64
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder export.PathBuilder) error {
+func (m *Merge) doMergeFiles(account string, paths []string) error {
 
 	// fixme: Control task concurrency
 	for runningJobs > m.MaxMergeJobs {
@@ -167,7 +168,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder export.
 	// Step 1. group by node_uuid, find target timestamp
 	timestamps := []string{}
 	for _, path := range paths {
-		p, err := pathBuilder.ParsePath(path)
+		p, err := m.pathBuilder.ParsePath(path)
 		if err != nil {
 			return err
 		}
@@ -186,9 +187,9 @@ func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder export.
 	timestamp_end := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
-	pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
-	merge_filename := pathBuilder.NewMergeFilename(timestamp_start, timestamp_end)
-	merge_filepath := pathBuilder.Join(merge_filename)
+	prefix := m.pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
+	merge_filename := m.pathBuilder.NewMergeFilename(timestamp_start, timestamp_end)
+	merge_filepath := path.Join(prefix, merge_filename)
 	new_file_writer := NewCSVWriter(m.FS, WithPath(merge_filepath))
 
 	// Step 3. do simple merge

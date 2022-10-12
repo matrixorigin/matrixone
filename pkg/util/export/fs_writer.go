@@ -17,6 +17,7 @@ package export
 import (
 	"context"
 	"io"
+	"path"
 	"sync"
 	"time"
 
@@ -45,6 +46,7 @@ type FSWriter struct {
 	nodeType string // see WithNode
 	// filename auto generated
 	filename string // see NewFSWriter
+	path     string // see NewFSWriter
 
 	fileServiceName string // see WithFileServiceName
 
@@ -74,6 +76,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		o.Apply(w)
 	}
 	w.filename = w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
+	w.path = w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
 	return w
 }
 
@@ -123,11 +126,10 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 	defer w.mux.Unlock()
 	n = len(p)
 	mkdirTried := false
-	w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + w.pathBuilder.Join(w.filename),
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.path, w.filename),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),

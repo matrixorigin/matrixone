@@ -103,13 +103,8 @@ const CsvExtension = ".csv"
 
 // PathBuilder hold strategy to build filepath
 type PathBuilder interface {
-	Clone() PathBuilder
 	// Build directory path
 	Build(account string, typ MergeLogType, ts time.Time, db string, name string) string
-	// DirectoryPath return last call Build result
-	DirectoryPath() string
-	// Join return DirectoryPath + "/" + filename
-	Join(filename string) string
 	// ParsePath
 	//
 	// switch path {
@@ -198,33 +193,18 @@ type MetricLogPathBuilder struct {
 	directory string
 }
 
-func (m *MetricLogPathBuilder) Clone() PathBuilder {
-	builder := NewMetricLogPathBuilder()
-	builder.directory = m.directory
-	return builder
-}
-
 func NewMetricLogPathBuilder() *MetricLogPathBuilder {
 	return &MetricLogPathBuilder{}
 }
 
 func (m *MetricLogPathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
-	m.directory = path.Join(account,
+	return path.Join(account,
 		typ.String(),
 		fmt.Sprintf("%d", ts.Year()),
 		fmt.Sprintf("%02d", ts.Month()),
 		fmt.Sprintf("%02d", ts.Day()),
 		name,
 	)
-	return m.directory
-}
-
-func (m MetricLogPathBuilder) DirectoryPath() string {
-	return m.directory
-}
-
-func (m *MetricLogPathBuilder) Join(filename string) string {
-	return path.Join(m.directory, filename)
 }
 
 func (m *MetricLogPathBuilder) ParsePath(path string) (CSVPath, error) {
@@ -243,13 +223,6 @@ func (m *MetricLogPathBuilder) NewLogFilename(name, nodeUUID, nodeType string, t
 var _ PathBuilder = (*DBTablePathBuilder)(nil)
 
 type DBTablePathBuilder struct {
-	directory string
-}
-
-func (m *DBTablePathBuilder) Clone() PathBuilder {
-	builder := NewDBTablePathBuilder()
-	builder.directory = m.directory
-	return builder
 }
 
 func NewDBTablePathBuilder() *DBTablePathBuilder {
@@ -257,16 +230,7 @@ func NewDBTablePathBuilder() *DBTablePathBuilder {
 }
 
 func (m *DBTablePathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
-	m.directory = db
-	return m.directory
-}
-
-func (m DBTablePathBuilder) DirectoryPath() string {
-	return m.directory
-}
-
-func (m *DBTablePathBuilder) Join(filename string) string {
-	return path.Join(m.directory, filename)
+	return db
 }
 
 func (m *DBTablePathBuilder) ParsePath(path string) (CSVPath, error) {
