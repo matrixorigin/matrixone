@@ -72,10 +72,12 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	for _, i := range dnList {
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
-
-	if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
-		tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-		return nil, err
+	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
+	if !ok {
+		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
+			tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return nil, err
+		}
 	}
 	if tbl.meta == nil {
 		return nil, nil
@@ -136,13 +138,18 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
 	defs := make([]engine.TableDef, 0, len(tbl.defs))
 	for i, def := range tbl.defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if !attr.Attr.IsHidden {
+		switch attr := def.(type) {
+		case *engine.CommentDef:
+			defs = append(defs, tbl.defs[i])
+		case *engine.AttributeDef:
+			if attr.Attr.Name != catalog.Row_ID {
 				defs = append(defs, tbl.defs[i])
 			}
+
 		}
 	}
 	return defs, nil
+
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
@@ -161,7 +168,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.IsHidden {
+			if attr.Attr.Name == catalog.Row_ID { // Why not hide but rowid?
 				attrs = append(attrs, &attr.Attr)
 			}
 		}
@@ -191,8 +198,7 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-	// bat := batch.NewWithSize(1)
-	// bat.Vecs[0] = vec
+	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
