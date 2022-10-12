@@ -40,7 +40,6 @@ import (
 	"path"
 	"strings"
 	"sync/atomic"
-	"time"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -86,7 +85,6 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
-	t1 := time.Now()
 	param := arg.(*Argument).Es
 	if param.End {
 		proc.SetInputBatch(nil)
@@ -99,7 +97,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	proc.SetInputBatch(bat)
-	fmt.Println("Call time:", time.Since(t1))
 	return false, nil
 }
 
@@ -233,13 +230,11 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat := makeBatch(param, plh, proc.Mp())
-	//originBat := makeOriginBatch(param, plh, proc.Mp())
 	var (
 		Line []string
 		err  error
 	)
 	deleteEnclosed(param, plh)
-	t1 := time.Now()
 	origin := make([][]string, len(param.Attrs))
 	for i := 0; i < len(param.Attrs); i++ {
 		origin[i] = make([]string, plh.batchSize)
@@ -258,17 +253,10 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 
 		for j := 0; j < len(param.Attrs); j++ {
-			//vec := originBat.GetVector(int32(j))
 			field := Line[param.Name2ColIndex[param.Attrs[j]]]
 			origin[j][rowIdx] = field
-			//err = vector.SetStringAt(vec, rowIdx, field, proc.Mp())
-			//if err != nil {
-			//	return nil, err
-			//}
 		}
 	}
-	fmt.Println("setStringAt cost:", time.Since(t1))
-	t1 = time.Now()
 	for i := 0; i < len(param.Attrs); i++ {
 		id := types.T(param.Cols[i].Typ.Id)
 		nullList := param.extern.NullMap[param.Attrs[i]]
@@ -326,7 +314,6 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for k := 0; k < n; k++ {
 		bat.Zs[k] = 1
 	}
-	fmt.Println("parse cost:", time.Since(t1))
 	return bat, nil
 }
 
