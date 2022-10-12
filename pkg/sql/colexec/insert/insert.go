@@ -52,6 +52,9 @@ func Prepare(_ *process.Process, _ any) error {
 
 func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
 	if !proc.LoadTag {
+		if bat.Length() == 0 {
+			bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
+		}
 		err := n.TargetTable.Write(ctx, bat)
 		n.Affected += uint64(len(bat.Zs))
 		return false, err
@@ -62,6 +65,9 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	txnOperator, err = proc.TxnClient.New()
 	if err != nil {
 		return false, err
+	}
+	if bat.Length() == 0 {
+		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
 	err = n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))

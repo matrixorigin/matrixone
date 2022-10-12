@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -52,6 +53,8 @@ func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
 	defer task.file.FreeWriter()
+	name := blockio.EncodeBlkName(task.meta.AsCommonID(), task.ts)
+	task.file.UpdateName(name)
 	block, err := task.file.WriteBatch(task.data, task.ts)
 	if err != nil {
 		return err

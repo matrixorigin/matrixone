@@ -188,7 +188,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			stm.SetTxnID(handler.GetTxn().Txn().ID)
 		}
@@ -2533,7 +2533,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted))))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError("invalid query"))
@@ -2604,7 +2604,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2632,7 +2632,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2677,7 +2677,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
+	logutil.Info("query trace", logutil.ConnectionIdField(mce.ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 
@@ -2879,8 +2879,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
-	var jsonBytes []byte
+func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -2889,6 +2888,7 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(uuid, options)
+		rows, size = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -2903,16 +2903,16 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes
+	return jsonBytes, rows, size
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
 		return serializePlanToJson(nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(queryPlan, uuid)

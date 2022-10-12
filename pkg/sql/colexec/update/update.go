@@ -86,6 +86,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			delBat := &batch.Batch{}
 			delBat.Vecs = []*vector.Vector{bat.GetVector(idx)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
 			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.PriKey)
 			if err != nil {
 				delBat.Clean(proc.Mp())
@@ -98,6 +99,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
@@ -118,6 +120,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			delBat := &batch.Batch{}
 			delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
 			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
 			if err != nil {
 				delBat.Clean(proc.Mp())
@@ -154,6 +157,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					}
 				}
 			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())

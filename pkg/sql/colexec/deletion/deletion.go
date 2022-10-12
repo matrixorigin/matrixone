@@ -60,6 +60,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// for j := filterColIndex + 1; j < maxIndex; j++ {
 			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
 			// }
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
@@ -78,6 +79,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// for j := filterColIndex + 1; j < maxIndex; j++ {
 			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
 			// }
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
