@@ -38,6 +38,18 @@ select * from json_extract('{"a":[1,2,3,{"a":4}]}','$.**');
 invalid input: json path error
 select * from json_extract('{"a":[1,2,3,{"a":4}]}','$.*1');
 invalid input: json path error
+select json_extract('{"a":1}','$[0]');
+json_extract({"a":1}, $[0])
+{"a": 1}
+select json_extract('{"a":1}','$[0].a');
+json_extract({"a":1}, $[0].a)
+1
+select json_extract('{"a":1}','$[0].b');
+json_extract({"a":1}, $[0].b)
+null
+select json_extract('{"a":1}','$[1]');
+json_extract({"a":1}, $[1])
+null
 drop table if exists t1;
 create table t1 (a json,b int);
 insert into t1(a,b) values ('{"a":1,"b":2,"c":3}',1);

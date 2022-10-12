@@ -248,6 +248,10 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		return cur
 	}
 	sub, nPath := path.step()
+	if sub.tp == subPathIdx && bj.Type == TpCodeObject && sub.idx == 0 {
+		cur = bj.query(cur, &nPath)
+		return cur
+	}
 	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
 		cnt := bj.GetElemCnt()
 		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
