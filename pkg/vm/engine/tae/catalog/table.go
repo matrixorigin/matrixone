@@ -44,7 +44,7 @@ type TableEntry struct {
 	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
-	rows      uint64
+	rows      atomic.Uint64
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 }
@@ -130,15 +130,15 @@ func (entry *TableEntry) IsVirtual() bool {
 }
 
 func (entry *TableEntry) GetRows() uint64 {
-	return atomic.LoadUint64(&entry.rows)
+	return entry.rows.Load()
 }
 
 func (entry *TableEntry) AddRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, delta)
+	return entry.rows.Add(delta)
 }
 
 func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, ^(delta - 1))
+	return entry.rows.Add(^(delta - 1))
 }
 
 func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {
