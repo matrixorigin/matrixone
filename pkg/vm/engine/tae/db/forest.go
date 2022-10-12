@@ -29,19 +29,13 @@ import (
 	"github.com/tidwall/btree"
 )
 
-/*
-
-an application on logtail mgr: monitor dirty blocks
-
-*/
-
 type TimeRangedTree struct {
 	sync.RWMutex
 	start, end types.TS
 	tree       *common.Tree
 }
 
-type forestMaintainer struct {
+type dirtyForest struct {
 	// collect dirty
 	interval struct {
 		sync.Mutex
@@ -49,28 +43,34 @@ type forestMaintainer struct {
 		alloc     *types.TsAlloctor
 		delay     time.Duration
 	}
-	logtail *logtail.LogtailMgr
+	sourcer *logtail.LogtailMgr
 
 	// consume dirty
 	catalog *catalog.Catalog
 	visitor catalog.Processor
 
 	// dirty
-	forest *btree.Generic[*TimeRangedTree]
+	trees *btree.Generic[*TimeRangedTree]
 }
 
-func newForestMaintainer(logtail *logtail.LogtailMgr, clock clock.Clock, catalog *catalog.Catalog, visitor catalog.Processor) *forestMaintainer {
-	watch := &forestMaintainer{
-		logtail: logtail,
+func newDirtyForest(
+	sourcer *logtail.LogtailMgr,
+	clock clock.Clock,
+	catalog *catalog.Catalog,
+	visitor catalog.Processor) *dirtyForest {
+	watch := &dirtyForest{
+		sourcer: sourcer,
 		catalog: catalog,
 		visitor: visitor,
-		forest:  btree.NewGeneric(func(a, b *TimeRangedTree) bool { return a.start.Less(b.start) && a.end.Less(b.end) }),
+		trees: btree.NewGeneric(func(a, b *TimeRangedTree) bool {
+			return a.start.Less(b.start) && a.end.Less(b.end)
+		}),
 	}
 	watch.interval.alloc = types.NewTsAlloctor(clock)
 	return watch
 }
 
-func (d *forestMaintainer) Run() {
+func (d *dirtyForest) Run() {
 	start, end := d.getTimeRange()
 	// end is empty means range is invalid if considering delay
 	if end.IsEmpty() {
@@ -80,20 +80,50 @@ func (d *forestMaintainer) Run() {
 	d.tryShrink()
 }
 
-func (d *forestMaintainer) WithStartTS(start types.TS) {
+func (d *dirtyForest) WithStartTS(start types.TS) {
 	d.interval.Lock()
 	defer d.interval.Unlock()
 	d.interval.prevStart = start
 }
 
 // WithDelay to avoid waiting when get logtail dirty, Physical is nanosecond of wall time
-func (d *forestMaintainer) WithDelay(delay time.Duration) {
+func (d *dirtyForest) WithDelay(delay time.Duration) {
 	d.interval.Lock()
 	defer d.interval.Unlock()
 	d.interval.delay = delay
 }
 
-func (d *forestMaintainer) getTimeRange() (start, end types.TS) {
+// DirtyCount returns unflushed table, segment, block count
+func (d *dirtyForest) DirtyCount() (tblCnt, segCnt, blkCnt int) {
+	merged := d.MergeForest()
+	tblCnt = merged.TableCount()
+	for _, tblTree := range merged.Tables {
+		segCnt += len(tblTree.Segs)
+		for _, segTree := range tblTree.Segs {
+			blkCnt += len(segTree.Blks)
+		}
+	}
+	return
+}
+
+func (d *dirtyForest) String() string {
+	tree := d.MergeForest()
+	return tree.String()
+}
+
+func (d *dirtyForest) MergeForest() *common.Tree {
+	merged := common.NewTree()
+	trees := d.trees.Copy()
+	trees.Scan(func(item *TimeRangedTree) bool {
+		item.RLock()
+		defer item.RUnlock()
+		merged.Merge(item.tree)
+		return true
+	})
+	return merged
+}
+
+func (d *dirtyForest) getTimeRange() (start, end types.TS) {
 	r := &d.interval
 	r.Lock()
 	defer r.Unlock()
@@ -108,53 +138,23 @@ func (d *forestMaintainer) getTimeRange() (start, end types.TS) {
 	return
 }
 
-// DirtyCount returns unflushed table, segment, block count
-func (d *forestMaintainer) DirtyCount() (tblCnt, segCnt, blkCnt int) {
-	merged := d.MergeForest()
-	tblCnt = merged.TableCount()
-	for _, tblTree := range merged.Tables {
-		segCnt += len(tblTree.Segs)
-		for _, segTree := range tblTree.Segs {
-			blkCnt += len(segTree.Blks)
-		}
-	}
-	return
-}
-
-func (d *forestMaintainer) String() string {
-	tree := d.MergeForest()
-	return tree.String()
-}
-
-func (d *forestMaintainer) MergeForest() *common.Tree {
-	merged := common.NewTree()
-	forest := d.forest.Copy()
-	forest.Scan(func(item *TimeRangedTree) bool {
-		item.RLock()
-		defer item.RUnlock()
-		merged.Merge(item.tree)
-		return true
-	})
-	return merged
-}
-
-func (d *forestMaintainer) tryExpand(start, end types.TS) {
-	reader := d.logtail.GetReader(start, end)
+func (d *dirtyForest) tryExpand(start, end types.TS) {
+	reader := d.sourcer.GetReader(start, end)
 	tree := reader.GetDirty()
 	dirty := &TimeRangedTree{
 		start: start,
 		end:   end,
 		tree:  tree,
 	}
-	d.forest.Set(dirty)
+	d.trees.Set(dirty)
 }
 
 // Scan current dirty trees, remove all flushed or not found ones, and drive visitor on remaining block entries.
-func (d *forestMaintainer) tryShrink() {
+func (d *dirtyForest) tryShrink() {
 	forestToDelete := make([]*TimeRangedTree, 0)
 
-	forest := d.forest.Copy()
-	forest.Scan(func(item *TimeRangedTree) bool {
+	trees := d.trees.Copy()
+	trees.Scan(func(item *TimeRangedTree) bool {
 		item.Lock()
 		defer item.Unlock()
 		// dirty blocks within the time range has been flushed
@@ -170,12 +170,12 @@ func (d *forestMaintainer) tryShrink() {
 	})
 
 	for _, tree := range forestToDelete {
-		d.forest.Delete(tree)
+		d.trees.Delete(tree)
 	}
 }
 
 // iter the tree and call visitor to process block. flushed block, empty seg and table will be removed from the tree
-func (d *forestMaintainer) tryShrinkATree(visitor catalog.Processor, tree *common.Tree) (err error) {
+func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
@@ -214,8 +214,8 @@ func (d *forestMaintainer) tryShrinkATree(visitor catalog.Processor, tree *commo
 
 			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-					err = nil
 					delete(tblDirty.Segs, id)
+					err = nil
 					continue
 				}
 				return
@@ -223,14 +223,15 @@ func (d *forestMaintainer) tryShrinkATree(visitor catalog.Processor, tree *commo
 			for id := range dirtySeg.Blks {
 				if blk, err = seg.GetBlockEntryByID(id); err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-						err = nil
 						delete(dirtySeg.Blks, id)
+						err = nil
 						continue
 					}
 					return
 				}
 				// if blk has been flushed, remove it
-				if blk.GetMetaLoc() != "" {
+				// if blk.GetMetaLoc() != "" {
+				if blk.GetBlockData().RunCalibration() == 0 {
 					delete(dirtySeg.Blks, id)
 					continue
 				}

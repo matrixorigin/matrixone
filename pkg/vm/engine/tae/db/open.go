@@ -110,10 +110,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
 	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
-		watcher := newForestMaintainer(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond/2, func() {
-			watcher.Run()
-			logutil.Infof(watcher.String())
+		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
+			forest.Run()
+			logutil.Infof(forest.String())
 		}, nil)
 		hb.Start()
 		<-ctx.Done()

@@ -3611,7 +3611,7 @@ func TestWatchDirty(t *testing.T) {
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := newForestMaintainer(logMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(logMgr, opts.Clock, tae.Catalog, visitor)
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	watcher.WithDelay(10 * time.Nanosecond)
 
@@ -3714,7 +3714,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := newForestMaintainer(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
 	watcher.WithDelay(10 * time.Nanosecond)
 
 	wg := &sync.WaitGroup{}
