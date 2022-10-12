@@ -344,6 +344,10 @@ func ParseJsonPath(path string) (p Path, err error) {
 					return
 				}
 			}
+			if isInvalidStar(key) {
+				err = moerr.NewInvalidInput("json path error")
+				return
+			}
 			subPaths = append(subPaths, subPath{tp: subPathKey, key: key})
 		} else {
 			// '**'
@@ -431,4 +435,8 @@ func (r UnnestResult) String() string {
 		buf.WriteString(val)
 	}
 	return buf.String()
+}
+
+func isInvalidStar(key string) bool {
+	return strings.HasPrefix(key, "*") && len(key) > 1
 }

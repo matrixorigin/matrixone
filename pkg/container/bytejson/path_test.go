@@ -89,3 +89,15 @@ func TestStar(t *testing.T) {
 		require.Equal(t, kase.flag, p.flag)
 	}
 }
+
+func TestInvalidStar(t *testing.T) {
+	ph := "*"
+	ok := isInvalidStar(ph)
+	require.Equal(t, false, ok)
+	ph = "**"
+	ok = isInvalidStar(ph)
+	require.Equal(t, true, ok)
+	ph = "a"
+	ok = isInvalidStar(ph)
+	require.Equal(t, false, ok)
+}
