@@ -86,6 +86,6 @@ create table t6 (a json primary key);
 not supported: JSON column 'a' cannot be in primary key
 drop table if exists t7;
 create table t7 (a json default '{"t1":"a"}');
-not supported: JSON column cannot have default value
+not supported: JSON column 'a' cannot have default value
 drop table if exists t8;
 create table t8 (a json default null);

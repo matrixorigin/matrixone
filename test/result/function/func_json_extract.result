@@ -34,10 +34,6 @@ json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
 4
-select * from json_extract('{"a":[1,2,3,{"a":4}]}','$.**');
-invalid input: json path error
-select * from json_extract('{"a":[1,2,3,{"a":4}]}','$.*1');
-invalid input: json path error
 select json_extract('{"a":1}','$[0]');
 json_extract({"a":1}, $[0])
 {"a": 1}
