@@ -36,10 +36,13 @@ type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
 	ts  time.Time               // New args
+	// pathBuilder
+	pathBuilder PathBuilder // WithPathBuilder
 
-	mux      sync.Mutex
+	mux sync.Mutex
+	// rejoin builder
 	name     string // see WithName, as filename name, see GetNewFileName
-	dir      string // see WithDir, default: ""
+	database string // see WithDatabase, default: ""
 	nodeUUID string // see WithNode
 	nodeType string // see WithNode
 	filename string // see GetNewFileName, auto generated
@@ -60,7 +63,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		ctx:      ctx,
 		fs:       fs,
 		name:     "info",
-		dir:      "",
+		database: "",
 		nodeUUID: "0",
 		nodeType: "standalone",
 
@@ -79,9 +82,9 @@ func WithName(item batchpipe.HasName) FSWriterOption {
 	})
 }
 
-func WithDir(dir string) FSWriterOption {
+func WithDatabase(dir string) FSWriterOption {
 	return FSWriterOption(func(w *FSWriter) {
-		w.dir = dir
+		w.database = dir
 	})
 }
 func WithNode(uuid, nodeType string) FSWriterOption {
@@ -93,6 +96,12 @@ func WithNode(uuid, nodeType string) FSWriterOption {
 func WithFileServiceName(serviceName string) FSWriterOption {
 	return FSWriterOption(func(w *FSWriter) {
 		w.fileServiceName = serviceName
+	})
+}
+
+func WithPathBuilder(builder PathBuilder) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.pathBuilder = builder
 	})
 }
 
@@ -109,7 +118,7 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + CsvExtension,
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.database, w.filename) + CsvExtension,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),
@@ -140,7 +149,7 @@ func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) F
 	return func(_ context.Context, dir string, i batchpipe.HasName) io.StringWriter {
 		return NewFSWriter(DefaultContext(), fs,
 			WithName(i),
-			WithDir(dir),
+			WithDatabase(dir),
 			WithNode(nodeUUID, nodeType),
 		)
 	}

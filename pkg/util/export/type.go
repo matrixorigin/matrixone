@@ -103,7 +103,7 @@ const CsvExtension = ".csv"
 type PathBuilder interface {
 	Clone() PathBuilder
 	// Build directory path
-	Build(string /*account*/, MergeLogType, time.Time, batchpipe.HasName) string
+	Build(string /*account*/, MergeLogType, time.Time, string /*db*/, batchpipe.HasName) string
 	// DirectoryPath return last call Build result
 	DirectoryPath() string
 	// Join return DirectoryPath + "/" + filename
@@ -116,6 +116,7 @@ type PathBuilder interface {
 	// }
 	ParsePath(path string) (CSVPath, error)
 	NewMergeFilename(timestampStart, timestampEnd string) string
+	NewLogFilename(name batchpipe.HasName, nodeUUID, nodeType string, ts time.Time) string
 }
 
 type CSVPath interface {
@@ -205,7 +206,7 @@ func NewMetricLogPathBuilder() *MetricLogPathBuilder {
 	return &MetricLogPathBuilder{}
 }
 
-func (m *MetricLogPathBuilder) Build(account string, datatype MergeLogType, timestamp time.Time, table batchpipe.HasName) string {
+func (m *MetricLogPathBuilder) Build(account string, datatype MergeLogType, timestamp time.Time, _ string, table batchpipe.HasName) string {
 	m.directory = path.Join(account,
 		string(datatype),
 		fmt.Sprintf("%d", timestamp.Year()),
@@ -231,4 +232,49 @@ func (m *MetricLogPathBuilder) ParsePath(path string) (CSVPath, error) {
 
 func (m *MetricLogPathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
 	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + CsvExtension
+}
+
+func (m *MetricLogPathBuilder) NewLogFilename(name batchpipe.HasName, nodeUUID, nodeType string, ts time.Time) string {
+	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
+}
+
+var _ PathBuilder = (*DBTablePathBuilder)(nil)
+
+type DBTablePathBuilder struct {
+	directory string
+}
+
+func (m *DBTablePathBuilder) Clone() PathBuilder {
+	builder := NewDatabaseTablePathBuilder()
+	builder.directory = m.directory
+	return builder
+}
+
+func NewDatabaseTablePathBuilder() *DBTablePathBuilder {
+	return &DBTablePathBuilder{}
+}
+
+func (m *DBTablePathBuilder) Build(_ string, _ MergeLogType, _ time.Time, db string, _ batchpipe.HasName) string {
+	m.directory = db
+	return m.directory
+}
+
+func (m DBTablePathBuilder) DirectoryPath() string {
+	return m.directory
+}
+
+func (m *DBTablePathBuilder) Join(filename string) string {
+	return path.Join(m.directory, filename)
+}
+
+func (m *DBTablePathBuilder) ParsePath(path string) (CSVPath, error) {
+	panic("not implement")
+}
+
+func (m *DBTablePathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
+	panic("not implement")
+}
+
+func (m *DBTablePathBuilder) NewLogFilename(name batchpipe.HasName, nodeUUID, nodeType string, ts time.Time) string {
+	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000"))
 }
