@@ -26,7 +26,10 @@ func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, 
 		return 0, moerr.NewInvalidInput("regexp_instr have invalid input")
 	}
 	//regular expression pattern
-	reg := regexp.MustCompile(pat)
+	reg, err := regexp.Compile(pat)
+	if err != nil {
+		return 0, moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
 	if matchRes == nil {
@@ -87,7 +90,10 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 	var occValue int64
 	var optValue uint8
 	if len(expr) == 1 && len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) {
 				nulls.Add(rns, uint64(i))
@@ -114,7 +120,10 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 			rs[i] = res
 		}
 	} else if len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {
 				nulls.Add(rns, uint64(i))
