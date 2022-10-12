@@ -79,3 +79,30 @@ func Decimal128VecSub(xs, ys, rs *vector.Vector) error {
 	}
 	return nil
 }
+
+func DatetimeSub(xs, ys, rs *vector.Vector) error {
+	xt := vector.MustTCols[types.Datetime](xs)
+	yt := vector.MustTCols[types.Datetime](ys)
+	rt := vector.MustTCols[int64](rs)
+
+	if len(xt) == 1 && len(yt) == 1 {
+		res := xt[0].DatetimeMinusWithSecond(yt[0])
+		rt[0] = res
+	} else if len(xt) == 1 {
+		for i := range yt {
+			res := xt[0].DatetimeMinusWithSecond(yt[i])
+			rt[i] = res
+		}
+	} else if len(yt) == 1 {
+		for i := range xt {
+			res := xt[i].DatetimeMinusWithSecond(yt[0])
+			rt[i] = res
+		}
+	} else {
+		for i := range xt {
+			res := xt[i].DatetimeMinusWithSecond(yt[i])
+			rt[i] = res
+		}
+	}
+	return nil
+}
