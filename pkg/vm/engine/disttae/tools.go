@@ -502,10 +502,7 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 			}
 		}
 	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
+	return plantool.MakeExpr("hash_value", args)
 }
 
 func newIntConstVal(v any) *plan.Expr {
@@ -700,6 +697,23 @@ func genTableDefOfColumn(col column) engine.TableDef {
 
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -797,7 +811,8 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
+			idx := uint64(v) % uint64(dnNum)
+			if err := vector.UnionOne(bats[idx].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
 					bat.Clean(proc.Mp())
 				}
