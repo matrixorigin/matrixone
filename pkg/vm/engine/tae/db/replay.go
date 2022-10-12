@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+
 	//"fmt"
 	"os"
 
@@ -211,6 +212,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if err != nil {
 		panic(err)
 	}
+	defer txnCmd.Close()
 	replayer.OnReplayCmd(txnCmd, idxCtx, txnif.CmdInvalid, types.TS{})
 	if err != nil {
 		panic(err)
@@ -353,8 +355,6 @@ func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, obser
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
 		db.onReplayAppend(cmd, idxCtx, observer, cmdType, commitTS)
-	case txnbase.CmdUpdate:
-		db.onReplayUpdate(cmd, idxCtx, observer)
 	case txnbase.CmdDelete:
 		db.onReplayDelete(cmd, idxCtx, observer, cmdType, commitTS)
 	}
@@ -436,35 +436,5 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	if observer != nil {
 		observer.OnTimeStamp(appendNode.GetCommitTS())
-	}
-}
-
-func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
-	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
-	if err != nil {
-		panic(err)
-	}
-	updateNode := cmd.GetUpdateNode()
-	updateNode.SetLogIndex(idxCtx)
-	id := updateNode.GetID()
-	blk, err := database.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	if !blk.IsActive() {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
-	if updateNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
-	blkdata := blk.GetBlockData()
-	err = blkdata.OnReplayUpdate(id.Idx, updateNode)
-	if err != nil {
-		panic(err)
-	}
-	if observer != nil {
-		observer.OnTimeStamp(updateNode.GetCommitTSLocked())
 	}
 }

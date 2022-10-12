@@ -19,7 +19,7 @@ make
 
 ## **2. 生成数据**
 
-### 选项一：自行生成数据集
+### 选项一：生成单表数据集
 
 当使用 `-s 1` 时 `dbgen` 命令会生产近600万行数据(670MB)，当使用`-s 10`时会生产近6000万行数据，会耗费大量时间。
 
@@ -31,11 +31,11 @@ make
 ./dbgen -s 1 -T d
 ```
 
-### 选项二：选用已有数据集
+### 选项二：下载大宽表数据集
 
-我们准备了 1GB 的数据集供你下载。
+我们准备了 1GB 的大宽表数据集供你下载。
 
-1. 在下面链接中直接获取数据集文件：
+1. 在下面链接中直接获取大宽表数据集文件：
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
@@ -171,7 +171,7 @@ CREATE TABLE lineorder_flat(
 
 ## **4. 导入数据**
 
-### 选项一：自行生成的数据集，使用如下命令将数据导入相关表
+### 选项一：使用如下命令导入单表数据集
 
 ```
 load data infile '/ssb-dbgen-path/supplier.tbl' into table supplier FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
@@ -187,7 +187,7 @@ load data infile '/ssb-dbgen-path/lineorder.tbl' into table lineorder FIELDS TER
 
 接着你可以在 MatrixOne 中进行查询操作。
 
-### 选项二：选用已有的数据集，使用如下命令将数据导入相关表
+### 选项二：使用如下命令导入大宽表数据集
 
 运行以下命令将数据导入`lineorder_flat`：
 

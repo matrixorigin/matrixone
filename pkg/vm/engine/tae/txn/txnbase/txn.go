@@ -16,9 +16,10 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
@@ -58,9 +59,9 @@ func (txn *OpTxn) IsTryCommitting() bool {
 
 func (txn *OpTxn) Repr() string {
 	if txn.Op == OpCommit {
-		return fmt.Sprintf("[Commit][Txn-%s]", txn.Txn.GetID())
+		return fmt.Sprintf("[Commit][Txn-%X]", txn.Txn.GetID())
 	} else {
-		return fmt.Sprintf("[Rollback][Txn-%s]", txn.Txn.GetID())
+		return fmt.Sprintf("[Rollback][Txn-%X]", txn.Txn.GetID())
 	}
 }
 
@@ -75,7 +76,7 @@ type Txn struct {
 	Store                    txnif.TxnStore
 	Err                      error
 	LSN                      uint64
-	TenantID, UserID, RoleID uint32
+	TenantID, UserID, RoleID atomic.Uint32
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -237,6 +238,7 @@ func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
+		//FIXME::??
 		txn.WaitGroup.Done()
 		return
 	}
@@ -249,7 +251,7 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
-	logutil.Debugf("Prepare Commite %s", txn.ID)
+	logutil.Debugf("Prepare Commite %X", txn.ID)
 	if txn.PrepareCommitFn != nil {
 		if err = txn.PrepareCommitFn(txn); err != nil {
 			return
@@ -306,7 +308,7 @@ func (txn *Txn) PrePrepare() error {
 }
 
 func (txn *Txn) PrepareRollback() (err error) {
-	logutil.Debugf("Prepare Rollbacking %s", txn.ID)
+	logutil.Debugf("Prepare Rollbacking %X", txn.ID)
 	if txn.PrepareRollbackFn != nil {
 		if err = txn.PrepareRollbackFn(txn); err != nil {
 			return
@@ -332,17 +334,17 @@ func (txn *Txn) WaitDone(err error, isAbort bool) error {
 }
 
 func (txn *Txn) BindAccessInfo(tenantID, userID, roleID uint32) {
-	atomic.StoreUint32(&txn.TenantID, tenantID)
-	atomic.StoreUint32(&txn.UserID, userID)
-	atomic.StoreUint32(&txn.RoleID, roleID)
+	txn.TenantID.Store(tenantID)
+	txn.UserID.Store(userID)
+	txn.RoleID.Store(roleID)
 }
 
 func (txn *Txn) GetTenantID() uint32 {
-	return atomic.LoadUint32(&txn.TenantID)
+	return txn.TenantID.Load()
 }
 
 func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
-	return atomic.LoadUint32(&txn.UserID), atomic.LoadUint32(&txn.RoleID)
+	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {

@@ -51,7 +51,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	if len(ctx) == 0 {
 		isNull = true
 	}
-	if err := resultVector.Append(ctx, isNull, proc.GetMheap()); err != nil {
+	if err := resultVector.Append(ctx, isNull, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return resultVector, nil

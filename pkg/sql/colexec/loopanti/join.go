@@ -53,7 +53,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.GetMheap())
+					ctr.bat.Clean(proc.Mp())
 				}
 				continue
 			}
@@ -90,7 +90,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
@@ -105,10 +105,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.GetMheap())
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
@@ -126,11 +126,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				break
 			}
 		}
-		defer vec.Free(proc.GetMheap())
+		defer vec.Free(proc.Mp())
 		if !matched && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.GetMheap()); err != nil {
-					rbat.Clean(proc.GetMheap())
+				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
+					rbat.Clean(proc.Mp())
 					return err
 				}
 			}

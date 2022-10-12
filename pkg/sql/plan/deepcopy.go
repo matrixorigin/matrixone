@@ -87,20 +87,23 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			TblName:      deleteTablesCtx.TblName,
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
+			IsHideKey:    deleteTablesCtx.IsHideKey,
+			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
 
 	for i, updateCtx := range node.UpdateCtxs {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
-			DbName:     updateCtx.DbName,
-			TblName:    updateCtx.TblName,
-			PriKey:     updateCtx.PriKey,
-			PriKeyIdx:  updateCtx.PriKeyIdx,
-			HideKey:    updateCtx.HideKey,
-			HideKeyIdx: updateCtx.HideKeyIdx,
-			OrderAttrs: make([]string, len(updateCtx.OrderAttrs)),
-			UpdateCols: make([]*ColDef, len(updateCtx.UpdateCols)),
-			OtherAttrs: make([]string, len(updateCtx.OtherAttrs)),
+			DbName:        updateCtx.DbName,
+			TblName:       updateCtx.TblName,
+			PriKey:        updateCtx.PriKey,
+			PriKeyIdx:     updateCtx.PriKeyIdx,
+			HideKey:       updateCtx.HideKey,
+			HideKeyIdx:    updateCtx.HideKeyIdx,
+			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
+			OtherAttrs:    make([]string, len(updateCtx.OtherAttrs)),
+			OrderAttrs:    make([]string, len(updateCtx.OrderAttrs)),
+			CompositePkey: DeepCopyColDef(updateCtx.GetCompositePkey()),
 		}
 		for j, col := range updateCtx.UpdateCols {
 			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
@@ -218,20 +221,30 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name:               table.Name,
-		Cols:               make([]*plan.ColDef, len(table.Cols)),
-		Defs:               make([]*plan.TableDef_DefType, len(table.Defs)),
-		TableType:          table.TableType,
-		Createsql:          table.Createsql,
-		Name2ColIndex:      table.Name2ColIndex,
-		CompositePkey:      table.CompositePkey,
-		TableFunctionParam: make([]byte, len(table.TableFunctionParam)),
+		Name:          table.Name,
+		Cols:          make([]*plan.ColDef, len(table.Cols)),
+		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:     table.TableType,
+		Createsql:     table.Createsql,
+		Name2ColIndex: table.Name2ColIndex,
+		CompositePkey: table.CompositePkey,
 	}
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
-	copy(newTable.TableFunctionParam, table.TableFunctionParam)
+	if table.TblFunc != nil {
+		newTable.TblFunc = &plan.TableFunction{
+			Name:  table.TblFunc.Name,
+			Param: make([]byte, len(table.TblFunc.Param)),
+		}
+		copy(newTable.TblFunc.Param, table.TblFunc.Param)
+	}
+
+	// FIX ME: don't support now
+	// for idx, def := range table.Defs {
+	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
+	// }
 
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {

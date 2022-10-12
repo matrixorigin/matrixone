@@ -58,7 +58,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 
 	fillLpad(sourceStr, lengthsOfChars, padStr, rowCount, constVectors, resultValues, resultNUll, inputNulls)
 
-	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNUll, proc.GetMheap())
+	resultVec = vector.NewWithStrings(types.T_varchar.ToType(), resultValues, resultNUll, proc.Mp())
 	return resultVec, nil
 }
 

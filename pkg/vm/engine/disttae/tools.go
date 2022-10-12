@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,15 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
-	name string, databaseId uint64, m *mheap.Mheap) (*batch.Batch, error) {
+	name string, databaseId uint64, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
-	bat.InitZsOne(1)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -88,10 +88,10 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch, error) {
+func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
-	bat.InitZsOne(1)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -107,11 +107,12 @@ func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch,
 	return bat, nil
 }
 
-func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string, tableId uint64,
-	databaseId uint64, databaseName string, comment string, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string,
+	tableId uint64, databaseId uint64, databaseName string,
+	relKind string, comment string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
-	bat.InitZsOne(1)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
@@ -140,7 +141,7 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relkind
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(relKind), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
@@ -182,10 +183,10 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-	bat.InitZsOne(1)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -287,10 +288,10 @@ func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
 }
 
 func genDropTableTuple(id, databaseId uint64, name, databaseName string,
-	m *mheap.Mheap) (*batch.Batch, error) {
+	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	bat.InitZsOne(1)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
@@ -501,29 +502,7 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 			}
 		}
 	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
-}
-
-// genDeleteExpr used to generate an expression to partition table data
-func genDeleteExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
-	var args []*plan.Expr
-
-	i := 1
-	for _, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
-				i++
-			}
-		}
-	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
+	return plantool.MakeExpr("hash_value", args)
 }
 
 func newIntConstVal(v any) *plan.Expr {
@@ -621,13 +600,22 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {
-	bat, err := toPBBatch(e.bat)
-	if err != nil {
-		return nil, err
+	var ebat *batch.Batch
+
+	if e.typ == INSERT {
+		ebat = batch.NewWithSize(0)
+		ebat.Vecs = e.bat.Vecs[1:]
+		ebat.Attrs = e.bat.Attrs[1:]
+	} else {
+		ebat = e.bat
 	}
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
+	}
+	bat, err := toPBBatch(ebat)
+	if err != nil {
+		return nil, err
 	}
 	return &api.Entry{
 		Bat:          bat,
@@ -678,6 +666,8 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].isAutoIncrement = row[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8)
 		cols[i].constraintType = string(row[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte))
 		cols[i].typ = row[catalog.MO_COLUMNS_ATTTYP_IDX].([]byte)
+		cols[i].hasDef = row[catalog.MO_COLUMNS_ATTHASDEF_IDX].(int8)
+		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
 	}
 	return cols
 }
@@ -707,6 +697,23 @@ func genTableDefOfColumn(col column) engine.TableDef {
 
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -792,7 +799,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	if err != nil {
 		return nil, err
 	}
-	defer pvec.Free(proc.GetMheap())
+	defer pvec.Free(proc.Mp())
 	bats := make([]*batch.Batch, dnNum)
 	for i := range bats {
 		bats[i] = batch.New(true, bat.Attrs)
@@ -804,13 +811,47 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.GetMheap()); err != nil {
+			idx := uint64(v) % uint64(dnNum)
+			if err := vector.UnionOne(bats[idx].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
-					bat.Clean(proc.GetMheap())
+					bat.Clean(proc.Mp())
 				}
 				return nil, err
 			}
 		}
+	}
+	for i := range bats {
+		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
+	}
+	return bats, nil
+}
+
+func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) {
+	txn := tbl.db.txn
+	bats := make([]*batch.Batch, len(tbl.parts))
+	for i := range bats {
+		bats[i] = batch.New(true, bat.Attrs)
+		for j := range bats[i].Vecs {
+			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+	}
+	vec := bat.GetVector(0)
+	vs := vector.MustTCols[types.Rowid](vec)
+	for i, v := range vs {
+		for j, part := range tbl.parts {
+			if part.Get(v, txn.meta.SnapshotTS) {
+				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
+					for _, bat := range bats {
+						bat.Clean(txn.proc.Mp())
+					}
+					return nil, err
+				}
+				break
+			}
+		}
+	}
+	for i := range bats {
+		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
 	}
 	return bats, nil
 }
@@ -861,7 +902,7 @@ func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.T
 	return blks
 }
 
-func genInsertBatch(bat *batch.Batch, m *mheap.Mheap) (*api.Batch, error) {
+func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
 	var vecs []*vector.Vector
 

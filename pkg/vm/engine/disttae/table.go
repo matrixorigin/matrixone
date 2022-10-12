@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -73,10 +72,12 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	for _, i := range dnList {
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
-
-	if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
-		tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-		return nil, err
+	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
+	if !ok {
+		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
+			tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return nil, err
+		}
 	}
 	if tbl.meta == nil {
 		return nil, nil
@@ -133,7 +134,22 @@ func (tbl *table) getTableDef() *plan.TableDef {
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
-	return tbl.defs, nil
+	//return tbl.defs, nil
+	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
+	defs := make([]engine.TableDef, 0, len(tbl.defs))
+	for i, def := range tbl.defs {
+		switch attr := def.(type) {
+		case *engine.CommentDef:
+			defs = append(defs, tbl.defs[i])
+		case *engine.AttributeDef:
+			if attr.Attr.Name != catalog.Row_ID {
+				defs = append(defs, tbl.defs[i])
+			}
+
+		}
+	}
+	return defs, nil
+
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
@@ -152,7 +168,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.IsHidden {
+			if attr.Attr.Name == catalog.Row_ID { // Why not hide but rowid?
 				attrs = append(attrs, &attr.Attr)
 			}
 		}
@@ -166,7 +182,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	for i := range bats {
-		if bats[i].GetVector(0).Length() == 0 {
+		if bats[i].Length() == 0 {
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
@@ -181,18 +197,21 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
+func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	bat.SetAttributes([]string{catalog.Row_ID})
+	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+	if bat.Length() == 0 {
+		return nil
+	}
+	bats, err := partitionDeleteBatch(tbl, bat)
 	if err != nil {
 		return err
 	}
 	for i := range bats {
-		if bats[i].GetVector(0).Length() == 0 {
+		if bats[i].Length() == 0 {
 			continue
 		}
-		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
 			return err
 		}

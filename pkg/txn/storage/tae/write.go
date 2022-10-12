@@ -36,7 +36,8 @@ func (s *taeStorage) Write(
 	case uint32(apipb.OpCode_OpPreCommit):
 
 		return handleWrite(
-			s, txnMeta, payload,
+			ctx, s,
+			txnMeta, payload,
 			s.taeHandler.HandlePreCommit,
 		)
 
@@ -51,10 +52,12 @@ func handleWrite[
 	Req any,
 	Resp any,
 ](
+	ctx context.Context,
 	s *taeStorage,
 	meta txn.TxnMeta,
 	payload []byte,
 	fn func(
+		ctx context.Context,
 		meta txn.TxnMeta,
 		req Req,
 		resp *Resp,
@@ -74,7 +77,7 @@ func handleWrite[
 	var resp Resp
 	defer logReq("write", req, meta, &resp, &err)()
 
-	err = fn(meta, req, &resp)
+	err = fn(ctx, meta, req, &resp)
 	if err != nil {
 		return nil, err
 	}

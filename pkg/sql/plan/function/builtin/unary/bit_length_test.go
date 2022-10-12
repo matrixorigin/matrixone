@@ -81,7 +81,7 @@ func makeBitLenTestVectors(data []string, nsp []uint64, isScalar bool) []*vector
 	vec := make([]*vector.Vector, 1)
 	if data != nil {
 		if isScalar {
-			vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, data[0])
+			vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, data[0], testutil.TestUtilMp)
 		} else {
 			vec[0] = testutil.MakeCharVector(data, nsp)
 		}

@@ -75,7 +75,7 @@ type txnStore struct {
 	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
-	writeOps    uint32
+	writeOps    atomic.Uint32
 
 	dirtyMemo *dirtyMemo
 }
@@ -100,11 +100,11 @@ func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeM
 }
 
 func (store *txnStore) IsReadonly() bool {
-	return atomic.LoadUint32(&store.writeOps) == 0
+	return store.writeOps.Load() == 0
 }
 
 func (store *txnStore) IncreateWriteCnt() int {
-	return int(atomic.AddUint32(&store.writeOps, uint32(1)))
+	return int(store.writeOps.Add(1))
 }
 
 func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
@@ -254,17 +254,6 @@ func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx u
 	// 	return
 	// }
 	return db.GetValue(id, row, colIdx)
-}
-
-func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	db, err := store.getOrSetDB(dbId)
-	if err != nil {
-		return err
-	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
-	return db.Update(id, row, colIdx, v)
 }
 
 func (store *txnStore) DatabaseNames() (names []string) {
@@ -531,7 +520,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%s PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 

@@ -61,7 +61,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
-	ses := NewSession(routine.protocol, routine.guestMmu, routine.mempool, rm.pu, gSysVariables)
+
+	// XXX MPOOL pass in a nil mpool.
+	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
+	// this mpool will be deleted.  Maybe in the following Closed method.
+	ses := NewSession(routine.protocol, nil, rm.pu, gSysVariables)
 	ses.SetRequestContext(routine.cancelRoutineCtx)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
@@ -253,27 +257,27 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 	}
 
 	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
-	var cipherSuites []uint16
+	// var cipherSuites []uint16
 	// var cipherNames []string
-	for _, sc := range tls.CipherSuites() {
-		switch sc.ID {
-		case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
-			// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
-			cipherSuites = append(cipherSuites, sc.ID)
-		default:
-			// cipherNames = append(cipherNames, sc.Name)
-			cipherSuites = append(cipherSuites, sc.ID)
-		}
-	}
+	// for _, sc := range tls.CipherSuites() {
+	// cipherSuites = append(cipherSuites, sc.ID)
+	// switch sc.ID {
+	// case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+	// 	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
+	// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
+	// default:
+	// cipherNames = append(cipherNames, sc.Name)
+	// cipherSuites = append(cipherSuites, sc.ID)
+	// }
+	// }
 	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
 
 	rm.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		ClientCAs:    certPool,
 		ClientAuth:   clientAuthPolicy,
-		MinVersion:   tls.VersionTLS12,
-		CipherSuites: cipherSuites,
+		// MinVersion:   tls.VersionTLS13,
+		// CipherSuites: cipherSuites,
 	}
 	logutil.Info("init TLS config finished")
 	return nil

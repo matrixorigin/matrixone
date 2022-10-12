@@ -24,6 +24,9 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	if stmt.OnDuplicateUpdate != nil {
+		return nil, moerr.NewNotSupported("INSERT ... ON DUPLICATE KEY UPDATE ...")
+	}
 	rows := stmt.Rows
 	switch rows.Select.(type) {
 	case *tree.ValuesClause:
@@ -154,7 +157,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 					}
 					columns[idx].Column = append(columns[idx].Column, expr)
 				} else {
-					binder := NewDefaultBinder(nil, nil, col.Typ)
+					binder := NewDefaultBinder(nil, nil, col.Typ, nil)
 					planExpr, err := binder.BindExpr(row[idx], 0, false)
 					if err != nil {
 						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)

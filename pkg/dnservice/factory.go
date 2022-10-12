@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -25,9 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"go.uber.org/zap"
 )
 
@@ -107,10 +105,13 @@ func (s *store) newMemTxnStorage(
 	logClient logservice.Client,
 	hakeeper logservice.DNHAKeeperClient,
 ) (storage.TxnStorage, error) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
+	// should it be no fixed or a certain size?
+	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
+	if err != nil {
+		return nil, err
+	}
 	return memorystorage.NewMemoryStorage(
-		mheap.New(gm),
+		mp,
 		memorystorage.SnapshotIsolation,
 		s.clock,
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
