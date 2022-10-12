@@ -341,7 +341,7 @@ var singleMetricTable = &trace.Table{
 	Engine:           trace.ExternalTableEngine,
 	Comment:          `metric data`,
 	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
-	AccountColumn:    &metricNameColumn,
+	AccountColumn:    &metricAccountColumn,
 }
 
 type ViewWhereCondition struct {
