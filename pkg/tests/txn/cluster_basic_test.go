@@ -29,7 +29,7 @@ var (
 func TestBasicSingleShard(t *testing.T) {
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
-	for _, backend := range testBackends[1:] {
+	for _, backend := range testBackends {
 		t.Run(backend, func(t *testing.T) {
 			c, err := NewCluster(t,
 				getBasicClusterOptions(backend))
@@ -47,30 +47,34 @@ func TestBasicSingleShard(t *testing.T) {
 			checkRead(t, mustNewTxn(t, cli), key, value, nil, true)
 		})
 	}
-
 }
 
 func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
-	// A Txn read and write will success.
-	c, err := NewCluster(t,
-		getBasicClusterOptions(memKVTxnStorage))
-	require.NoError(t, err)
-	c.Start()
-	defer c.Stop()
+	// 1. start t1
+	// 2. start t2
+	// 3. t1 write
+	// 4. t2 can not read t1's write
+	for _, backend := range testBackends {
+		t.Run(backend, func(t *testing.T) {
+			c, err := NewCluster(t,
+				getBasicClusterOptions(memKVTxnStorage))
+			require.NoError(t, err)
+			c.Start()
+			defer c.Stop()
 
-	cli := c.NewClient()
+			cli := c.NewClient()
 
-	key := "k"
-	value := "v"
+			key := "k"
+			value := "v"
 
-	t1 := mustNewTxn(t, cli)
-	t2 := mustNewTxn(t, cli)
+			t1 := mustNewTxn(t, cli)
+			t2 := mustNewTxn(t, cli)
 
-	checkWrite(t, t2, key, value, nil, false)
-	checkRead(t, t1, key, "", nil, true)
-
-	require.NoError(t, t2.Commit())
+			checkWrite(t, t1, key, value, nil, false)
+			checkRead(t, t2, key, "", nil, true)
+		})
+	}
 }
 
 func checkRead(t *testing.T, txn Txn, key string, expectValue string, expectError error, commit bool) {

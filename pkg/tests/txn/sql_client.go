@@ -121,7 +121,7 @@ func (kop *sqlTxn) Rollback() error {
 }
 
 func (kop *sqlTxn) Read(key string) (string, error) {
-	rows, err := kop.txn.Query(fmt.Sprintf("select kv_key, kv_value from txn_test_kv where kv_key = '%s'", key))
+	rows, err := kop.txn.Query(fmt.Sprintf("select kv_value from txn_test_kv where kv_key = '%s'", key))
 	if err != nil {
 		return "", err
 	}
@@ -130,6 +130,9 @@ func (kop *sqlTxn) Read(key string) (string, error) {
 		return "", rows.Close()
 	}
 	v := ""
+	if err := rows.Scan(&v); err != nil {
+		return "", multierr.Append(err, rows.Close())
+	}
 	return v, multierr.Append(err, rows.Close())
 }
 
