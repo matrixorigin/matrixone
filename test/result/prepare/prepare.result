@@ -89,3 +89,13 @@ execute stmt1 using @a;
 select a from t1;
 a
 34418.59
+drop table if exists t1;
+prepare s6 from 'create table t1(a int)';
+execute s6;
+show tables;
+tables_in_db1
+t1
+prepare s7 from 'drop table t1';
+execute s7;
+show tables;
+tables_in_db1

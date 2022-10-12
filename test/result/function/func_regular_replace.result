@@ -85,3 +85,10 @@ a    regexp_replace(b, Cat, taC, 3, 2)
 7    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
 8    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
 drop table t1;
+DROP TABLE IF EXISTS t;
+CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
+INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
+INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
+SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
+invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
+drop table t;

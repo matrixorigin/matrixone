@@ -117,7 +117,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
-		createTable.Database = ""
+		createTable.Database = ctx.DefaultDatabase()
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
