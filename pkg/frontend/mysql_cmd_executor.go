@@ -1698,9 +1698,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
+		rules := []plan2.VisitPlanRule{resetVarRule}
+		if len(executePlan.Args) > 0 {
+			rules = append(rules, plan2.NewResetParamRefRule(executePlan.Args))
+		}
+		vp := plan2.NewVisitPlan(newPlan, rules)
 		err = vp.Visit()
 		if err != nil {
 			return nil, err

@@ -569,7 +569,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				if isUnsigned {
 					vars[i] = val
 				} else {
-					vars[i] = int16(val)
+					vars[i] = int64(val)
 				}
 
 			case defines.MYSQL_TYPE_FLOAT:
