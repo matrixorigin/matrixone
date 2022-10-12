@@ -2858,6 +2858,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDBTableDirect = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -2869,13 +2872,30 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDBTableDirect = true
+		if len(st.Names) != 0 {
+			dbName = string(st.Names[0].SchemaName)
+		}
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.Insert, *tree.Load, *tree.Import:
+	case *tree.Insert:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDBTableDirect = true
+	case *tree.Load:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDBTableDirect = true
+		if st.Table != nil {
+			dbName = string(st.Table.SchemaName)
+		}
+	case *tree.Import:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDBTableDirect = true
+		if st.Table != nil {
+			dbName = string(st.Table.SchemaName)
+		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -2970,23 +2990,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				default:
 					t = PrivilegeTypeSelect
 				}
-				appendPot(privilegeTips{
-					t,
-					node.ObjRef.GetSchemaName(),
-					node.ObjRef.GetObjName(),
-				})
+				if node.ObjRef != nil {
+					appendPot(privilegeTips{
+						t,
+						node.ObjRef.GetSchemaName(),
+						node.ObjRef.GetObjName(),
+					})
+				}
 			} else if node.NodeType == plan.Node_INSERT { //insert select
-				appendPot(privilegeTips{
-					PrivilegeTypeInsert,
-					node.ObjRef.GetSchemaName(),
-					node.ObjRef.GetObjName(),
-				})
+				if node.ObjRef != nil {
+					appendPot(privilegeTips{
+						PrivilegeTypeInsert,
+						node.ObjRef.GetSchemaName(),
+						node.ObjRef.GetObjName(),
+					})
+				}
 			} else if node.NodeType == plan.Node_DELETE {
-				appendPot(privilegeTips{
-					PrivilegeTypeDelete,
-					node.ObjRef.GetSchemaName(),
-					node.ObjRef.GetObjName(),
-				})
+				if node.ObjRef != nil {
+					appendPot(privilegeTips{
+						PrivilegeTypeDelete,
+						node.ObjRef.GetSchemaName(),
+						node.ObjRef.GetObjName(),
+					})
+				}
 			}
 		}
 	} else if p.GetIns() != nil { //insert into values
@@ -3130,6 +3156,15 @@ func getSqlForPrivilege(roleId int64, entry privilegeEntry, pl privilegeLevelTyp
 	return sql, nil
 }
 
+// getSqlForPrivilege2 complements the database name and calls getSqlForPrivilege
+func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl privilegeLevelType) (string, error) {
+	//handle the empty database
+	if len(entry.databaseName) == 0 {
+		entry.databaseName = ses.GetDatabaseName()
+	}
+	return getSqlForPrivilege(roleId, entry, pl)
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
 func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds []int64, priv *privilege) (bool, error) {
@@ -3145,9 +3180,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false, nil
 	}
 
-	verifyPrivilegeEntryInMultiPrivilegeLevels := func(roleId int64, entry privilegeEntry, pls []privilegeLevelType) (bool, error) {
+	verifyPrivilegeEntryInMultiPrivilegeLevels := func(ses *Session, roleId int64, entry privilegeEntry, pls []privilegeLevelType) (bool, error) {
 		for _, pl := range pls {
-			sql, err = getSqlForPrivilege(roleId, entry, pl)
+			sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
 			if err != nil {
 				return false, err
 			}
@@ -3189,7 +3224,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if err != nil {
 					return false, err
 				}
-				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(roleId, entry, pls)
+				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, entry, pls)
 				if err != nil {
 					return false, err
 				}
@@ -3239,7 +3274,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								return false, err
 							}
 							//At least there is one success
-							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(roleId, tempEntry, pls)
+							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
 							if err != nil {
 								return false, err
 							}
