@@ -91,6 +91,7 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = "e"
+	SystemInternalRel     = "internal"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"

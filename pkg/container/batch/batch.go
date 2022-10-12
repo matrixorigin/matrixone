@@ -208,6 +208,10 @@ func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	}
 }
 
+func (bat *Batch) SetAttributes(attrs []string) {
+	bat.Attrs = attrs
+}
+
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
 }
