@@ -237,6 +237,7 @@ func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
+		//FIXME::??
 		txn.WaitGroup.Done()
 		return
 	}
