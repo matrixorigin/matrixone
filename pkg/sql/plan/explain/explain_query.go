@@ -221,3 +221,23 @@ func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, opt
 	}
 	return nil
 }
+
+// StatisticsRead statistics read rows, size in ExplainData
+func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
+	for _, step := range d.Steps {
+		for _, node := range step.GraphData.Nodes {
+			if node.Name != TableScan && node.Name != ExternalScan {
+				continue
+			}
+			for _, s := range node.Statistics.Throughput {
+				switch s.Name {
+				case InputRows:
+					rows += s.Value
+				case InputSize:
+					size += s.Value
+				}
+			}
+		}
+	}
+	return
+}

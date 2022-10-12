@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -103,8 +102,8 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) error {
-
+func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) error {
+	vec := bat.Vecs[0]
 	clusterDetails, err := t.engine.getClusterDetails()
 	if err != nil {
 		return err

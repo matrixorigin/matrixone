@@ -177,6 +177,7 @@ func (txn *Txn) done2PCWithErr(err error, isAbort bool) {
 	defer txn.DoneCond.L.Unlock()
 
 	endOfTxn := true
+	done := true
 
 	if err != nil {
 		txn.ToUnknownLocked()
@@ -193,10 +194,12 @@ func (txn *Txn) done2PCWithErr(err error, isAbort bool) {
 				panic(err)
 			}
 		case txnif.TxnStateCommittingFinished:
+			done = false
 			if err = txn.ToCommittedLocked(); err != nil {
 				panic(err)
 			}
 		case txnif.TxnStatePrepared:
+			done = false
 			if isAbort {
 				if err = txn.ToRollbackedLocked(); err != nil {
 					panic(err)
@@ -208,8 +211,9 @@ func (txn *Txn) done2PCWithErr(err error, isAbort bool) {
 			}
 		}
 	}
-
-	txn.WaitGroup.Done()
+	if done {
+		txn.WaitGroup.Done()
+	}
 
 	if endOfTxn {
 		txn.DoneCond.Broadcast()

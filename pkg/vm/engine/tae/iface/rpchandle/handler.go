@@ -15,6 +15,7 @@
 package rpchandle
 
 import (
+	"context"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -22,18 +23,22 @@ import (
 
 type Handler interface {
 	HandleCommit(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandleRollback(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandleCommitting(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandlePrepare(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) (
 		timestamp.Timestamp,
@@ -41,20 +46,23 @@ type Handler interface {
 	)
 
 	HandleStartRecovery(
+		ctx context.Context,
 		ch chan txn.TxnMeta,
 	)
 
-	HandleClose() error
+	HandleClose(ctx context.Context) error
 
-	HandleDestroy() error
+	HandleDestroy(ctx context.Context) error
 
 	HandleGetLogTail(
+		ctx context.Context,
 		meta txn.TxnMeta,
 		req apipb.SyncLogTailReq,
 		resp *apipb.SyncLogTailResp,
 	) error
 
 	HandlePreCommit(
+		ctx context.Context,
 		meta txn.TxnMeta,
 		req apipb.PrecommitWriteCmd,
 		resp *apipb.SyncLogTailResp,

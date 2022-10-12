@@ -131,10 +131,10 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 }
 
 func (entry *SegmentEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *SegmentEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
@@ -222,7 +222,7 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
 		itBlk := it.Get().GetPayload()
-		dropped := itBlk.HasDropped()
+		dropped := itBlk.HasDropCommitted()
 		if itBlk.IsAppendable() && !dropped {
 			blk = itBlk
 			break
@@ -406,22 +406,19 @@ func (entry *SegmentEntry) IsActive() bool {
 	if !table.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
 }
 
 func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	table := entry.GetTable()
 	db := table.GetDB()
-	if db.IsDroppedCommitted() {
+	if db.HasDropCommittedLocked() {
 		return db.DBBaseEntry
 	}
-	if table.IsDroppedCommitted() {
+	if table.HasDropCommittedLocked() {
 		return table.TableBaseEntry
 	}
-	if entry.IsDroppedCommitted() {
+	if entry.HasDropCommittedLocked() {
 		return entry.MetaBaseEntry
 	}
 	return nil

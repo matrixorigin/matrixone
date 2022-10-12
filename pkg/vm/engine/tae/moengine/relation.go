@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -101,7 +100,7 @@ func (rel *baseRelation) Update(_ context.Context, _ *batch.Batch) error {
 	return nil
 }
 
-func (rel *baseRelation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
+func (rel *baseRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error {
 	return nil
 }
 

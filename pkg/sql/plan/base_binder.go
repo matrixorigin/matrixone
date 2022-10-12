@@ -975,7 +975,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		if !ok {
 			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
-		return &Expr{
+		expr := &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
@@ -989,7 +989,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				Nullable: false,
 				Size:     8,
 			},
-		}, nil
+		}
+		if typ != nil && typ.Id == int32(types.T_varchar) {
+			return appendCastBeforeExpr(expr, typ)
+		}
+		return expr, nil
 	case tree.P_uint64:
 		val, ok := constant.Uint64Val(astExpr.Value)
 		if !ok {
