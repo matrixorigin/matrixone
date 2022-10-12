@@ -155,7 +155,7 @@ func newLogStore(cfg Config, taskService taskservice.TaskService, logger *zap.Lo
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewTaskScheduler(taskService, hakeeperConfig),
+		taskScheduler: task.NewScheduler(taskService, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),

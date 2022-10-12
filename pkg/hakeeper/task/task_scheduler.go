@@ -25,7 +25,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type Scheduler struct {
+type scheduler struct {
 	ctx    context.Context
 	logger *zap.Logger
 
@@ -33,9 +33,11 @@ type Scheduler struct {
 	cfg hakeeper.Config
 }
 
-func NewTaskScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) *Scheduler {
+var _ hakeeper.TaskScheduler = (*scheduler)(nil)
+
+func NewScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) hakeeper.TaskScheduler {
 	cfg.Fill()
-	return &Scheduler{
+	return &scheduler{
 		ctx:    context.Background(),
 		logger: logutil.GetGlobalLogger().Named("hakeeper"),
 
@@ -44,11 +46,11 @@ func NewTaskScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) 
 	}
 }
 
-func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
+func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	workingCN, expiredCN := parseCNStores(s.cfg, cnState, currentTick)
 
-	runningTasks := s.queryRunningTasks()
-	createdTasks := s.queryCreatedTasks()
+	runningTasks := s.queryTasks(task.TaskStatus_Running)
+	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	if runningTasks == nil && createdTasks == nil {
 		return
 	}
@@ -60,25 +62,18 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
-func (s *Scheduler) queryRunningTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
+	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
 	if err != nil {
-		s.logger.Error("query running tasks error", zap.Error(err))
+		s.logger.Error("failed to query tasks",
+			zap.String("status", status.String()),
+			zap.Error(err))
 		return nil
 	}
 	return tasks
 }
 
-func (s *Scheduler) queryCreatedTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
-	if err != nil {
-		s.logger.Error("query created tasks error", zap.Error(err))
-		return nil
-	}
-	return tasks
-}
-
-func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
+func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	for _, t := range tasks {
 		runner := orderedCN.min()
 		if runner == "" {
