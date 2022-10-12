@@ -678,7 +678,7 @@ func TestTxn9(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	val := uint32(0)
+	var val atomic.Uint32
 
 	scanNames := func() {
 		defer wg.Done()
@@ -690,7 +690,7 @@ func TestTxn9(t *testing.T) {
 			cnt++
 			it.Next()
 		}
-		atomic.StoreUint32(&val, 2)
+		val.Store(2)
 		assert.Equal(t, 2, cnt)
 		assert.NoError(t, txn.Commit())
 	}
@@ -711,7 +711,7 @@ func TestTxn9(t *testing.T) {
 			rows += blk.Rows()
 			it.Next()
 		}
-		atomic.StoreUint32(&val, 2)
+		val.Store(2)
 		// assert.Equal(t, int(expectRows/5*2), rows)
 		assert.NoError(t, txn.Commit())
 	}
@@ -722,7 +722,7 @@ func TestTxn9(t *testing.T) {
 		wg.Add(1)
 		go scanNames()
 		time.Sleep(time.Millisecond * 10)
-		atomic.StoreUint32(&val, 1)
+		val.Store(1)
 		return nil
 	})
 	schema2 := catalog.MockSchemaAll(13, 12)
@@ -732,17 +732,16 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
-	assert.Equal(t, uint32(2), atomic.LoadUint32(&val))
+	assert.Equal(t, uint32(2), val.Load())
 
 	apply := func(_ txnif.AsyncTxn) error {
 		wg.Add(1)
 		go scanCol()
 		time.Sleep(time.Millisecond * 10)
-		atomic.StoreUint32(&val, 1)
+		val.Store(1)
 		return nil
 	}
 
-	val = uint32(0)
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
@@ -752,7 +751,6 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
 
-	val = uint32(0)
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
@@ -766,7 +764,6 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
 
-	val = uint32(0)
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
