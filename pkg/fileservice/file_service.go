@@ -41,9 +41,9 @@ type FileService interface {
 	// List lists sub-entries in a dir
 	List(ctx context.Context, dirPath string) ([]DirEntry, error)
 
-	// Delete deletes a file
+	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found
-	Delete(ctx context.Context, filePath string) error
+	Delete(ctx context.Context, filePaths ...string) error
 }
 
 type IOVector struct {

@@ -43,7 +43,16 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 
 var _ FileService = &FileServices{}
 
-func (f *FileServices) Delete(ctx context.Context, filePath string) error {
+func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
+	for _, filePath := range filePaths {
+		if err := f.deleteSingle(ctx, filePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, "")
 	if err != nil {
 		return err
