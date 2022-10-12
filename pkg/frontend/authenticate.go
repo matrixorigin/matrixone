@@ -4582,19 +4582,14 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
 
 	var err error
-	var sqls []string
+	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "create database information_schema;")
 	sqls = append(sqls, "use information_schema;")
-	for _, table := range sysview.InitInformationSchemaSysTables {
-		sqls = append(sqls, table)
-	}
-
+	sqls = append(sqls, sysview.InitInformationSchemaSysTables...)
 	sqls = append(sqls, "create database mysql;")
 	sqls = append(sqls, "use mysql;")
-	for _, table := range sysview.InitMysqlSysTables {
-		sqls = append(sqls, table)
-	}
+	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
 	for _, sql := range sqls {
 		bh.ClearExecResultSet()
