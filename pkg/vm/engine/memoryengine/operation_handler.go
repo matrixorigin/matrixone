@@ -187,7 +187,7 @@ type OperationHandler interface {
 }
 
 type OperationHandlerProvider interface {
-	GetOperationHandler() (OperationHandler, txn.TxnMeta)
+	GetOperationHandler(shard Shard) (OperationHandler, txn.TxnMeta)
 }
 
 func handle(

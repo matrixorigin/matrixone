@@ -58,7 +58,8 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if err != nil {
 		return nil, err
 	}
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(id))
+	_, ok := db.txn.createTableMap[id]
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(id), !ok)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +92,21 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 		return err
 	}
+	metaName := genMetaTableName(id)
+	metaId, err := db.txn.getTableId(ctx, db.databaseId, metaName)
+	if err != nil {
+		return err
+	}
+	metaBat, err := genDropTableTuple(metaId, db.databaseId, metaName,
+		db.databaseName, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, metaBat, db.txn.dnStores[0]); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -103,7 +119,17 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	if err != nil {
 		return err
 	}
+	metaTableId, err := db.txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	metaName := genMetaTableName(tableId)
 	cols, err := genColumns(accountId, name, db.databaseName, tableId, db.databaseId, defs)
+	if err != nil {
+		return err
+	}
+	metaCols, err := genColumns(accountId, metaName, db.databaseName, metaTableId,
+		db.databaseId, catalog.MoTableMetaDefs)
 	if err != nil {
 		return err
 	}
@@ -129,6 +155,30 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			return err
 		}
 	}
+	{
+		sql := getSql(ctx)
+		bat, err := genCreateTableTuple(sql, catalog.System_Account, catalog.System_User,
+			catalog.System_Role, metaName, metaTableId, db.databaseId, db.databaseName,
+			comment, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
+			return err
+		}
+	}
+	for _, col := range metaCols {
+		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0]); err != nil {
+			return err
+		}
+	}
+	db.txn.createTableMap[tableId] = 0
 	return nil
 }
 

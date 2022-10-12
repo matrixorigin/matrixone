@@ -134,7 +134,10 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 	ctx.DoneCond.L.Lock()
 	defer ctx.DoneCond.L.Unlock()
 	state := ctx.State
-	if state != txnif.TxnStatePreparing {
+	//if state != txnif.TxnStatePreparing {
+	if state == txnif.TxnStateActive ||
+		state == txnif.TxnStateRollbacked ||
+		state == txnif.TxnStateCommitted {
 		return state
 	}
 	ctx.DoneCond.Wait()
@@ -151,7 +154,12 @@ func (ctx *TxnCtx) GetTxnState(waitIfCommitting bool) (state txnif.TxnState) {
 	// Quick get the current txn state
 	// If waitIfCommitting is false, return the state
 	// If state is not txnif.TxnStatePreparing, return the state
-	if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
+
+	//if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
+	if state = ctx.getTxnState(); !waitIfCommitting ||
+		state == txnif.TxnStateActive ||
+		state == txnif.TxnStateCommitted ||
+		state == txnif.TxnStateRollbacked {
 		return state
 	}
 
