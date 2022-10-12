@@ -93,44 +93,42 @@ ulimit -n 65536
 
 2. 输入命令，确认 gcc-11 是否成功：
 
-   ```
-   gcc-11 -v
-   ```
+    ```
+    gcc-11 -v
+    ```
 
-   如下结果，表示成功：
+    如下结果，表示成功：
 
-   ```
-   Using built-in specs.
-   COLLECT_GCC=gcc-11
-   COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc@11/11.3.0/bin/../libexec/gcc/aarch64-apple-darwin21/11/lto-wrapper
-   Target: aarch64-apple-darwin21
-   Configured with: ../configure --prefix=/opt/homebrew/opt/gcc@11 --libdir=/opt/homebrew/opt/gcc@11/lib/gcc/11 --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-11 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 11.3.0' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --build=aarch64-apple-darwin21 --with-system-zlib --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX12.sdk
-   Thread model: posix
-   Supported LTO compression algorithms: zlib zstd
-   gcc version 11.3.0 (Homebrew GCC 11.3.0)
-   ```
+    ```
+    Using built-in specs.
+    COLLECT_GCC=gcc-11
+    COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc@11/11.3.0/bin/../libexec/gcc/aarch64-apple-darwin21/11/lto-wrapper
+    Target: aarch64-apple-darwin21
+    Configured with: ../configure --prefix=/opt/homebrew/opt/gcc@11 --libdir=/opt/homebrew/opt/gcc@11/lib/gcc/11 --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-11 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 11.3.0' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --build=aarch64-apple-darwin21 --with-system-zlib --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX12.sdk
+    Thread model: posix
+    Supported LTO compression algorithms: zlib zstd
+    gcc version 11.3.0 (Homebrew GCC 11.3.0)
+    ```
 
 3. 手动修改 *ssb-dbgen* 目录下的 *bm_utils.c* 配置文件：
 
-   - 将第41行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
+    - 将第41行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
 
-   - 将第398行的 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT|O_LARGEFILE,0644);` 修改为 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT,0644);`
+    - 将第398行的 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT|O_LARGEFILE,0644);` 修改为 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT,0644);`
 
 4. 手动修改 *ssb-dbgen* 目录下的 *varsub.c* 配置文件：
 
-   - 将第5行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
-
-5.
+    - 将第5行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
 
 5. 手动修改 *ssb-dbgen* 目录下的 *makefile* 配置文件：
 
-   - 将第5行的 `CC      = gcc` 修改为 `CC      = gcc-11`
+    - 将第5行的 `CC      = gcc` 修改为 `CC      = gcc-11`
 
 6. 再次进入 *ssb-dbgen* 目录，进行编译：
 
-   ```
-   cd ssb-dbgen
-   make
-   ```
+    ```
+    cd ssb-dbgen
+    make
+    ```
 
 7. 查看 *ssb-dbgen* 目录，生成 *dbgen* 可执行文件，表示编译成功。
