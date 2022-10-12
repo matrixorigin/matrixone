@@ -56,10 +56,10 @@ func Prepare(proc *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
-	if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
-		param.End = true
-		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	}
+	//if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
+	//	param.End = true
+	//	return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
+	//}
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.End = true
