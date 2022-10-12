@@ -50,10 +50,11 @@ type Txn interface {
 type Relation interface {
 	//just for test
 	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
+	GetHideKeys(context.Context) ([]*engine.Attribute, error)
 
 	Write(context.Context, *batch.Batch) error
 
-	Delete(context.Context, *vector.Vector, string) error
+	Delete(context.Context, *batch.Batch, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error
 

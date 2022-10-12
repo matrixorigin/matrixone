@@ -235,6 +235,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 				}
 			}
 		}
+
 		// use hide key to update if primary key will not be updated
 		var hideKeyIdx int32 = -1
 		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
@@ -246,6 +247,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 			hideKeyIdx = offset
 		}
+
 		// construct projection for list of update expr
 		for _, expr := range updateExprsArray[i] {
 			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr})
@@ -254,6 +256,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		// construct other cols and table offset
 		var otherAttrs []string = nil
 		var k int
+
 		// get table reference index
 		for k = 0; k < len(tblRefs); k++ {
 			if updateCols[0].tblName == tblRefs[k].Name {
@@ -261,6 +264,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			}
 		}
 		orderAttrs := make([]string, 0, len(tblRefs[k].Cols)-1)
+
 		// figure out other cols that will not be updated
 		var onUpdateCols []updateCol
 		for _, col := range tblRefs[k].Cols {
@@ -311,6 +315,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		updateCtxs = append(updateCtxs, ct)
 
 	}
+
 	return updateCtxs, useProjectExprs, nil
 }
 

@@ -54,6 +54,9 @@ func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree
 }
 
 func (v *LogtailReader) HasCatalogChanges() bool {
+	if v.start.IsEmpty() {
+		return true
+	}
 	changed := false
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
 		if txn.GetStore().HasCatalogChanges() {

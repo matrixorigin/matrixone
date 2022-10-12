@@ -67,10 +67,6 @@ func (node *appendableNode) Rows() uint32 {
 	return node.rows
 }
 
-func (node *appendableNode) CheckUnloadable() bool {
-	return !node.block.mvcc.HasActiveAppendNode()
-}
-
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(int(minRow),
 		int(maxRow-minRow),
@@ -127,7 +123,7 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 ) (vec containers.Vector, err error) {
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
-		data = data.Window(int(minRow), int(maxRow))
+		data = data.Window(int(minRow), int(maxRow-minRow))
 		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
 	} else {
 		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)

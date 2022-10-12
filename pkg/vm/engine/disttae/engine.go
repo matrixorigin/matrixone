@@ -162,16 +162,17 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
-		proc:        e.proc,
-		db:          e.db,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		rowId:       [2]uint64{math.MaxUint64, 0},
-		dnStores:    cluster.DNStores,
-		fileMap:     make(map[string]uint64),
-		tableMap:    make(map[tableKey]*table),
-		databaseMap: make(map[databaseKey]*database),
+		proc:           e.proc,
+		db:             e.db,
+		readOnly:       true,
+		meta:           op.Txn(),
+		idGen:          e.idGen,
+		rowId:          [2]uint64{math.MaxUint64, 0},
+		dnStores:       cluster.DNStores,
+		fileMap:        make(map[string]uint64),
+		tableMap:       make(map[tableKey]*table),
+		databaseMap:    make(map[databaseKey]*database),
+		createTableMap: make(map[uint64]uint8),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
