@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +27,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -275,4 +277,186 @@ func TestWriteAndRead(t *testing.T) {
 			t.Errorf("input not equal output: vec[0][%d]'s value not match", i)
 		}
 	}
+}
+
+func TestComputeRange(t *testing.T) {
+	type asserts = struct {
+		result bool
+		data   [][2]int64
+		expr   *plan.Expr
+	}
+
+	testCases := []asserts{
+		// a > abs(20)   not support now
+		{false, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("like", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeFunctionExprForTest("abs", []*plan.Expr{
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+		})},
+		// a > 20
+		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+		})},
+		// a = 20
+		{true, [][2]int64{{20, 20}}, makeFunctionExprForTest("=", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+		})},
+		// a > 20 and a < 100
+		{true, [][2]int64{{21, 99}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(100),
+			}),
+		})},
+		// a > 20 and a < 10  => empty
+		{true, [][2]int64{}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(10),
+			}),
+		})},
+		// a < 20 or a > 100
+		{true, [][2]int64{{math.MinInt64, 19}, {101, math.MaxInt64}}, makeFunctionExprForTest("or", []*plan.Expr{
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(100),
+			}),
+		})},
+		// a < 20 or a > 100
+		{true, [][2]int64{{math.MinInt64, 19}, {101, math.MaxInt64}}, makeFunctionExprForTest("or", []*plan.Expr{
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(100),
+			}),
+		})},
+		// (a >5 or a=1) and (a < 8 or a =11) => 1,6,7,11
+		{true, [][2]int64{{6, 7}, {11, 11}, {1, 1}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(5),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("<", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(8),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(11),
+				}),
+			}),
+		})},
+	}
+
+	t.Run("test computeRange", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, data := computeRange(testCase.expr, 0)
+			if result != testCase.result {
+				t.Fatalf("test computeRange at cases[%d], get result is different with expected", i)
+			}
+			if result {
+				if len(data) != len(testCase.data) {
+					t.Fatalf("test computeRange at cases[%d], data length is not match", i)
+				}
+				for j, r := range testCase.data {
+					if r[0] != data[j][0] || r[1] != data[j][1] {
+						t.Fatalf("test computeRange at cases[%d], data[%d] is not match", i, j)
+					}
+				}
+			}
+		}
+	})
+}
+
+func TestGetListByRange(t *testing.T) {
+	type asserts = struct {
+		result []DNStore
+		list   []DNStore
+		r      [][2]int64
+	}
+
+	testCases := []asserts{
+		{[]DNStore{{UUID: "1"}, {UUID: "2"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 32324234234234}}},
+		{[]DNStore{{UUID: "1"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 14}}},
+	}
+
+	t.Run("test getListByRange", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result := getListByRange(testCase.list, testCase.r)
+			if len(result) != len(testCase.result) {
+				t.Fatalf("test getListByRange at cases[%d], data length is not match", i)
+			}
+			for j, r := range testCase.result {
+				if r.UUID != result[j].UUID {
+					t.Fatalf("test getListByRange at cases[%d], result[%d] is not match", i, j)
+				}
+			}
+		}
+	})
+}
+
+func TestGetDNStore(t *testing.T) {
+	tableDef := makeTableDefForTest([]string{"a"})
+	priKeys := []*engine.Attribute{
+		{
+			Name: "a",
+			Type: types.T_int64.ToType(),
+		},
+	}
+
+	type asserts = struct {
+		result []DNStore
+		list   []DNStore
+		expr   *plan.Expr
+	}
+
+	testCases := []asserts{
+		{[]DNStore{{UUID: "1"}, {UUID: "2"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(14),
+		})},
+		{[]DNStore{{UUID: "1"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, makeFunctionExprForTest("=", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(14),
+		})},
+	}
+
+	t.Run("test getDNStore", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result := getDNStore(testCase.expr, tableDef, priKeys, testCase.list)
+			if len(result) != len(testCase.result) {
+				t.Fatalf("test getDNStore at cases[%d], data length is not match", i)
+			}
+			for j, r := range testCase.result {
+				if r.UUID != result[j].UUID {
+					t.Fatalf("test getDNStore at cases[%d], result[%d] is not match", i, j)
+				}
+			}
+		}
+	})
 }
