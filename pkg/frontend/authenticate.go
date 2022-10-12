@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"strings"
 	"time"
 
@@ -4580,9 +4581,27 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
 
-	err := bh.Exec(ctx, "create database information_schema;")
-	if err != nil {
-		return err
+	var err error
+	var sqls []string
+
+	sqls = append(sqls, "create database information_schema;")
+	sqls = append(sqls, "use information_schema;")
+	for _, table := range sysview.InitInformationSchemaSysTables {
+		sqls = append(sqls, table)
+	}
+
+	sqls = append(sqls, "create database mysql;")
+	sqls = append(sqls, "use mysql;")
+	for _, table := range sysview.InitMysqlSysTables {
+		sqls = append(sqls, table)
+	}
+
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
