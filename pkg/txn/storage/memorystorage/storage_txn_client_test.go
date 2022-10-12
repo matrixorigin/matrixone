@@ -16,6 +16,7 @@ package memorystorage
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -44,7 +45,10 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	return ctx, stubs
 }
 
-func TestFrontend(t *testing.T) {
+func testStorageTxnClient(
+	t *testing.T,
+	numShards int,
+) {
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Minute,
@@ -62,44 +66,56 @@ func TestFrontend(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
+	clock := clock.NewHLCClock(func() int64 {
+		return time.Now().Unix()
+	}, math.MaxInt)
+
+	var dnStores []logservicepb.DNStore
+	storages := make(map[string]*Storage)
+	for i := 0; i < numShards; i++ {
+
+		shard := logservicepb.DNShardInfo{
+			ShardID:   uint64(i + 8),
+			ReplicaID: uint64(i + 8),
+		}
+		shards := []logservicepb.DNShardInfo{
+			shard,
+		}
+		dnAddr := fmt.Sprintf("1.1.1.%d", i+8)
+		dnStore := logservicepb.DNStore{
+			UUID:           uuid.NewString(),
+			ServiceAddress: dnAddr,
+			Shards:         shards,
+		}
+
+		dnStores = append(dnStores, dnStore)
+
+		storage, err := NewMemoryStorage(
+			mp,
+			memtable.SnapshotIsolation,
+			clock,
+			memoryengine.RandomIDGenerator,
+		)
+		assert.Nil(t, err)
+
+		storages[dnAddr] = storage
 	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
-		Shards:         shards,
-	}
+
 	engine := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
-				DNStores: []logservicepb.DNStore{
-					dnStore,
-				},
+				DNStores: dnStores,
 			}, nil
 		},
-	)
-
-	clock := clock.NewHLCClock(func() int64 {
-		return time.Now().Unix()
-	}, math.MaxInt)
-	storage, err := NewMemoryStorage(
-		mp,
-		memtable.SnapshotIsolation,
-		clock,
 		memoryengine.RandomIDGenerator,
 	)
-	assert.Nil(t, err)
-	txnClient := &StorageTxnClient{
-		clock:   clock,
-		storage: storage,
-	}
+
+	txnClient := NewStorageTxnClient(
+		clock,
+		storages,
+	)
 
 	pu := &config.ParameterUnit{
 		SV:            frontendParameters,
@@ -112,7 +128,7 @@ func TestFrontend(t *testing.T) {
 	ctx, rsStubs := mockRecordStatement(ctx)
 	defer rsStubs.Reset()
 
-	err = frontend.InitSysTenant(ctx)
+	err := frontend.InitSysTenant(ctx)
 	assert.Nil(t, err)
 
 	globalVars := new(frontend.GlobalSystemVariables)
@@ -134,4 +150,13 @@ func TestFrontend(t *testing.T) {
 	_, err = session.AuthenticateUser("root")
 	assert.Nil(t, err)
 
+}
+
+func TestStorageTxnClientSingleDN(t *testing.T) {
+	testStorageTxnClient(t, 1)
+}
+
+func TestStorageTxnClientMultipleDN(t *testing.T) {
+	t.Skip() //TODO frontend init error
+	testStorageTxnClient(t, 8)
 }

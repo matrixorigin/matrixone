@@ -19,7 +19,7 @@ make
 
 ## **2. Generate data**
 
-### Option 1: Generate your own dataset
+### Option 1: Generate the single table dataset
 
 With -s 1 dbgen generates 6 million rows (670MB), while while -s 10 it generates 60 million rows (which takes some time)
 
@@ -31,9 +31,9 @@ With -s 1 dbgen generates 6 million rows (670MB), while while -s 10 it generates
 ./dbgen -s 1 -T d
 ```
 
-### Option 2: Use an existing dataset
+### Option 2: Download the large wide table dataset
 
-We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
+We have also prepared a 1GB large wide table dataset for downloading. You can get the data files directly:
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
@@ -168,7 +168,7 @@ CREATE TABLE lineorder_flat(
 
 ## **4. Load data into the created tables**
 
-### Option 1: Load data into related tables with this command in MatrixOne
+### Option 1: Load the sigle table dataset into related tables with this command in MatrixOne
 
 ```
 load data infile '/ssb-dbgen-path/supplier.tbl' into table supplier FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
@@ -184,7 +184,7 @@ load data infile '/ssb-dbgen-path/lineorder.tbl' into table lineorder FIELDS TER
 
 Then you can query data in MatrixOne with the created table.
 
-### Option 2: Load data into the lineorder_flat
+### Option 2: Load the large wide table dataset into the *lineorder_flat*
 
 ```
 load data infile '/ssb-dbgen-path/lineorder_flat.tbl' into table lineorder_flat FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
