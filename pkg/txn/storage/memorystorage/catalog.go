@@ -270,10 +270,14 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 	case catalog.SystemColAttr_NullAbility:
 		ret.Value = boolToInt8(a.Nullable)
 	case catalog.SystemColAttr_HasExpr:
-		ret.Value = boolToInt8(a.Default != nil && a.Default.Expr != nil)
+		ret.Value = boolToInt8(a.Default != nil)
 	case catalog.SystemColAttr_DefaultExpr:
-		if a.Default != nil && a.Default.Expr != nil {
-			ret.Value = []byte(a.Default.Expr.String())
+		if a.Default != nil {
+			defaultExpr, err := types.Encode(a.Default)
+			if err != nil {
+				return ret, nil
+			}
+			ret.Value = defaultExpr
 		} else {
 			ret.Value = []byte("")
 		}
