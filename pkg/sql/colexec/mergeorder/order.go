@@ -68,6 +68,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			anal.Output(ctr.bat)
 			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
 			ctr.state = End
 			return true, nil
 		default:

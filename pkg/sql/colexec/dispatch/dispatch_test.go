@@ -84,6 +84,9 @@ func TestDispatch(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		for len(tc.arg.Regs[0].Ch) > 0 {
 			bat := <-tc.arg.Regs[0].Ch
+			if bat == nil {
+				break
+			}
 			if len(bat.Zs) == 0 {
 				continue
 			}

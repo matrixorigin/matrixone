@@ -30,8 +30,15 @@ type Argument struct {
 	Regs []*process.WaitRegister
 }
 
-func (arg *Argument) Free(_ *process.Process) {
+func (arg *Argument) Free(proc *process.Process) {
 	for i := range arg.Regs {
+		for len(arg.Regs[i].Ch) > 0 {
+			bat := <-arg.Regs[i].Ch
+			if bat == nil {
+				break
+			}
+			bat.Clean(proc.Mp())
+		}
 		select {
 		case <-arg.Regs[i].Ctx.Done():
 		case arg.Regs[i].Ch <- nil:

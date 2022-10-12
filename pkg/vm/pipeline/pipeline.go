@@ -50,7 +50,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var err error
 	var bat *batch.Batch
 
-	defer cleanup(p, proc)
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
@@ -58,11 +57,13 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		}
 	}
 	if err = vm.Prepare(p.instructions, proc); err != nil {
+		cleanup(p, proc, false)
 		return false, err
 	}
 	for {
 		// read data from storage engine
 		if bat, err = r.Read(p.attrs, nil, proc.Mp()); err != nil {
+			cleanup(p, proc, false)
 			return false, err
 		}
 		if bat != nil {
@@ -70,8 +71,14 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		}
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
+		end, err = vm.Run(p.instructions, proc)
+		if err != nil {
+			cleanup(p, proc, false)
 			return end, err
+		}
+		if end {
+			cleanup(p, proc, true)
+			return end, nil
 		}
 	}
 }
@@ -80,7 +87,6 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	var end bool // exist flag
 	var err error
 
-	defer cleanup(p, proc)
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
@@ -92,26 +98,27 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	}
 	bat.Cnt = 1
 	// processing the batch according to the instructions
-	for {
-		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+	pipelineInputs := []*batch.Batch{bat, nil}
+	for i := range pipelineInputs {
+		proc.Reg.InputBatch = pipelineInputs[i]
+		end, err = vm.Run(p.instructions, proc)
+		if err != nil {
+			cleanup(p, proc, false)
 			return end, err
 		}
-		proc.Reg.InputBatch = nil
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
-			return end, err
+		if end {
+			cleanup(p, proc, true)
+			return end, nil
 		}
 	}
+	return true, nil
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
-	defer func() {
-		cleanup(p, proc)
-		proc.Cancel()
-	}()
+	defer proc.Cancel()
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
@@ -119,31 +126,41 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 		}
 	}
 	if err := vm.Prepare(p.instructions, proc); err != nil {
+		cleanup(p, proc, false)
 		return false, err
 	}
 	for {
 		proc.Reg.InputBatch = nil
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+		end, err = vm.Run(p.instructions, proc)
+		if err != nil {
+			cleanup(p, proc, false)
 			return end, err
+		}
+		if end {
+			cleanup(p, proc, true)
+			return end, nil
 		}
 	}
 }
 
 // cleanup do memory release work for a whole pipeline.
 // clean the coming batches and template space of each pipeline operator.
-func cleanup(p *Pipeline, proc *process.Process) {
+func cleanup(p *Pipeline, proc *process.Process, pipelineSucceed bool) {
 	// clean all the coming batches.
-	bat := proc.InputBatch()
-	if bat != nil {
-		bat.Clean(proc.Mp())
+	if !pipelineSucceed {
+		bat := proc.InputBatch()
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+		proc.SetInputBatch(nil)
 	}
-	proc.SetInputBatch(nil)
 	for i := range proc.Reg.MergeReceivers {
 		for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
 			bat := <-proc.Reg.MergeReceivers[i].Ch
-			if bat != nil {
-				bat.Clean(proc.Mp())
+			if bat == nil {
+				break
 			}
+			bat.Clean(proc.Mp())
 		}
 	}
 
