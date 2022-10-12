@@ -2150,7 +2150,61 @@ func TestMergeblocks2(t *testing.T) {
 	// tae.restart()
 	// assert.Equal(t, int64(2), rel.Rows())
 }
+func TestMergeEmptyBlocks(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	bats := bat.Split(2)
+	defer bat.Close()
 
+	tae.createRelAndAppend(bats[0], true)
+
+	assert.NoError(t, tae.deleteAll(false))
+
+	txn, rel := tae.getRelation()
+	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, txn.Commit())
+
+	{
+		t.Log("************merge************")
+
+		txn, rel = tae.getRelation()
+
+		segIt := rel.MakeSegmentIt()
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(seg.ID)
+		assert.NoError(t, err)
+
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+
+		{
+			v := getSingleSortKeyValue(bat, schema, 4)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		err = txn.Commit()
+		assert.NoError(t, err)
+	}
+}
 func TestDelete2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
