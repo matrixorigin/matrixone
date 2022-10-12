@@ -62,8 +62,8 @@ type Catalog struct {
 
 	nodesMu sync.RWMutex
 
-	tableCnt  int32
-	columnCnt int32
+	tableCnt  atomic.Int32
+	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -540,7 +540,7 @@ func (catalog *Catalog) ReplayTableRows() {
 		if err != nil {
 			panic(err)
 		}
-		tbl.rows = rows
+		tbl.rows.Store(rows)
 		return nil
 	}
 	err := catalog.RecurLoop(processor)
@@ -562,23 +562,21 @@ func (catalog *Catalog) CoarseDBCnt() int {
 }
 
 func (catalog *Catalog) CoarseTableCnt() int {
-	return int(atomic.LoadInt32(&catalog.tableCnt))
+	return int(catalog.tableCnt.Load())
 }
 
 func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(atomic.LoadInt32(&catalog.columnCnt))
+	return int(catalog.columnCnt.Load())
 }
 
 func (catalog *Catalog) AddTableCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.tableCnt, int32(cnt))
-	if n < 0 {
+	if catalog.tableCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }
 
 func (catalog *Catalog) AddColumnCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.columnCnt, int32(cnt))
-	if n < 0 {
+	if catalog.columnCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }

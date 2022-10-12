@@ -136,7 +136,8 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	{
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(sql, accountId, userId, roleId, name,
-			tableId, db.databaseId, db.databaseName, comment, db.txn.proc.Mp())
+			tableId, db.databaseId, db.databaseName, catalog.SystemOrdinaryRel,
+			comment, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -159,7 +160,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(sql, catalog.System_Account, catalog.System_User,
 			catalog.System_Role, metaName, metaTableId, db.databaseId, db.databaseName,
-			comment, db.txn.proc.Mp())
+			catalog.SystemInternalRel, comment, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}

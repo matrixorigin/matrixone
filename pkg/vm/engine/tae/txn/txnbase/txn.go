@@ -16,9 +16,10 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
@@ -75,7 +76,7 @@ type Txn struct {
 	Store                    txnif.TxnStore
 	Err                      error
 	LSN                      uint64
-	TenantID, UserID, RoleID uint32
+	TenantID, UserID, RoleID atomic.Uint32
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -333,17 +334,17 @@ func (txn *Txn) WaitDone(err error, isAbort bool) error {
 }
 
 func (txn *Txn) BindAccessInfo(tenantID, userID, roleID uint32) {
-	atomic.StoreUint32(&txn.TenantID, tenantID)
-	atomic.StoreUint32(&txn.UserID, userID)
-	atomic.StoreUint32(&txn.RoleID, roleID)
+	txn.TenantID.Store(tenantID)
+	txn.UserID.Store(userID)
+	txn.RoleID.Store(roleID)
 }
 
 func (txn *Txn) GetTenantID() uint32 {
-	return atomic.LoadUint32(&txn.TenantID)
+	return txn.TenantID.Load()
 }
 
 func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
-	return atomic.LoadUint32(&txn.UserID), atomic.LoadUint32(&txn.RoleID)
+	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
