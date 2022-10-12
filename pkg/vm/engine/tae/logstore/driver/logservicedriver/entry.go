@@ -163,6 +163,7 @@ func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals
 		e := entry.NewEmptyEntry()
 		e.ReadFrom(bbuf)
 		h(e)
+		e.Entry.Free()
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals

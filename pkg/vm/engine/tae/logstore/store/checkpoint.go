@@ -151,6 +151,7 @@ func (w *StoreImpl) CkpCkp() {
 	if err != nil {
 		panic(err)
 	}
+	e.Free()
 }
 
 func (w *StoreImpl) onTruncatingQueue(items ...any) {
