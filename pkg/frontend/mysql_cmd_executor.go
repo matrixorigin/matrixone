@@ -1869,11 +1869,6 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
-	incStatementCounter("0", stmt)
-}
-
 // authenticatePrivilegeOfStatement checks the user can execute the statement
 func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	var havePrivilege bool
