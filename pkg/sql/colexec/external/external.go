@@ -272,14 +272,6 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for i := 0; i < len(param.Attrs); i++ {
 		id := types.T(param.Cols[i].Typ.Id)
 		nullList := param.extern.NullMap[param.Attrs[i]]
-		nullVec := vector.New(types.Type{Oid: types.T_varchar, Width: 1024})
-		vector.PreAlloc(nullVec, len(nullList), len(nullList), proc.Mp())
-		for j := 0; j < len(nullList); j++ {
-			err = vector.SetStringAt(nullVec, j, nullList[j], proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		}
 		switch id {
 		case types.T_bool:
 			bat.Vecs[i], err = multi.ParseNumber[bool](origin[i], nullList, bat.GetVector(int32(i)), proc, external.ParseBool)
