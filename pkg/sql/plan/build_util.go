@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -132,7 +133,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 
 	if typ.Id == int32(types.T_json) {
 		if expr != nil && !isNullAstExpr(expr) {
-			return nil, moerr.NewSyntaxError("JSON column can not have default value")
+			return nil, moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
 		}
 	}
 	if !nullAbility && isNullAstExpr(expr) {
