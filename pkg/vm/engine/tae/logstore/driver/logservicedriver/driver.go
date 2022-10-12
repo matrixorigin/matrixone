@@ -66,7 +66,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		recordSize:             cfg.NewRecordSize,
 		logserviceClientConfig: cfg.ClientConfig,
 		GetClientRetryTimeOut:  cfg.GetClientRetryTimeOut,
-		retryDuration: cfg.RetryTimeout,
+		retryDuration:          cfg.RetryTimeout,
 	}
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
