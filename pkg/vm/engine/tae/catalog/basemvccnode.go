@@ -27,11 +27,13 @@ type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
 }
 
-func NewEntryMVCCNode() *EntryMVCCNode {
-	return &EntryMVCCNode{}
+// Dropped committed
+func (un *EntryMVCCNode) HasDropCommitted() bool {
+	return !un.DeletedAt.IsEmpty() && un.DeletedAt != txnif.UncommitTS
 }
 
-func (un *EntryMVCCNode) HasDropped() bool {
+// Dropped committed or uncommitted
+func (un *EntryMVCCNode) HasDropIntent() bool {
 	return !un.DeletedAt.IsEmpty()
 }
 

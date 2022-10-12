@@ -30,13 +30,13 @@ type Closable interface {
 }
 
 type ClosedState struct {
-	closed int32
+	closed atomic.Int32
 }
 
 func (c *ClosedState) IsClosed() bool {
-	return atomic.LoadInt32(&c.closed) == int32(1)
+	return c.closed.Load() == int32(1)
 }
 
 func (c *ClosedState) TryClose() bool {
-	return atomic.CompareAndSwapInt32(&c.closed, int32(0), int32(1))
+	return c.closed.CompareAndSwap(0, 1)
 }

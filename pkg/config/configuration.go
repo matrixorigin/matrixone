@@ -102,6 +102,9 @@ var (
 
 	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
+
+	// defaultMetricExportInterval default: 15 sec.
+	defaultMetricExportInterval = 15
 )
 
 // FrontendParameters of the frontend
@@ -342,10 +345,16 @@ type ObservabilityParameters struct {
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
 	// TraceExportInterval default is 15s.
-	TraceExportInterval int `toml:"trace_export_interval"`
+	TraceExportInterval int `toml:"traceExportInterval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"long_query_time"`
+	LongQueryTime float64 `toml:"longQueryTime"`
+
+	// MetricMultiTable default is false. With true, save all metric data in one table.
+	MetricMultiTable bool `toml:"metricMultiTable"`
+
+	// MetricExportInterval default is 15 sec.
+	MetricExportInterval int `toml:"metricExportInterval"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -363,8 +372,12 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.BatchProcessor = defaultBatchProcessor
 	}
 
-	if op.TraceExportInterval == 0 {
+	if op.TraceExportInterval <= 0 {
 		op.TraceExportInterval = defaultTraceExportInterval
+	}
+
+	if op.MetricExportInterval <= 0 {
+		op.MetricExportInterval = defaultMetricExportInterval
 	}
 }
 

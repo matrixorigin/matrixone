@@ -84,16 +84,25 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				}
 			}
 
-			err := updateCtx.TableSource.Delete(ctx, bat.GetVector(idx), updateCtx.PriKey)
+			delBat := &batch.Batch{}
+			delBat.Vecs = []*vector.Vector{bat.GetVector(idx)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
+			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.PriKey)
 			if err != nil {
+				delBat.Clean(proc.Mp())
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
+			delBat.Clean(proc.Mp())
 
 			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 
@@ -109,11 +118,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				panic(any("internal error when filter Batch"))
 			}
 
-			err := updateCtx.TableSource.Delete(ctx, tmpBat.GetVector(0), updateCtx.HideKey)
+			delBat := &batch.Batch{}
+			delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
+			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
 			if err != nil {
+				delBat.Clean(proc.Mp())
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
+			delBat.Clean(proc.Mp())
 
 			tmpBat.Vecs[0].Free(proc.Mp())
 			tmpBat.Vecs = tmpBat.Vecs[1:]
@@ -124,6 +138,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 
 			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 
@@ -142,15 +157,17 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 					}
 				}
 			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
-			tmpBat.Clean(proc.Mp())
 
 			affectedRows += cnt
 		}
+
+		tmpBat.Clean(proc.Mp())
 	}
 
 	atomic.AddUint64(&p.AffectedRows, affectedRows)

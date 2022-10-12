@@ -35,7 +35,7 @@ type DeleteChain struct {
 	*txnbase.MVCCChain
 	mvcc  *MVCCHandle
 	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
-	cnt   uint32
+	cnt   atomic.Uint32
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -52,11 +52,11 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 }
 
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
-	atomic.AddUint32(&chain.cnt, cnt)
+	chain.cnt.Add(cnt)
 }
 
 func (chain *DeleteChain) GetDeleteCnt() uint32 {
-	return atomic.LoadUint32(&chain.cnt)
+	return chain.cnt.Load()
 }
 
 func (chain *DeleteChain) StringLocked() string {
@@ -76,29 +76,17 @@ func (chain *DeleteChain) StringLocked() string {
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
 func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
-	chain.LoopChain(
-		func(vn txnif.MVCCNode) (goNext bool) {
-			n := vn.(*DeleteNode)
-			if n.GetStartTS().Greater(ts) {
-				return true
-			}
-			if n.HasOverlapLocked(row, row) {
-				needWait, txnToWait := n.NeedWaitCommitting(ts)
-				if needWait {
-					rwlocker.RUnlock()
-					txnToWait.GetTxnState(true)
-					rwlocker.RLock()
-				}
-				if n.IsVisible(ts) {
-					deleted = true
-				}
-			}
-			if n.IsMerged() || deleted || err != nil {
-				return false
-			}
-			return true
-		})
-	return
+	deleteNode := chain.GetDeleteNodeByRow(row)
+	if deleteNode == nil {
+		return false, nil
+	}
+	needWait, txn := deleteNode.NeedWaitCommitting(ts)
+	if needWait {
+		rwlocker.RUnlock()
+		txn.GetTxnState(true)
+		rwlocker.RLock()
+	}
+	return deleteNode.IsVisible(ts), nil
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {

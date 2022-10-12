@@ -34,13 +34,19 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := DoTxnRequest[CreateRelationResp](
+	id, err := d.engine.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = DoTxnRequest[CreateRelationResp](
 		ctx,
 		d.txnOperator,
 		false,
 		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
+			ID:           id,
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
 			Type:         RelationTable,

@@ -30,6 +30,7 @@ type DeleteCtx struct {
 	TableSource  engine.Relation
 	UseDeleteKey string
 	CanTruncate  bool
+	ColIndex     int32
 }
 
 func (arg *Argument) Free(_ *process.Process) {
