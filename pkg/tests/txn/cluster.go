@@ -16,21 +16,33 @@ package txn
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var (
 	defaultTestTimeout = time.Minute
+
+	memKVTxnStorage = "MEMKV"
+	memTxnStorage   = "MEM"
 )
 
 type cluster struct {
-	t   *testing.T
-	env service.Cluster
+	t       *testing.T
+	logger  *zap.Logger
+	clock   clock.Clock
+	env     service.Cluster
+	stopper *stopper.Stopper
 }
 
 // NewCluster new txn testing cluster based on the service.Cluster
@@ -39,9 +51,13 @@ func NewCluster(t *testing.T, options service.Options) (Cluster, error) {
 	if err != nil {
 		return nil, err
 	}
+	stopper := stopper.NewStopper("test-env-stopper")
 	return &cluster{
-		t:   t,
-		env: env,
+		t:       t,
+		env:     env,
+		logger:  logutil.GetPanicLoggerWithLevel(zap.DebugLevel),
+		clock:   clock.NewUnixNanoHLCClockWithStopper(stopper, 0),
+		stopper: stopper,
 	}, nil
 }
 
@@ -63,15 +79,22 @@ func (c *cluster) Stop() {
 	}
 }
 
-func (c *cluster) Restart() {
-	c.Stop()
-	c.Start()
-}
-
 func (c *cluster) Env() service.Cluster {
 	return c.env
 }
 
 func (c *cluster) NewClient() Client {
-	return nil
+	backend := c.env.Options().GetTxnStorageBackend()
+	switch backend {
+	case memKVTxnStorage:
+		cli, err := newKVClient(c.env, c.clock, c.logger)
+		require.NoError(c.t, err)
+		return cli
+	case memTxnStorage:
+		cli, err := newSQLClient(c.env)
+		require.NoError(c.t, err)
+		return cli
+	default:
+		panic(fmt.Sprintf("%s backend txn storage not support", backend))
+	}
 }

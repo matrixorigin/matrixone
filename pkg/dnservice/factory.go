@@ -41,8 +41,9 @@ const (
 
 var (
 	supportTxnStorageBackends = map[string]struct{}{
-		memStorageBackend: {},
-		taeStorageBackend: {},
+		memKVStorageBackend: {},
+		memStorageBackend:   {},
+		taeStorageBackend:   {},
 	}
 )
 

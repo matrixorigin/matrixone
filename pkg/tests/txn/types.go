@@ -21,22 +21,20 @@ import (
 
 // Cluster txn testing cluster
 type Cluster interface {
+	// Start start the cluster, block until all service started and all DNShard created
 	Start()
+	// Stop stop the cluster
 	Stop()
-	Restart()
+	// Env return the test cluster env
 	Env() service.Cluster
+	// NewClient create a test txn client
 	NewClient() Client
 }
 
 // Client used to execute read and write.
 type Client interface {
-	// Read read value of the specified key, execute in an auto-commit transaction
-	Read(key string) (string, error)
-	// Write write key-value pair to the cluster, execute in an auto-commit transaction
-	Write(key, value string) error
-	// ExecTxn exec multi read and write operations in a transaction. The handle func can
-	// commit or abort the transaction.
-	ExecTxn(func(txn Txn) error, ...client.TxnOption) error
+	// NewTxn create a txn to execute read and write command
+	NewTxn(options ...client.TxnOption) (Txn, error)
 }
 
 // Txn txn operation handler

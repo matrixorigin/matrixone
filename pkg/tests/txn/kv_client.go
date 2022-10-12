@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -52,40 +51,24 @@ func newKVClient(env service.Cluster,
 	if err != nil {
 		return nil, err
 	}
-	return &kvClient{
+	c := &kvClient{
 		env:    env,
 		client: client.NewTxnClient(sender),
-	}, nil
-}
-
-func (c *kvClient) Read(key string) (string, error) {
-	err := c.ExecTxn(func(op Txn) error {
-		return nil
-	})
-	if err != nil {
-		return "", err
 	}
-	return "", nil
+	c.refreshDNShards()
+	return c, nil
 }
 
-func (c *kvClient) Write(key, value string) error {
-	return c.ExecTxn(func(op Txn) error {
-		return nil
-	})
-}
-
-func (c *kvClient) ExecTxn(fn func(Txn) error, options ...client.TxnOption) error {
+func (c *kvClient) NewTxn(options ...client.TxnOption) (Txn, error) {
 	op, err := c.client.New(options...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	kop := &kvTxn{op: op, env: c.env, router: c.getTargetDN, refreshRouter: c.refreshDNShards}
-	if err := fn(kop); err != nil {
-		e := kop.Rollback()
-		return multierr.Append(err, e)
-	}
-	return kop.Commit()
+	return &kvTxn{op: op,
+		env:           c.env,
+		router:        c.getTargetDN,
+		refreshRouter: c.refreshDNShards}, nil
 }
 
 func (c *kvClient) getTargetDN(key string) metadata.DNShard {

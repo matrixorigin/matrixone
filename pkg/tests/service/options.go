@@ -236,8 +236,8 @@ func (opt Options) WithRootDataDir(root string) Options {
 	return opt
 }
 
-// WithDnStorage sets dn transaction storage.
-func (opt Options) WithDnTxnStorage(s string) Options {
+// WithDNStorage sets dn transaction storage.
+func (opt Options) WithDNTxnStorage(s string) Options {
 	opt.dn.txnStorageBackend = s
 	return opt
 }
