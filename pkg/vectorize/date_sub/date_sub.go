@@ -245,9 +245,6 @@ func TimestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 				continue
 			}
 			date, success := d.AddInterval(-ys[i], types.IntervalType(zs[0]), types.TimeStampType)
-			if int64(date) < int64(types.TimestampMinValue) || int64(date) > int64(types.TimestampMaxValue){
-				return nil, moerr.NewInvalidInput("date_sub have invalid input")
-			}
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
