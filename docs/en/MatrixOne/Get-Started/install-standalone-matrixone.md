@@ -92,19 +92,45 @@ MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is required.
 
 ### 2. Download binary packages and decompress
 
-Linux Environment
+**Linux Environment**
 
-```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
-unzip mo-server-v0.5.1-linux-amd64.zip
-```
+   + Downloading method 1:
 
-MacOS Environment
+      ```bash
+      wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+      unzip mo-server-v0.5.1-linux-amd64.zip
+      ```
 
-```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
-unzip mo-server-v0.5.1-darwin-x86_64.zip
-```
+   + Downloading method 2:
+
+      ```bash
+      curl -OL https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+      unzip mo-server-v0.5.1-linux-amd64.zip
+      ```
+
+   + Downloading method 3:
+
+      Go to the [version 0.5.1](https://github.com/matrixorigin/matrixone/releases/tag/v0.5.1), pull down to find the **Assets** column, and click the installation package *mo-server-v0. 5.1-linux-amd64.zip* can be downloaded.
+
+**MacOS Environment**
+
+   + Downloading method 1:
+
+      ```bash
+      wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+      unzip mo-server-v0.5.1-darwin-x86_64.zip
+      ```
+
+   + Downloading method 2:
+
+      ```bash
+      curl -OL https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+      unzip mo-server-v0.5.1-darwin-x86_64.zip
+      ```
+
+   + Downloading method 3:
+
+      Go to the [version 0.5.1](https://github.com/matrixorigin/matrixone/releases/tag/v0.5.1), pull down to find the **Assets** column, and click the installation package *mo-server-v0.5.1-darwin-x86_64.zip* can be downloaded.
 
 !!! info
     MatrixOne only supports installation on ARM chipset with source code build; if you are using MacOS M1 and above, for more information on using source code build to install MatrixOne, see <a href="#code_source">Method 1: Building from source code</a>. Using release binary files from X86 chipset will lead to unknown problems.

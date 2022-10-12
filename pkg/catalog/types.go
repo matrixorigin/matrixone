@@ -24,6 +24,12 @@ const (
 )
 
 const (
+	System_User    = uint32(0)
+	System_Role    = uint32(0)
+	System_Account = uint32(0)
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
@@ -72,6 +78,8 @@ const (
 	SystemColAttr_IsAutoIncrement = "att_is_auto_increment"
 	SystemColAttr_Comment         = "att_comment"
 	SystemColAttr_IsHidden        = "att_is_hidden"
+
+	BlockMeta_ID = "ID"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -228,6 +236,9 @@ var (
 		SystemColAttr_Comment,
 		SystemColAttr_IsHidden,
 	}
+	MoTableMetaSchema = []string{
+		BlockMeta_ID,
+	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
 		types.New(types.T_varchar, 100, 0, 0), // datname
@@ -273,7 +284,9 @@ var (
 		types.New(types.T_int8, 0, 0, 0),       // att_is_auto_increment
 		types.New(types.T_varchar, 1024, 0, 0), // att_comment
 		types.New(types.T_int8, 0, 0, 0),       // att_is_hidden
-
+	}
+	MoTableMetaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0), // ID
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
@@ -281,4 +294,6 @@ var (
 	MoTablesTableDefs = []engine.TableDef{}
 	// used by memengine or tae
 	MoColumnsTableDefs = []engine.TableDef{}
+	// used by memengine or tae or cn
+	MoTableMetaDefs = []engine.TableDef{}
 )

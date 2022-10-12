@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -126,17 +127,19 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 }
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string) (*tableMeta, error) {
+	name string, needUpdated bool) (*tableMeta, error) {
 	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
-	if err.Error() == "info: empty table" {
+	if err != nil && strings.Contains(err.Error(), "empty table") {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := txn.db.Update(ctx, txn.dnStores, databaseId,
-		id, txn.meta.SnapshotTS); err != nil {
-		return nil, err
+	if needUpdated {
+		if err := txn.db.Update(ctx, txn.dnStores, databaseId,
+			id, txn.meta.SnapshotTS); err != nil {
+			return nil, err
+		}
 	}
 	cols := make([]string, 0, len(defs))
 	{
@@ -147,13 +150,18 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 		}
 	}
 	blocks := make([][]BlockMeta, len(txn.dnStores))
-	for i, dnStore := range txn.dnStores {
-		rows, err := txn.getRows(ctx, databaseId, id,
-			[]DNStore{dnStore}, defs, cols, nil)
-		if err != nil {
-			return nil, err
+	if needUpdated {
+		for i, dnStore := range txn.dnStores {
+			rows, err := txn.getRows(ctx, databaseId, id,
+				[]DNStore{dnStore}, defs, cols, nil)
+			if err != nil && strings.Contains(err.Error(), "empty table") {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			blocks[i] = genBlockMetas(rows)
 		}
-		blocks[i] = genBlockMetas(rows)
 	}
 	return &tableMeta{
 		tableId:   id,
