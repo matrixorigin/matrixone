@@ -584,7 +584,7 @@ func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 
 // for test
 type printUnflush struct {
-	op *DirtyWatcher
+	op *forestMaintainer
 }
 
 var _ base.IHBHandle = (*printUnflush)(nil)
@@ -598,7 +598,7 @@ func (f *printUnflush) OnStopped() {}
 
 func NewTestUnflushedDirtyObserver(interval time.Duration, clock clock.Clock, logtail *logtail.LogtailMgr, cat *catalog.Catalog) base.IHeartbeater {
 	visitor := &catalog.LoopProcessor{}
-	watch := NewDirtyWatcher(logtail, clock, cat, visitor)
+	watch := newForestMaintainer(logtail, clock, cat, visitor)
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	watch.WithDelay(19 * time.Nanosecond)
 

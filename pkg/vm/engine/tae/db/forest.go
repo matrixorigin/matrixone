@@ -35,13 +35,13 @@ an application on logtail mgr: monitor dirty blocks
 
 */
 
-type TSRangedTree struct {
+type TimeRangedTree struct {
 	sync.RWMutex
 	start, end types.TS
 	tree       *common.Tree
 }
 
-type DirtyWatcher struct {
+type forestMaintainer struct {
 	// collect dirty
 	interval struct {
 		sync.Mutex
@@ -56,44 +56,44 @@ type DirtyWatcher struct {
 	visitor catalog.Processor
 
 	// dirty
-	dirtyTrees *btree.Generic[*TSRangedTree]
+	forest *btree.Generic[*TimeRangedTree]
 }
 
-func NewDirtyWatcher(logtail *logtail.LogtailMgr, clock clock.Clock, catalog *catalog.Catalog, visitor catalog.Processor) *DirtyWatcher {
-	watch := &DirtyWatcher{
-		logtail:    logtail,
-		catalog:    catalog,
-		visitor:    visitor,
-		dirtyTrees: btree.NewGeneric(func(a, b *TSRangedTree) bool { return a.start.Less(b.start) && a.end.Less(b.end) }),
+func newForestMaintainer(logtail *logtail.LogtailMgr, clock clock.Clock, catalog *catalog.Catalog, visitor catalog.Processor) *forestMaintainer {
+	watch := &forestMaintainer{
+		logtail: logtail,
+		catalog: catalog,
+		visitor: visitor,
+		forest:  btree.NewGeneric(func(a, b *TimeRangedTree) bool { return a.start.Less(b.start) && a.end.Less(b.end) }),
 	}
 	watch.interval.alloc = types.NewTsAlloctor(clock)
 	return watch
 }
 
-func (d *DirtyWatcher) Run() {
+func (d *forestMaintainer) Run() {
 	start, end := d.getTimeRange()
 	// end is empty means range is invalid if considering delay
 	if end.IsEmpty() {
 		return
 	}
-	d.AppendDirty(start, end)
-	d.ScanAndUpdateDirty()
+	d.tryExpand(start, end)
+	d.tryShrink()
 }
 
-func (d *DirtyWatcher) WithStartTS(start types.TS) {
+func (d *forestMaintainer) WithStartTS(start types.TS) {
 	d.interval.Lock()
 	defer d.interval.Unlock()
 	d.interval.prevStart = start
 }
 
 // WithDelay to avoid waiting when get logtail dirty, Physical is nanosecond of wall time
-func (d *DirtyWatcher) WithDelay(delay time.Duration) {
+func (d *forestMaintainer) WithDelay(delay time.Duration) {
 	d.interval.Lock()
 	defer d.interval.Unlock()
 	d.interval.delay = delay
 }
 
-func (d *DirtyWatcher) getTimeRange() (start, end types.TS) {
+func (d *forestMaintainer) getTimeRange() (start, end types.TS) {
 	r := &d.interval
 	r.Lock()
 	defer r.Unlock()
@@ -109,16 +109,8 @@ func (d *DirtyWatcher) getTimeRange() (start, end types.TS) {
 }
 
 // DirtyCount returns unflushed table, segment, block count
-func (d *DirtyWatcher) DirtyCount() (tblCnt, segCnt, blkCnt int) {
-	merged := common.NewTree()
-	dirtyTreeCopied := d.dirtyTrees.Copy()
-	dirtyTreeCopied.Scan(func(item *TSRangedTree) bool {
-		item.RLock()
-		defer item.RUnlock()
-		merged.Merge(item.tree)
-		return true
-	})
-
+func (d *forestMaintainer) DirtyCount() (tblCnt, segCnt, blkCnt int) {
+	merged := d.MergeForest()
 	tblCnt = merged.TableCount()
 	for _, tblTree := range merged.Tables {
 		segCnt += len(tblTree.Segs)
@@ -129,42 +121,61 @@ func (d *DirtyWatcher) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	return
 }
 
-func (d *DirtyWatcher) AppendDirty(start, end types.TS) {
+func (d *forestMaintainer) String() string {
+	tree := d.MergeForest()
+	return tree.String()
+}
+
+func (d *forestMaintainer) MergeForest() *common.Tree {
+	merged := common.NewTree()
+	forest := d.forest.Copy()
+	forest.Scan(func(item *TimeRangedTree) bool {
+		item.RLock()
+		defer item.RUnlock()
+		merged.Merge(item.tree)
+		return true
+	})
+	return merged
+}
+
+func (d *forestMaintainer) tryExpand(start, end types.TS) {
 	reader := d.logtail.GetReader(start, end)
 	tree := reader.GetDirty()
-	dirty := &TSRangedTree{
+	dirty := &TimeRangedTree{
 		start: start,
 		end:   end,
 		tree:  tree,
 	}
-	d.dirtyTrees.Set(dirty)
+	d.forest.Set(dirty)
 }
 
 // Scan current dirty trees, remove all flushed or not found ones, and drive visitor on remaining block entries.
-func (d *DirtyWatcher) ScanAndUpdateDirty() {
-	dels := make([]*TSRangedTree, 0)
+func (d *forestMaintainer) tryShrink() {
+	forestToDelete := make([]*TimeRangedTree, 0)
 
-	dirtyTreeCopied := d.dirtyTrees.Copy()
-	dirtyTreeCopied.Scan(func(item *TSRangedTree) bool {
+	forest := d.forest.Copy()
+	forest.Scan(func(item *TimeRangedTree) bool {
 		item.Lock()
 		defer item.Unlock()
-		if item.tree.TableCount() == 0 {
-			dels = append(dels, item)
+		// dirty blocks within the time range has been flushed
+		// exclude the related dirty tree from the foreset
+		if item.tree.IsEmpty() {
+			forestToDelete = append(forestToDelete, item)
 			return true
 		}
-		if err := d.driveVisitorOnTree(d.visitor, item.tree); err != nil {
+		if err := d.tryShrinkATree(d.visitor, item.tree); err != nil {
 			logutil.Warnf("error: visitor on dirty tree: %v", err)
 		}
 		return true
 	})
 
-	for _, del := range dels {
-		d.dirtyTrees.Delete(del)
+	for _, tree := range forestToDelete {
+		d.forest.Delete(tree)
 	}
 }
 
 // iter the tree and call visitor to process block. flushed block, empty seg and table will be removed from the tree
-func (d *DirtyWatcher) driveVisitorOnTree(visitor catalog.Processor, tree *common.Tree) (err error) {
+func (d *forestMaintainer) tryShrinkATree(visitor catalog.Processor, tree *common.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
