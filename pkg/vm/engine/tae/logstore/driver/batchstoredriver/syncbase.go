@@ -36,7 +36,7 @@ type syncBase struct {
 	*sync.RWMutex
 	Lsn              uint64
 	lsnmu            sync.RWMutex
-	checkpointing    uint64
+	checkpointing    atomic.Uint64
 	ckpmu            *sync.RWMutex
 	truncatedVersion int
 	syncing          uint64
@@ -85,7 +85,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Entry) error {
 }
 
 func (base *syncBase) GetTruncated() (uint64, error) {
-	lsn := atomic.LoadUint64(&base.checkpointing)
+	lsn := base.checkpointing.Load()
 	return lsn, nil
 }
 
@@ -121,6 +121,6 @@ func (base *syncBase) onReplay(r *replayer) {
 	base.synced = r.maxlsn
 	base.syncing = r.maxlsn
 	if r.minlsn != math.MaxUint64 {
-		base.checkpointing = r.minlsn
+		base.checkpointing.Store(r.minlsn)
 	}
 }

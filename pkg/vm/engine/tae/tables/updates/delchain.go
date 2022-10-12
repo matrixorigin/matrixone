@@ -35,7 +35,7 @@ type DeleteChain struct {
 	*txnbase.MVCCChain
 	mvcc  *MVCCHandle
 	links map[uint32]*common.GenericSortedDList[txnif.MVCCNode]
-	cnt   uint32
+	cnt   atomic.Uint32
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -52,11 +52,11 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 }
 
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
-	atomic.AddUint32(&chain.cnt, cnt)
+	chain.cnt.Add(cnt)
 }
 
 func (chain *DeleteChain) GetDeleteCnt() uint32 {
-	return atomic.LoadUint32(&chain.cnt)
+	return chain.cnt.Load()
 }
 
 func (chain *DeleteChain) StringLocked() string {

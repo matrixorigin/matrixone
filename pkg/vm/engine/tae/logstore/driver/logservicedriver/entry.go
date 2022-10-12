@@ -29,16 +29,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
+type MetaType uint8
+
+const (
+	TInvalid MetaType = iota
+	TNormal
+	TReplay
+)
+
 type meta struct {
+	metaType    MetaType
 	appended    uint64
 	addr        map[uint64]uint64
 	payloadSize uint64
 }
 
 func newMeta() *meta {
-	return &meta{addr: make(map[uint64]uint64)}
+	return &meta{addr: make(map[uint64]uint64), metaType: TNormal}
 }
-
+func (m *meta) SetType(t MetaType) {
+	m.metaType = t
+}
+func (m *meta) GetType() MetaType {
+	return m.metaType
+}
 func (m *meta) SetAppended(appended uint64) {
 	m.appended = appended
 }
@@ -62,6 +76,10 @@ func (m *meta) GetMaxLsn() uint64 {
 	return max
 }
 func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, m.metaType); err != nil {
+		return
+	}
+	n += 1
 	if err = binary.Write(w, binary.BigEndian, m.appended); err != nil {
 		return
 	}
@@ -89,6 +107,10 @@ func (m *meta) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (m *meta) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &m.metaType); err != nil {
+		return
+	}
+	n += 1
 	if err = binary.Read(r, binary.BigEndian, &m.appended); err != nil {
 		return
 	}
@@ -139,9 +161,10 @@ func (m *meta) Marshal() (buf []byte, err error) {
 type recordEntry struct {
 	*meta
 	entries []*entry.Entry
+	cmd     *ReplayCmd
 
 	payload     []byte
-	unmarshaled uint32
+	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
 }
 
@@ -163,6 +186,7 @@ func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals
 		e := entry.NewEmptyEntry()
 		e.ReadFrom(bbuf)
 		h(e)
+		e.Entry.Free()
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals
@@ -179,12 +203,23 @@ func (r *recordEntry) WriteTo(w io.Writer) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	for _, e := range r.entries {
-		n1, err = e.WriteTo(w)
+	switch r.meta.metaType {
+	case TNormal:
+		for _, e := range r.entries {
+			n1, err = e.WriteTo(w)
+			if err != nil {
+				return
+			}
+			n += n1
+		}
+	case TReplay:
+		n1, err = r.cmd.WriteTo(w)
 		if err != nil {
 			return
 		}
 		n += n1
+	default:
+		panic("invalid type")
 	}
 	return
 }
@@ -231,14 +266,12 @@ func (r *recordEntry) prepareRecord() (size int) {
 }
 
 func (r *recordEntry) unmarshal() {
-	marshaled := atomic.LoadUint32(&r.unmarshaled)
-	if marshaled == 1 {
+	if r.unmarshaled.Load() == 1 {
 		return
 	}
 	r.mashalMu.Lock()
 	defer r.mashalMu.Unlock()
-	marshaled = atomic.LoadUint32(&r.unmarshaled)
-	if marshaled == 1 {
+	if r.unmarshaled.Load() == 1 {
 		return
 	}
 	buf := r.payload
@@ -247,7 +280,7 @@ func (r *recordEntry) unmarshal() {
 	if err != nil {
 		panic(err)
 	}
-	atomic.StoreUint32(&r.unmarshaled, 1)
+	r.unmarshaled.Store(1)
 }
 
 func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {

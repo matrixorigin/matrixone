@@ -32,6 +32,7 @@ type clientConfig struct {
 	recordSize             int
 	logserviceClientConfig *logservice.ClientConfig
 	GetClientRetryTimeOut  time.Duration
+	retryDuration          time.Duration
 }
 
 type clientWithRecord struct {
@@ -40,12 +41,20 @@ type clientWithRecord struct {
 	id     int
 }
 
-func newClient(cancelDuration time.Duration, recordsize int, cfg *logservice.ClientConfig) *clientWithRecord {
+func newClient(cancelDuration, retryDuration time.Duration, recordsize int, cfg *logservice.ClientConfig) *clientWithRecord {
 	ctx, cancel := context.WithTimeout(context.Background(), cancelDuration)
-	defer cancel()
 	logserviceClient, err := logservice.NewClient(ctx, *cfg)
+	cancel()
 	if err != nil {
-		panic(err) //TODO retry
+		err = RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), cancelDuration)
+			logserviceClient, err = logservice.NewClient(ctx, *cfg)
+			cancel()
+			return err == nil
+		})
+		if err != nil {
+			panic(err)
+		}
 	}
 	c := &clientWithRecord{
 		c:      logserviceClient,
@@ -69,7 +78,7 @@ type clientpool struct {
 	count      int
 	getTimeout time.Duration
 
-	closed int32
+	closed atomic.Int32
 
 	freeClients   []*clientWithRecord
 	clientFactory func() *clientWithRecord
@@ -96,7 +105,7 @@ func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
 func (c *clientpool) newClientFactory(cfg *clientConfig) func() *clientWithRecord {
 	return func() *clientWithRecord {
 		c.count++
-		client := newClient(cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
+		client := newClient(cfg.retryDuration, cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
 		client.id = c.count
 		return client
 	}
@@ -114,7 +123,7 @@ func (c *clientpool) Close() {
 	for _, client := range c.freeClients {
 		c.closefn(client)
 	}
-	atomic.StoreInt32(&c.closed, 1)
+	c.closed.Store(1)
 	c.mu.Unlock()
 }
 
@@ -154,8 +163,7 @@ func (c *clientpool) Get() (*clientWithRecord, error) {
 }
 
 func (c *clientpool) IsClosed() bool {
-	closed := atomic.LoadInt32(&c.closed)
-	return closed == 1
+	return c.closed.Load() == 1
 }
 
 func (c *clientpool) Put(client *clientWithRecord) {
