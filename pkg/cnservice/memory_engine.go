@@ -54,10 +54,8 @@ func (s *service) initMemoryEngine(
 	pu.StorageEngine = memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
-		memoryengine.GetClusterDetailsFromHAKeeper(
-			ctx,
-			hakeeper,
-		),
+		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
+		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
 
 	return nil
@@ -78,6 +76,20 @@ func (s *service) initMemoryEngineNonDist(
 	if err != nil {
 		return err
 	}
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnAddr := "1"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
 	storage, err := memorystorage.NewMemoryStorage(
 		mp,
 		memorystorage.SnapshotIsolation,
@@ -90,22 +102,11 @@ func (s *service) initMemoryEngineNonDist(
 
 	txnClient := memorystorage.NewStorageTxnClient(
 		ck,
-		storage,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
 	)
 	pu.TxnClient = txnClient
-
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
-		Shards:         shards,
-	}
 
 	engine := memoryengine.New(
 		ctx,
@@ -117,6 +118,7 @@ func (s *service) initMemoryEngineNonDist(
 				},
 			}, nil
 		},
+		memoryengine.RandomIDGenerator,
 	)
 	pu.StorageEngine = engine
 
