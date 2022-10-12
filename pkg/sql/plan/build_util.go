@@ -116,7 +116,6 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
-
 	for _, attr := range col.Attributes {
 		if s, ok := attr.(*tree.AttributeNull); ok {
 			nullAbility = s.Is
@@ -131,6 +130,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		}
 	}
 
+	if typ.Id == int32(types.T_json) {
+		if expr != nil && !isNullAstExpr(expr) {
+			return nil, moerr.NewSyntaxError("JSON column can not have default value")
+		}
+	}
 	if !nullAbility && isNullAstExpr(expr) {
 		return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
 	}
