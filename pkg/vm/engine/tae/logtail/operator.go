@@ -150,9 +150,6 @@ func (c *BoundTableOperator) processDatabases() error {
 	dbIt := c.catalog.MakeDBIt(true)
 	for ; dbIt.Valid(); dbIt.Next() {
 		dbentry := dbIt.Get().GetPayload()
-		if dbentry.IsSystemDB() {
-			continue
-		}
 		if err := c.visitor.OnDatabase(dbentry); err != nil {
 			return err
 		}
@@ -167,9 +164,6 @@ func (c *BoundTableOperator) processTables() error {
 	dbIt := c.catalog.MakeDBIt(true)
 	for ; dbIt.Valid(); dbIt.Next() {
 		db := dbIt.Get().GetPayload()
-		if db.IsSystemDB() {
-			continue
-		}
 		tblIt := db.MakeTableIt(true)
 		for ; tblIt.Valid(); tblIt.Next() {
 			if err := c.visitor.OnTable(tblIt.Get().GetPayload()); err != nil {
