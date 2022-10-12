@@ -27,7 +27,7 @@ func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, 
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
-	if err != nil{
+	if err != nil {
 		return 0, moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
@@ -91,7 +91,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 	var optValue uint8
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
-		if err != nil{
+		if err != nil {
 			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
@@ -121,7 +121,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 		}
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
-		if err != nil{
+		if err != nil {
 			return moerr.NewInvalidArg("regexp_instr have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {

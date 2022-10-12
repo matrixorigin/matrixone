@@ -29,7 +29,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 	}
 	//regular expression pattern
 	reg, err := regexp.Compile(pat)
-	if err != nil{
+	if err != nil {
 		return "", moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
 	}
 	//match result indexs
@@ -112,7 +112,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	var occValue int64
 	if len(expr) == 1 && len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
-		if err != nil{
+		if err != nil {
 			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
@@ -144,7 +144,7 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(pat) == 1 {
 		reg, err := regexp.Compile(pat[0])
-		if err != nil{
+		if err != nil {
 			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		for i := 0; i < maxLen; i++ {
