@@ -16,15 +16,12 @@ package export
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"path"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
@@ -35,17 +32,19 @@ var _ stringWriter = (*FSWriter)(nil)
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
-	ts  time.Time               // New args
+	ts  time.Time               // WithTimestamp ?
 	// pathBuilder
 	pathBuilder PathBuilder // WithPathBuilder
 
 	mux sync.Mutex
 	// rejoin builder
+	account  string // see WithAccount, default: ""
 	name     string // see WithName, as filename name, see GetNewFileName
 	database string // see WithDatabase, default: ""
 	nodeUUID string // see WithNode
 	nodeType string // see WithNode
-	filename string // see GetNewFileName, auto generated
+	// filename auto generated
+	filename string // see NewFSWriter
 
 	fileServiceName string // see WithFileServiceName
 
@@ -60,20 +59,28 @@ func (f FSWriterOption) Apply(w *FSWriter) {
 
 func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWriterOption) *FSWriter {
 	w := &FSWriter{
-		ctx:      ctx,
-		fs:       fs,
-		name:     "info",
-		database: "",
-		nodeUUID: "0",
-		nodeType: "standalone",
+		ctx:         ctx,
+		fs:          fs,
+		ts:          time.Now(),
+		pathBuilder: NewDBTablePathBuilder(),
+		name:        "info",
+		database:    "",
+		nodeUUID:    "0",
+		nodeType:    "standalone",
 
 		fileServiceName: etlFileServiceName,
 	}
 	for _, o := range opts {
 		o.Apply(w)
 	}
-	w.filename = w.GetNewFileName(util.Now())
+	w.filename = w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
 	return w
+}
+
+func WithAccount(a string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.account = a
+	})
 }
 
 func WithName(item batchpipe.HasName) FSWriterOption {
@@ -105,20 +112,17 @@ func WithPathBuilder(builder PathBuilder) FSWriterOption {
 	})
 }
 
-func (w *FSWriter) GetNewFileName(ts time.Time) string {
-	return fmt.Sprintf(`%s_%s_%s_%s`, w.name, w.nodeUUID, w.nodeType, ts.Format("20060102.150405.000000"))
-}
-
 // Write implement io.Writer, Please execute in series
 func (w *FSWriter) Write(p []byte) (n int, err error) {
 	w.mux.Lock()
 	defer w.mux.Unlock()
 	n = len(p)
 	mkdirTried := false
+	w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.database, w.filename) + CsvExtension,
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + w.pathBuilder.Join(w.filename),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),

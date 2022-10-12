@@ -52,6 +52,7 @@ type CSVWriter interface {
 // Merge like a compaction, merge input files into one/two/... files.
 type Merge struct {
 	Table       *Table                  // see With?
+	DB          string                  // see With?
 	Datetime    time.Time               // see With?
 	FS          fileservice.FileService // see With?
 	pathBuilder export.PathBuilder
@@ -123,7 +124,7 @@ func (m *Merge) Main() error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.Table)
+		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.DB, m.Table.GetName())
 		// get all file entry
 		fileEntry, err := m.FS.List(m.ctx, rootPath)
 		if err != nil {
@@ -185,7 +186,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, pathBuilder export.
 	timestamp_end := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
-	pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.Table)
+	pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
 	merge_filename := pathBuilder.NewMergeFilename(timestamp_start, timestamp_end)
 	merge_filepath := pathBuilder.Join(merge_filename)
 	new_file_writer := NewCSVWriter(m.FS, WithPath(merge_filepath))
