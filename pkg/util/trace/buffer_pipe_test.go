@@ -1040,7 +1040,7 @@ func Test_genCsvData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)
@@ -1127,7 +1127,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)

@@ -189,9 +189,7 @@ func (p *MetricLogPath) Timestamp() []string {
 
 var _ PathBuilder = (*MetricLogPathBuilder)(nil)
 
-type MetricLogPathBuilder struct {
-	directory string
-}
+type MetricLogPathBuilder struct{}
 
 func NewMetricLogPathBuilder() *MetricLogPathBuilder {
 	return &MetricLogPathBuilder{}

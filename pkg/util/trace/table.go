@@ -188,7 +188,7 @@ func (tbl *Table) GetRow() *Row {
 }
 
 func (r *Row) Reset() {
-	for idx, _ := range r.Columns {
+	for idx := 0; idx < len(r.Columns); idx++ {
 		r.Columns[idx] = ""
 	}
 }
