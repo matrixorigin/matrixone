@@ -154,7 +154,7 @@ func (kop *sqlTxn) insert(key, value string) error {
 	if err != nil {
 		panic(err)
 	}
-	if n != 0 {
+	if n != 1 {
 		panic(n)
 	}
 	return err
