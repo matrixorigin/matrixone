@@ -20,40 +20,49 @@ import (
 	"fmt"
 	"sync"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/multierr"
 )
 
 var (
-	createSql = `create table if not exists txn_test_kv (
-		key          varchar(10) primary key,
-		value        varchar(10))`
+	createSql = `create table if not exists txn_test_kv (kv_key varchar(20) primary key, kv_value varchar(10))`
 )
 
 // sqlClient use sql client to connect to CN node and use a table to simulate rr test KV operations
 type sqlClient struct {
-	env service.Cluster
+	cn service.CNService
 }
 
 func newSQLClient(env service.Cluster) (Client, error) {
-	return &sqlClient{
-		env: env,
-	}, nil
-}
-
-func (c *sqlClient) NewTxn(options ...client.TxnOption) (Txn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
-	c.env.WaitCNStoreReportedIndexed(ctx, 0)
-	store, err := c.env.GetCNStoreInfoIndexed(ctx, 0)
+	env.WaitCNStoreReportedIndexed(ctx, 0)
+	cn, err := env.GetCNServiceIndexed(0)
 	if err != nil {
 		return nil, err
 	}
-	return newSQLTxn(store)
+
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/system", cn.SQLAddress()))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(createSql)
+	if err != nil {
+		return nil, multierr.Append(err, db.Close())
+	}
+
+	return &sqlClient{
+		cn: cn,
+	}, multierr.Append(err, db.Close())
+}
+
+func (c *sqlClient) NewTxn(options ...client.TxnOption) (Txn, error) {
+	return newSQLTxn(c.cn)
 }
 
 type sqlTxn struct {
@@ -66,15 +75,10 @@ type sqlTxn struct {
 	}
 }
 
-func newSQLTxn(store logpb.CNStoreInfo) (Txn, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/system", store.ServiceAddress))
+func newSQLTxn(cn service.CNService) (Txn, error) {
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/system", cn.SQLAddress()))
 	if err != nil {
 		return nil, err
-	}
-
-	_, err = db.Exec(createSql)
-	if err != nil {
-		return nil, multierr.Append(err, db.Close())
 	}
 
 	txn, err := db.Begin()
@@ -117,7 +121,7 @@ func (kop *sqlTxn) Rollback() error {
 }
 
 func (kop *sqlTxn) Read(key string) (string, error) {
-	rows, err := kop.txn.Query("select key, value from txn_test_kv where key = ?", key)
+	rows, err := kop.txn.Query(fmt.Sprintf("select kv_key, kv_value from txn_test_kv where kv_key = '%s'", key))
 	if err != nil {
 		return "", err
 	}
@@ -142,11 +146,21 @@ func (kop *sqlTxn) Write(key, value string) error {
 }
 
 func (kop *sqlTxn) insert(key, value string) error {
-	_, err := kop.txn.Exec("insert into txn_test_kv(key, value) values(?, ?)", key, value)
+	res, err := kop.txn.Exec(fmt.Sprintf("insert into txn_test_kv(kv_key, kv_value) values('%s', '%s')", key, value))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		panic(err)
+	}
+	if n != 0 {
+		panic(n)
+	}
 	return err
 }
 
 func (kop *sqlTxn) update(key, value string) error {
-	_, err := kop.txn.Exec("update txn_test_kv set value = ? where key = ?", key, value)
+	_, err := kop.txn.Exec(fmt.Sprintf("update txn_test_kv set kv_value = '%s' where kv_key = '%s'", key, value))
 	return err
 }
