@@ -37,6 +37,7 @@ func Prepare(_ *process.Process, arg any) error {
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	var err error
 	param := arg.(*Argument).Es
 	bat := proc.InputBatch()
 	if bat == nil {
@@ -44,11 +45,17 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	dt := bat.GetVector(0).GetBytes(0)
 	var exArgs []string
-	err := json.Unmarshal(dt, &exArgs)
+	err = json.Unmarshal(dt, &exArgs)
 	if err != nil {
 		return false, err
 	}
 	rbat := batch.New(false, param.Attrs)
+	rbat.Cnt = 1
+	defer func() {
+		if err != nil {
+			rbat.Clean(proc.Mp())
+		}
+	}()
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
@@ -140,12 +147,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:       types.T(typ.Id),
-		Width:     typ.Width,
-		Size:      typ.Size,
-		Precision: typ.Precision,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
 }
 
 func judgeArgs[T Number](start, end, step T) ([]T, error) {

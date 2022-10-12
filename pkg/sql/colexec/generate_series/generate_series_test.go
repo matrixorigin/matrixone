@@ -442,6 +442,7 @@ func TestGenStep(t *testing.T) {
 
 func TestCall(t *testing.T) {
 	proc := testutil.NewProc()
+	beforeCall := proc.Mp().CurrNB()
 	arg := &Argument{
 		Es: &Param{
 			Attrs: []string{"result"},
@@ -460,35 +461,56 @@ func TestCall(t *testing.T) {
 	require.Equal(t, true, end)
 
 	param.Cols[0].Typ.Id = int32(types.T_int32)
-	proc.SetInputBatch(makeBatch([]string{"1", "10"}, proc))
+	bat := makeBatch([]string{"1", "10"}, proc)
+	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 10, proc.InputBatch().GetVector(0).Length())
+	proc.InputBatch().Clean(proc.Mp())
+	bat.Clean(proc.Mp())
 
 	param.Cols[0].Typ.Id = int32(types.T_int64)
-	proc.SetInputBatch(makeBatch([]string{"654345676543", "654345676549"}, proc))
+	bat = makeBatch([]string{"654345676543", "654345676549"}, proc)
+	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 7, proc.InputBatch().GetVector(0).Length())
+	proc.InputBatch().Clean(proc.Mp())
+	bat.Clean(proc.Mp())
 
 	param.Cols[0].Typ.Id = int32(types.T_datetime)
 	param.Cols[0].Typ.Precision = 0
-	proc.SetInputBatch(makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second"}, proc))
+	bat = makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second"}, proc)
+	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
+	proc.InputBatch().Clean(proc.Mp())
+	bat.Clean(proc.Mp())
+
+	bat = makeBatch([]string{"2020-01-01 00:00:-1", "2020-01-01 00:00:59", "1 second"}, proc)
+	proc.SetInputBatch(bat)
+	end, err = Call(0, proc, arg)
+	require.NotNil(t, err)
+	require.Equal(t, false, end)
+	proc.InputBatch().Clean(proc.Mp())
+
+	require.Equal(t, beforeCall, proc.Mp().CurrNB())
+
 }
 
 func makeBatch(arg []string, proc *process.Process) *batch.Batch {
 	dt, _ := json.Marshal(arg)
 	b := batch.New(true, []string{"result"})
+	b.Cnt = 1
 	b.InitZsOne(1)
 	b.Vecs[0] = vector.New(types.Type{Oid: types.T_varchar})
 	err := b.Vecs[0].Append(dt, false, proc.Mp())
 	if err != nil {
+		b.Clean(proc.Mp())
 		logutil.Errorf("set bytes at failed, err: %v", err)
 	}
 	return b
