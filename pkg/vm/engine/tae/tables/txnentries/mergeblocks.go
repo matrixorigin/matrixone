@@ -186,9 +186,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		}
 		deletes := view.DeleteMask
 		for colIdx, column := range view.Columns {
-			column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
-				column.UpdateMask,
-				column.UpdateVals,
+			view.DeleteMask = compute.ShuffleByDeletes(
 				deletes, entry.deletes[fromPos])
 			for row, v := range column.UpdateVals {
 				toPos, toRow := entry.resolveAddr(fromPos-skipped, row)
@@ -197,7 +195,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 				}
 			}
 		}
-		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, entry.deletes[fromPos])
+		view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
 		if view.DeleteMask != nil {
 			it := view.DeleteMask.Iterator()
 			for it.HasNext() {
