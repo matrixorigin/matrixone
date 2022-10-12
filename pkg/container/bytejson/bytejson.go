@@ -303,6 +303,16 @@ func (bj ByteJson) Query(path *Path) *ByteJson {
 	if len(out) == 1 {
 		return &out[0]
 	}
+	fullNull := true
+	for i := 0; i < len(out); i++ {
+		if out[i].Type != TpCodeLiteral || out[i].Data[0] != LiteralNull {
+			fullNull = false
+			break
+		}
+	}
+	if fullNull {
+		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+	}
 	return mergeToArray(out)
 }
 

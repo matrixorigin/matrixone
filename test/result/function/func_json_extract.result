@@ -46,6 +46,9 @@ null
 select json_extract('{"a":1}','$[1]');
 json_extract({"a":1}, $[1])
 null
+select json_extract(' {"af": [1, "2", {"aaf": "bb"}],"eab":"888"} ','$**.f');
+json_extract( {"af": [1, "2", {"aaf": "bb"}],"eab":"888"} , $**.f)
+null
 drop table if exists t1;
 create table t1 (a json,b int);
 insert into t1(a,b) values ('{"a":1,"b":2,"c":3}',1);
