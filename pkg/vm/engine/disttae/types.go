@@ -114,7 +114,7 @@ type Partitions []*Partition
 type Partition struct {
 	sync.RWMutex
 	// multi-version data of logtail, implemented with reusee's memengine
-	data *memtable.Table[RowID, DataValue, *DataRow]
+	Data *memtable.Table[RowID, DataValue, *DataRow]
 	// last updated timestamp
 	ts timestamp.Timestamp
 }

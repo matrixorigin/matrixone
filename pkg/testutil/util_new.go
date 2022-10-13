@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"strconv"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -631,4 +633,10 @@ func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 		}
 	}
 	return vec
+}
+
+func NewClock() clock.Clock {
+	return clock.NewHLCClock(func() int64 {
+		return time.Now().Unix()
+	}, math.MaxInt64)
 }

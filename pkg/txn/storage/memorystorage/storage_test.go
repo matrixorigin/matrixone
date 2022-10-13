@@ -21,14 +21,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/assert"
@@ -38,29 +39,21 @@ func testDatabase(
 	t *testing.T,
 	newStorage func() (*Storage, error),
 ) {
-	mp := mpool.MustNewZero()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
+
+	mp := mpool.MustNewZero()
+	clock := testutil.NewClock()
 
 	// new
 	s, err := newStorage()
 	assert.Nil(t, err)
 	defer s.Close(ctx)
 
-	// txn
-	txnMeta := txn.TxnMeta{
-		ID:     []byte("1"),
-		Status: txn.TxnStatus_Active,
-		SnapshotTS: timestamp.Timestamp{
-			PhysicalTime: 1,
-			LogicalTime:  1,
-		},
-	}
-
 	// open database
 	{
-		_, err := testRead[memoryengine.OpenDatabaseResp](
-			ctx, t, s, txnMeta,
+		_, err := testReadTx[memoryengine.OpenDatabaseResp](
+			ctx, t, s, clock,
 			memoryengine.OpOpenDatabase,
 			memoryengine.OpenDatabaseReq{
 				Name: "foo",
@@ -71,8 +64,8 @@ func testDatabase(
 
 	// create database
 	{
-		resp, err := testWrite[memoryengine.CreateDatabaseResp](
-			ctx, t, s, txnMeta,
+		resp, err := testWriteTx[memoryengine.CreateDatabaseResp](
+			ctx, t, s, clock,
 			memoryengine.OpCreateDatabase,
 			memoryengine.CreateDatabaseReq{
 				Name: "foo",
@@ -84,8 +77,8 @@ func testDatabase(
 
 	// get databases
 	{
-		resp, err := testRead[memoryengine.GetDatabasesResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.GetDatabasesResp](
+			ctx, t, s, clock,
 			memoryengine.OpGetDatabases,
 			memoryengine.GetDatabasesReq{},
 		)
@@ -97,8 +90,8 @@ func testDatabase(
 	// open database
 	var dbID ID
 	{
-		resp, err := testRead[memoryengine.OpenDatabaseResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.OpenDatabaseResp](
+			ctx, t, s, clock,
 			memoryengine.OpOpenDatabase,
 			memoryengine.OpenDatabaseReq{
 				Name: "foo",
@@ -111,8 +104,8 @@ func testDatabase(
 		// delete database
 		defer func() {
 			{
-				resp, err := testWrite[memoryengine.DeleteDatabaseResp](
-					ctx, t, s, txnMeta,
+				resp, err := testWriteTx[memoryengine.DeleteDatabaseResp](
+					ctx, t, s, clock,
 					memoryengine.OpDeleteDatabase,
 					memoryengine.DeleteDatabaseReq{
 						Name: "foo",
@@ -122,8 +115,8 @@ func testDatabase(
 				assert.NotEmpty(t, resp.ID)
 			}
 			{
-				resp, err := testRead[memoryengine.GetDatabasesResp](
-					ctx, t, s, txnMeta,
+				resp, err := testReadTx[memoryengine.GetDatabasesResp](
+					ctx, t, s, clock,
 					memoryengine.OpGetDatabases,
 					memoryengine.GetDatabasesReq{},
 				)
@@ -135,8 +128,8 @@ func testDatabase(
 
 	// open relation
 	{
-		_, err := testRead[memoryengine.OpenRelationResp](
-			ctx, t, s, txnMeta,
+		_, err := testReadTx[memoryengine.OpenRelationResp](
+			ctx, t, s, clock,
 			memoryengine.OpOpenRelation,
 			memoryengine.OpenRelationReq{
 				DatabaseID: dbID,
@@ -148,8 +141,8 @@ func testDatabase(
 
 	// create relation
 	{
-		resp, err := testWrite[memoryengine.CreateRelationResp](
-			ctx, t, s, txnMeta,
+		resp, err := testWriteTx[memoryengine.CreateRelationResp](
+			ctx, t, s, clock,
 			memoryengine.OpCreateRelation,
 			memoryengine.CreateRelationReq{
 				DatabaseID: dbID,
@@ -179,8 +172,8 @@ func testDatabase(
 
 	// get relations
 	{
-		resp, err := testRead[memoryengine.GetRelationsResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.GetRelationsResp](
+			ctx, t, s, clock,
 			memoryengine.OpGetRelations,
 			memoryengine.GetRelationsReq{
 				DatabaseID: dbID,
@@ -194,8 +187,8 @@ func testDatabase(
 	// open relation
 	var relID ID
 	{
-		resp, err := testRead[memoryengine.OpenRelationResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.OpenRelationResp](
+			ctx, t, s, clock,
 			memoryengine.OpOpenRelation,
 			memoryengine.OpenRelationReq{
 				DatabaseID: dbID,
@@ -211,8 +204,8 @@ func testDatabase(
 
 	// get relation defs
 	{
-		resp, err := testRead[memoryengine.GetTableDefsResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.GetTableDefsResp](
+			ctx, t, s, clock,
 			memoryengine.OpGetTableDefs,
 			memoryengine.GetTableDefsReq{
 				TableID: relID,
@@ -246,8 +239,8 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		_, err := testWrite[memoryengine.WriteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.WriteResp](
+			ctx, t, s, clock,
 			memoryengine.OpWrite,
 			memoryengine.WriteReq{
 				TableID: relID,
@@ -258,6 +251,12 @@ func testDatabase(
 	}
 
 	// read
+	now, _ := clock.Now()
+	txnMeta := txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	var iterID ID
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
@@ -296,8 +295,8 @@ func testDatabase(
 				1,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.DeleteResp](
+			ctx, t, s, clock,
 			memoryengine.OpDelete,
 			memoryengine.DeleteReq{
 				TableID:    relID,
@@ -309,6 +308,12 @@ func testDatabase(
 	}
 
 	// read after delete
+	now, _ = clock.Now()
+	txnMeta = txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
 			ctx, t, s, txnMeta,
@@ -346,8 +351,8 @@ func testDatabase(
 				8,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.DeleteResp](
+			ctx, t, s, clock,
 			memoryengine.OpDelete,
 			memoryengine.DeleteReq{
 				TableID:    relID,
@@ -359,6 +364,12 @@ func testDatabase(
 	}
 
 	// read after delete
+	now, _ = clock.Now()
+	txnMeta = txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
 			ctx, t, s, txnMeta,
@@ -409,8 +420,8 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(1)
-		_, err := testWrite[memoryengine.WriteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.WriteResp](
+			ctx, t, s, clock,
 			memoryengine.OpWrite,
 			memoryengine.WriteReq{
 				TableID: relID,
@@ -422,8 +433,8 @@ func testDatabase(
 
 	// delete relation
 	{
-		resp, err := testWrite[memoryengine.DeleteRelationResp](
-			ctx, t, s, txnMeta,
+		resp, err := testWriteTx[memoryengine.DeleteRelationResp](
+			ctx, t, s, clock,
 			memoryengine.OpDeleteRelation,
 			memoryengine.DeleteRelationReq{
 				DatabaseID: dbID,
@@ -434,8 +445,8 @@ func testDatabase(
 		assert.NotEmpty(t, resp.ID)
 	}
 	{
-		resp, err := testRead[memoryengine.GetRelationsResp](
-			ctx, t, s, txnMeta,
+		resp, err := testReadTx[memoryengine.GetRelationsResp](
+			ctx, t, s, clock,
 			memoryengine.OpGetRelations,
 			memoryengine.GetRelationsReq{
 				DatabaseID: dbID,
@@ -447,8 +458,8 @@ func testDatabase(
 
 	// new relation without primary key
 	{
-		resp, err := testWrite[memoryengine.CreateRelationResp](
-			ctx, t, s, txnMeta,
+		resp, err := testWriteTx[memoryengine.CreateRelationResp](
+			ctx, t, s, clock,
 			memoryengine.OpCreateRelation,
 			memoryengine.CreateRelationReq{
 				DatabaseID: dbID,
@@ -499,8 +510,8 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		_, err := testWrite[memoryengine.WriteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.WriteResp](
+			ctx, t, s, clock,
 			memoryengine.OpWrite,
 			memoryengine.WriteReq{
 				TableID: relID,
@@ -521,8 +532,8 @@ func testDatabase(
 				1,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.DeleteResp](
+			ctx, t, s, clock,
 			memoryengine.OpDelete,
 			memoryengine.DeleteReq{
 				TableID:    relID,
@@ -534,6 +545,12 @@ func testDatabase(
 	}
 
 	// read after delete
+	now, _ = clock.Now()
+	txnMeta = txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
 			ctx, t, s, txnMeta,
@@ -571,8 +588,8 @@ func testDatabase(
 				8,
 			},
 		)
-		_, err := testWrite[memoryengine.DeleteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.DeleteResp](
+			ctx, t, s, clock,
 			memoryengine.OpDelete,
 			memoryengine.DeleteReq{
 				TableID:    relID,
@@ -584,6 +601,12 @@ func testDatabase(
 	}
 
 	// read after delete
+	now, _ = clock.Now()
+	txnMeta = txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
 			ctx, t, s, txnMeta,
@@ -614,8 +637,8 @@ func testDatabase(
 
 	// delete by row id
 	{
-		_, err := testWrite[memoryengine.DeleteResp](
-			ctx, t, s, txnMeta,
+		_, err := testWriteTx[memoryengine.DeleteResp](
+			ctx, t, s, clock,
 			memoryengine.OpDelete,
 			memoryengine.DeleteReq{
 				TableID:    relID,
@@ -627,6 +650,12 @@ func testDatabase(
 	}
 
 	// read after delete
+	now, _ = clock.Now()
+	txnMeta = txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
 	{
 		resp, err := testRead[memoryengine.NewTableIterResp](
 			ctx, t, s, txnMeta,
@@ -686,6 +715,41 @@ func testRead[
 	return
 }
 
+func testReadTx[
+	Resp any,
+	Req any,
+](
+	ctx context.Context,
+	t *testing.T,
+	s *Storage,
+	clock clock.Clock,
+	op uint32,
+	req Req,
+) (
+	resp Resp,
+	err error,
+) {
+
+	now, _ := clock.Now()
+
+	txnMeta := txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
+
+	resp, err = testRead[Resp](ctx, t, s, txnMeta, op, req)
+	if err != nil {
+		s.Rollback(ctx, txnMeta)
+		return
+	}
+
+	err = s.Commit(ctx, txnMeta)
+	assert.Nil(t, err)
+
+	return
+}
+
 func testWrite[
 	Resp any,
 	Req any,
@@ -711,6 +775,41 @@ func testWrite[
 	}
 
 	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
+	assert.Nil(t, err)
+
+	return
+}
+
+func testWriteTx[
+	Resp any,
+	Req any,
+](
+	ctx context.Context,
+	t *testing.T,
+	s *Storage,
+	clock clock.Clock,
+	op uint32,
+	req Req,
+) (
+	resp Resp,
+	err error,
+) {
+
+	now, _ := clock.Now()
+
+	txnMeta := txn.TxnMeta{
+		ID:         []byte(uuid.NewString()),
+		Status:     txn.TxnStatus_Active,
+		SnapshotTS: now,
+	}
+
+	resp, err = testWrite[Resp](ctx, t, s, txnMeta, op, req)
+	if err != nil {
+		s.Rollback(ctx, txnMeta)
+		return
+	}
+
+	err = s.Commit(ctx, txnMeta)
 	assert.Nil(t, err)
 
 	return

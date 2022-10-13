@@ -42,6 +42,7 @@ type tableState[
 	rows    *btree.BTreeG[*PhysicalRow[K, V]]
 	indexes *btree.BTreeG[*IndexEntry[K, V]]
 	writes  *btree.BTreeG[*WriteEntry[K, V]]
+	logs    *btree.BTreeG[*LogEntry[K, V]]
 }
 
 func (t *tableState[K, V]) Copy() *tableState[K, V] {
@@ -49,6 +50,7 @@ func (t *tableState[K, V]) Copy() *tableState[K, V] {
 		rows:    t.rows.Copy(),
 		indexes: t.indexes.Copy(),
 		writes:  t.writes.Copy(),
+		logs:    t.logs.Copy(),
 	}
 }
 
@@ -69,7 +71,8 @@ type IndexEntry[
 	Index     Tuple
 	Key       K
 	VersionID int64
-	Value     V
+
+	Value V
 }
 
 type WriteEntry[
@@ -77,8 +80,21 @@ type WriteEntry[
 	V any,
 ] struct {
 	Transaction *Transaction
-	Row         *PhysicalRow[K, V]
-	VersionID   int64
+	Key         *K
+
+	VersionID int64
+}
+
+type LogEntry[
+	K Ordered[K],
+	V any,
+] struct {
+	Time     Time
+	Key      K
+	IsDelete bool
+
+	BornTime Time
+	Value    V
 }
 
 func NewTable[
@@ -91,6 +107,7 @@ func NewTable[
 		rows:    btree.NewBTreeG(comparePhysicalRow[K, V]),
 		indexes: btree.NewBTreeG(compareIndexEntry[K, V]),
 		writes:  btree.NewBTreeG(compareWriteEntry[K, V]),
+		logs:    btree.NewBTreeG(compareLogEntry[K, V]),
 	}
 	ret.state.Store(state)
 	return ret
@@ -132,15 +149,34 @@ func compareWriteEntry[
 	if a.Transaction.ID > b.Transaction.ID {
 		return false
 	}
-	if a.Row != nil && b.Row != nil {
-		if a.Row.Key.Less(b.Row.Key) {
+	if a.Key != nil && b.Key != nil {
+		if (*a.Key).Less(*b.Key) {
 			return true
 		}
-		if b.Row.Key.Less(a.Row.Key) {
+		if (*b.Key).Less(*a.Key) {
 			return false
 		}
 	}
-	return a.Row == nil && b.Row != nil
+	return a.Key == nil && b.Key != nil
+}
+
+func compareLogEntry[
+	K Ordered[K],
+	V any,
+](a, b *LogEntry[K, V]) bool {
+	if a.Time.Before(b.Time) {
+		return true
+	}
+	if b.Time.Before(a.Time) {
+		return false
+	}
+	if a.Key.Less(b.Key) {
+		return true
+	}
+	if b.Key.Less(a.Key) {
+		return false
+	}
+	return a.IsDelete && !b.IsDelete
 }
 
 func (t *Table[K, V, R]) Insert(
@@ -185,7 +221,7 @@ func (t *Table[K, V, R]) Insert(
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -229,7 +265,76 @@ func (t *Table[K, V, R]) Update(
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
+			VersionID:   version.ID,
+		})
+
+		// row entry
+		state.rows.Set(physicalRow)
+
+		tx.Time.Tick()
+		return nil
+	})
+}
+
+func (t *Table[K, V, R]) Upsert(
+	tx *Transaction,
+	row R,
+) error {
+	key := row.Key()
+
+	return t.update(func(state *tableState[K, V]) error {
+		physicalRow := getOrSetRowByKey(state.rows, key)
+
+		value := row.Value()
+		updatedPhysicalRow, version, err := physicalRow.Update(
+			tx.Time, tx, value,
+		)
+		if err != nil {
+
+			if errors.Is(err, sql.ErrNoRows) {
+				// insert
+				if err := validate(physicalRow, tx); err != nil {
+					return err
+				}
+
+				for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+					version := physicalRow.Versions[i]
+					if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy.Read) {
+						return moerr.NewDuplicate()
+					}
+				}
+
+				value := row.Value()
+				physicalRow, version, err = physicalRow.Insert(
+					tx.Time, tx, value,
+				)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				return err
+			}
+		} else {
+			physicalRow = updatedPhysicalRow
+		}
+
+		// index entry
+		for _, index := range row.Indexes() {
+			state.indexes.Set(&IndexEntry[K, V]{
+				Index:     index,
+				Key:       key,
+				VersionID: version.ID,
+				Value:     value,
+			})
+		}
+
+		// write entry
+		tx.committers[t] = struct{}{}
+		state.writes.Set(&WriteEntry[K, V]{
+			Transaction: tx,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -261,7 +366,7 @@ func (t *Table[K, V, R]) Delete(
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -339,6 +444,16 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 	return
 }
 
+func (t *Table[K, V, R]) GetLogs(fromTime *Time, toTime *Time) (entries []*LogEntry[K, V], err error) {
+	iter := t.NewLogIter(fromTime, toTime)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		entries = append(entries, entry)
+	}
+	return
+}
+
 func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 	return t.update(func(state *tableState[K, V]) error {
 		iter := state.writes.Copy().Iter()
@@ -352,22 +467,35 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				break
 			}
 
-			if err := validate(entry.Row, tx); err != nil {
+			// validate
+			physicalRow := getRowByKey(state.rows, *entry.Key)
+			if err := validate(physicalRow, tx); err != nil {
 				return err
 			}
 
 			// set born time and lock time to commit time
-			physicalRow := entry.Row.clone()
+			physicalRow = physicalRow.clone()
 			for i, version := range physicalRow.Versions {
-				if version.ID == entry.VersionID {
-					if version.LockTx == tx {
-						version.LockTime = tx.CommitTime
-					}
-					if version.BornTx == tx {
-						version.BornTime = tx.CommitTime
-					}
-					physicalRow.Versions[i] = version
+				if version.ID != entry.VersionID {
+					continue
 				}
+				if version.LockTx == tx {
+					version.LockTime.Timestamp = tx.CommitTime.Timestamp
+				}
+				if version.BornTx == tx {
+					version.BornTime.Timestamp = tx.CommitTime.Timestamp
+				}
+				physicalRow.Versions[i] = version
+
+				// add log entry
+				state.logs.Set(&LogEntry[K, V]{
+					Time:     tx.CommitTime,
+					Key:      physicalRow.Key,
+					IsDelete: version.LockTx == tx,
+					BornTime: version.BornTime,
+					Value:    version.Value,
+				})
+
 			}
 			state.rows.Set(physicalRow)
 

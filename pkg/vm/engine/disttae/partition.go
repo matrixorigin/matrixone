@@ -38,7 +38,7 @@ const (
 
 func NewPartition() *Partition {
 	return &Partition{
-		data: memtable.NewTable[RowID, DataValue, *DataRow](),
+		Data: memtable.NewTable[RowID, DataValue, *DataRow](),
 	}
 }
 
@@ -87,7 +87,7 @@ func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
 		t,
 		memtable.SnapshotIsolation,
 	)
-	if _, err := p.data.Get(tx, RowID(key)); err != nil {
+	if _, err := p.Data.Get(tx, RowID(key)); err != nil {
 		return false
 	}
 	return true
@@ -118,7 +118,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		}
 		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
 
-		err := p.data.Delete(tx, rowID)
+		err := p.Data.Delete(tx, rowID)
 		if err != nil {
 			return err
 		}
@@ -160,7 +160,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 		var primaryKey any
 		if primaryKeyIndex >= 0 {
 			primaryKey = memtable.ToOrdered(tuple[primaryKeyIndex])
-			entries, err := p.data.Index(tx, memtable.Tuple{
+			entries, err := p.Data.Index(tx, memtable.Tuple{
 				index_PrimaryKey,
 				primaryKey,
 			})
@@ -190,7 +190,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 		})
 
-		err = p.data.Insert(tx, &DataRow{
+		err = p.Data.Upsert(tx, &DataRow{
 			rowID:   rowID,
 			value:   dataValue,
 			indexes: indexes,
@@ -215,7 +215,7 @@ func (p *Partition) IterRowIDsByBlockID(ctx context.Context, ts timestamp.Timest
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	iter := p.data.NewIndexIter(tx, memtable.Tuple{
+	iter := p.Data.NewIndexIter(tx, memtable.Tuple{
 		index_BlockID,
 		memtable.ToOrdered(blockID),
 	})
@@ -276,7 +276,7 @@ func (p *Partition) NewReader(
 	}
 	readers[0] = &PartitionReader{
 		typsMap:  mp,
-		iter:     p.data.NewIter(tx),
+		iter:     p.Data.NewIter(tx),
 		readTime: t,
 		tx:       tx,
 		expr:     expr,

@@ -17,7 +17,6 @@ package memorystorage
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -60,12 +59,11 @@ func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
 
 	now := Time{
 		Timestamp: timestamp.Timestamp{
-			PhysicalTime: math.MinInt64,
+			PhysicalTime: 0,
 		},
 	}
 	tx := memtable.NewTransaction(uuid.NewString(), now, memtable.SnapshotIsolation)
 	defer func() {
-		now.Statement = math.MaxInt
 		if err := tx.Commit(now); err != nil {
 			panic(err)
 		}

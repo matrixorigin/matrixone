@@ -43,10 +43,19 @@ func (t TestRow) Indexes() []Tuple {
 	}
 }
 
+// time util
+func ts(i int64) Time {
+	return Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: i,
+		},
+	}
+}
+
 func TestTable(t *testing.T) {
 
 	table := NewTable[Int, int, TestRow]()
-	tx := NewTransaction("1", Time{}, Serializable)
+	tx := NewTransaction("1", ts(1), Serializable)
 	row := TestRow{key: 42, value: 1}
 
 	// insert
@@ -85,15 +94,19 @@ func TestTable(t *testing.T) {
 	err = table.Delete(tx, Int(42))
 	assert.Nil(t, err)
 
-}
+	// commit
+	err = tx.Commit(tx.Time)
+	assert.Nil(t, err)
 
-// time util
-func ts(i int64) Time {
-	return Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: i,
-		},
-	}
+	// logs
+	logEntries, err := table.GetLogs(nil, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(logEntries))
+	assert.Equal(t, tx.Time, logEntries[0].Time)
+	assert.Equal(t, Int(42), logEntries[0].Key)
+	assert.Equal(t, true, logEntries[0].IsDelete)
+	assert.Equal(t, 2, logEntries[0].Value)
+
 }
 
 func TestTableIsolation(t *testing.T) {

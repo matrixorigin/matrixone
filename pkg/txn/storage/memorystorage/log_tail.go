@@ -26,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+	"go.uber.org/zap"
 )
 
 type LogTailEntry = apipb.Entry
@@ -38,6 +40,8 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 
 	// tx
 	tx := m.getTx(meta)
+
+	logutil.Debug("get log tail", zap.Any("tx", meta))
 
 	// table and db infos
 	tableRow, err := m.relations.Get(tx, tableID)
@@ -192,35 +196,28 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 
 	} else {
 		// non-system table data
-		iter := m.data.NewDiffIter(fromTime, toTime)
+		iter := m.data.NewLogIter(fromTime, toTime)
 		defer iter.Close()
 
-		tableKey := DataKey{
-			tableID:    tableID,
-			primaryKey: Tuple{},
-		}
-		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-			key, value, bornTime, lockTime, err := iter.Read()
-			if err != nil {
-				return err
-			}
-			if key.tableID != tableID {
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			if entry.Key.tableID != tableID {
 				break
 			}
-			if lockTime != nil {
+			if entry.IsDelete {
 				// delete
 				if err := appendDelete(&NamedDataRow{
-					Value:    value,
+					Value:    entry.Value,
 					AttrsMap: attrsMap,
-				}, *lockTime, bornTime); err != nil {
+				}, entry.Time, entry.BornTime); err != nil {
 					return err
 				}
 			} else {
 				// insert
 				if err := appendInsert(&NamedDataRow{
-					Value:    value,
+					Value:    entry.Value,
 					AttrsMap: attrsMap,
-				}, bornTime, bornTime); err != nil {
+				}, entry.Time, entry.BornTime); err != nil {
 					return err
 				}
 			}
@@ -268,21 +265,18 @@ func logTailHandleSystemTable[
 	appendDelete func(row NamedRow, commitTime Time, readTime Time) error,
 ) error {
 
-	iter := table.NewDiffIter(fromTime, toTime)
+	iter := table.NewLogIter(fromTime, toTime)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
-		_, value, bornTime, lockTime, err := iter.Read()
-		if err != nil {
-			return err
-		}
-		if lockTime != nil {
+		entry := iter.Item()
+		if entry.IsDelete {
 			// delete
-			if err := appendDelete(value, *lockTime, bornTime); err != nil {
+			if err := appendDelete(entry.Value, entry.Time, entry.BornTime); err != nil {
 				return err
 			}
 		} else {
 			// insert
-			if err := appendInsert(value, bornTime, bornTime); err != nil {
+			if err := appendInsert(entry.Value, entry.Time, entry.BornTime); err != nil {
 				return err
 			}
 		}

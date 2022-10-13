@@ -57,8 +57,10 @@ func TestCatalogHandler(t *testing.T) {
 	}()
 
 	handler := storage.handler
+	now, _ := clock.Now()
 	meta := txn.TxnMeta{
-		ID: []byte(uuid.NewString()),
+		ID:         []byte(uuid.NewString()),
+		SnapshotTS: now,
 	}
 
 	// system db
