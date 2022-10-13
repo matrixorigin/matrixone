@@ -50,6 +50,8 @@ func (rm *RoutineManager) GetSkipCheckUser() bool {
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
 	return rm.pu
 }
 
