@@ -117,7 +117,11 @@ func TestByStringOne(t *testing.T) {
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+		if kase.want == "null" {
+			require.True(t, q.IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want, q.String())
 	}
 }
 
@@ -131,7 +135,11 @@ func TestByString(t *testing.T) {
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result[0]))
+		if kase.want == "null" {
+			require.True(t, result[0].IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want, result[0].String())
 	}
 }
 
@@ -153,7 +161,11 @@ func TestByJsonOne(t *testing.T) {
 		require.Nil(t, err)
 		q, err := byJsonOne(json, &ph)
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+		if kase.want == "null" {
+			require.True(t, q.IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want, q.String())
 	}
 }
 
@@ -175,6 +187,10 @@ func TestByJson(t *testing.T) {
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result[0]))
+		if kase.want == "null" {
+			require.True(t, result[0].IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want, result[0].String())
 	}
 }
