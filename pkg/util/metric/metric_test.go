@@ -94,6 +94,7 @@ func TestMetricNoProm(t *testing.T) {
 
 	withModifiedConfig(func() {
 		SV := &config.ObservabilityParameters{}
+		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
