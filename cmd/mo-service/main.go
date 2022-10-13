@@ -282,5 +282,16 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
+	stopper.RunNamedTask("merge", func(ctx context.Context) {
+		merge := trace.NewMerge(ctx,
+			trace.WithDatabase(metric.MetricDBConst),
+			trace.WithTable(metric.SingleMetricTable),
+			trace.WithFileService(fs),
+			trace.WithMinFilesMerge(1),
+		)
+		go merge.Start(15 * time.Second)
+		<-ctx.Done()
+		merge.Stop()
+	})
 	return nil
 }

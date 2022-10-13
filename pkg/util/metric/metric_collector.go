@@ -274,7 +274,7 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 		pipeOpts = append(pipeOpts,
 			bp.PipeWithBufferWorkerNum(1),
 			bp.PipeWithItemNameFormatter(func(bp.HasName) string {
-				return singleMetricTable.GetName()
+				return SingleMetricTable.GetName()
 			}))
 	}
 	base := bp.NewBaseBatchPipe[*pb.MetricFamily, trace.CSVRequests](c, pipeOpts...)
@@ -395,7 +395,7 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 		s.writeCsvOneLine(buf, row.ToStrings())
 	}
 
-	row := singleMetricTable.GetRow()
+	row := SingleMetricTable.GetRow()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 
@@ -435,8 +435,8 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 
 	reqs := make([]*trace.CSVRequest, 0, len(buffer))
 	for account, buf := range buffer {
-		writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable,
-			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(singleMetricTable.PathBuilder))
+		writer := s.writerFactory(trace.DefaultContext(), SingleMetricTable.Database, SingleMetricTable,
+			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(SingleMetricTable.PathBuilder))
 		reqs = append(reqs, trace.NewCSVRequest(writer, buf.String()))
 	}
 

@@ -202,7 +202,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	}()
 
 	if !multiTable {
-		mustExec(singleMetricTable.ToCreateSql(true))
+		mustExec(SingleMetricTable.ToCreateSql(true))
 		for desc := range descChan {
 			sql := createView(desc)
 			mustExec(sql)
@@ -333,7 +333,7 @@ var (
 	metricTypeColumn        = trace.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
 )
 
-var singleMetricTable = &trace.Table{
+var SingleMetricTable = &trace.Table{
 	Database:         MetricDBConst,
 	Table:            `metric`,
 	Columns:          []trace.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
@@ -341,7 +341,7 @@ var singleMetricTable = &trace.Table{
 	Engine:           trace.ExternalTableEngine,
 	Comment:          `metric data`,
 	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
-	PathBuilder:      export.NewDBTablePathBuilder(),
+	PathBuilder:      export.NewMetricLogPathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 }
 
@@ -353,7 +353,7 @@ func NewMetricView(tbl string, opts ...trace.ViewOption) *trace.View {
 	view := &trace.View{
 		Database:    MetricDBConst,
 		Table:       tbl,
-		OriginTable: singleMetricTable,
+		OriginTable: SingleMetricTable,
 		Columns:     []trace.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
 		Condition:   &ViewWhereCondition{Table: tbl},
 	}
@@ -366,7 +366,7 @@ func NewMetricView(tbl string, opts ...trace.ViewOption) *trace.View {
 func NewMetricViewWithLabels(tbl string, lbls []string) *trace.View {
 	var options []trace.ViewOption
 	for _, label := range lbls {
-		for _, col := range singleMetricTable.Columns {
+		for _, col := range SingleMetricTable.Columns {
 			if strings.EqualFold(label, col.Name) {
 				options = append(options, trace.WithColumn(col))
 			}

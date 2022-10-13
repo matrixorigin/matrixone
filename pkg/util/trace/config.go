@@ -49,6 +49,8 @@ const (
 	KB
 	MB
 	GB
+	TB
+	PB
 )
 
 // tracerProviderConfig.

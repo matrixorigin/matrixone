@@ -35,35 +35,26 @@ import (
 // handle merge
 // ========================
 
-type CSVWriter interface {
-	// WriteStrings write record as one line into csv file
-	WriteStrings(record []string) error
-	// FlushAndClose flush its buffer and close.
-	FlushAndClose() error
-}
-
-// =======================
-// main logic
-// =======================
-
 // Merge like a compaction, merge input files into one/two/... files.
 type Merge struct {
-	Table       *Table                  // see With?
-	DB          string                  // see With?
-	Datetime    time.Time               // see With?
-	FS          fileservice.FileService // see With?
-	pathBuilder export.PathBuilder
+	Table       *Table                  // see WithTable
+	DB          string                  // see WithDatabase
+	Datetime    time.Time               // see WithDatetime
+	FS          fileservice.FileService // see WithFileService
+	pathBuilder export.PathBuilder      // see WithPathBuilder
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
-	MaxFileSize int64 // see With?
+	MaxFileSize int64 // see WithMaxFileSize
 	// MaxMergeJobs 允许进行的Merge的任务个数，default: 16
-	MaxMergeJobs int64 // see With?
+	MaxMergeJobs int64 // see WithMaxMergeJobs
 	// MinFilesMerge 控制Merge最少合并文件个数，default：2
 	//
 	// Deprecated: useless in Merge all in one file
-	MinFilesMerge int //
+	MinFilesMerge int // see WithMinFilesMerge
 	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 16 MB
-	FileCacheSize int64 // see With?
+	//
+	// Deprecated: useless while NOT support multiParts upload
+	FileCacheSize int64
 
 	// flow ctrl
 	ctx        context.Context
@@ -78,8 +69,57 @@ func (opt MergeOption) Apply(m *Merge) {
 	opt(m)
 }
 
+func WithTable(tbl *Table) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.Table = tbl
+	})
+}
+func WithDatabase(db string) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.DB = db
+	})
+}
+func WithDatetime(ts time.Time) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.Datetime = ts
+	})
+}
+func WithFileService(fs fileservice.FileService) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.FS = fs
+	})
+}
+func WithPathBuilder(builder export.PathBuilder) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.pathBuilder = builder
+	})
+}
+func WithMaxFileSize(filesize int64) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.MaxFileSize = filesize
+	})
+}
+func WithMaxMergeJobs(jobs int64) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.MaxMergeJobs = jobs
+	})
+}
+
+func WithMinFilesMerge(files int) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.MinFilesMerge = files
+	})
+}
+
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
-	m := &Merge{}
+	m := &Merge{
+		Datetime:      time.Now(),
+		pathBuilder:   export.NewMetricLogPathBuilder(),
+		MaxFileSize:   128 * MB,
+		MaxMergeJobs:  16,
+		MinFilesMerge: 2,
+		FileCacheSize: PB, // disable it by set very large
+	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
 		opt(m)
@@ -103,17 +143,35 @@ func (m *Merge) valid() {
 	}
 }
 
+func (m *Merge) Start(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case ts := <-ticker.C:
+			m.Main(ts)
+		case <-m.ctx.Done():
+			return
+		}
+	}
+}
+
 // Stop should call only once
 func (m *Merge) Stop() {
 	m.cancelFunc()
 }
 
+// =======================
+// main logic
+// =======================
+
 // Main handle cron job
 // foreach all
-func (m *Merge) Main() error {
+func (m *Merge) Main(ts time.Time) error {
 	var files = make([]string, 1000)
 	var totalSize int64
 
+	m.Datetime = ts
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
@@ -136,8 +194,9 @@ func (m *Merge) Main() error {
 			files = append(files, filepath)
 		}
 
-		go m.doMergeFiles(account.Name, files)
-
+		if err := m.doMergeFiles(account.Name, files); err != nil {
+			logutil.Errorf("err: %v\n", err)
+		}
 	}
 
 	return err
@@ -276,6 +335,13 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 
 	// return content Reader
 	return NewContentReader(content), nil
+}
+
+type CSVWriter interface {
+	// WriteStrings write record as one line into csv file
+	WriteStrings(record []string) error
+	// FlushAndClose flush its buffer and close.
+	FlushAndClose() error
 }
 
 var _ CSVWriter = (*ContentWriter)(nil)
