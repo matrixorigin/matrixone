@@ -412,7 +412,7 @@ import (
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-%type <funcExpr> function_call_json
+//%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -5386,10 +5386,10 @@ simple_expr:
     {
         $$ = $1
     }
-|     function_call_json
-    {
-        $$ = $1
-    }
+//|     function_call_json
+//    {
+//        $$ = $1
+//    }
 
 else_opt:
     {
@@ -5835,17 +5835,17 @@ function_call_generic:
         }
     }
 
-function_call_json:
-    JSON_EXTRACT '(' STRING ',' STRING ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{a1, a2},
-        }
-    }
+//function_call_json:
+//    JSON_EXTRACT '(' STRING ',' STRING ')'
+//    {
+//        name := tree.SetUnresolvedName(strings.ToLower($1))
+//        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+//        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+//        $$ = &tree.FuncExpr{
+//            Func: tree.FuncName2ResolvableFunctionReference(name),
+//            Exprs: tree.Exprs{a1, a2},
+//        }
+//    }
 
 trim_direction:
     BOTH
