@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -50,9 +50,9 @@ type walDriver struct {
 	wg            sync.WaitGroup
 }
 
-func NewDriverWithLogservice(logservicecfg *logservice.ClientConfig) Driver {
+func NewDriverWithLogservice(factory logservicedriver.LogServiceClientFactory) Driver {
 	ckpDuration := time.Second * 5
-	impl := store.NewStoreWithLogserviceDriver(logservicecfg)
+	impl := store.NewStoreWithLogserviceDriver(factory)
 	driver := NewDriverWithStore(impl, true, ckpDuration)
 	return driver
 }

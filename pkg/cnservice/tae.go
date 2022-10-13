@@ -48,16 +48,16 @@ func initTAE(
 	opts := &options.Options{}
 	switch cfg.Engine.Logstore {
 	case options.LogstoreLogservice:
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
-			ReadOnly:         false,
-			LogShardID:       1,
-			DNReplicaID:      1,
-			ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
-		})
-		cancel()
-		if err != nil {
-			panic(err)
+		lc := func() (logservice.Client, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
+				ReadOnly:         false,
+				LogShardID:       1,
+				DNReplicaID:      1,
+				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+			})
+			cancel()
+			return lc, err
 		}
 		opts.Lc = lc
 		opts.LogStoreT = options.LogstoreLogservice

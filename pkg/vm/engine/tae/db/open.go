@@ -73,8 +73,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	case options.LogstoreBatchStore:
 		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
 	case options.LogstoreLogservice:
-		cfg := opts.Lc.Config()
-		db.Wal = wal.NewDriverWithLogservice(&cfg)
+		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
