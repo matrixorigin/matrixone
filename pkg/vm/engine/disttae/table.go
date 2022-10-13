@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"strconv"
 
@@ -218,13 +217,6 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i])
 	}
-	{
-		fmt.Printf("insert %v: %v\n", bat.Attrs, bat.VectorCount())
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %T, %v\n", i, vec.Col, vec)
-		}
-	}
-
 	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
@@ -247,12 +239,6 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
 	bat.SetAttributes([]string{catalog.Row_ID})
-	{
-		fmt.Printf("%v: %v\n", bat.Attrs, bat.VectorCount())
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %T, %v\n", i, vec.Col, vec)
-		}
-	}
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
