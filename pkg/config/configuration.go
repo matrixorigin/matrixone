@@ -105,6 +105,12 @@ var (
 
 	// defaultMetricExportInterval default: 15 sec.
 	defaultMetricExportInterval = 15
+
+	// defaultLogShardID default: 1
+	defaultLogShardID = 1
+
+	// defaultDNReplicaID default: 1
+	defaultDNReplicaID = 1
 )
 
 // FrontendParameters of the frontend
@@ -219,6 +225,12 @@ type FrontendParameters struct {
 
 	//default is ''. Path of file that contains X509 key in PEM format for client
 	TlsKeyFile string `toml:"tlsKeyFile"`
+
+	//default is 1
+	LogShardID uint64 `toml:"logshardid"`
+
+	//default is 1
+	DNReplicaID uint64 `toml:"dnreplicalid"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -304,6 +316,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.PortOfRpcServerInComputationEngine == 0 {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
+	}
+
+	if fp.DNReplicaID == 0 {
+		fp.DNReplicaID = uint64(defaultDNReplicaID)
+	}
+
+	if fp.LogShardID == 0 {
+		fp.LogShardID = uint64(defaultLogShardID)
 	}
 }
 

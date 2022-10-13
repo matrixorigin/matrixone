@@ -52,8 +52,8 @@ func initTAE(
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
 				ReadOnly:         false,
-				LogShardID:       1,
-				DNReplicaID:      1,
+				LogShardID:       pu.SV.LogShardID,
+				DNReplicaID:      pu.SV.DNReplicaID,
 				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
 			})
 			cancel()
