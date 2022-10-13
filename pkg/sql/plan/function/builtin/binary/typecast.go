@@ -660,7 +660,7 @@ func StringToFloat[T constraints.Float](xs []string, rs []T) []T {
 func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	for i, x := range xs {
-		rs[i] = strconv.FormatFloat(float64(x), 'G', -1, bitSize)
+		rs[i] = strconv.FormatFloat(float64(x), 'f', -1, bitSize)
 	}
 	return rs, nil
 }

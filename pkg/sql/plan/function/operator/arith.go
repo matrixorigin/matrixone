@@ -37,12 +37,16 @@ type arithT interface {
 		types.Decimal64 | types.Decimal128 | types.Varlena
 }
 
+type numericT interface {
+	constraints.Integer | constraints.Float
+}
+
 type arithFn func(v1, v2, r *vector.Vector) error
 
 // Generic T1 is the operand type and generic T2 is the return value type
 func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process, typ types.Type, afn arithFn) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T1](right)
+	leftValues, rightValues := vector.MustTCols[T1](left), vector.MustTCols[T2](right)
 
 	if left.IsScalarNull() || right.IsScalarNull() {
 		return proc.AllocScalarNullVector(typ), nil
@@ -103,8 +107,32 @@ func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, add.Decimal128VecAdd)
 }
 
-func PlusString[T1 arithT, T2 arithT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func PlusStringAndString[T1 types.Varlena, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddString)
+}
+
+func PlusStringAndFloat[T1 types.Varlena, T2 constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddFloat[T2])
+}
+
+func PlusStringAndSigned[T1 types.Varlena, T2 constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddSigned[T2])
+}
+
+func PlusStringAndUnsigned[T1 types.Varlena, T2 constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddUnsigned[T2])
+}
+
+func PlusFloatAndString[T1 constraints.Float, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.FloatAddString[T1])
+}
+
+func PlusSignedAndString[T1 constraints.Signed, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.SignedAddString[T1])
+}
+
+func PlusUnsignedAndString[T1 constraints.Unsigned, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.UnsignedAddString[T1])
 }
 
 // Subtraction operation
@@ -158,7 +186,7 @@ func MultDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector
 	lv, rv := args[0], args[1]
 	resultScale := lv.Typ.Scale + rv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
-	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, mult.Decimal64VecMult)
+	return Arith[types.Decimal64, types.Decimal64](args, proc, resultTyp, mult.Decimal64VecMult)
 }
 func MultDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := args[0], args[1]
@@ -179,7 +207,7 @@ func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector,
 		scale = types.MYSQL_DEFAULT_SCALE + args[0].Typ.Scale
 	}
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
-	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
+	return Arith[types.Decimal64, types.Decimal64](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var scale int32
@@ -195,7 +223,7 @@ func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector
 // Integer division operation
 func IntegerDivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultTyp := types.T_int64.ToType()
-	return Arith[T, int64](args, proc, resultTyp, div.NumericIntegerDivFloat[T])
+	return Arith[T, T](args, proc, resultTyp, div.NumericIntegerDivFloat[T])
 }
 
 // mod operation
