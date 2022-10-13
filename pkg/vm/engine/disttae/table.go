@@ -220,20 +220,6 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {
-	key := genTableKey(ctx, tbl.tableName, tbl.db.databaseId)
-	delete(tbl.db.txn.tableMap, key)
-	bat, err := genDropTableTuple(tbl.tableId, tbl.db.databaseId,
-		tbl.tableName, tbl.db.databaseName, tbl.db.txn.proc.Mp())
-	if err != nil {
-		return 0, err
-	}
-	if err := tbl.db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0]); err != nil {
-		return 0, err
-	}
-	if err := tbl.db.Create(ctx, tbl.tableName, tbl.defs); err != nil {
-		return 0, err
-	}
 	return 0, nil
 }
 

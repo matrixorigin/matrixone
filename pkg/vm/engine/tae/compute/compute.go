@@ -51,37 +51,9 @@ import (
 // 	return ranges[mid]
 // }
 
-func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deleteMask, deletes *roaring.Bitmap) (destMask *roaring.Bitmap, destVals map[uint32]any, destDelets *roaring.Bitmap) {
+func ShuffleByDeletes(deleteMask, deletes *roaring.Bitmap) (destDelets *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {
-		return origMask, origVals, deleteMask
-	}
-	if origMask != nil && !origMask.IsEmpty() {
-		valIt := origMask.Iterator()
-		destMask = roaring.New()
-		destVals = make(map[uint32]any)
-		deleteIt := deletes.Iterator()
-		deleteCnt := uint32(0)
-		for deleteIt.HasNext() {
-			del := deleteIt.Next()
-			for valIt.HasNext() {
-				row := valIt.PeekNext()
-				if row < del {
-					destMask.Add(row - deleteCnt)
-					destVals[row-deleteCnt] = origVals[row]
-					valIt.Next()
-				} else if row == del {
-					valIt.Next()
-				} else {
-					break
-				}
-			}
-			deleteCnt++
-		}
-		for valIt.HasNext() {
-			row := valIt.Next()
-			destMask.Add(row - deleteCnt)
-			destVals[row-deleteCnt] = origVals[row]
-		}
+		return deleteMask
 	}
 	if deleteMask != nil && !deleteMask.IsEmpty() {
 		delIt := deleteMask.Iterator()
@@ -108,7 +80,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deleteM
 			destDelets.Add(row - deleteCnt)
 		}
 	}
-	return destMask, destVals, destDelets
+	return destDelets
 }
 
 func GetOffsetWithFunc[T any](
