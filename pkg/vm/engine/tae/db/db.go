@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -60,7 +60,7 @@ type DB struct {
 
 	Scheduler tasks.TaskScheduler
 
-	TimedScanner wb.IHeartbeater
+	HeartBeatJobs *stopper.Stopper
 
 	FileFactory file.SegmentFactory
 
@@ -137,7 +137,7 @@ func (db *DB) Close() error {
 	// XXX PRINT
 	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.TimedScanner.Stop()
+	db.HeartBeatJobs.Stop()
 	db.CKPDriver.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()

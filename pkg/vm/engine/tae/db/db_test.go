@@ -16,6 +16,8 @@ package db
 
 import (
 	"bytes"
+	"context"
+	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -83,9 +86,14 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
-	beater.Start()
-	defer beater.Stop()
+	forest := newDirtyForest(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
 	schema.SegmentMaxBlocks = 10
@@ -2741,13 +2749,13 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
-	beater.Start()
-	defer func() {
-		// sleep to see more blocks flush
-		time.Sleep(500 * time.Millisecond)
-		beater.Stop()
-	}()
+	forest := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -3611,7 +3619,7 @@ func TestWatchDirty(t *testing.T) {
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := NewDirtyWatcher(logMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(logMgr, opts.Clock, tae.Catalog, visitor)
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	watcher.WithDelay(10 * time.Nanosecond)
 
@@ -3714,7 +3722,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := NewDirtyWatcher(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
 	watcher.WithDelay(10 * time.Nanosecond)
 
 	wg := &sync.WaitGroup{}
@@ -3751,4 +3759,94 @@ func TestDirtyWatchRace(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestBlockRead(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	tsAlloc := types.NewTsAlloctor(opts.Clock)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+
+	tae.createRelAndAppend(bat, true)
+
+	_, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkEntry := blkit.GetBlock().GetMeta().(*catalog.BlockEntry)
+	blkID := blkEntry.AsCommonID()
+
+	beforeDel := tsAlloc.Alloc()
+	txn1, rel := tae.getRelation()
+	assert.NoError(t, rel.RangeDelete(blkID, 0, 0, handle.DT_Normal))
+	assert.NoError(t, txn1.Commit())
+
+	afterFirstDel := tsAlloc.Alloc()
+	txn2, rel := tae.getRelation()
+	assert.NoError(t, rel.RangeDelete(blkID, 1, 3, handle.DT_Normal))
+	assert.NoError(t, txn2.Commit())
+
+	afterSecondDel := tsAlloc.Alloc()
+
+	tae.compactBlocks(false)
+
+	metaloc := blkEntry.GetMetaLoc()
+	deltaloc := blkEntry.GetDeltaLoc()
+	assert.NotEmpty(t, metaloc)
+	assert.NotEmpty(t, deltaloc)
+
+	columns := make([]string, 0)
+	colIdxs := make([]uint16, 0)
+	colTyps := make([]types.Type, 0)
+	colNulls := make([]bool, 0)
+	defs := schema.ColDefs[:]
+	rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
+	for _, col := range defs {
+		columns = append(columns, col.Name)
+		colIdxs = append(colIdxs, uint16(col.Idx))
+		colTyps = append(colTyps, col.Type)
+		colNulls = append(colNulls, col.NullAbility)
+	}
+	t.Log("read columns: ", columns)
+	fs := tae.DB.FileFactory.(*blockio.ObjectFactory).Fs.Service
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
+	assert.NoError(t, err)
+	defer b1.Close()
+	assert.Equal(t, columns, b1.Attrs)
+	assert.Equal(t, len(columns), len(b1.Vecs))
+	assert.Equal(t, 20, b1.Vecs[0].Length())
+
+	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterFirstDel, fs, pool)
+	assert.NoError(t, err)
+	defer b2.Close()
+	assert.Equal(t, columns, b2.Attrs)
+	assert.Equal(t, len(columns), len(b2.Vecs))
+	assert.Equal(t, 19, b2.Vecs[0].Length())
+	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterSecondDel, fs, pool)
+	assert.NoError(t, err)
+	defer b3.Close()
+	assert.Equal(t, columns, b2.Attrs)
+	assert.Equal(t, len(columns), len(b2.Vecs))
+	assert.Equal(t, 16, b3.Vecs[0].Length())
+
+	// read rowid column only
+	b4, err := blockio.BlockReadInner(
+		context.Background(),
+		[]string{catalog.AttrRowID},
+		[]uint16{2},
+		[]types.Type{types.T_Rowid.ToType()},
+		[]bool{false},
+		metaloc, deltaloc, afterSecondDel,
+		fs, pool,
+	)
+	assert.NoError(t, err)
+	defer b4.Close()
+	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
+	assert.Equal(t, 1, len(b4.Vecs))
+	assert.Equal(t, 16, b4.Vecs[0].Length())
 }
