@@ -16,11 +16,11 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -64,7 +64,7 @@ func initTAE(
 	case options.LogstoreBatchStore, "":
 		opts.LogStoreT = options.LogstoreBatchStore
 	default:
-		panic(fmt.Sprintf("invalid logstore type: %v", cfg.Engine.Logstore))
+		return moerr.NewInternalError("invalid logstore type: %v", cfg.Engine.Logstore)
 	}
 
 	tae, err := db.Open(targetDir+"/tae", opts)
