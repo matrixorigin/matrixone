@@ -3458,7 +3458,7 @@ func Test_determineDML(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for i, pl := range pls {
@@ -3473,6 +3473,20 @@ func Test_determineDML(t *testing.T) {
 							rows = [][]interface{}{}
 						}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+			for _, entry := range priv.entries {
+				if entry.peTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.peTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.mEntry.privs {
+						tempEntry := privilegeEntriesMap[mi.pt]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.peTyp = privilegeEntryTypeGeneral
+						tempEntry.mEntry = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
@@ -3536,7 +3550,7 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
@@ -3551,6 +3565,21 @@ func Test_determineDML(t *testing.T) {
 							rows = [][]interface{}{}
 						}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			for _, entry := range priv.entries {
+				if entry.peTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.peTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.mEntry.privs {
+						tempEntry := privilegeEntriesMap[mi.pt]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.peTyp = privilegeEntryTypeGeneral
+						tempEntry.mEntry = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
@@ -3613,7 +3642,7 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1, 2}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
@@ -3622,6 +3651,21 @@ func Test_determineDML(t *testing.T) {
 						convey.So(err, convey.ShouldBeNil)
 						rows = [][]interface{}{}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			for _, entry := range priv.entries {
+				if entry.peTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.peTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.mEntry.privs {
+						tempEntry := privilegeEntriesMap[mi.pt]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.peTyp = privilegeEntryTypeGeneral
+						tempEntry.mEntry = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
