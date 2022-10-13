@@ -192,58 +192,37 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 
 	} else {
 		// non-system table data
-		iter := m.data.NewPhysicalIter()
+		iter := m.data.NewDiffIter(fromTime, toTime)
 		defer iter.Close()
 
-		handleRow := func(
-			physicalRow *memtable.PhysicalRow[DataKey, DataValue],
-		) error {
-			for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
-				value := physicalRow.Versions[i]
-
-				if value.LockTx != nil &&
-					value.LockTx.State.Load() == memtable.Committed &&
-					(fromTime == nil || value.LockTime.After(*fromTime)) &&
-					(toTime == nil || value.LockTime.Before(*toTime)) {
-					// committed delete
-					if err := appendDelete(&NamedDataRow{
-						Value:    value.Value,
-						AttrsMap: attrsMap,
-					}, value.LockTime, value.BornTime); err != nil {
-						return err
-					}
-					break
-
-				} else if value.BornTx.State.Load() == memtable.Committed &&
-					(fromTime == nil || value.BornTime.After(*fromTime)) &&
-					(toTime == nil || value.BornTime.Before(*toTime)) {
-					// committed insert
-					if err := appendInsert(&NamedDataRow{
-						Value:    value.Value,
-						AttrsMap: attrsMap,
-					}, value.BornTime, value.BornTime); err != nil {
-						return err
-					}
-					break
-				}
-
-			}
-			return nil
-		}
-
-		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
-			Key: DataKey{
-				tableID:    tableID,
-				primaryKey: Tuple{},
-			},
+		tableKey := DataKey{
+			tableID:    tableID,
+			primaryKey: Tuple{},
 		}
 		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-			physicalRow := iter.Item()
-			if physicalRow.Key.tableID != tableID {
+			key, value, bornTime, lockTime, err := iter.Read()
+			if err != nil {
+				return err
+			}
+			if key.tableID != tableID {
 				break
 			}
-			if err := handleRow(physicalRow); err != nil {
-				return err
+			if lockTime != nil {
+				// delete
+				if err := appendDelete(&NamedDataRow{
+					Value:    value,
+					AttrsMap: attrsMap,
+				}, *lockTime, bornTime); err != nil {
+					return err
+				}
+			} else {
+				// insert
+				if err := appendInsert(&NamedDataRow{
+					Value:    value,
+					AttrsMap: attrsMap,
+				}, bornTime, bornTime); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -289,42 +268,23 @@ func logTailHandleSystemTable[
 	appendDelete func(row NamedRow, commitTime Time, readTime Time) error,
 ) error {
 
-	handleRow := func(
-		physicalRow *memtable.PhysicalRow[K, V],
-	) error {
-		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
-			value := physicalRow.Versions[i]
-
-			if value.LockTx != nil &&
-				value.LockTx.State.Load() == memtable.Committed &&
-				(fromTime == nil || value.LockTime.After(*fromTime)) &&
-				(toTime == nil || value.LockTime.Before(*toTime)) {
-				// committed delete
-				if err := appendDelete(value.Value, value.LockTime, value.BornTime); err != nil {
-					return err
-				}
-				break
-
-			} else if value.BornTx.State.Load() == memtable.Committed &&
-				(fromTime == nil || value.BornTime.After(*fromTime)) &&
-				(toTime == nil || value.BornTime.Before(*toTime)) {
-				// committed insert
-				if err := appendInsert(value.Value, value.BornTime, value.BornTime); err != nil {
-					return err
-				}
-				break
-			}
-
-		}
-		return nil
-	}
-
-	iter := table.NewPhysicalIter()
+	iter := table.NewDiffIter(fromTime, toTime)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
-		physicalRow := iter.Item()
-		if err := handleRow(physicalRow); err != nil {
+		_, value, bornTime, lockTime, err := iter.Read()
+		if err != nil {
 			return err
+		}
+		if lockTime != nil {
+			// delete
+			if err := appendDelete(value, *lockTime, bornTime); err != nil {
+				return err
+			}
+		} else {
+			// insert
+			if err := appendInsert(value, bornTime, bornTime); err != nil {
+				return err
+			}
 		}
 	}
 
