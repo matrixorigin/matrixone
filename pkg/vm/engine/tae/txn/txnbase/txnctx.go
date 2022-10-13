@@ -37,6 +37,7 @@ func IDCtxToID(buf []byte) string {
 
 type TxnCtx struct {
 	sync.RWMutex
+	sync.WaitGroup
 	DoneCond                     sync.Cond
 	ID                           string
 	IDCtx                        []byte
