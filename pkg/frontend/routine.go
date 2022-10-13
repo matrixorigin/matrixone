@@ -120,7 +120,6 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		ses.SetRequestContext(tenantCtx)
-		ses.SetFromRealUser(true)
 		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
 		if resp, err = routine.executor.ExecRequest(tenantCtx, req); err != nil {
