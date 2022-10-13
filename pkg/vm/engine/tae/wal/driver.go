@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -49,7 +50,14 @@ type walDriver struct {
 	wg            sync.WaitGroup
 }
 
-func NewDriver(dir, name string, cfg *DriverConfig) Driver {
+func NewDriverWithLogservice(logservicecfg *logservice.ClientConfig) Driver {
+	ckpDuration := time.Second * 5
+	impl := store.NewStoreWithLogserviceDriver(logservicecfg)
+	driver := NewDriverWithStore(impl, true, ckpDuration)
+	return driver
+}
+
+func NewDriverWithBatchStore(dir, name string, cfg *DriverConfig) Driver {
 	var batchStoreCfg *batchstoredriver.StoreCfg
 	ckpDuration := time.Second * 5
 	if cfg != nil {

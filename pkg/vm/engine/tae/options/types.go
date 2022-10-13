@@ -45,6 +45,15 @@ const (
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 1024
+
+	DefaultLogstoreType = LogstoreBatchStore
+)
+
+type LogstoreType string
+
+const (
+	LogstoreBatchStore LogstoreType = "batchstore"
+	LogstoreLogservice LogstoreType = "logservice"
 )
 
 type Options struct {
@@ -55,8 +64,9 @@ type Options struct {
 	LogtailCfg    *LogtailCfg
 	Catalog       *catalog.Catalog
 
-	Clock clock.Clock
-	Fs    fileservice.FileService
-	Lc    logservice.Client
-	Shard metadata.DNShard
+	Clock     clock.Clock
+	Fs        fileservice.FileService
+	Lc        logservice.Client
+	Shard     metadata.DNShard
+	LogStoreT LogstoreType
 }
