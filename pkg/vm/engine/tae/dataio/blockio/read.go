@@ -168,7 +168,7 @@ func readColumnBatchByMetaloc(
 
 	// TODO: objectio will add mpool later
 	// the ioResult is managed by golang itself.
-	ioResult, err := reader.Read(extent, idxsWithouRowid)
+	ioResult, err := reader.Read(extent, idxsWithouRowid, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*co
 	if err != nil {
 		return nil, err
 	}
-	ioResult, err := reader.Read(extent, []uint16{0, 1, 2})
+	ioResult, err := reader.Read(extent, []uint16{0, 1, 2}, nil)
 	if err != nil {
 		return nil, err
 	}
