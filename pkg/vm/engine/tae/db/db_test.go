@@ -24,11 +24,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 
@@ -2989,7 +2994,6 @@ func TestMultiTenantDBOps(t *testing.T) {
 	assert.NoError(t, txn14.Commit())
 }
 
-/* XXX why it failed?
 func TestMultiTenantMoCatalogOps(t *testing.T) {
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3105,7 +3109,6 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	}
 
 }
-*/
 
 // txn1 create update
 // txn2 update delete
@@ -3145,7 +3148,6 @@ func TestUpdateAttr(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 
-/*
 func TestLogtailBasic(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
@@ -3261,10 +3263,10 @@ func TestLogtailBasic(t *testing.T) {
 	fixedColCnt := 3 // __rowid + commit_time + aborted, the columns for a delBatch
 	// check Bat rows count consistency
 	check_same_rows := func(bat *api.Batch, expect int) {
-		for _, vec := range bat.Vecs {
+		for i, vec := range bat.Vecs {
 			col, err := vector.ProtoVectorToVector(vec)
 			assert.NoError(t, err)
-			assert.Equal(t, expect, col.Length())
+			assert.Equal(t, expect, col.Length(), "columns %d", i)
 		}
 	}
 
@@ -3367,7 +3369,6 @@ func TestLogtailBasic(t *testing.T) {
 		assert.Equal(t, 2, v)
 	}
 }
-*/
 
 // txn1: create relation and append, half blk
 // txn2: compact

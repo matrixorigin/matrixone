@@ -440,7 +440,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req m
 		handleRow := func(
 			row NamedRow,
 		) (bool, error) {
-			if err := appendNamedRow(
+			if err := appendNamedRowToBatch(
 				tx,
 				c.upstream,
 				0,
