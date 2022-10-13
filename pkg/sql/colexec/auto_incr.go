@@ -287,6 +287,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
 	bat := GetDeleteBatch(param.rel, param.ctx, name, mp)
+	bat.SetZs(bat.GetVector(0).Length(), mp)
 	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
 		return err
