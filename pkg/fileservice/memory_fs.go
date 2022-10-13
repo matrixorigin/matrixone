@@ -214,9 +214,18 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
-func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
+func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
 	m.Lock()
 	defer m.Unlock()
+	for _, filePath := range filePaths {
+		if err := m.deleteSingle(ctx, filePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
 
 	path, err := ParsePathAtService(filePath, m.name)
 	if err != nil {

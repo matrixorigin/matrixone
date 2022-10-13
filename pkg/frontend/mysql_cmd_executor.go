@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -29,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -43,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -185,7 +189,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 			stm.SetTxnID(handler.GetTxn().Txn().ID)
 		}
@@ -349,7 +353,7 @@ func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
-		if colName == "PADDR" {
+		if colName == catalog.PhyAddrColumnName {
 			continue
 		}
 		row[0] = colName
@@ -1161,18 +1165,22 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+	if sv.Like != nil && sv.Where != nil {
+		return moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+	}
+
 	var err error = nil
 	ses := mce.GetSession()
 	proto := mce.GetSession().protocol
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col1.SetName("VARIABLE_NAME")
+	col1.SetName("Variable_name")
 
 	col2 := new(MysqlColumn)
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2.SetName("VARIABLE_VALUE")
+	col2.SetName("Value")
 
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
@@ -1187,12 +1195,8 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	var sysVars map[string]interface{}
 	if sv.Global {
 		sysVars = make(map[string]interface{})
-		for name := range sysVars {
-			if val, err := ses.GetGlobalVar(name); err == nil {
-				sysVars[name] = val
-			} else if !goErrors.Is(err, errorSystemVariableSessionEmpty) {
-				return err
-			}
+		for k, v := range gSysVarsDefs {
+			sysVars[k] = v.Default
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1221,10 +1225,48 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		rows = append(rows, row)
 	}
 
+	if sv.Where != nil {
+		bat, err := mce.constructVarBatch(rows)
+		if err != nil {
+			return err
+		}
+		binder := plan2.NewDefaultBinder(nil, nil, &plan2.Type{Id: int32(types.T_varchar)}, []string{"variable_name", "value"})
+		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
+		if err != nil {
+			return err
+		}
+
+		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		if err != nil {
+			return err
+		}
+		bs := vector.GetColumn[bool](vec)
+		sels := proc.Mp().GetSels()
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		bat.Shrink(sels)
+		proc.Mp().PutSels(sels)
+		v0 := vector.MustStrCols(bat.Vecs[0])
+		v1 := vector.MustStrCols(bat.Vecs[1])
+		rows = rows[:len(v0)]
+		for i := range v0 {
+			rows[i][0] = v0[i]
+			rows[i][1] = v1[i]
+		}
+		bat.Clean(proc.Mp())
+	}
+
 	//sort by name
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
+
+	for _, row := range rows {
+		ses.Mrs.AddRow(row)
+	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -1233,6 +1275,25 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
+}
+
+func (mce *MysqlCmdExecutor) constructVarBatch(rows [][]interface{}) (*batch.Batch, error) {
+	bat := batch.New(true, []string{"Variable_name", "Value"})
+	typ := types.New(types.T_varchar, 0, 0, 0)
+	cnt := len(rows)
+	bat.Zs = make([]int64, cnt)
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
+	}
+	v0 := make([]string, cnt)
+	v1 := make([]string, cnt)
+	for i, row := range rows {
+		v0[i] = row[0].(string)
+		v1[i] = fmt.Sprintf("%v", row[1])
+	}
+	bat.Vecs[0] = vector.NewWithStrings(typ, v0, nil, mce.ses.Mp)
+	bat.Vecs[1] = vector.NewWithStrings(typ, v1, nil, mce.ses.Mp)
+	return bat, nil
 }
 
 func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
@@ -1649,6 +1710,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
 		cwft.plan = newPlan
+
+		//check privilege
+		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
@@ -1704,12 +1771,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
-			}
-			if !yes {
-				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 		}
 		return ret, err
@@ -1735,12 +1799,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
-			}
-			if !yes {
-				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 		}
 	}
@@ -1808,9 +1869,76 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
-func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
-	incStatementCounter("0", stmt)
+// authenticatePrivilegeOfStatement checks the user can execute the statement
+func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	var havePrivilege bool
+	var err error
+	if ses.GetTenantInfo() != nil {
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+		if err != nil {
+			return err
+		}
+
+		if !havePrivilege {
+			err = moerr.NewInternalError("do not have privilege to execute the statement")
+			return err
+		}
+
+		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+		if err != nil {
+			return err
+		}
+
+		if !havePrivilege {
+			err = moerr.NewInternalError("do not have privilege to execute the statement")
+			return err
+		}
+	}
+	return err
+}
+
+// authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
+func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		return moerr.NewInternalError("do not have privilege to execute the statement")
+	}
+	return nil
+}
+
+// authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
+func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	err := authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+	if err != nil {
+		return err
+	}
+	err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, p)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+// canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
+func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(stmt tree.Statement) error {
+	can := StatementCanBeExecutedInUncommittedTransaction(stmt)
+	if !can {
+		//is ddl statement
+		if IsDDL(stmt) {
+			return errorOnlyCreateStatement
+		} else if IsAdministrativeStatement(stmt) {
+			return errorAdministrativeStatement
+		} else if IsParameterModificationStatement(stmt) {
+			return errorParameterModificationInTxn
+		} else {
+			return errorUnclassifiedStatement
+		}
+	}
+	return nil
 }
 
 // execute query
@@ -1865,42 +1993,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
-	var havePrivilege bool
 	var err2 error
 	var columns []interface{}
 
-	stmt0 := cws[0].GetAst()
-	mce.beforeRun(stmt0)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 		tenant := sysAccountName
-		if ses.GetTenantInfo() != nil {
+		//skip PREPARE statement here
+		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			tenant = ses.GetTenantInfo().GetTenant()
-			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
-			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
-			if err2 != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, err2)
-				return err2
-			}
-
-			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
-			}
-
-			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
-			if err2 != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, err2)
-				return err2
-			}
-
-			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
+			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -1918,26 +2024,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			                     <- has active transaction
 		*/
 		if ses.InActiveTransaction() {
-			can := StatementCanBeExecutedInUncommittedTransaction(stmt)
-			if !can {
-				//is ddl statement
-				if IsDDL(stmt) {
-					retErr = errorOnlyCreateStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else if IsAdministrativeStatement(stmt) {
-					retErr = errorAdministrativeStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else if IsParameterModificationStatement(stmt) {
-					retErr = errorParameterModificationInTxn
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else {
-					retErr = errorUnclassifiedStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				}
+			err = mce.canExecuteStatementInUncommittedTransaction(stmt)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -2008,9 +2097,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.PrepareString:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareString(st)
+			if err != nil {
+				goto handleFailed
+			}
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2028,7 +2125,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st)
+			err = mce.handleShowVariables(st, proc)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2243,7 +2340,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				cwft.RecordExecPlan(requestCtx)
+				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2280,7 +2377,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				cwft.RecordExecPlan(requestCtx)
+				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		case *tree.ExplainAnalyze:
 			explainColName := "QUERY PLAN"
@@ -2370,6 +2467,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 	handleSucceeded:
 		//load data handle txn failure internally
+		incStatementCounter(tenant, stmt)
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
@@ -2419,6 +2517,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
 		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
@@ -2467,7 +2566,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted))))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
 			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError("invalid query"))
@@ -2538,7 +2637,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2566,7 +2665,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
-		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
+		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2611,7 +2710,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
+	logutil.Info("query trace", logutil.ConnectionIdField(mce.ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 
@@ -2660,6 +2759,8 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		return true
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+		return true
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Execute, *tree.Deallocate:
 		return true
 	case *tree.Use:
 		/*
@@ -2713,6 +2814,15 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.SetVar:
+		return true
+	}
+	return false
+}
+
+// IsPrepareStatement checks the statement is the prepare statement.
+func IsPrepareStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.PrepareStmt, *tree.PrepareString:
 		return true
 	}
 	return false
@@ -2811,8 +2921,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
-	var jsonBytes []byte
+func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, rows int64, size int64) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
 		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 		options := &explain.ExplainOptions{
@@ -2821,6 +2930,7 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 			Format:  explain.EXPLAIN_FORMAT_TEXT,
 		}
 		marshalPlan := explainQuery.BuildJsonPlan(uuid, options)
+		rows, size = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
 		buffer := &bytes.Buffer{}
 		encoder := json.NewEncoder(buffer)
@@ -2835,16 +2945,16 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 	} else {
 		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes
+	return jsonBytes, rows, size
 }
 
 // SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 	if plan == nil {
 		return serializePlanToJson(nil, uuid)
 	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
 		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), 0, 0
 	} else {
 		// data transform to json dataStruct
 		return serializePlanToJson(queryPlan, uuid)

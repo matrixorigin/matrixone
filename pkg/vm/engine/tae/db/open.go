@@ -15,9 +15,12 @@
 package db
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -101,11 +104,31 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
 	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(catalogMonotor)
-	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
 
 	// Start workers
 	db.CKPDriver.Start()
-	db.TimedScanner.Start()
+
+	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
+	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
+		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
+			forest.Run()
+			dirtyTree := forest.MergeForest()
+			if dirtyTree.IsEmpty() {
+				return
+			}
+			logutil.Infof(dirtyTree.String())
+		}, nil)
+		hb.Start()
+		<-ctx.Done()
+		hb.Stop()
+	})
+	db.HeartBeatJobs.RunNamedTask("BackgroundScanner", func(ctx context.Context) {
+		hb := w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
+		hb.Start()
+		<-ctx.Done()
+		hb.Stop()
+	})
 
 	return
 }

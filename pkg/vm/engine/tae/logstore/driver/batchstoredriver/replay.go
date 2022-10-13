@@ -89,5 +89,6 @@ func (r *replayer) replayHandler(vfile *vFile) error {
 	vfile.onReplay(r.pos, e.Lsn)
 	r.applyEntry(e)
 	r.pos += e.GetSize()
+	e.Entry.Free()
 	return nil
 }

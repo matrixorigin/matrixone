@@ -20,14 +20,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -580,27 +574,4 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)
 	return
-}
-
-// for test
-type printUnflush struct {
-	op *DirtyWatcher
-}
-
-var _ base.IHBHandle = (*printUnflush)(nil)
-
-func (f *printUnflush) OnExec() {
-	f.op.Run()
-	t, s, b := f.op.DirtyCount()
-	logutil.Infof("unflushed: %d table, %d seg, %d block", t, s, b)
-}
-func (f *printUnflush) OnStopped() {}
-
-func NewTestUnflushedDirtyObserver(interval time.Duration, clock clock.Clock, logtail *logtail.LogtailMgr, cat *catalog.Catalog) base.IHeartbeater {
-	visitor := &catalog.LoopProcessor{}
-	watch := NewDirtyWatcher(logtail, clock, cat, visitor)
-	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
-	watch.WithDelay(19 * time.Nanosecond)
-
-	return w.NewHeartBeater(interval, &printUnflush{op: watch})
 }

@@ -22,6 +22,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
+type lamdaHandle struct {
+	onExec func()
+	onStop func()
+}
+
+func (h *lamdaHandle) OnExec() {
+	if h.onExec != nil {
+		h.onExec()
+	}
+}
+
+func (h *lamdaHandle) OnStopped() {
+	if h.onStop != nil {
+		h.onStop()
+	}
+}
+
 type heartbeater struct {
 	handle   base.IHBHandle
 	interval time.Duration
@@ -30,7 +47,12 @@ type heartbeater struct {
 	wg       *sync.WaitGroup
 }
 
-func NewHeartBeater(interval time.Duration, handle base.IHBHandle) base.IHeartbeater {
+func NewHeartBeaterWithFunc(interval time.Duration, onExec, onStop func()) *heartbeater {
+	h := &lamdaHandle{onExec: onExec, onStop: onStop}
+	return NewHeartBeater(interval, h)
+}
+
+func NewHeartBeater(interval time.Duration, handle base.IHBHandle) *heartbeater {
 	c := &heartbeater{
 		interval: interval,
 		handle:   handle,

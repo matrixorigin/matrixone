@@ -41,7 +41,7 @@ type LogtailMgr struct {
 	tsAlloc  *types.TsAlloctor // share same clock with txnMgr
 
 	// TODO: move the active page to btree, simplify the iteration of pages
-	activeSize *int32
+	activeSize atomic.Int32
 	// activePage is a fixed size array, has fixed memory address during its whole lifetime
 	activePage []txnif.AsyncTxn
 	// Lock is used to protect pages. there are three cases to hold lock
@@ -61,7 +61,6 @@ func NewLogtailMgr(pageSize int32, clock clock.Clock) *LogtailMgr {
 		pageSize:   pageSize,
 		minTs:      minTs,
 		tsAlloc:    tsAlloc,
-		activeSize: new(int32),
 		activePage: make([]txnif.AsyncTxn, pageSize),
 		pages:      btree.NewGenericOptions(cmpTxnPage, btree.Options{NoLocks: true}),
 	}
@@ -74,9 +73,9 @@ func (l *LogtailMgr) OnEndPrePrepare(op *txnbase.OpTxn) { l.AddTxn(op.Txn) }
 // 1. AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.
 // 2. the added txn has no prepareTS because it happens in OnEndPrePrepare, so it is safe to alloc ts to be minTs
 func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
-	size := atomic.LoadInt32(l.activeSize)
+	size := l.activeSize.Load()
 	l.activePage[size] = txn
-	newsize := atomic.AddInt32(l.activeSize, 1)
+	newsize := l.activeSize.Add(1)
 
 	if newsize == l.pageSize {
 		// alloc ts without lock
@@ -91,7 +90,7 @@ func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
 		l.pages.Set(newPage)
 
 		l.activePage = make([]txnif.AsyncTxn, l.pageSize)
-		atomic.StoreInt32(l.activeSize, 0)
+		l.activeSize.Store(0)
 	}
 }
 
@@ -99,7 +98,7 @@ func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
 // this is cheap operation, the returned reader can be accessed without any locks
 func (l *LogtailMgr) GetReader(start, end types.TS) *LogtailReader {
 	l.Lock()
-	size := atomic.LoadInt32(l.activeSize)
+	size := l.activeSize.Load()
 	activeView := l.activePage[:size]
 	btreeView := l.pages.Copy()
 	l.Unlock()

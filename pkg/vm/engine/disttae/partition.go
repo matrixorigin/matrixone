@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -68,6 +69,21 @@ func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks 
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
+}
+
+func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	if _, err := p.data.Get(tx, RowID(key)); err != nil {
+		return false
+	}
+	return true
 }
 
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
@@ -186,6 +202,7 @@ func (p *Partition) NewReader(
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
