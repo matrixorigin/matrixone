@@ -130,7 +130,7 @@ func (bf *blockFile) GetMeta() objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(metaKey)
+	block, err := bf.reader.ReadMeta(metaKey, nil)
 	if err != nil {
 		panic(any(err))
 	}
@@ -142,7 +142,7 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
-	block, err := bf.reader.ReadMeta(extent)
+	block, err := bf.reader.ReadMeta(extent, nil)
 	if err != nil {
 		// FIXME: Now the block that is gc will also be replayed, here is a work around
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -162,7 +162,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(metaKey)
+	block, err := bf.reader.ReadMeta(metaKey, nil)
 	if err != nil {
 		panic(any(err))
 	}
@@ -174,7 +174,7 @@ func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
-	block, err := bf.reader.ReadMeta(extent)
+	block, err := bf.reader.ReadMeta(extent, nil)
 	if err != nil {
 		// FIXME: Now the block that is gc will also be replayed, here is a work around
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {

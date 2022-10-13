@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -80,7 +81,7 @@ func (r *Reader) LoadBlkColumns(
 		if err != nil {
 			return bat, err
 		}
-		data, err := col.GetData()
+		data, err := col.GetData(nil)
 		if err != nil {
 			return bat, err
 		}
@@ -93,10 +94,10 @@ func (r *Reader) LoadBlkColumns(
 	return bat, err
 }
 
-func (r *Reader) ReadMeta(extent objectio.Extent) (objectio.BlockObject, error) {
+func (r *Reader) ReadMeta(extent objectio.Extent, m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
 	extents[0] = extent
-	block, err := r.reader.ReadMeta(extents)
+	block, err := r.reader.ReadMeta(extents, m)
 	if err != nil {
 		return nil, err
 	}
