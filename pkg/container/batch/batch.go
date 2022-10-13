@@ -208,6 +208,10 @@ func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	}
 }
 
+func (bat *Batch) SetAttributes(attrs []string) {
+	bat.Attrs = attrs
+}
+
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
 }
@@ -217,16 +221,13 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 }
 
 func (bat *Batch) GetSubBatch(cols []string) *Batch {
+	mp := make(map[string]int)
+	for i, attr := range bat.Attrs {
+		mp[attr] = i
+	}
 	rbat := NewWithSize(len(cols))
-	i := 0
-	for j, attr := range bat.Attrs {
-		if attr == cols[i] {
-			rbat.Vecs[i] = bat.Vecs[j]
-			i++
-			if i == len(cols) {
-				break
-			}
-		}
+	for i, col := range cols {
+		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
 	rbat.Zs = bat.Zs
 	return rbat

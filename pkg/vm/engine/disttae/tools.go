@@ -107,8 +107,9 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string, tableId uint64,
-	databaseId uint64, databaseName string, comment string, m *mpool.MPool) (*batch.Batch, error) {
+func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string,
+	tableId uint64, databaseId uint64, databaseName string,
+	relKind string, comment string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	bat.SetZs(1, m)
@@ -140,7 +141,7 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relkind
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(relKind), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
@@ -501,37 +502,7 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 			}
 		}
 	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
-}
-
-// genDeleteExpr used to generate an expression to partition table data
-func genDeleteExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
-	var args []*plan.Expr
-
-	i := 1
-	for _, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Primary {
-				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
-				i++
-			}
-		}
-	}
-	if len(args) == 0 {
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				args = append(args, newColumnExpr(1, attr.Attr.Type.Oid, attr.Attr.Name))
-				break
-			}
-		}
-	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
+	return plantool.MakeExpr("hash_value", args)
 }
 
 func newIntConstVal(v any) *plan.Expr {
@@ -695,6 +666,8 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].isAutoIncrement = row[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8)
 		cols[i].constraintType = string(row[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte))
 		cols[i].typ = row[catalog.MO_COLUMNS_ATTTYP_IDX].([]byte)
+		cols[i].hasDef = row[catalog.MO_COLUMNS_ATTHASDEF_IDX].(int8)
+		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
 	}
 	return cols
 }
@@ -724,6 +697,23 @@ func genTableDefOfColumn(col column) engine.TableDef {
 
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -821,7 +811,8 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
+			idx := uint64(v) % uint64(dnNum)
+			if err := vector.UnionOne(bats[idx].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
 					bat.Clean(proc.Mp())
 				}
@@ -831,6 +822,36 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	}
 	for i := range bats {
 		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
+	}
+	return bats, nil
+}
+
+func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) {
+	txn := tbl.db.txn
+	bats := make([]*batch.Batch, len(tbl.parts))
+	for i := range bats {
+		bats[i] = batch.New(true, bat.Attrs)
+		for j := range bats[i].Vecs {
+			bats[i].SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+	}
+	vec := bat.GetVector(0)
+	vs := vector.MustTCols[types.Rowid](vec)
+	for i, v := range vs {
+		for j, part := range tbl.parts {
+			if part.Get(v, txn.meta.SnapshotTS) {
+				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
+					for _, bat := range bats {
+						bat.Clean(txn.proc.Mp())
+					}
+					return nil, err
+				}
+				break
+			}
+		}
+	}
+	for i := range bats {
+		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
 	}
 	return bats, nil
 }

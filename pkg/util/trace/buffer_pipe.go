@@ -459,7 +459,6 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 type CsvFields interface {
 	bp.HasName
-	CsvOptions() *CsvOptions
 	CsvFields() []string
 }
 
@@ -492,7 +491,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
-	opts := i.CsvOptions()
+	opts := CommonCsvOptions
 
 	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i)
 

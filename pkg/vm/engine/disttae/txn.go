@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -79,7 +81,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		txn.dnStores[:1],
-		catalog.MoDatabaseTableDefs, []string{
+		catalog.MoTablesTableDefs, []string{
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
@@ -126,17 +128,19 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 }
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string) (*tableMeta, error) {
+	name string, needUpdated bool) (*tableMeta, error) {
 	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
-	if err.Error() == "info: empty table" {
+	if err != nil && strings.Contains(err.Error(), "empty table") {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := txn.db.Update(ctx, txn.dnStores, databaseId,
-		id, txn.meta.SnapshotTS); err != nil {
-		return nil, err
+	if needUpdated {
+		if err := txn.db.Update(ctx, txn.dnStores, databaseId,
+			id, txn.meta.SnapshotTS); err != nil {
+			return nil, err
+		}
 	}
 	cols := make([]string, 0, len(defs))
 	{
@@ -147,13 +151,18 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 		}
 	}
 	blocks := make([][]BlockMeta, len(txn.dnStores))
-	for i, dnStore := range txn.dnStores {
-		rows, err := txn.getRows(ctx, databaseId, id,
-			[]DNStore{dnStore}, defs, cols, nil)
-		if err != nil {
-			return nil, err
+	if needUpdated {
+		for i, dnStore := range txn.dnStores {
+			rows, err := txn.getRows(ctx, databaseId, id,
+				[]DNStore{dnStore}, defs, cols, nil)
+			if err != nil && strings.Contains(err.Error(), "empty table") {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			blocks[i] = genBlockMetas(rows)
 		}
-		blocks[i] = genBlockMetas(rows)
 	}
 	return &tableMeta{
 		tableId:   id,
@@ -190,11 +199,6 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		}
 		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-	} else {
-		if bat = txn.deleteBatch(bat, databaseId, tableId); bat.Length() == 0 {
-			bat.Clean(txn.proc.Mp())
-			return nil
-		}
 	}
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
@@ -564,4 +568,34 @@ func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs file
 	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
 
 	return bat, nil
+}
+
+func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {
+	// get primay keys index(that was colPos in expr)
+	pkIndex := int32(-1)
+	for _, key := range priKeys {
+		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
+		if isCPkey {
+			continue
+		}
+		// if primary key is not int or uint, return all the list
+		if !key.Type.IsIntOrUint() {
+			return list
+		}
+
+		pkIndex = tableDef.Name2ColIndex[key.Name]
+		break
+	}
+
+	// have no PrimaryKey, return all the list
+	if pkIndex == -1 {
+		return list
+	}
+
+	canComputeRange, pkRange := computeRange(expr, pkIndex)
+	if !canComputeRange {
+		return list
+	}
+
+	return getListByRange(list, pkRange)
 }

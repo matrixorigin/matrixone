@@ -723,6 +723,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
 		if args[0].Typ.Id != int32(types.T_varchar) && args[0].Typ.Id != int32(types.T_char) {
 			return appendCastBeforeExpr(args[0], &Type{
 				Id: int32(types.T_date),
@@ -853,6 +856,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return args[1], nil
 		}
 	case "unary_minus":
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_decimal128),
@@ -863,6 +869,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			}
 		}
 	case "oct", "bit_and", "bit_or", "bit_xor":
+		if len(args) == 0 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),
@@ -874,6 +883,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "like":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
 		if args[0].Typ.Id == int32(types.T_any) {
 			args[0].Typ.Id = int32(types.T_varchar)
 		}
@@ -975,7 +987,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		if !ok {
 			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
-		return &Expr{
+		expr := &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
@@ -989,7 +1001,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 				Nullable: false,
 				Size:     8,
 			},
-		}, nil
+		}
+		if typ != nil && typ.Id == int32(types.T_varchar) {
+			return appendCastBeforeExpr(expr, typ)
+		}
+		return expr, nil
 	case tree.P_uint64:
 		val, ok := constant.Uint64Val(astExpr.Value)
 		if !ok {

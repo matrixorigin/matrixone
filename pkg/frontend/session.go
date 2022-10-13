@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"time"
 
@@ -119,6 +120,16 @@ type Session struct {
 	priv *privilege
 
 	errInfo *errInfo
+
+	//fromRealUser distinguish the sql that the user inputs from the one
+	//that the internal or background program executes
+	fromRealUser bool
+}
+
+// Clean up all resources hold by the session.  As of now, the mpool
+func (ses *Session) Dispose() {
+	mpool.DeleteMPool(ses.Mp)
+	ses.Mp = nil
 }
 
 type errInfo struct {
@@ -190,6 +201,10 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
+
+	runtime.SetFinalizer(ses, func(ss *Session) {
+		ss.Dispose()
+	})
 	return ses
 }
 
@@ -774,6 +789,14 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.priv = priv
 }
 
+func (ses *Session) SetFromRealUser(b bool) {
+	ses.fromRealUser = b
+}
+
+func (ses *Session) GetFromRealUser() bool {
+	return ses.fromRealUser
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
@@ -1043,6 +1066,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_Partition{
 					Partition: p,
+				},
+			})
+		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_ComputeIndex{
+					ComputeIndex: &plan2.ComputeIndexDef{
+						Names:      indexDef.Names,
+						TableNames: indexDef.TableNames,
+						Uniques:    indexDef.Uniques,
+					},
 				},
 			})
 		}
