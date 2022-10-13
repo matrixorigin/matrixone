@@ -450,16 +450,3 @@ func transJsonArray2Lines(str string, attrs []string) ([]string, error) {
 	}
 	return res, nil
 }
-
-func makeOriginBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *batch.Batch {
-	batchData := batch.New(true, param.Attrs)
-	batchSize := plh.batchSize
-	//alloc space for vector
-	for i := 0; i < len(param.Attrs); i++ {
-		typ := types.New(types.T_varchar, 0, 0, 0)
-		vec := vector.NewOriginal(typ)
-		vector.PreAlloc(vec, batchSize, batchSize, mp)
-		batchData.Vecs[i] = vec
-	}
-	return batchData
-}
