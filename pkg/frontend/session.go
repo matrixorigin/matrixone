@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -124,6 +125,8 @@ type Session struct {
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
 	fromRealUser bool
+
+	mu sync.Mutex
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -233,65 +236,95 @@ func (bgs *BackgroundSession) Close() {
 	}
 }
 func (ses *Session) GenNewStmtId() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.lastStmtId = ses.lastStmtId + 1
 	return ses.lastStmtId
 }
 
 func (ses *Session) GetLastStmtId() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.lastStmtId
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.requestCtx = reqCtx
 }
 
 func (ses *Session) GetRequestContext() context.Context {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.requestCtx
 }
 
 func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.timeZone = loc
 }
 
 func (ses *Session) GetTimeZone() *time.Location {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.timeZone
 }
 
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.Mrs = mrs
 }
 
 func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.Mrs
 }
 
 func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.allResultSet = append(ses.allResultSet, mrs)
 }
 
 func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.allResultSet
 }
 
 func (ses *Session) ClearAllMysqlResultSet() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if ses.allResultSet != nil {
 		ses.allResultSet = ses.allResultSet[:0]
 	}
 }
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.tenant
 }
 
 func (ses *Session) GetUUID() []byte {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.tenant = ti
 }
 
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
 			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
@@ -302,6 +335,8 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 }
 
 func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
@@ -309,17 +344,23 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	delete(ses.prepareStmts, name)
 }
 
 // SetGlobalVar sets the value of system variable in global.
 // used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.gSysVars.SetGlobalSysVar(name, value)
 }
 
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
@@ -331,11 +372,15 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.txnCompileCtx
 }
 
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
@@ -363,6 +408,8 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 
 // GetSessionVar gets this value of the system variable in session
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
 		if def.GetScope() == ScopeGlobal {
@@ -375,6 +422,8 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	cp := make(map[string]interface{})
 	for k, v := range ses.sysVars {
 		cp[k] = v
@@ -384,12 +433,16 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = value
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
 func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
 	if !ok {
 		return SystemVariableNullType{}, nil, nil
@@ -398,35 +451,51 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interfac
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.txnHandler
 }
 
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.txnCompileCtx
 }
 
 func (ses *Session) SetSql(sql string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.sql = sql
 }
 
 func (ses *Session) GetSql() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.sql
 }
 
 func (ses *Session) IsTaeEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	_, ok := ses.storage.(moengine.TxnEngine)
 	return ok
 }
 
 func (ses *Session) GetStorage() engine.Engine {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.storage
 }
 
 func (ses *Session) GetDatabaseName() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.protocol.GetDatabaseName()
 }
 
 func (ses *Session) SetDatabaseName(db string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.protocol.SetDatabaseName(db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
@@ -436,38 +505,56 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) GetUserName() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.protocol.GetUserName()
 }
 
 func (ses *Session) SetUserName(uname string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.protocol.SetUserName(uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.protocol.ConnectionID()
 }
 
 func (ses *Session) SetOptionBits(bit uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.optionBits |= bit
 }
 
 func (ses *Session) ClearOptionBits(bit uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.optionBits &= ^bit
 }
 
 func (ses *Session) OptionBitsIsSet(bit uint32) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.optionBits&bit != 0
 }
 
 func (ses *Session) SetServerStatus(bit uint16) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.serverStatus |= bit
 }
 
 func (ses *Session) ClearServerStatus(bit uint16) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.serverStatus &= ^bit
 }
 
 func (ses *Session) ServerStatusIsSet(bit uint16) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.serverStatus&bit != 0
 }
 
@@ -523,8 +610,8 @@ func (ses *Session) TxnStart() error {
 	if ses.InMultiStmtTransactionMode() {
 		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	}
-	if !ses.txnHandler.IsValidTxn() {
-		err = ses.txnHandler.NewTxn()
+	if !ses.GetTxnHandler().IsValidTxn() {
+		err = ses.GetTxnHandler().NewTxn()
 	}
 	return err
 }
@@ -544,7 +631,7 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
-		err = ses.txnHandler.CommitTxn()
+		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
 	}
@@ -566,7 +653,7 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
-		err = ses.txnHandler.RollbackTxn()
+		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
 	}
@@ -581,7 +668,7 @@ func (ses *Session) TxnBegin() error {
 	var err error
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		err = ses.txnHandler.CommitTxn()
+		err = ses.GetTxnHandler().CommitTxn()
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
@@ -589,7 +676,7 @@ func (ses *Session) TxnBegin() error {
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
-	err = ses.txnHandler.NewTxn()
+	err = ses.GetTxnHandler().NewTxn()
 	return err
 }
 
@@ -597,7 +684,7 @@ func (ses *Session) TxnBegin() error {
 func (ses *Session) TxnCommit() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
-	err = ses.txnHandler.CommitTxn()
+	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
@@ -607,7 +694,7 @@ func (ses *Session) TxnCommit() error {
 func (ses *Session) TxnRollback() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
-	err = ses.txnHandler.RollbackTxn()
+	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
 }
@@ -619,7 +706,7 @@ func (ses *Session) InActiveTransaction() bool {
 	if ses.InActiveMultiStmtTransaction() {
 		return true
 	} else {
-		return ses.txnHandler.IsValidTxn()
+		return ses.GetTxnHandler().IsValidTxn()
 	}
 }
 
