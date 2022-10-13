@@ -81,11 +81,6 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		if err != nil {
 			return nil, err
 		}
-		/*
-			{
-				fmt.Printf("+++++begin read: %v\n", types.Rowid(dataKey))
-			}
-		*/
 		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
 			continue
 		}

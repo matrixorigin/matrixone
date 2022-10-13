@@ -16,12 +16,12 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -195,23 +195,17 @@ func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, erro
 
 func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
-	for _, def := range tbl.defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Name == catalog.Row_ID { // Why not hide but rowid?
-				attrs = append(attrs, &attr.Attr)
-			}
-		}
-	}
+	attrs = append(attrs, &engine.Attribute{
+		IsHidden: true,
+		IsRowId:  true,
+		Name:     catalog.Row_ID,
+		Type:     types.New(types.T_Rowid, 0, 0, 0),
+		Primary:  true,
+	})
 	return attrs, nil
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	{
-		fmt.Printf("+++++write %v: %v\n", bat.Attrs, bat.VectorCount())
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %v\n", i, vec)
-		}
-	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
@@ -245,12 +239,6 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-	{
-		fmt.Printf("+++++delete %v: %v\n", bat.Attrs, bat.VectorCount())
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v], %v = %v\n", i, vec.Typ, vec)
-		}
-	}
 
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)

@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -92,12 +91,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
-	}
-	{
-		fmt.Printf("+++++logtail delete %v: %v\n", bat.Attrs, bat.VectorCount())
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v], %v = %v\n", i, vec.Typ, vec)
-		}
 	}
 
 	txID := uuid.NewString()
@@ -208,9 +201,6 @@ func (p *Partition) NewReader(
 				deletes[v] = 0
 			}
 		}
-	}
-	{
-		fmt.Printf("+++deletes: %v\n", deletes)
 	}
 
 	readers := make([]engine.Reader, readerNumber)
