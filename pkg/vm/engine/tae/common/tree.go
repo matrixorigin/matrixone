@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type TreeVisitor interface {
@@ -154,7 +153,6 @@ func (tree *Tree) Equal(o *Tree) bool {
 		return false
 	}
 	if len(tree.Tables) != len(o.Tables) {
-		logutil.Infof("XXX %d-%d", len(tree.Tables), len(o.Tables))
 		return false
 	}
 	for id, table := range tree.Tables {
