@@ -221,13 +221,14 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name:          table.Name,
-		Cols:          make([]*plan.ColDef, len(table.Cols)),
-		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
-		TableType:     table.TableType,
-		Createsql:     table.Createsql,
-		Name2ColIndex: table.Name2ColIndex,
-		CompositePkey: table.CompositePkey,
+		Name:              table.Name,
+		Cols:              make([]*plan.ColDef, len(table.Cols)),
+		Defs:              make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:         table.TableType,
+		Createsql:         table.Createsql,
+		Name2ColIndex:     table.Name2ColIndex,
+		CompositePkey:     nil,
+		ComputeIndexInfos: make([]*ComputeIndexInfo, len(table.ComputeIndexInfos)),
 	}
 
 	for idx, col := range table.Cols {
@@ -245,6 +246,20 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	// for idx, def := range table.Defs {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
 	// }
+
+	for table.CompositePkey != nil {
+		table.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	}
+	for idx, indexInfo := range table.ComputeIndexInfos {
+		newTable.ComputeIndexInfos[idx] = &ComputeIndexInfo{
+			TableName: indexInfo.TableName,
+			Attrs:     indexInfo.Attrs,
+			Cols:      make([]*plan.ColDef, len(table.ComputeIndexInfos[idx].Cols)),
+		}
+		for i, col := range table.ComputeIndexInfos[idx].Cols {
+			newTable.ComputeIndexInfos[idx].Cols[i] = DeepCopyColDef(col)
+		}
+	}
 
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {
@@ -329,6 +344,16 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Partition{
 					Partition: partitionDef,
+				},
+			}
+		case *TableDef_DefType_ComputeIndex:
+			computeIdxDef := &plan.ComputeIndexDef{}
+			copy(computeIdxDef.Names, defImpl.ComputeIndex.Names)
+			copy(computeIdxDef.TableNames, defImpl.ComputeIndex.TableNames)
+			copy(computeIdxDef.Uniques, defImpl.ComputeIndex.Uniques)
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_ComputeIndex{
+					ComputeIndex: computeIdxDef,
 				},
 			}
 		}
