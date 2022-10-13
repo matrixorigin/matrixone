@@ -1,6 +1,7 @@
 # Build a simple Java CRUD demo with MatrixOne
 
-!Note: The source code of this demo can be downloaded at [github](https://github.com/matrixorigin/matrixone_java_crud_example).  
+!!! note
+    The source code of this demo can be downloaded at [github](https://github.com/matrixorigin/matrixone_java_crud_example).  
 
 ## Setup your environment
 
@@ -26,7 +27,7 @@ Launch IDEA, and create a new Java project as below:
 
 ![image-20220927104740221](https://github.com/matrixorigin/artwork/blob/main/docs/reference/jdbc_create_project.png?raw=true)
 
-In your **Project Setting > Libraries**, import the *mysql-connector-java-8.0.xx.jar* file. 
+In your **Project Setting > Libraries**, import the *mysql-connector-java-8.0.xx.jar* file.
 
 ![image-20220927104904770](https://github.com/matrixorigin/artwork/blob/main/docs/reference/jdbc_import_library.png?raw=true)
 

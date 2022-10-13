@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	initMysqlSysTables = []string{
+	InitMysqlSysTables = []string{
 		`CREATE TABLE IF NOT EXISTS user (
 			Host char(255)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -145,9 +145,9 @@ var (
 			Column_priv varchar(10) NOT NULL DEFAULT '',
 			PRIMARY KEY (Host,Db,User,Table_name),
 			KEY Grantor (Grantor)
-		  )`,
+		  );`,
 	}
-	initInformationSchemaSysTables = []string{
+	InitInformationSchemaSysTables = []string{
 		"CREATE TABLE IF NOT EXISTS KEY_COLUMN_USAGE(" +
 			"CONSTRAINT_CATALOG varchar(64)," +
 			"CONSTRAINT_SCHEMA varchar(64)," +
@@ -161,7 +161,7 @@ var (
 			"REFERENCED_TABLE_SCHEMA varchar(64)," +
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS COLUMNS(" +
 			"TABLE_CATALOG varchar(64)," +
 			"TABLE_SCHEMA varchar(64)," +
@@ -185,7 +185,7 @@ var (
 			"COLUMN_COMMENT text," +
 			"GENERATION_EXPRESSION longtext," +
 			"SRS_ID int unsigned" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -205,7 +205,7 @@ var (
 			"SOURCE_FUNCTION varchar(30) DEFAULT NULL," +
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
 			"ID bigint unsigned NOT NULL DEFAULT '0'," +
 			"USER varchar(32) NOT NULL DEFAULT ''," +
@@ -215,13 +215,13 @@ var (
 			"TIME int NOT NULL DEFAULT '0'," +
 			"STATE varchar(64) DEFAULT NULL," +
 			"INFO longtext" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
 			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
 			"CATALOG_NAME varchar(64)," +
 			"SCHEMA_NAME varchar(64)," +
@@ -229,13 +229,13 @@ var (
 			"DEFAULT_COLLATION_NAME varchar(64)," +
 			"SQL_PATH binary(0)," +
 			"DEFAULT_ENCRYPTION varchar(10)" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
 			"DESCRIPTION varchar(2048)," +
 			"MAXLEN int unsigned" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS TRIGGERS(" +
 			"TRIGGER_CATALOG varchar(64)," +
 			"TRIGGER_SCHEMA varchar(64)," +
@@ -259,7 +259,7 @@ var (
 			"CHARACTER_SET_CLIENT varchar(64)," +
 			"COLLATION_CONNECTION varchar(64)," +
 			"DATABASE_COLLATION varchar(64)" +
-			")",
+			");",
 		"CREATE TABLE IF NOT EXISTS TABLES(" +
 			"TABLE_CATALOG varchar(64)," +
 			"TABLE_SCHEMA varchar(64)," +
@@ -282,7 +282,7 @@ var (
 			"CHECKSUM bigint," +
 			"CREATE_OPTIONS varchar(256)," +
 			"TABLE_COMMENT text" +
-			")",
+			");",
 	}
 )
 
@@ -308,7 +308,7 @@ func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor, 
 	}()
 	instant := time.Now()
 
-	for _, sql := range initMysqlSysTables {
+	for _, sql := range InitMysqlSysTables {
 		mustExec(sql)
 	}
 	createCost = time.Since(instant)
@@ -330,7 +330,7 @@ func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.Intern
 	}()
 	instant := time.Now()
 
-	for _, sql := range initInformationSchemaSysTables {
+	for _, sql := range InitInformationSchemaSysTables {
 		mustExec(sql)
 	}
 	createCost = time.Since(instant)
