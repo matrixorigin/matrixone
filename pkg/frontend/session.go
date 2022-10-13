@@ -55,6 +55,7 @@ type TxnHandler struct {
 	txnClient TxnClient
 	ses       *Session
 	txn       TxnOperator
+	mu        sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -272,6 +273,12 @@ func (ses *Session) GetTimeZone() *time.Location {
 	return ses.timeZone
 }
 
+func (ses *Session) GetCmd() int {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Cmd
+}
+
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -456,12 +463,6 @@ func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
 }
 
-func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.txnCompileCtx
-}
-
 func (ses *Session) SetSql(sql string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -488,16 +489,12 @@ func (ses *Session) GetStorage() engine.Engine {
 }
 
 func (ses *Session) GetDatabaseName() string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.protocol.GetDatabaseName()
+	return ses.GetMysqlProtocol().GetDatabaseName()
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.protocol.SetDatabaseName(db)
-	ses.txnCompileCtx.SetDatabase(db)
+	ses.GetMysqlProtocol().SetDatabaseName(db)
+	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
 func (ses *Session) DatabaseNameIsEmpty() bool {
@@ -505,21 +502,15 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) GetUserName() string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.protocol.GetUserName()
+	return ses.GetMysqlProtocol().GetUserName()
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.protocol.SetUserName(uname)
+	ses.GetMysqlProtocol().SetUserName(uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.protocol.ConnectionID()
+	return ses.GetMysqlProtocol().ConnectionID()
 }
 
 func (ses *Session) SetOptionBits(bit uint32) {
@@ -731,6 +722,8 @@ func (ses *Session) SetAutocommit(on bool) error {
 }
 
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.outputCallback = callback
 }
 
@@ -869,23 +862,54 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 }
 
 func (ses *Session) GetPrivilege() *privilege {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.priv
 }
 
 func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.priv = priv
 }
 
 func (ses *Session) SetFromRealUser(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.fromRealUser = b
 }
 
 func (ses *Session) GetFromRealUser() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.fromRealUser
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	th.ses = ses
+}
+
+func (th *TxnHandler) GetTxnClient() TxnClient {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txnClient
+}
+
+// TxnClientNew creates a new txn
+func (th *TxnHandler) TxnClientNew() error {
+	var err error
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.txnClient == nil {
+		panic("must set txn client")
+	}
+	th.txn, err = th.txnClient.New()
+	if err != nil {
+		return err
+	}
+	return err
 }
 
 // NewTxn commits the old transaction if it existed.
@@ -899,51 +923,67 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
-	if th.txnClient == nil {
-		panic("must set txn client")
-	}
-	th.txn, err = th.txnClient.New()
+	err = th.TxnClientNew()
 	if err != nil {
 		return err
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	return th.storage.New(ctx, th.txn)
+	return storage.New(ctx, th.GetTxnOperator())
 }
 
 // IsValidTxn checks the transaction is true or not.
 func (th *TxnHandler) IsValidTxn() bool {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn != nil
 }
 
 func (th *TxnHandler) SetInvalid() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	th.txn = nil
+}
+
+func (th *TxnHandler) GetTxnOperator() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txn
+}
+
+func (th *TxnHandler) GetSession() *Session {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.ses
 }
 
 func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	if err := th.storage.Commit(ctx, th.txn); err != nil {
+	txnOp := th.GetTxnOperator()
+	if err := storage.Commit(ctx, txnOp); err != nil {
 		return err
 	}
-	err := th.txn.Commit(ctx)
+	err := txnOp.Commit(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -952,33 +992,37 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	if err := th.storage.Rollback(ctx, th.txn); err != nil {
+	txnOp := th.GetTxnOperator()
+	if err := storage.Rollback(ctx, txnOp); err != nil {
 		return err
 	}
-	err := th.txn.Rollback(ctx)
+	err := txnOp.Rollback(ctx)
 	th.SetInvalid()
 	return err
 }
 
 func (th *TxnHandler) GetStorage() engine.Engine {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.storage
 }
 
 func (th *TxnHandler) GetTxn() TxnOperator {
-	err := th.ses.TxnStart()
+	err := th.GetSession().TxnStart()
 	if err != nil {
 		panic(err)
 	}
-	return th.txn
+	return th.GetTxnOperator()
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -996,36 +1040,63 @@ type TxnCompilerContext struct {
 	QryTyp     QueryType
 	txnHandler *TxnHandler
 	ses        *Session
+	mu         sync.Mutex
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
 
+func (tcc *TxnCompilerContext) GetQueryType() QueryType {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.QryTyp
+}
+
 func (tcc *TxnCompilerContext) SetSession(ses *Session) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.ses = ses
 }
 
+func (tcc *TxnCompilerContext) GetSession() *Session {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses
+}
+
+func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.txnHandler
+}
+
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.dbName = db
 }
 
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	return tcc.dbName
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
-	return tcc.ses.GetSql()
+	return tcc.GetSession().GetSql()
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn())
+	_, err = tcc.GetTxnHandler().GetStorage().Database(tcc.GetSession().GetRequestContext(), name, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -1040,9 +1111,9 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
@@ -1083,7 +1154,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1177,7 +1248,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		})
 	}
 
-	if tcc.QryTyp != TXN_DEFAULT {
+	if tcc.GetQueryType() != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
 		if err != nil {
 			return nil, nil
@@ -1215,18 +1286,18 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.ses.GetGlobalVar(varName)
+			return tcc.GetSession().GetGlobalVar(varName)
 		} else {
-			return tcc.ses.GetSessionVar(varName)
+			return tcc.GetSession().GetSessionVar(varName)
 		}
 	} else {
-		_, val, err := tcc.ses.GetUserDefinedVar(varName)
+		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
 		return val, err
 	}
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -1264,7 +1335,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -1309,7 +1380,7 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	rows, err := table.Rows(tcc.ses.GetRequestContext())
+	rows, err := table.Rows(tcc.GetSession().GetRequestContext())
 	if err != nil {
 		return
 	}

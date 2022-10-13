@@ -1337,17 +1337,19 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return err
 	}
 
+	ses := mce.GetSession()
+
 	switch stmt.Statement.(type) {
 	case *tree.Delete:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	case *tree.Update:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 	default:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 	}
 
 	//get query optimizer and execute Optimize
-	plan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, stmt.Statement)
+	plan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1364,8 +1366,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return err
 	}
 
-	session := mce.GetSession()
-	protocol := session.GetMysqlProtocol()
+	protocol := ses.GetMysqlProtocol()
 
 	explainColName := "QUERY PLAN"
 	columns, err := GetExplainColumns(explainColName)
@@ -1382,10 +1383,11 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 	//send columns
 	//column_count * Protocol::ColumnDefinition packets
-	cmd := session.Cmd
+	cmd := ses.GetCmd()
+	mrs := ses.GetMysqlResultSet()
 	for _, c := range columns {
 		mysqlc := c.(Column)
-		session.Mrs.AddColumn(mysqlc)
+		mrs.AddColumn(mysqlc)
 		//	mysql COM_QUERY response: send the column definition per column
 		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
 		if err != nil {
@@ -1400,7 +1402,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return err
 	}
 
-	err = buildMoExplainQuery(explainColName, buffer, session, getDataFromPipeline)
+	err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
 	if err != nil {
 		return err
 	}
@@ -1414,13 +1416,14 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareStmt, error) {
+	ses := mce.GetSession()
 	switch st.Stmt.(type) {
 	case *tree.Update:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 	case *tree.Delete:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
-	preparePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
+	preparePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
 	}
@@ -1431,24 +1434,25 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareSt
 		PrepareStmt: st.Stmt,
 	}
 
-	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareString
 func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*PrepareStmt, error) {
+	ses := mce.GetSession()
 	stmts, err := mysql.Parse(st.Sql)
 	if err != nil {
 		return nil, err
 	}
 	switch stmts[0].(type) {
 	case *tree.Update:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 	case *tree.Delete:
-		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
 
-	preparePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
+	preparePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
 	}
@@ -1459,17 +1463,18 @@ func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*Prepa
 		PrepareStmt: stmts[0],
 	}
 
-	err = mce.ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }
 
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
+	ses := mce.GetSession()
+	deallocatePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
-	mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
+	ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 	return nil
 }
 
@@ -1683,7 +1688,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1712,7 +1717,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule})
 		err = vp.Visit()
 		if err != nil {
@@ -1730,7 +1735,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 	} else {
 		// replace @var with their values
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
+		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx())
 		vp := plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{resetVarRule})
 		err = vp.Visit()
 		if err != nil {
@@ -1969,7 +1974,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		requestCtx,
 		ses.Mp,
 		ses.Pu.TxnClient,
-		ses.GetTxnHandler().txn,
+		ses.GetTxnHandler().GetTxnOperator(),
 		ses.Pu.FileService,
 	)
 	proc.Id = mce.getNextProcessId()
