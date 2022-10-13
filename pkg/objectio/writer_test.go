@@ -61,7 +61,9 @@ func TestNewObjectWriter(t *testing.T) {
 	dir = path.Join(dir, "/local")
 	id := 1
 	name := fmt.Sprintf("%d.blk", id)
-	bat := newBatch()
+	mp := mpool.MustNewZero()
+	bat := newBatch(mp)
+	defer bat.Clean(mp)
 	c := fileservice.Config{
 		Name:    "LOCAL",
 		Backend: "DISK",
@@ -126,8 +128,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
 }
 
-func newBatch() *batch.Batch {
-	mp := mpool.MustNewZero()
+func newBatch(mp *mpool.MPool) *batch.Batch {
 	types := []types.Type{
 		{Oid: types.T_int8},
 		{Oid: types.T_int16},
