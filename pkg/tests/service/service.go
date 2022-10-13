@@ -313,7 +313,7 @@ func (c *testCluster) Start() error {
 	if c.opt.initial.cnServiceNum != 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		c.WaitDNShardsReported(ctx)
+		c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
