@@ -15,6 +15,9 @@
 package util
 
 import (
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,12 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func BuildIndexTableName(unique bool, indexNumber int, indexName string) string {
 	var name string
-	name = prefixPriColName
+	name = catalog.PrefixPriColName
 	if unique {
 		name += "unique_"
 	} else {
