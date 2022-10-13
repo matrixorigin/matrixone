@@ -33,16 +33,24 @@ type Table[
 	R Row[K, V],
 ] struct {
 	sync.Mutex
-	tree atomic.Pointer[btree.BTreeG[*TreeItem[K, V]]]
+	state atomic.Pointer[tableState[K, V]]
 }
 
-type TreeItem[
+type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	Row        *PhysicalRow[K, V]
-	IndexEntry *IndexEntry[K, V]
-	WriteEntry *WriteEntry[K, V]
+	rows    *btree.BTreeG[*PhysicalRow[K, V]]
+	indexes *btree.BTreeG[*IndexEntry[K, V]]
+	writes  *btree.BTreeG[*WriteEntry[K, V]]
+}
+
+func (t *tableState[K, V]) Copy() *tableState[K, V] {
+	return &tableState[K, V]{
+		rows:    t.rows.Copy(),
+		indexes: t.indexes.Copy(),
+		writes:  t.writes.Copy(),
+	}
 }
 
 type Row[K any, V any] interface {
@@ -80,29 +88,13 @@ func NewTable[
 	R Row[K, V],
 ]() *Table[K, V, R] {
 	ret := &Table[K, V, R]{}
-	tree := btree.NewBTreeGOptions(compareTreeItem[K, V], btree.Options{
-		NoLocks: true,
-	})
-	ret.tree.Store(tree)
+	state := &tableState[K, V]{
+		rows:    btree.NewBTreeG(comparePhysicalRow[K, V]),
+		indexes: btree.NewBTreeG(compareIndexEntry[K, V]),
+		writes:  btree.NewBTreeG(compareWriteEntry[K, V]),
+	}
+	ret.state.Store(state)
 	return ret
-}
-
-func compareTreeItem[
-	K Ordered[K],
-	V any,
-](a, b *TreeItem[K, V]) bool {
-	if a.Row != nil && b.Row != nil {
-		return comparePhysicalRow(a.Row, b.Row)
-	}
-	if a.IndexEntry != nil && b.IndexEntry != nil {
-		return compareIndexEntry(a.IndexEntry, b.IndexEntry)
-	}
-	if a.WriteEntry != nil && b.WriteEntry != nil {
-		return compareWriteEntry(a.WriteEntry, b.WriteEntry)
-	}
-	// WriteEntry < IndexEntry < Row
-	return a.WriteEntry != nil ||
-		(a.IndexEntry != nil && b.Row != nil)
 }
 
 func comparePhysicalRow[
@@ -158,8 +150,8 @@ func (t *Table[K, V, R]) Insert(
 ) error {
 	key := row.Key()
 
-	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
-		physicalRow := getOrSetRowByKey(tree, key)
+	return t.update(func(state *tableState[K, V]) error {
+		physicalRow := getOrSetRowByKey(state.rows, key)
 
 		if err := validate(physicalRow, tx); err != nil {
 			return err
@@ -182,30 +174,24 @@ func (t *Table[K, V, R]) Insert(
 
 		// index entry
 		for _, index := range row.Indexes() {
-			tree.Set(&TreeItem[K, V]{
-				IndexEntry: &IndexEntry[K, V]{
-					Index:     index,
-					Key:       key,
-					VersionID: version.ID,
-					Value:     value,
-				},
+			state.indexes.Set(&IndexEntry[K, V]{
+				Index:     index,
+				Key:       key,
+				VersionID: version.ID,
+				Value:     value,
 			})
 		}
 
 		// write entry
 		tx.committers[t] = struct{}{}
-		tree.Set(&TreeItem[K, V]{
-			WriteEntry: &WriteEntry[K, V]{
-				Transaction: tx,
-				Row:         physicalRow,
-				VersionID:   version.ID,
-			},
+		state.writes.Set(&WriteEntry[K, V]{
+			Transaction: tx,
+			Row:         physicalRow,
+			VersionID:   version.ID,
 		})
 
 		// row entry
-		tree.Set(&TreeItem[K, V]{
-			Row: physicalRow,
-		})
+		state.rows.Set(physicalRow)
 
 		tx.Time.Tick()
 		return nil
@@ -219,8 +205,8 @@ func (t *Table[K, V, R]) Update(
 ) error {
 	key := row.Key()
 
-	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
-		physicalRow := getOrSetRowByKey(tree, key)
+	return t.update(func(state *tableState[K, V]) error {
+		physicalRow := getOrSetRowByKey(state.rows, key)
 
 		value := row.Value()
 		physicalRow, version, err := physicalRow.Update(
@@ -232,30 +218,24 @@ func (t *Table[K, V, R]) Update(
 
 		// index entry
 		for _, index := range row.Indexes() {
-			tree.Set(&TreeItem[K, V]{
-				IndexEntry: &IndexEntry[K, V]{
-					Index:     index,
-					Key:       key,
-					VersionID: version.ID,
-					Value:     value,
-				},
+			state.indexes.Set(&IndexEntry[K, V]{
+				Index:     index,
+				Key:       key,
+				VersionID: version.ID,
+				Value:     value,
 			})
 		}
 
 		// write entry
 		tx.committers[t] = struct{}{}
-		tree.Set(&TreeItem[K, V]{
-			WriteEntry: &WriteEntry[K, V]{
-				Transaction: tx,
-				Row:         physicalRow,
-				VersionID:   version.ID,
-			},
+		state.writes.Set(&WriteEntry[K, V]{
+			Transaction: tx,
+			Row:         physicalRow,
+			VersionID:   version.ID,
 		})
 
 		// row entry
-		tree.Set(&TreeItem[K, V]{
-			Row: physicalRow,
-		})
+		state.rows.Set(physicalRow)
 
 		tx.Time.Tick()
 		return nil
@@ -267,8 +247,8 @@ func (t *Table[K, V, R]) Delete(
 	key K,
 ) error {
 
-	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
-		physicalRow := getRowByKey(tree, key)
+	return t.update(func(state *tableState[K, V]) error {
+		physicalRow := getRowByKey(state.rows, key)
 		if physicalRow == nil {
 			return nil
 		}
@@ -280,18 +260,14 @@ func (t *Table[K, V, R]) Delete(
 
 		// write entry
 		tx.committers[t] = struct{}{}
-		tree.Set(&TreeItem[K, V]{
-			WriteEntry: &WriteEntry[K, V]{
-				Transaction: tx,
-				Row:         physicalRow,
-				VersionID:   version.ID,
-			},
+		state.writes.Set(&WriteEntry[K, V]{
+			Transaction: tx,
+			Row:         physicalRow,
+			VersionID:   version.ID,
 		})
 
 		// row entry
-		tree.Set(&TreeItem[K, V]{
-			Row: physicalRow,
-		})
+		state.rows.Set(physicalRow)
 
 		tx.Time.Tick()
 		return nil
@@ -306,8 +282,8 @@ func (t *Table[K, V, R]) Get(
 	value V,
 	err error,
 ) {
-	tree := t.tree.Load()
-	physicalRow := getRowByKey(tree, key)
+	state := t.state.Load()
+	physicalRow := getRowByKey(state.rows, key)
 	if physicalRow == nil {
 		err = sql.ErrNoRows
 		return
@@ -323,56 +299,46 @@ func getRowByKey[
 	K Ordered[K],
 	V any,
 ](
-	tree *btree.BTreeG[*TreeItem[K, V]],
+	tree *btree.BTreeG[*PhysicalRow[K, V]],
 	key K,
 ) *PhysicalRow[K, V] {
-	pivot := &TreeItem[K, V]{
-		Row: &PhysicalRow[K, V]{
-			Key: key,
-		},
+	pivot := &PhysicalRow[K, V]{
+		Key: key,
 	}
 	row, _ := tree.Get(pivot)
 	if row == nil {
 		return nil
 	}
-	return row.Row
+	return row
 }
 
 func getOrSetRowByKey[
 	K Ordered[K],
 	V any,
 ](
-	tree *btree.BTreeG[*TreeItem[K, V]],
+	tree *btree.BTreeG[*PhysicalRow[K, V]],
 	key K,
 ) *PhysicalRow[K, V] {
-	pivot := &TreeItem[K, V]{
-		Row: &PhysicalRow[K, V]{
-			Key: key,
-		},
+	pivot := &PhysicalRow[K, V]{
+		Key: key,
 	}
 	if row, _ := tree.Get(pivot); row != nil {
-		return row.Row
+		return row
 	}
-	pivot.Row.LastUpdate = time.Now()
+	pivot.LastUpdate = time.Now()
 	tree.Set(pivot)
-	return pivot.Row
+	return pivot
 }
 
 func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
-	tree := t.tree.Load()
-	iter := tree.Iter()
+	state := t.state.Load()
+	iter := state.indexes.Copy().Iter()
 	defer iter.Release()
-	pivot := &TreeItem[K, V]{
-		IndexEntry: &IndexEntry[K, V]{
-			Index: index,
-		},
+	pivot := &IndexEntry[K, V]{
+		Index: index,
 	}
 	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-		item := iter.Item()
-		if item.IndexEntry == nil {
-			break
-		}
-		entry := item.IndexEntry
+		entry := iter.Item()
 		if index.Less(entry.Index) {
 			break
 		}
@@ -380,7 +346,7 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 			break
 		}
 
-		physicalRow := getRowByKey(tree, entry.Key)
+		physicalRow := getRowByKey(state.rows, entry.Key)
 		if physicalRow == nil {
 			continue
 		}
@@ -399,20 +365,14 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 }
 
 func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
-	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
-		iter := tree.Copy().Iter()
+	return t.update(func(state *tableState[K, V]) error {
+		iter := state.writes.Copy().Iter()
 		defer iter.Release()
-		pivot := &TreeItem[K, V]{
-			WriteEntry: &WriteEntry[K, V]{
-				Transaction: tx,
-			},
+		pivot := &WriteEntry[K, V]{
+			Transaction: tx,
 		}
 		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-			item := iter.Item()
-			if item.WriteEntry == nil {
-				break
-			}
-			entry := item.WriteEntry
+			entry := iter.Item()
 			if entry.Transaction != tx {
 				break
 			}
@@ -424,7 +384,7 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 			// set born time and lock time to commit time
 			physicalRow := entry.Row.clone()
 			for i, version := range physicalRow.Versions {
-				if version.ID == item.WriteEntry.VersionID {
+				if version.ID == entry.VersionID {
 					if version.LockTx == tx {
 						version.LockTime = tx.CommitTime
 					}
@@ -434,12 +394,10 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 					physicalRow.Versions[i] = version
 				}
 			}
-			tree.Set(&TreeItem[K, V]{
-				Row: physicalRow,
-			})
+			state.rows.Set(physicalRow)
 
 			// delete write entry
-			tree.Delete(item)
+			state.writes.Delete(entry)
 
 		}
 		return nil
@@ -448,40 +406,34 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 }
 
 func (t *Table[K, V, R]) AbortTx(tx *Transaction) {
-	t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
-		iter := tree.Copy().Iter()
+	t.update(func(state *tableState[K, V]) error {
+		iter := state.writes.Copy().Iter()
 		defer iter.Release()
-		pivot := &TreeItem[K, V]{
-			WriteEntry: &WriteEntry[K, V]{
-				Transaction: tx,
-			},
+		pivot := &WriteEntry[K, V]{
+			Transaction: tx,
 		}
 		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-			item := iter.Item()
-			if item.WriteEntry == nil {
-				break
-			}
-			entry := item.WriteEntry
+			entry := iter.Item()
 			if entry.Transaction != tx {
 				break
 			}
-			tree.Delete(item)
+			state.writes.Delete(entry)
 		}
 		return nil
 	})
 }
 
 func (t *Table[K, V, R]) update(
-	fn func(*btree.BTreeG[*TreeItem[K, V]]) error,
+	fn func(state *tableState[K, V]) error,
 ) error {
 	t.Lock()
 	defer t.Unlock()
-	tree := t.tree.Load()
-	newTree := tree.Copy()
-	if err := fn(newTree); err != nil {
+	state := t.state.Load()
+	newState := state.Copy()
+	if err := fn(newState); err != nil {
 		return err
 	}
-	t.tree.Store(newTree)
+	t.state.Store(newState)
 	return nil
 }
 
