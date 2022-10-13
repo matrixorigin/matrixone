@@ -16,7 +16,6 @@ package logservicedriver
 
 import (
 	"context"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	// "time"
@@ -24,9 +23,8 @@ import (
 
 // driver lsn -> entry lsn
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
-	truncated := atomic.LoadUint64(&d.truncating)
-	if lsn > truncated {
-		atomic.StoreUint64(&d.truncating, lsn)
+	if lsn > d.truncating.Load() {
+		d.truncating.Store(lsn)
 	}
 	_, err := d.truncateQueue.Enqueue(struct{}{})
 	if err != nil {
@@ -36,7 +34,7 @@ func (d *LogServiceDriver) Truncate(lsn uint64) error {
 }
 
 func (d *LogServiceDriver) GetTruncated() (lsn uint64, err error) {
-	lsn = atomic.LoadUint64(&d.truncating)
+	lsn = d.truncating.Load()
 	return
 }
 
@@ -45,7 +43,7 @@ func (d *LogServiceDriver) onTruncate(items ...any) {
 }
 
 func (d *LogServiceDriver) doTruncate() {
-	target := atomic.LoadUint64(&d.truncating)
+	target := d.truncating.Load()
 	lastServiceLsn := d.truncatedLogserviceLsn
 	lsn := lastServiceLsn
 	//TODO use valid lsn
@@ -83,7 +81,9 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 			cancel()
 			return err == nil
 		})
-		panic(err)
+		if err != nil {
+			panic(err)
+		}
 	}
 	logutil.Infof("Logservice Driver: Truncate %d", lsn)
 }
@@ -106,7 +106,9 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 			cancel()
 			return err == nil
 		})
-		panic(err)
+		if err != nil {
+			panic(err)
+		}
 	}
 	logutil.Infof("Logservice Driver: Get Truncate %d", lsn)
 	return

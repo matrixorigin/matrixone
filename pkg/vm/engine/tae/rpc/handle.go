@@ -16,9 +16,10 @@ package rpc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"syscall"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,7 +56,9 @@ func NewTAEHandle(opt *options.Options) *Handle {
 	}
 	return h
 }
-func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
+func (h *Handle) HandleCommit(
+	ctx context.Context,
+	meta txn.TxnMeta) (err error) {
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -68,7 +71,9 @@ func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
 	return
 }
 
-func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
+func (h *Handle) HandleRollback(
+	ctx context.Context,
+	meta txn.TxnMeta) (err error) {
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -78,7 +83,9 @@ func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
 	return
 }
 
-func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
+func (h *Handle) HandleCommitting(
+	ctx context.Context,
+	meta txn.TxnMeta) (err error) {
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -89,7 +96,9 @@ func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
 	return
 }
 
-func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
+func (h *Handle) HandlePrepare(
+	ctx context.Context,
+	meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -106,21 +115,24 @@ func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err e
 	return
 }
 
-func (h *Handle) HandleStartRecovery(ch chan txn.TxnMeta) {
+func (h *Handle) HandleStartRecovery(
+	ctx context.Context,
+	ch chan txn.TxnMeta) {
 	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
 	//TODO:: TAE replay
 	close(ch)
 }
 
-func (h *Handle) HandleClose() (err error) {
+func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	return h.eng.Close()
 }
 
-func (h *Handle) HandleDestroy() (err error) {
+func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 	return h.eng.Destroy()
 }
 
 func (h *Handle) HandleGetLogTail(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
@@ -135,6 +147,7 @@ func (h *Handle) HandleGetLogTail(
 
 // TODO:: need to handle resp.
 func (h *Handle) HandlePreCommit(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req apipb.PrecommitWriteCmd,
 	resp *apipb.SyncLogTailResp) (err error) {
@@ -157,7 +170,7 @@ func (h *Handle) HandlePreCommit(
 						AccountID: cmd.AccountId,
 					},
 				}
-				if err = h.HandleCreateDatabase(meta, req,
+				if err = h.HandleCreateDatabase(ctx, meta, req,
 					new(db.CreateDatabaseResp)); err != nil {
 					return err
 				}
@@ -175,7 +188,7 @@ func (h *Handle) HandlePreCommit(
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
 				}
-				if err = h.HandleCreateRelation(meta, req,
+				if err = h.HandleCreateRelation(ctx, meta, req,
 					new(db.CreateRelationResp)); err != nil {
 					return err
 				}
@@ -191,12 +204,12 @@ func (h *Handle) HandlePreCommit(
 						AccountID: req.AccountId,
 					},
 				}
-				if err = h.HandleDropDatabase(meta, req,
+				if err = h.HandleDropDatabase(ctx, meta, req,
 					new(db.DropDatabaseResp)); err != nil {
 					return err
 				}
 			}
-		case []catalog.DropTable:
+		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
 				req := db.DropRelationReq{
 					AccessInfo: db.AccessInfo{
@@ -209,7 +222,7 @@ func (h *Handle) HandlePreCommit(
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
-				if err = h.HandleDropRelation(meta, req,
+				if err = h.HandleDropRelation(ctx, meta, req,
 					new(db.DropRelationResp)); err != nil {
 					return err
 				}
@@ -233,7 +246,7 @@ func (h *Handle) HandlePreCommit(
 				TableName:    pe.GetTableName(),
 				Batch:        moBat,
 			}
-			if err = h.HandleWrite(meta, req,
+			if err = h.HandleWrite(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
 				return err
 			}
@@ -248,6 +261,7 @@ func (h *Handle) HandlePreCommit(
 //Handle DDL commands.
 
 func (h *Handle) HandleCreateDatabase(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
@@ -257,7 +271,7 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -274,6 +288,7 @@ func (h *Handle) HandleCreateDatabase(
 }
 
 func (h *Handle) HandleDropDatabase(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
@@ -283,7 +298,7 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -301,6 +316,7 @@ func (h *Handle) HandleDropDatabase(
 }
 
 func (h *Handle) HandleCreateRelation(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
@@ -310,7 +326,7 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	ctx := context.Background()
+	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -332,6 +348,7 @@ func (h *Handle) HandleCreateRelation(
 }
 
 func (h *Handle) HandleDropRelation(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.DropRelationReq,
 	resp *db.DropRelationResp) (err error) {
@@ -341,7 +358,7 @@ func (h *Handle) HandleDropRelation(
 	if err != nil {
 		return
 	}
-	ctx := context.Background()
+	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -365,6 +382,7 @@ func (h *Handle) HandleDropRelation(
 
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
+	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.WriteReq,
 	resp *db.WriteResp) (err error) {
@@ -375,7 +393,7 @@ func (h *Handle) HandleWrite(
 		return err
 	}
 
-	ctx := context.Background()
+	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)

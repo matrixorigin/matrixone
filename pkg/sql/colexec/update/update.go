@@ -84,8 +84,27 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				}
 			}
 
+			// in update, we can get a batch[b(update), b(old)]
+			// we should use old b as delete info
+			for i, info := range updateCtx.ComputeIndexInfos {
+				rel := updateCtx.ComputeIndexTables[i]
+				var attrs []string = nil
+				attrs = append(attrs, updateCtx.UpdateAttrs...)
+				attrs = append(attrs, updateCtx.OtherAttrs...)
+				attrs = append(attrs, updateCtx.IndexAttrs...)
+				oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
+				if rowNum != 0 {
+					err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+					if err != nil {
+						return false, err
+					}
+				}
+				oldBatch.Clean(proc.Mp())
+			}
+
 			delBat := &batch.Batch{}
 			delBat.Vecs = []*vector.Vector{bat.GetVector(idx)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
 			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.PriKey)
 			if err != nil {
 				delBat.Clean(proc.Mp())
@@ -98,6 +117,20 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
+
+			for i, info := range updateCtx.ComputeIndexInfos {
+				rel := updateCtx.ComputeIndexTables[i]
+				b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
+				if rowNum != 0 {
+					err = rel.Write(ctx, b)
+					if err != nil {
+						return false, err
+					}
+				}
+				b.Clean(proc.Mp())
+			}
+
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
@@ -116,8 +149,27 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				panic(any("internal error when filter Batch"))
 			}
 
+			// in update, we can get a batch[b(update), b(old)]
+			// we should use old b as delete info
+			for i, info := range updateCtx.ComputeIndexInfos {
+				rel := updateCtx.ComputeIndexTables[i]
+				var attrs []string = nil
+				attrs = append(attrs, updateCtx.UpdateAttrs...)
+				attrs = append(attrs, updateCtx.OtherAttrs...)
+				attrs = append(attrs, updateCtx.IndexAttrs...)
+				oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
+				if rowNum != 0 {
+					err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+					if err != nil {
+						return false, err
+					}
+				}
+				oldBatch.Clean(proc.Mp())
+			}
+
 			delBat := &batch.Batch{}
 			delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
+			delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
 			err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
 			if err != nil {
 				delBat.Clean(proc.Mp())
@@ -153,6 +205,18 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 						}
 					}
 				}
+			}
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
+			for i, info := range updateCtx.ComputeIndexInfos {
+				rel := updateCtx.ComputeIndexTables[i]
+				b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
+				if rowNum != 0 {
+					err = rel.Write(ctx, b)
+					if err != nil {
+						return false, err
+					}
+				}
+				b.Clean(proc.Mp())
 			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {

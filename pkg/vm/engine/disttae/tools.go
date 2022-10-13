@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,8 +108,9 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 	return bat, nil
 }
 
-func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string, tableId uint64,
-	databaseId uint64, databaseName string, comment string, m *mpool.MPool) (*batch.Batch, error) {
+func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint32, name string,
+	tableId uint64, databaseId uint64, databaseName string,
+	comment string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	bat.SetZs(1, m)
@@ -140,12 +142,12 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 		}
 		idx = catalog.MO_TABLES_RELKIND_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relkind
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.relKind), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_COMMENT_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_comment
-		if err := bat.Vecs[idx].Append([]byte(comment), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
@@ -175,9 +177,15 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // partition
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.partition), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VIEWDEF_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // viewdef
+		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }
@@ -282,11 +290,52 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 		if err := bat.Vecs[idx].Append(col.isHidden, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_has_update
+		if err := bat.Vecs[idx].Append(col.hasUpdate, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
+		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }
 
 func genDropTableTuple(id, databaseId uint64, name, databaseName string,
+	m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(4)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
+	bat.SetZs(1, m)
+	{
+		idx := catalog.MO_TABLES_REL_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
+		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_REL_NAME_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
+		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
+		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
+			return nil, err
+		}
+	}
+	return bat, nil
+}
+
+func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -494,17 +543,9 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 		}
 	}
 	if len(args) == 0 {
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				args = append(args, newColumnExpr(0, attr.Attr.Type.Oid, attr.Attr.Name))
-				break
-			}
-		}
+		return nil
 	}
-	return plantool.MakeExpr("%", []*plan.Expr{
-		plantool.MakeExpr("hash_value", args),
-		newIntConstVal(int64(dnNum)),
-	})
+	return plantool.MakeExpr("hash_value", args)
 }
 
 func newIntConstVal(v any) *plan.Expr {
@@ -668,6 +709,10 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].isAutoIncrement = row[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8)
 		cols[i].constraintType = string(row[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte))
 		cols[i].typ = row[catalog.MO_COLUMNS_ATTTYP_IDX].([]byte)
+		cols[i].hasDef = row[catalog.MO_COLUMNS_ATTHASDEF_IDX].(int8)
+		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
+		cols[i].hasUpdate = row[catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8)
+		cols[i].updateExpr = row[catalog.MO_COLUMNS_ATT_UPDATE_IDX].([]byte)
 	}
 	return cols
 }
@@ -689,6 +734,12 @@ func genTableDefOfColumn(col column) engine.TableDef {
 			panic(err)
 		}
 	}
+	if col.hasUpdate == 1 {
+		attr.OnUpdate = new(plan.Expr)
+		if err := types.Decode(col.updateExpr, attr.OnUpdate); err != nil {
+			panic(err)
+		}
+	}
 	if col.constraintType == catalog.SystemColPKConstraint {
 		attr.Primary = true
 	}
@@ -697,6 +748,23 @@ func genTableDefOfColumn(col column) engine.TableDef {
 
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -729,6 +797,16 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			if len(defaultExpr) > 0 {
 				col.hasDef = 1
 				col.defaultExpr = defaultExpr
+			}
+		}
+		if attrDef.Attr.OnUpdate != nil {
+			expr, err := types.Encode(attrDef.Attr.OnUpdate)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) > 0 {
+				col.hasUpdate = 1
+				col.updateExpr = expr
 			}
 		}
 		if attrDef.Attr.IsHidden {
@@ -794,7 +872,8 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
+			idx := uint64(v) % uint64(dnNum)
+			if err := vector.UnionOne(bats[idx].GetVector(int32(i)), vec, int64(j), proc.Mp()); err != nil {
 				for _, bat := range bats {
 					bat.Clean(proc.Mp())
 				}
@@ -855,6 +934,11 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
+}
+
+func isMetaTable(name string) bool {
+	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
+	return ok
 }
 
 func genBlockMetas(rows [][]any) []BlockMeta {

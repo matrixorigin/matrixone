@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+
 	//"fmt"
 	"os"
 
@@ -211,6 +212,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if err != nil {
 		panic(err)
 	}
+	defer txnCmd.Close()
 	replayer.OnReplayCmd(txnCmd, idxCtx, txnif.CmdInvalid, types.TS{})
 	if err != nil {
 		panic(err)

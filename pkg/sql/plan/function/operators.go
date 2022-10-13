@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -311,6 +312,16 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNull,
 			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
 		},
 	},
 
@@ -493,6 +504,16 @@ var operators = map[int]Functions{
 				Layout: IS_NULL_EXPRESSION,
 				Args: []types.T{
 					types.T_blob,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNotNull,
@@ -2510,9 +2531,17 @@ var operators = map[int]Functions{
 				Index:     12,
 				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
-				Args:      []types.T{types.T_date, types.T_interval},
-				ReturnTyp: types.T_date,
-				Fn:        nil,
+				Args:      []types.T{types.T_date, types.T_date},
+				ReturnTyp: types.T_int64,
+				Fn:        binary.DateDiff,
+			},
+			{
+				Index:     13,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
+				Layout:    BINARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.MinusDatetime,
 			},
 		},
 	},
