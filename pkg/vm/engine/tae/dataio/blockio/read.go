@@ -45,7 +45,7 @@ Notes:
 */
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
-func CNBlockRead(ctx context.Context, columns []string, fs fileservice.FileService, pool *mpool.MPool, tableDef *plan.TableDef, metaloc, deltaloc string, ts timestamp.Timestamp) (*batch.Batch, error) {
+func BlockRead(ctx context.Context, columns []string, fs fileservice.FileService, pool *mpool.MPool, tableDef *plan.TableDef, metaloc, deltaloc string, ts timestamp.Timestamp) (*batch.Batch, error) {
 	// prepare
 	columnLength := len(columns)
 	colIdxs := make([]uint16, columnLength)
@@ -81,7 +81,7 @@ func CNBlockRead(ctx context.Context, columns []string, fs fileservice.FileServi
 	return bat, nil
 }
 
-func BlockRead(ctx context.Context, colNames []string, colIdxs []uint16, colTyps []types.Type, colNulls []bool, fs fileservice.FileService, pool *mpool.MPool, metaloc, deltaloc string, ts types.TS) (*containers.Batch, error) {
+func BlockReadInner(ctx context.Context, colNames []string, colIdxs []uint16, colTyps []types.Type, colNulls []bool, fs fileservice.FileService, pool *mpool.MPool, metaloc, deltaloc string, ts types.TS) (*containers.Batch, error) {
 	columnBatch, err := readColumnBatchByMetaloc(metaloc, fs, pool, colNames, colIdxs, colTyps, colNulls)
 	if err != nil {
 		return nil, err
