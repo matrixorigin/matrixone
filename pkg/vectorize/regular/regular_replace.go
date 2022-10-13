@@ -28,7 +28,10 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
 	//regular expression pattern
-	reg := regexp.MustCompile(pat)
+	reg, err := regexp.Compile(pat)
+	if err != nil {
+		return "", moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+	}
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(expr, -1)
 	if matchRes == nil {
@@ -108,7 +111,10 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 	var posValue int64
 	var occValue int64
 	if len(expr) == 1 && len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
 				nulls.Add(resultVector.Nsp, uint64(i))
@@ -137,7 +143,10 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		}
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_replace have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
 				nulls.Add(resultVector.Nsp, uint64(i))
