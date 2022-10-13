@@ -34,7 +34,7 @@ import (
 
 type arithT interface {
 	constraints.Integer | constraints.Float | bool |
-		types.Decimal64 | types.Decimal128
+		types.Decimal64 | types.Decimal128 | types.Varlena
 }
 
 type arithFn func(v1, v2, r *vector.Vector) error
@@ -101,6 +101,10 @@ func PlusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, add.Decimal128VecAdd)
+}
+
+func PlusString[T1 arithT, T2 arithT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddString)
 }
 
 // Subtraction operation

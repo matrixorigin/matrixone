@@ -812,9 +812,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
-			name = "concat"
 		}
+		//else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		//	name = "concat"
+		//}
 		if err != nil {
 			return nil, err
 		}

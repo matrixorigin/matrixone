@@ -23,6 +23,7 @@ package add
 import "C"
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -200,6 +201,37 @@ func goNumericAddFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 		for i, x := range xt {
 			if !nulls.Contains(rs.Nsp, uint64(i)) {
 				rt[i] = x + yt[i]
+			}
+		}
+		return nil
+	}
+}
+
+func StringAddString(xs, ys, rs *vector.Vector) error {
+	xt, yt, rt := vector.MustStrCols(xs), vector.MustStrCols(ys), vector.MustTCols[float64](rs)
+	xf := make([]float64, len(xt))
+	yf := make([]float64, len(yt))
+	binary.StringToFloat[float64](xt, xf)
+	binary.StringToFloat[float64](yt, yf)
+
+	if xs.IsScalar() {
+		for i, y := range yf {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = xf[0] + y
+			}
+		}
+		return nil
+	} else if ys.IsScalar() {
+		for i, x := range xf {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yf[0]
+			}
+		}
+		return nil
+	} else {
+		for i, x := range xf {
+			if !nulls.Contains(rs.Nsp, uint64(i)) {
+				rt[i] = x + yf[i]
 			}
 		}
 		return nil
