@@ -109,7 +109,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 		for i, ag := range ap.Aggs {
 			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
-				ctr.bat = nil
 				return false, err
 			}
 		}
@@ -135,8 +134,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	if bat == nil {
 		if ctr.bat != nil {
 			if ap.NeedEval {
-				for i, agg := range ctr.bat.Aggs {
-					vec, err := agg.Eval(proc.Mp())
+				for i, ag := range ctr.bat.Aggs {
+					vec, err := ag.Eval(proc.Mp())
 					if err != nil {
 						return false, err
 					}
@@ -177,11 +176,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	for i, expr := range ap.Exprs {
 		vec, err := colexec.EvalExpr(bat, proc, expr)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.groupVecs[j].needFree {
-					ctr.groupVecs[i].vec.Free(proc.Mp())
-				}
-			}
 			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
@@ -194,13 +188,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.vecs[i] = vec
 	}
-	defer func() {
-		for i := range ctr.groupVecs {
-			if ctr.groupVecs[i].needFree {
-				ctr.groupVecs[i].vec.Free(proc.Mp())
-			}
-		}
-	}()
 	if ctr.bat == nil {
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
@@ -259,8 +246,11 @@ func (ctr *container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
-	for i, agg := range ctr.bat.Aggs {
-		agg.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[i].vec})
+	for i, ag := range ctr.bat.Aggs {
+		err := ag.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[i].vec})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

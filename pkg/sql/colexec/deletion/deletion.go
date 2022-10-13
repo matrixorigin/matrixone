@@ -37,7 +37,10 @@ func Prepare(_ *process.Process, _ any) error {
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp())
@@ -64,7 +67,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
-				return false, err
+				return true, err
 			}
 			affectedRows += cnt
 
@@ -83,7 +86,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
-				return false, err
+				return true, err
 			}
 			affectedRows += uint64(batLen)
 

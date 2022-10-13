@@ -50,7 +50,6 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
-			ctr.state = End
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
@@ -72,7 +71,8 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			}
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			return true, nil
+			ctr.state = End
+			return false, nil
 		case End:
 			proc.SetInputBatch(nil)
 			return true, nil

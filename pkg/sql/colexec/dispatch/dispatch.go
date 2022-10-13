@@ -44,7 +44,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
-				return false, err
+				return true, err
 			}
 			vecs = append(vecs, vec)
 		}
@@ -86,5 +86,5 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			return false, nil
 		}
 	}
-	return true, nil
+	return false, nil
 }

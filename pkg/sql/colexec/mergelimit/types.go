@@ -16,11 +16,6 @@ package mergelimit
 
 import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
-const (
-	Eval = iota
-	End
-)
-
 type container struct {
 	state int
 	seen  uint64

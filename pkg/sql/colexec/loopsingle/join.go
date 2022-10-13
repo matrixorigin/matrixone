@@ -65,14 +65,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}

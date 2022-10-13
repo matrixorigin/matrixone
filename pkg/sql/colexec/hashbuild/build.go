@@ -69,11 +69,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				if ap.NeedHashMap {
 					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
-				proc.SetInputBatch(ctr.bat)
-				ctr.bat = nil
-			} else {
-				proc.SetInputBatch(nil)
 			}
+			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
 			return true, nil
 		}
 	}

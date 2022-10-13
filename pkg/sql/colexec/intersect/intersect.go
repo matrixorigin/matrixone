@@ -201,6 +201,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		analyze.Output(c.btc)
 		proc.SetInputBatch(c.btc)
+		c.btc = nil
 		btc.Clean(proc.Mp())
 		return false, nil
 	}
