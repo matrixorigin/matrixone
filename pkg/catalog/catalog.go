@@ -15,6 +15,9 @@
 package catalog
 
 import (
+	"regexp"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,14 +82,37 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropTables(GenRows(bat)), es[1:], nil
+			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
 		for i := range cmds {
-			cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
-				Comment: cmds[i].Comment,
+			// tae's logic
+			if len(cmds[i].Comment) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+					Comment: cmds[i].Comment,
+				})
+			}
+			if len(cmds[i].Viewdef) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+					View: cmds[i].Viewdef,
+				})
+			}
+			if len(cmds[i].Partition) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+					Partition: cmds[i].Partition,
+				})
+			}
+			pro := new(engine.PropertiesDef)
+			pro.Properties = append(pro.Properties, engine.Property{
+				Key:   SystemRelAttr_Kind,
+				Value: string(cmds[i].RelKind),
 			})
+			pro.Properties = append(pro.Properties, engine.Property{
+				Key:   SystemRelAttr_CreateSQL,
+				Value: cmds[i].CreateSql,
+			})
+			cmds[i].Defs = append(cmds[i].Defs, pro)
 			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
 				return nil, nil, err
 			}
@@ -133,17 +159,28 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
+		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
+		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
 	return cmds
 }
 
-func genDropTables(rows [][]any) []DropTable {
-	cmds := make([]DropTable, len(rows))
+func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
+	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		if id, ok := isTruncate(name); ok {
+			cmds[i].Id = id
+			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		} else {
+			cmds[i].IsDrop = true
+			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].Name = name
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		}
 	}
 	return cmds
 }
@@ -186,6 +223,12 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	if row[MO_COLUMNS_ATTHASDEF_IDX].(int8) == 1 {
 		attr.Default = new(plan.Default)
 		if err := types.Decode(row[MO_COLUMNS_ATT_DEFAULT_IDX].([]byte), attr.Default); err != nil {
+			return nil, err
+		}
+	}
+	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
+		attr.OnUpdate = new(plan.Expr)
+		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
 			return nil, err
 		}
 	}
@@ -307,4 +350,15 @@ func GenRows(bat *batch.Batch) [][]any {
 		}
 	}
 	return rows
+}
+
+func isTruncate(name string) (uint64, bool) {
+	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
+	if !ok {
+		return 0, false
+	}
+	reg, _ := regexp.Compile(`\d+`)
+	str := reg.FindString(name)
+	id, _ := strconv.ParseUint(str, 10, 64)
+	return id, true
 }
