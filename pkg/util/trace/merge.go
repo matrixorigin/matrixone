@@ -15,7 +15,9 @@
 package trace
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"io"
 	"path"
 	"strings"
@@ -25,23 +27,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+
+	"github.com/matrixorigin/simdcsv"
 )
 
 // ========================
 // handle merge
 // ========================
 
-// FileName handle filename maker logic.
-type FileName interface {
-	Name() string
-}
-
 type CSVWriter interface {
-	SetWriter(io.StringWriter)
-	// WriteLine format all elem with default format and write one line into csv file
-	WriteLine(elems []any) error
-	// WriteStrings write all string elems as one line into csv file
-	WriteStrings(elems []string) error
+	// WriteStrings write record as one line into csv file
+	WriteStrings(record []string) error
 	// FlushAndClose flush its buffer and close.
 	FlushAndClose() error
 }
@@ -70,9 +66,10 @@ type Merge struct {
 	FileCacheSize int64 // see With?
 
 	// flow ctrl
-
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+
+	runningJobs chan struct{}
 }
 
 type MergeOption func(*Merge)
@@ -88,6 +85,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		opt(m)
 	}
 	m.valid()
+	m.runningJobs = make(chan struct{}, m.MaxMergeJobs)
 	// fixme: m.pathBuilder = ?? // init with Table and Datetime
 	return m
 }
@@ -145,8 +143,6 @@ func (m *Merge) Main() error {
 	return err
 }
 
-var runningJobs int64
-
 // doMergeFiles handle merge{read, write, delete} ops
 // Step 1. find new timestamp_start, timestamp_end.
 // Step 2. make new filename, file writer
@@ -154,12 +150,11 @@ var runningJobs int64
 // Step 4. delete old files.
 func (m *Merge) doMergeFiles(account string, paths []string) error {
 
-	// fixme: Control task concurrency
-	for runningJobs > m.MaxMergeJobs {
-		// todo: wait
-		time.Sleep(time.Minute)
-		runningJobs--
-	}
+	// Control task concurrency
+	m.runningJobs <- struct{}{}
+	defer func() {
+		<-m.runningJobs
+	}()
 
 	if len(paths) < m.MinFilesMerge {
 		return moerr.NewInternalError("file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
@@ -180,7 +175,6 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		timestamps = append(timestamps, ts[0])
 	}
 	if len(timestamps) <= 1 {
-		// fixme
 		return moerr.NewInternalError("CSVMerge: only one timestamp")
 	}
 	timestampStart := timestamps[0]
@@ -190,21 +184,25 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 	prefix := m.pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter := NewCSVWriter(m.FS, WithPath(mergeFilepath))
+	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath)
 
 	// Step 3. do simple merge
 	cacheFileData := m.Table.NewRowCache()
 	for _, path := range paths {
-		reader := NewCSVReader(m.FS, path)
+		reader, err := NewCSVReader(m.ctx, m.FS, path)
+		if err != nil {
+			// fixme: handle this path ? just return
+			continue
+		}
 		for line := reader.ReadLine(); line != nil; line = reader.ReadLine() {
 
 			row := m.Table.ParseRow(line)
 			// fixme: if !obj.Valid() { continue }
 			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
-			if cacheFileData.Size() > m.FileCacheSize {
-				cacheFileData.Flush(newFileWriter)
-				cacheFileData.Reset()
-			}
+		}
+		if cacheFileData.Size() > m.FileCacheSize {
+			cacheFileData.Flush(newFileWriter)
+			cacheFileData.Reset()
 		}
 	}
 	if !cacheFileData.IsEmpty() {
@@ -223,16 +221,95 @@ type CSVReader interface {
 	ReadLine() []string
 }
 
-func NewCSVReader(fs fileservice.FileService, path string) CSVReader {
-	panic("not implement")
+type ContentReader struct {
+	idx     int
+	length  int
+	content [][]string
 }
 
-func WithPath(filepath string) interface{} {
-	panic("not implement")
+func NewContentReader(content [][]string) *ContentReader {
+	return &ContentReader{
+		length:  len(content),
+		content: content,
+	}
 }
 
-func NewCSVWriter(fs fileservice.FileService, i interface{}) CSVWriter {
-	panic("not implement")
+func (s *ContentReader) ReadLine() []string {
+	if s.idx < s.length {
+		idx := s.idx
+		s.idx++
+		return s.content[idx]
+	}
+	return nil
+}
+
+func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (CSVReader, error) {
+	// external.ReadFile
+	var reader io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &reader,
+			},
+		},
+	}
+	// read whole file
+	if err := fs.Read(ctx, &vec); err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	// parse csv content
+	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
+		CommonCsvOptions.Terminator,
+		'#',
+		true,
+		true)
+	defer simdCsvReader.Close()
+	content, err := simdCsvReader.ReadAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// return content Reader
+	return NewContentReader(content), nil
+}
+
+var _ CSVWriter = (*ContentWriter)(nil)
+
+type ContentWriter struct {
+	writer io.StringWriter
+	buf    *bytes.Buffer
+	parser *csv.Writer
+}
+
+func NewContentWriter(writer io.StringWriter) *ContentWriter {
+	buf := bytes.NewBuffer(nil)
+	return &ContentWriter{
+		writer: writer,
+		buf:    buf,
+		parser: csv.NewWriter(buf),
+	}
+}
+
+func (w *ContentWriter) WriteStrings(record []string) error {
+	return w.parser.Write(record)
+}
+
+func (w *ContentWriter) FlushAndClose() error {
+	_, err := w.writer.WriteString(w.buf.String())
+	return err
+}
+
+func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string) (CSVWriter, error) {
+
+	factory := export.GetFSWriterFactory(fs, "", "")
+	fsWriter := factory(ctx, "", nil, export.WithFilePath(path))
+
+	return NewContentWriter(fsWriter), nil
 }
 
 type Cache interface {
