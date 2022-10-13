@@ -167,7 +167,7 @@ func TypeMatch(v any, typ types.T) bool {
 	case types.T_blob:
 		_, ok = v.([]byte)
 	case types.T_uuid:
-		_, ok = v.([]byte)
+		_, ok = v.(types.Uuid)
 	case types.T_TS:
 		_, ok = v.(types.TS)
 	case types.T_Rowid:
