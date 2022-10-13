@@ -161,7 +161,7 @@ func TestFSWriter_Write(t *testing.T) {
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS("test", basedir, MB) // db root dir.
+	localFs, err := fileservice.NewLocalFS("test", basedir, MB) // db root database.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
@@ -192,8 +192,8 @@ func TestFSWriter_Write(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
-				WithPrefix(tt.fields.prefix),
-				WithDir(tt.fields.dir),
+				WithName(tt.fields.prefix),
+				WithDatabase(tt.fields.dir),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
 				WithFileServiceName(""),
 			)
