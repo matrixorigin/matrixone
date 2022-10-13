@@ -436,7 +436,7 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 	reqs := make([]*trace.CSVRequest, 0, len(buffer))
 	for account, buf := range buffer {
 		writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable,
-			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(export.NewMetricLogPathBuilder()))
+			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(singleMetricTable.PathBuilder))
 		reqs = append(reqs, trace.NewCSVRequest(writer, buf.String()))
 	}
 

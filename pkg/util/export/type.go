@@ -244,8 +244,7 @@ func (m *MetricLogPathBuilder) NewLogFilename(name, nodeUUID, nodeType string, t
 
 var _ PathBuilder = (*DBTablePathBuilder)(nil)
 
-type DBTablePathBuilder struct {
-}
+type DBTablePathBuilder struct{}
 
 // BuildETLPath implement PathBuilder
 //

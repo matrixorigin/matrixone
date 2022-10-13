@@ -341,7 +341,7 @@ var singleMetricTable = &trace.Table{
 	Engine:           trace.ExternalTableEngine,
 	Comment:          `metric data`,
 	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
-	PathBuilder:      export.NewMetricLogPathBuilder(),
+	PathBuilder:      export.NewDBTablePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 }
 
