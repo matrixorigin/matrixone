@@ -204,13 +204,9 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 		}
 	} else {
 		blkData := entry.GetBlockData()
-		ts, terminated := entry.GetTerminationTS()
-		if terminated && blkData.GetMaxCheckpointTS().Less(ts) {
-			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
-			if err != nil {
-				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
-				err = nil
-			}
+		_, terminated := entry.GetTerminationTS()
+		if terminated && blkData.RunCalibration() > 0 {
+			monitor.db.CKPDriver.EnqueueCheckpointUnit(blkData)
 		}
 	}
 	return
