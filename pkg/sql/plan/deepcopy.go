@@ -413,16 +413,133 @@ func DeepCopyPlan(pl *Plan) *Plan {
 				Query: DeepCopyQuery(pl.Query),
 			},
 		}
+
 	case *plan.Plan_Ins:
 		return &Plan{
 			Plan: &plan.Plan_Ins{
 				Ins: DeepCopyInsertValues(pl.Ins),
 			},
 		}
+
+	case *plan.Plan_Ddl:
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: DeepCopyDataDefinition(pl.Ddl),
+			},
+		}
+
 	default:
 		// only support query/insert plan now
 		return nil
 	}
+}
+
+func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
+	newDf := &plan.DataDefinition{
+		DdlType: old.DdlType,
+	}
+	if old.Query != nil {
+		newDf.Query = DeepCopyQuery(old.Query)
+	}
+
+	switch df := old.Definition.(type) {
+	case *plan.DataDefinition_CreateDatabase:
+		newDf.Definition = &plan.DataDefinition_CreateDatabase{
+			CreateDatabase: &plan.CreateDatabase{
+				IfNotExists: df.CreateDatabase.IfNotExists,
+				Database:    df.CreateDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_AlterDatabase:
+		newDf.Definition = &plan.DataDefinition_AlterDatabase{
+			AlterDatabase: &plan.AlterDatabase{
+				IfExists: df.AlterDatabase.IfExists,
+				Database: df.AlterDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_DropDatabase:
+		newDf.Definition = &plan.DataDefinition_DropDatabase{
+			DropDatabase: &plan.DropDatabase{
+				IfExists: df.DropDatabase.IfExists,
+				Database: df.DropDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_CreateTable:
+		newDf.Definition = &plan.DataDefinition_CreateTable{
+			CreateTable: &plan.CreateTable{
+				IfNotExists: df.CreateTable.IfNotExists,
+				Temporary:   df.CreateTable.Temporary,
+				Database:    df.CreateTable.Database,
+				TableDef:    DeepCopyTableDef(df.CreateTable.TableDef),
+			},
+		}
+
+	case *plan.DataDefinition_AlterTable:
+		newDf.Definition = &plan.DataDefinition_AlterTable{
+			AlterTable: &plan.AlterTable{
+				Table:    df.AlterTable.Table,
+				TableDef: DeepCopyTableDef(df.AlterTable.TableDef),
+			},
+		}
+
+	case *plan.DataDefinition_DropTable:
+		newDf.Definition = &plan.DataDefinition_DropTable{
+			DropTable: &plan.DropTable{
+				IfExists: df.DropTable.IfExists,
+				Database: df.DropTable.Database,
+				Table:    df.DropTable.Table,
+			},
+		}
+
+	case *plan.DataDefinition_CreateIndex:
+		newDf.Definition = &plan.DataDefinition_CreateIndex{
+			CreateIndex: &plan.CreateIndex{
+				IfNotExists: df.CreateIndex.IfNotExists,
+				Index:       df.CreateIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_AlterIndex:
+		newDf.Definition = &plan.DataDefinition_AlterIndex{
+			AlterIndex: &plan.AlterIndex{
+				Index: df.AlterIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_DropIndex:
+		newDf.Definition = &plan.DataDefinition_DropIndex{
+			DropIndex: &plan.DropIndex{
+				IfExists: df.DropIndex.IfExists,
+				Index:    df.DropIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_TruncateTable:
+		newDf.Definition = &plan.DataDefinition_TruncateTable{
+			TruncateTable: &plan.TruncateTable{
+				Table: df.TruncateTable.Table,
+			},
+		}
+
+	case *plan.DataDefinition_ShowVariables:
+		showVariables := &plan.ShowVariables{
+			Global: df.ShowVariables.Global,
+			Where:  make([]*plan.Expr, len(df.ShowVariables.Where)),
+		}
+		for i, e := range df.ShowVariables.Where {
+			showVariables.Where[i] = DeepCopyExpr(e)
+		}
+
+		newDf.Definition = &plan.DataDefinition_ShowVariables{
+			ShowVariables: showVariables,
+		}
+
+	}
+
+	return newDf
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
