@@ -58,7 +58,7 @@ drop table t1;
 drop table t2;
 CREATE TABLE t1 (a VARCHAR(250), b INT, PRIMARY KEY (b));
 insert into t1 (a) select (FLOOR(0.13 * 100));
-constraint vialation: Column 'b' cannot be null
+constraint violation: Column 'b' cannot be null
 insert into t1 (a) select FLOOR(1.32 * 100) from t1;
 insert into t1 (a) select FLOOR(0.0044 * 100) from t1;
 insert into t1 (a) select FLOOR(124.314 * 100) from t1;

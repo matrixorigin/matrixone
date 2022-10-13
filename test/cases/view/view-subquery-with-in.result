@@ -185,7 +185,7 @@ a
 4
 create view v1 as select * from t1 where t1.a in (SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.a);
 create view v2 as SELECT * FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10;
-constraint vialation: duplicate column "b"
+constraint violation: duplicate column "b"
 create view v3 as SELECT * FROM t1 WHERE t1.a NOT IN (SELECT a FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10);
 select * from v1;
 a
