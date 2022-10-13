@@ -28,6 +28,8 @@ import (
 )
 
 var (
+	createDB  = `create database if not exists kv_test`
+	useDB     = `use kv_test;`
 	createSql = `create table if not exists txn_test_kv (kv_key varchar(20) primary key, kv_value varchar(10))`
 )
 
@@ -46,9 +48,19 @@ func newSQLClient(env service.Cluster) (Client, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/system", cn.SQLAddress()))
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/", cn.SQLAddress()))
 	if err != nil {
 		return nil, err
+	}
+
+	_, err = db.Exec(createDB)
+	if err != nil {
+		return nil, multierr.Append(err, db.Close())
+	}
+
+	_, err = db.Exec(useDB)
+	if err != nil {
+		return nil, multierr.Append(err, db.Close())
 	}
 
 	_, err = db.Exec(createSql)
@@ -76,7 +88,7 @@ type sqlTxn struct {
 }
 
 func newSQLTxn(cn service.CNService) (Txn, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/system", cn.SQLAddress()))
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/kv_test", cn.SQLAddress()))
 	if err != nil {
 		return nil, err
 	}
