@@ -722,7 +722,6 @@ message Prepare {
 	repeated ObjectRef schemas 	= 2;
 	Plan   plan		 			= 3;
 	repeated int32 param_types  = 4;
-	bool  can_exec_uncommit		= 5;
 }
 
 message Execute {
