@@ -100,7 +100,7 @@ func TestNewObjectWriter(t *testing.T) {
 	for i, blk := range blocks {
 		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
 	}
-	bs, err := objectReader.ReadMeta(extents)
+	bs, err := objectReader.ReadMeta(extents, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
