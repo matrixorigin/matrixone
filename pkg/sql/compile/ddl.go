@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -87,6 +86,26 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
+	// build index table
+	for _, def := range qry.IndexTables {
+		planCols = def.GetCols()
+		exeCols = planColsToExeCols(planCols)
+		planDefs = def.GetDefs()
+		exeDefs, err = planDefsToExeDefs(planDefs)
+		if err != nil {
+			return err
+		}
+		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(tblName)
+		}
+		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
 }
 
@@ -111,6 +130,11 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
+	}
+	for _, name := range qry.IndexTableNames {
+		if err := dbSource.Delete(c.ctx, name); err != nil {
+			return err
+		}
 	}
 	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
 }
@@ -151,6 +175,12 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
+		case *plan.TableDef_DefType_ComputeIndex:
+			computeIndexDef := &engine.ComputeIndexDef{}
+			computeIndexDef.Names = defVal.ComputeIndex.Names
+			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
+			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
+			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil

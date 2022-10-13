@@ -148,6 +148,15 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 	return
 }
 
+func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
+	for _, offset := range entry.skippedBlks {
+		if offset == fromPos {
+			return true
+		}
+	}
+	return false
+}
+
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	blks := make([]handle.Block, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
@@ -163,17 +172,10 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		blks[i] = blk
 	}
 	var view *model.BlockView
-	skipped := 0
+	skippedCnt := 0
 	for fromPos, dropped := range entry.droppedBlks {
-		isSkipped := false
-		for _, offset := range entry.skippedBlks {
-			if offset == fromPos {
-				skipped++
-				isSkipped = true
-				break
-			}
-		}
-		if isSkipped {
+		if entry.isSkipped(fromPos) {
+			skippedCnt++
 			continue
 		}
 		dataBlock := dropped.GetBlockData()
@@ -186,23 +188,21 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		}
 		deletes := view.DeleteMask
 		for colIdx, column := range view.Columns {
-			column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
-				column.UpdateMask,
-				column.UpdateVals,
+			view.DeleteMask = compute.ShuffleByDeletes(
 				deletes, entry.deletes[fromPos])
 			for row, v := range column.UpdateVals {
-				toPos, toRow := entry.resolveAddr(fromPos-skipped, row)
+				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
 				if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
 					return
 				}
 			}
 		}
-		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, entry.deletes[fromPos])
+		view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
 		if view.DeleteMask != nil {
 			it := view.DeleteMask.Iterator()
 			for it.HasNext() {
 				row := it.Next()
-				toPos, toRow := entry.resolveAddr(fromPos-skipped, row)
+				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
 				if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
 					return
 				}
