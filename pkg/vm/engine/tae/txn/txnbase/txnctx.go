@@ -45,6 +45,10 @@ type TxnCtx struct {
 	Info                         []byte
 	State                        txnif.TxnState
 	Participants                 []uint64
+
+	// Memo is not thread-safe
+	// It will be readonly when txn state is not txnif.TxnStateActive
+	Memo *txnif.TxnMemo
 }
 
 func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
@@ -55,9 +59,14 @@ func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 		PrepareTS: txnif.UncommitTS,
 		CommitTS:  txnif.UncommitTS,
 		Info:      info,
+		Memo:      txnif.NewTxnMemo(),
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
+}
+
+func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
+	return ctx.Memo
 }
 
 func (ctx *TxnCtx) Is2PC() bool { return len(ctx.Participants) > 1 }
