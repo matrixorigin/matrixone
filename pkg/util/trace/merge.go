@@ -172,7 +172,7 @@ func (m *Merge) Main(ts time.Time) error {
 	var totalSize int64
 
 	m.Datetime = ts
-	logutil.Debugf("Merge start on %s.%s, %v", m.Datetime, m.Table.GetName(), m.Datetime)
+	logutil.Debugf("Merge start on %s.%s, %v", m.DB, m.Table.GetName(), m.Datetime)
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
