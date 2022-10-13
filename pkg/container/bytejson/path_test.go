@@ -34,20 +34,38 @@ func TestValid(t *testing.T) {
 		{"$.a.b", true, 2},
 		{"$.a..b", false, 0},
 		{"$[1]", true, 1},
-		{"$[1].", true, 1},
+		{"$[1].", false, 1},
 		{"$[1].a", true, 2},
 		{"$[1]..a", false, 0},
 		{"$[1].a.b", true, 3},
 		{"$[1].a..b", false, 0},
 		{"$[-1]", false, 0},
 		{"$[1][2]", true, 2},
-		{"$[1][2].", true, 2},
+		{"$[1][2].", false, 2},
 		{"$[1][2].a", true, 3},
 		{"$[1][2]..a", false, 0},
 		{"$[*]", true, 1},
-		{"$[*].", true, 1},
+		{"$[*].", false, 1},
 		{"$[*].a", true, 2},
 		{`$[*]."a"`, true, 2},
+		{"$[*]..a", false, 0},
+		{"$[*].a.b", true, 3},
+		{"$[*].a..b", false, 0},
+		{"$[1][*]", true, 2},
+		{"$[1][*].", false, 2},
+		{"cscdwg", false, 0},
+		{"$.**", false, 0},
+		{"$**", false, 0},
+		{"$**.a", true, 2},
+		{"$**.a[1]", true, 3},
+		{"$*1", false, 0},
+		{"$*a", false, 0},
+		{"$***", false, 0},
+		{"$**a", false, 0},
+		{"$**[1]", true, 2},
+		{"$.a**.1", false, 0},
+		{"$.a**.a", true, 3},
+		{"$.a**.\"1\"", true, 3},
 	}
 	for _, kase := range kases {
 		v, err := ParseJsonPath(kase.path)
@@ -88,16 +106,4 @@ func TestStar(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, kase.flag, p.flag)
 	}
-}
-
-func TestInvalidStar(t *testing.T) {
-	ph := "*"
-	ok := isInvalidStar(ph)
-	require.Equal(t, false, ok)
-	ph = "**"
-	ok = isInvalidStar(ph)
-	require.Equal(t, true, ok)
-	ph = "a"
-	ok = isInvalidStar(ph)
-	require.Equal(t, false, ok)
 }
