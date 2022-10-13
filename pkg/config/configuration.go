@@ -105,6 +105,9 @@ var (
 
 	// defaultMetricExportInterval default: 15 sec.
 	defaultMetricExportInterval = 15
+
+	// defaultMetricGatherInterval default: 15 sec.
+	defaultMetricGatherInterval = 15
 )
 
 // FrontendParameters of the frontend
@@ -355,6 +358,9 @@ type ObservabilityParameters struct {
 
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metricExportInterval"`
+
+	// MetricGatherInterval default is 15 sec.
+	MetricGatherInterval int `toml:"metricGatherInterval"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -378,6 +384,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MetricExportInterval <= 0 {
 		op.MetricExportInterval = defaultMetricExportInterval
+	}
+
+	if op.MetricGatherInterval <= 0 {
+		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 }
 

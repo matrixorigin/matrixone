@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -118,13 +119,19 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 
 	cancelRequestFunc context.CancelFunc
+
+	mu sync.Mutex
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.ses = ses
 }
 
 func (mce *MysqlCmdExecutor) GetSession() *Session {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.ses
 }
 
@@ -139,14 +146,20 @@ func (mce *MysqlCmdExecutor) getNextProcessId() string {
 }
 
 func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.sqlCount += a
 }
 
 func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.routineMgr = mgr
 }
 
 func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.routineMgr
 }
 
@@ -2717,10 +2730,14 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 }
 
 func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
 }
 
 func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.cancelRequestFunc
 }
 
