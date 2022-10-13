@@ -79,6 +79,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	canExecUncommit := true
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
@@ -96,6 +97,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			if len(getParamRule.params) > 0 {
 				return nil, moerr.NewInvalidInput("cannot plan DDL statement")
 			}
+		}
+		// only create can execute in uncommit txn
+		switch pp.Ddl.DdlType {
+		case plan.DataDefinition_CREATE_DATABASE, plan.DataDefinition_CREATE_TABLE, plan.DataDefinition_CREATE_INDEX, plan.DataDefinition_CREATE_VIEW:
+		default:
+			canExecUncommit = false
 		}
 
 	case *plan.Plan_Query, *plan.Plan_Ins:
@@ -123,10 +130,11 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	}
 
 	prepare := &plan.Prepare{
-		Name:       stmtName,
-		Schemas:    schemas,
-		Plan:       preparePlan,
-		ParamTypes: paramTypes,
+		Name:            stmtName,
+		Schemas:         schemas,
+		Plan:            preparePlan,
+		ParamTypes:      paramTypes,
+		CanExecUncommit: canExecUncommit,
 	}
 
 	return &Plan{
