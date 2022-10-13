@@ -53,6 +53,10 @@ func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.DropDatabase(name)
 }
 
+func (txn *txnImpl) UnsafeGetDatabase(id uint64) (db handle.Database, err error) {
+	return txn.Store.UnsafeGetDatabase(id)
+}
+
 func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.GetDatabase(name)
 }

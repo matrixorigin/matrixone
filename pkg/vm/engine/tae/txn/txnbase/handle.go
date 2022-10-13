@@ -47,6 +47,7 @@ func (db *TxnDatabase) Close() error                                            
 func (db *TxnDatabase) CreateRelation(def any) (rel handle.Relation, err error)         { return }
 func (db *TxnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) { return }
 func (db *TxnDatabase) GetRelationByName(name string) (rel handle.Relation, err error)  { return }
+func (db *TxnDatabase) UnsafeGetRelation(id uint64) (rel handle.Relation, err error)    { return }
 func (db *TxnDatabase) RelationCnt() int64                                              { return 0 }
 func (db *TxnDatabase) Relations() (rels []handle.Relation)                             { return }
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }

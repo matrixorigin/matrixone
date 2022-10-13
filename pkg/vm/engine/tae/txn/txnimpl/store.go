@@ -269,6 +269,19 @@ func (store *txnStore) UseDatabase(name string) (err error) {
 	return err
 }
 
+func (store *txnStore) UnsafeGetDatabase(id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.GetDatabaseByID(id)
+	if err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
+		return
+	}
+	h = buildDB(db)
+	return
+}
+
 func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
 	meta, err := store.catalog.GetDBEntry(name, store.txn)
 	if err != nil {
