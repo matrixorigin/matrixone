@@ -113,10 +113,11 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
 		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
 			forest.Run()
-			str := forest.String()
-			if str != "" {
-				logutil.Infof(str)
+			dirtyTree := forest.MergeForest()
+			if dirtyTree.IsEmpty() {
+				return
 			}
+			logutil.Infof(dirtyTree.String())
 		}, nil)
 		hb.Start()
 		<-ctx.Done()
