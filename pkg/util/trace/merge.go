@@ -183,35 +183,35 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		// fixme
 		return moerr.NewInternalError("CSVMerge: only one timestamp")
 	}
-	timestamp_start := timestamps[0]
-	timestamp_end := timestamps[len(timestamps)-1]
+	timestampStart := timestamps[0]
+	timestampEnd := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
 	prefix := m.pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
-	merge_filename := m.pathBuilder.NewMergeFilename(timestamp_start, timestamp_end)
-	merge_filepath := path.Join(prefix, merge_filename)
-	new_file_writer := NewCSVWriter(m.FS, WithPath(merge_filepath))
+	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
+	mergeFilepath := path.Join(prefix, mergeFilename)
+	newFileWriter := NewCSVWriter(m.FS, WithPath(mergeFilepath))
 
 	// Step 3. do simple merge
 	cacheFileData := m.Table.NewRowCache()
 	for _, path := range paths {
-		reader := NewCSVReader(m.FS, WithPath(path))
+		reader := NewCSVReader(m.FS, path)
 		for line := reader.ReadLine(); line != nil; line = reader.ReadLine() {
 
 			row := m.Table.ParseRow(line)
 			// fixme: if !obj.Valid() { continue }
 			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
 			if cacheFileData.Size() > m.FileCacheSize {
-				cacheFileData.Flush(new_file_writer)
+				cacheFileData.Flush(newFileWriter)
 				cacheFileData.Reset()
 			}
 		}
 	}
 	if !cacheFileData.IsEmpty() {
-		cacheFileData.Flush(new_file_writer)
+		cacheFileData.Flush(newFileWriter)
 		cacheFileData.Reset()
 	}
-	new_file_writer.FlushAndClose()
+	newFileWriter.FlushAndClose()
 
 	// step 4. delete old files
 	err := m.FS.Delete(m.ctx, paths...)
@@ -223,7 +223,7 @@ type CSVReader interface {
 	ReadLine() []string
 }
 
-func NewCSVReader(fs fileservice.FileService, path interface{}) CSVReader {
+func NewCSVReader(fs fileservice.FileService, path string) CSVReader {
 	panic("not implement")
 }
 
