@@ -24,6 +24,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -458,7 +459,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	return nil
 }
 
-const rowIDColumnName = "__rowid"
+const rowIDColumnName = catalog.Row_ID
 
 func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
