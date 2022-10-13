@@ -83,9 +83,14 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
-	beater.Start()
-	defer beater.Stop()
+	forest := newDirtyForest(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
 	schema.SegmentMaxBlocks = 10
@@ -2741,13 +2746,13 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
-	beater.Start()
-	defer func() {
-		// sleep to see more blocks flush
-		time.Sleep(500 * time.Millisecond)
-		beater.Stop()
-	}()
+	forest := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
