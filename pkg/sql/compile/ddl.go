@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,6 +57,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -106,7 +108,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
+	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
 }
 
 func (s *Scope) DropTable(c *Compile) error {
