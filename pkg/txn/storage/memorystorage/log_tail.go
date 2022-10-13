@@ -142,7 +142,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 		// commit time
 		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)
 		// attributes
-		if err := appendNamedRow(tx, m, startOffset, batch, row); err != nil {
+		if err := appendNamedRowToBatch(tx, m, startOffset, batch, row); err != nil {
 			return err
 		}
 		return nil

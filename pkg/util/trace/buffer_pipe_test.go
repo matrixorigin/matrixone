@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/stretchr/testify/require"
 
@@ -60,7 +61,7 @@ func init() {
 		WithMOVersion("v0.test.0"),
 		WithNode("node_uuid", NodeTypeStandalone),
 		WithBatchProcessMode(InternalExecutor),
-		WithFSWriterFactory(func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ ...export.FSWriterOption) io.StringWriter {
 			return os.Stdout
 		}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
@@ -1039,7 +1040,7 @@ func Test_genCsvData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)
@@ -1126,7 +1127,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)

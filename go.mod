@@ -125,3 +125,5 @@ require (
 // required until memberlist issue 272 is resolved
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
 replace github.com/hashicorp/memberlist => github.com/lni/memberlist v0.3.2-0.20220811084252-8a89d1ea99cb
+
+replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
