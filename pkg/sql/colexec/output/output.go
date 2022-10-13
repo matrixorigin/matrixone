@@ -40,5 +40,5 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 		bat.Clean(proc.Mp())
 	}
-	return true, nil
+	return false, nil
 }
