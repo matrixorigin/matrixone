@@ -131,7 +131,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
+          ./mo-service -launch ./etc/lauch-tae-logservice/launch.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -201,7 +201,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
+          ./mo-service -launch ./etc/lauch-tae-logservice/launch.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -273,7 +273,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -cfg ./etc/cn-standalone-test.toml &>mo-service.log &
+          ./mo-service -launch ./etc/lauch-tae-logservice/launch.toml &>mo-service.log &
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
