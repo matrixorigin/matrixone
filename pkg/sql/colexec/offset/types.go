@@ -21,6 +21,6 @@ type Argument struct {
 	Offset uint64
 }
 
-func (arg *Argument) Free(_ *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	return
 }

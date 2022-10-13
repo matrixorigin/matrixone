@@ -41,7 +41,7 @@ type Argument struct {
 	Result []colexec.ResultPos
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc.Mp())

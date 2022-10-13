@@ -50,7 +50,7 @@ type Argument struct {
 	ctr      *container
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

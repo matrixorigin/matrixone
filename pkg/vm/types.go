@@ -64,7 +64,7 @@ const (
 
 type InstructionArgument interface {
 	// Free release all memory allocated from mPool in an operator.
-	Free(process *process.Process)
+	Free(proc *process.Process, pipelineFailed bool)
 }
 
 // Instruction contains relational algebra

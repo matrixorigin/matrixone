@@ -166,6 +166,6 @@ func cleanup(p *Pipeline, proc *process.Process, pipelineSucceed bool) {
 
 	// clean operator space.
 	for i := range p.instructions {
-		p.instructions[i].Arg.Free(proc)
+		p.instructions[i].Arg.Free(proc, !pipelineSucceed)
 	}
 }

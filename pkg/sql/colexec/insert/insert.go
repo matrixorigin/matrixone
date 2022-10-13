@@ -40,7 +40,7 @@ type Argument struct {
 	CPkeyColDef   *plan.ColDef
 }
 
-func (arg *Argument) Free(_ *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	return
 }
 

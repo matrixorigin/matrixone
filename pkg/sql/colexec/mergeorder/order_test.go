@@ -96,7 +96,7 @@ func TestOrder(t *testing.T) {
 				}
 			}
 		}
-		tc.arg.Free(tc.proc)
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
 }

@@ -44,7 +44,7 @@ type Argument struct {
 	Fs    []*plan.OrderBySpec
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

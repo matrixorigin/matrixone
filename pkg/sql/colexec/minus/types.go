@@ -45,7 +45,7 @@ type container struct {
 	bat *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	mp := proc.Mp()
 	arg.ctr.cleanBatch(mp)
 	arg.ctr.cleanHashMap()

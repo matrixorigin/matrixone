@@ -51,7 +51,7 @@ type container struct {
 	inBuckets []uint8
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()

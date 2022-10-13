@@ -61,7 +61,7 @@ type Argument struct {
 	Aggs     []agg.Aggregate // aggregations
 }
 
-func (arg *Argument) Free(proc *process.Process) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

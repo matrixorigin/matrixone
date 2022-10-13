@@ -181,7 +181,7 @@ func TestUnnest(t *testing.T) {
 		if ut.proc.InputBatch() != nil {
 			ut.proc.Reg.InputBatch.Clean(ut.proc.Mp())
 		}
-		ut.arg.Free(ut.proc)
+		ut.arg.Free(ut.proc, false)
 		require.Equal(t, nb0, ut.proc.Mp().CurrNB())
 	}
 }
