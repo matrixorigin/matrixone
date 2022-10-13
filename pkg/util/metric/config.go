@@ -35,6 +35,7 @@ var (
 
 func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
 	setExportToProm(SV.EnableMetricToProm)
+	setGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
 
 func envOrDefaultBool(key string, defaultValue int32) int32 {
