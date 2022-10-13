@@ -52,33 +52,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
-	if !proc.LoadTag {
-		if bat.Length() == 0 {
-			bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
-		}
-		for idx, info := range n.ComputeIndexInfos {
-			b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
-			if rowNum != 0 {
-				err := n.ComputeIndexTables[idx].Write(ctx, b)
-				if err != nil {
-					return false, err
-				}
-			}
-			b.Clean(proc.Mp())
-		}
-		err := n.TargetTable.Write(ctx, bat)
-		n.Affected += uint64(len(bat.Zs))
-		return false, err
-	}
-
-	var err error
-	var txnOperator client.TxnOperator
-	txnOperator, err = proc.TxnClient.New()
-	if err != nil {
-		return false, err
-	}
-
+func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch, ) error {
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
@@ -87,25 +61,56 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		if rowNum != 0 {
 			err := n.ComputeIndexTables[idx].Write(ctx, b)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
 		b.Clean(proc.Mp())
 	}
-	err = n.TargetTable.Write(ctx, bat)
+	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))
+	return err
+}
 
+func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
+	if !proc.LoadTag {
+		return false, handleWrite(n, proc, ctx, bat)
+	}
+
+	var err error
+	var txnOperator client.TxnOperator
+	txnOperator, err = proc.TxnClient.New()
+	fmt.Printf("wangjian sql5 is %T\n", txnOperator)
 	if err != nil {
+		return false, err
+	}
+	err = n.Engine.New(ctx, txnOperator)
+	if err != nil {
+		return false, err
+	}
+
+	err = handleWrite(n, proc, ctx, bat)
+	if err != nil {
+		ctx, cancel := context.WithTimeout(
+			ctx,
+			n.Engine.Hints().CommitOrRollbackTimeout,
+		)
+		defer cancel()
 		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return false, err2
 		}
 		return false, err
 	}
-	err = txnOperator.Commit(ctx)
-	if err != nil {
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		n.Engine.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	if err = n.Engine.Commit(ctx, txnOperator); err != nil {
 		return false, err
 	}
-
+	fmt.Println("wangjian sql5b is", err)
+	err = txnOperator.Commit(ctx)
+	fmt.Println("wangjian sql5c is", err)
 	return false, err
 }
 
