@@ -14,28 +14,7 @@
 
 package rpc
 
-import (
-	"context"
-	"fmt"
-	"testing"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-)
-
+/*
 const ModuleName = "TAEHANDLE"
 
 type mockHandle struct {
@@ -158,14 +137,12 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	return mh
 }
 
-/*
 func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
 }
-*/
 
 func mockDNShard(id uint64) metadata.DNShard {
 	return metadata.DNShard{
@@ -674,5 +651,6 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	}
 	return rbat, nil
 }
+*/
 
 //gen LogTail

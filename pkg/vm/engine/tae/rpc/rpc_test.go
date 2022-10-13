@@ -14,24 +14,6 @@
 
 package rpc
 
-import (
-	"context"
-	"sync"
-	"testing"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"github.com/stretchr/testify/assert"
-)
-
 /* XXX why it failed?
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -259,6 +241,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 }
 */
 
+/*
 func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
@@ -539,7 +522,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	err = txn.Commit()
 	assert.Nil(t, err)
 }
+*/
 
+/*
 func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
@@ -841,7 +826,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	err = txn.Commit()
 	assert.Nil(t, err)
 }
+*/
 
+/*
 func TestHandle_MVCCVisibility(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
@@ -1160,3 +1147,4 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	assert.Nil(t, err)
 	wg.Wait()
 }
+*/

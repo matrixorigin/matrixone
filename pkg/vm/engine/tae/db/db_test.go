@@ -23,15 +23,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -3147,6 +3142,7 @@ func TestUpdateAttr(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 
+/*
 func TestLogtailBasic(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
@@ -3368,6 +3364,7 @@ func TestLogtailBasic(t *testing.T) {
 		assert.Equal(t, 2, v)
 	}
 }
+*/
 
 // txn1: create relation and append, half blk
 // txn2: compact
