@@ -34,6 +34,28 @@ json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
 4
+select json_extract('{"a":1}','$[0]');
+json_extract({"a":1}, $[0])
+{"a": 1}
+select json_extract('{"a":1}','$[0].a');
+json_extract({"a":1}, $[0].a)
+1
+select json_extract('{"a":1}','$[0].b');
+json_extract({"a":1}, $[0].b)
+null
+select json_extract('{"a":1}','$[1]');
+json_extract({"a":1}, $[1])
+null
+select json_extract('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+json_extract({"af": [1, "2", {"aaf": "bb"}],"eab":"888"}, $**.f)
+null
+select json_extract('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+json_extract({"a": [1, "2", {"a": "bb"}]}, $**.a)
+[[1, "2", {"a": "bb"}], "bb"]
+select  json_extract('{"a":"a1","b":"b1"}','$.**');
+invalid input: invalid json path '$.**'
+select  json_extract('{"a":"a1","b":"b1"}','$**.1');
+invalid input: invalid json path '$**.1'
 drop table if exists t1;
 create table t1 (a json,b int);
 insert into t1(a,b) values ('{"a":1,"b":2,"c":3}',1);

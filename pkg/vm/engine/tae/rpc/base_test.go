@@ -14,27 +14,7 @@
 
 package rpc
 
-import (
-	"context"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
-)
-
+/*
 const ModuleName = "TAEHANDLE"
 
 type mockHandle struct {
@@ -671,5 +651,6 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	}
 	return rbat, nil
 }
+*/
 
 //gen LogTail
