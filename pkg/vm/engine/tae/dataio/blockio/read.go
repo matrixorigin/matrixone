@@ -34,10 +34,10 @@ import (
 /*
 
 Notes:
- 1. in BlockRead function, tae vector is used, because it is easy to to apply deletion,
-    and in CNBlockRead, the result batch from BlockRead will be converted to mo batch without copying
+ 1. in BlockReadInner function, tae vector is used, because it is easy to to apply deletion,
+    and in BlockRead, the result batch from BlockReadInner will be converted to mo batch without copying
 
- 2. in BlockRead, rowid column is generated locally, its memory allocation happens in MPool,
+ 2. in BlockReadInner, rowid column is generated locally, its memory allocation happens in MPool,
  	so the corresponding mo vector's 'original' field is False, when its Free() is called, the memory will be freed.
 	Other columns are read from objectio.Reader, but for now, it memory is managed by golang runtime, so their 'original' fields are True, which means nothing to do when its Free() is Called.
 	Later, the mpool will be added to objectio.Reader, and let the mpool hold columns data. After that, all orginal fields will be False.
@@ -61,7 +61,7 @@ func BlockRead(ctx context.Context, columns []string, fs fileservice.FileService
 	}
 
 	// read
-	columnBatch, err := BlockRead(ctx, columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, types.TimestampToTS(ts))
+	columnBatch, err := BlockReadInner(ctx, columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, types.TimestampToTS(ts))
 	if err != nil {
 		return nil, err
 	}
