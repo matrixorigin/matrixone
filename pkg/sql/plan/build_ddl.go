@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -123,7 +122,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt.Defs, ctx, createTable.TableDef)
+	err := buildTableDefs(stmt.Defs, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -258,10 +257,11 @@ func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.
 	return err
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
+func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
-	colNameMap := make(map[string]int32)
+	colMap := make(map[string]*ColDef)
+	indexInfos := make([]*tree.UniqueIndex, 0)
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -329,8 +329,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				Comment:       comment,
 				AutoIncrement: auto_incr,
 			}
-			colNameMap[col.Name] = col.Typ.GetId()
-			tableDef.Cols = append(tableDef.Cols, col)
+			colMap[col.Name] = col
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
 				return moerr.NewInvalidInput("more than one primary key defined")
@@ -373,12 +373,14 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				indexs = append(indexs, name)
 			}
 
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Idx{
 					Idx: idxDef,
 				},
 			})
-		case *tree.UniqueIndex, *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
+		case *tree.UniqueIndex:
+			indexInfos = append(indexInfos, def)
+		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI("table def: '%v'", def)
 		default:
@@ -386,14 +388,16 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 		}
 	}
 
+	pkeyName := ""
 	if len(primaryKeys) > 0 {
 		for _, primaryKey := range primaryKeys {
-			if _, ok := colNameMap[primaryKey]; !ok {
+			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInput("column '%s' doesn't exist in table", primaryKey)
 			}
 		}
 		if len(primaryKeys) == 1 {
-			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			pkeyName = primaryKeys[0]
+			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
 						Names: primaryKeys,
@@ -401,9 +405,93 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				},
 			})
 		} else {
-			cPkeyName := util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+				Name: pkeyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   int32(types.T_varchar),
+					Size: types.VarlenaSize,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: []string{pkeyName},
+					},
+				},
+			})
+		}
+	}
+
+	// check index invalid on the type
+	// for example, the text type don't support index
+	for _, str := range indexs {
+		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return moerr.NewNotSupported("text type in index")
+		}
+	}
+
+	// build index table
+	if len(indexInfos) != 0 {
+		err := buildUniqueIndexTable(createTable, indexInfos, colMap, pkeyName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string) error {
+	indexNumber := 0
+	def := &plan.ComputeIndexDef{}
+
+	for _, indexInfo := range indexInfos {
+		indexTableName := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		tableDef := &TableDef{
+			Name: indexTableName,
+		}
+		names := make([]string, 0)
+		for _, keyPart := range indexInfo.KeyParts {
+			name := keyPart.ColName.Parts[0]
+			if _, ok := colMap[name]; !ok {
+				return moerr.NewInvalidInput("column '%s' is not exist", name)
+			}
+			names = append(names, name)
+		}
+
+		var keyName string
+		if len(indexInfo.KeyParts) == 1 {
+			keyName = names[0]
 			tableDef.Cols = append(tableDef.Cols, &ColDef{
-				Name: cPkeyName,
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   colMap[keyName].Typ.Id,
+					Size: colMap[keyName].Typ.Size,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: []string{keyName},
+					},
+				},
+			})
+		} else {
+			keyName = util.BuildCompositePrimaryKeyColumnName(names)
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:   int32(types.T_varchar),
@@ -418,20 +506,21 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
-						Names: []string{cPkeyName},
+						Names: []string{keyName},
 					},
 				},
 			})
 		}
+		def.Names = append(def.Names, indexInfo.Name)
+		def.TableNames = append(def.TableNames, indexTableName)
+		def.Uniques = append(def.Uniques, true)
+		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 	}
-
-	// check index invalid on the type
-	// for example, the text type don't support index
-	for _, str := range indexs {
-		if colNameMap[str] == int32(types.T_blob) {
-			return moerr.NewNotSupported("text type in index")
-		}
-	}
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_ComputeIndex{
+			ComputeIndex: def,
+		},
+	})
 	return nil
 }
 
@@ -468,8 +557,12 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
+		computeInfos := BuildComputeIndexInfos(ctx, dropTable.Database, tableDef.Defs)
+		dropTable.IndexTableNames = make([]string, len(computeInfos))
+		for i := range computeInfos {
+			dropTable.IndexTableNames[i] = computeInfos[i].TableName
+		}
 	}
-
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
