@@ -164,6 +164,21 @@ func TestQuery(t *testing.T) {
 			pathStr: "$**.a",
 			outStr:  `[[1,2,3,{"a":4}],4]`,
 		},
+		{
+			jsonStr: `{"a":1}`,
+			pathStr: "$[0]",
+			outStr:  `{"a":1}`,
+		},
+		{
+			jsonStr: `{"a":1}`,
+			pathStr: "$[0].a",
+			outStr:  `1`,
+		},
+		{
+			jsonStr: `{"a":1}`,
+			pathStr: "$[1]",
+			outStr:  `null`,
+		},
 	}
 	for _, kase := range kases {
 		bj, err := ParseFromString(kase.jsonStr)
