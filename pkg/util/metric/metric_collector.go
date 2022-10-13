@@ -286,7 +286,7 @@ func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch 
 	return func(batchs trace.CSVRequests) {
 		for _, batch := range batchs {
 			if _, err := batch.Handle(); err != nil {
-				logutil.Error(fmt.Sprintf("[Metric] faield to write csv: %s, err: %v", batch.Content(), err))
+				logutil.Errorf("[Metric] failed to write csv: %s, err: %v", batch.Content(), err)
 			}
 		}
 	}

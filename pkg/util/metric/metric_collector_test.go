@@ -174,6 +174,7 @@ func TestCsvFSCollector(t *testing.T) {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
 				{
+					Label:   []*pb.LabelPair{{Name: "account", Value: "user"}},
 					Counter: &pb.Counter{Value: 12.0}, Collecttime: ts,
 				},
 			}},
@@ -188,9 +189,11 @@ func TestCsvFSCollector(t *testing.T) {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
 			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[1], Role: roles[1], Metric: []*pb.Metric{
 				{
+					Label:   []*pb.LabelPair{{Name: "account", Value: "user"}},
 					Counter: &pb.Counter{Value: 21.0}, Collecttime: ts,
 				},
 				{
+					Label:   []*pb.LabelPair{{Name: "account", Value: "user"}},
 					Counter: &pb.Counter{Value: 66.0}, Collecttime: ts,
 				},
 			}},
