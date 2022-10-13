@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -41,10 +42,12 @@ type Config struct {
 	GetTruncateDuration time.Duration
 	ReadDuration        time.Duration
 
-	ClientConfig *logservice.ClientConfig
+	ClientFactory LogServiceClientFactory
 }
 
-func NewDefaultConfig(cfg *logservice.ClientConfig) *Config {
+type LogServiceClientFactory logservice.ClientFactory
+
+func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 	return &Config{
 		ClientPoolMaxSize:     100,
 		ClientPoolInitSize:    100,
@@ -62,12 +65,12 @@ func NewDefaultConfig(cfg *logservice.ClientConfig) *Config {
 		TruncateDuration:     time.Second,
 		GetTruncateDuration:  time.Second,
 		ReadDuration:         time.Second,
-		ClientConfig:         cfg,
+		ClientFactory:        clientFactory,
 	}
 }
 
-func NewTestConfig(cfg *logservice.ClientConfig) *Config {
-	return &Config{
+func NewTestConfig(ccfg *logservice.ClientConfig) *Config {
+	cfg := &Config{
 		ClientPoolMaxSize:     10,
 		ClientPoolInitSize:    5,
 		GetClientRetryTimeOut: time.Second,
@@ -84,6 +87,12 @@ func NewTestConfig(cfg *logservice.ClientConfig) *Config {
 		TruncateDuration:     time.Second,
 		GetTruncateDuration:  time.Second,
 		ReadDuration:         time.Second,
-		ClientConfig:         cfg,
 	}
+	cfg.ClientFactory = func() (logservice.Client, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.NewClientDuration)
+		logserviceClient, err := logservice.NewClient(ctx, *ccfg)
+		cancel()
+		return logserviceClient, err
+	}
+	return cfg
 }
