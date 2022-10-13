@@ -72,32 +72,52 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func callByFunc(param *Param, proc *process.Process) (bool, error) {
+	var (
+		err    error
+		vec    *vector.Vector
+		rbat   *batch.Batch
+		tmpBat *batch.Batch
+		path   bytejson.Path
+		json   bytejson.ByteJson
+	)
+	defer func() {
+		if err != nil {
+			if tmpBat != nil {
+				tmpBat.Clean(proc.Mp())
+			}
+			if rbat != nil {
+				rbat.Clean(proc.Mp())
+			}
+		}
+	}()
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	tmpBat := batch.NewWithSize(0)
+	tmpBat = batch.NewWithSize(0)
 	tmpBat.Zs = []int64{1}
-	vec, err := colexec.EvalExpr(tmpBat, proc, param.ExprList[0])
+	tmpBat.Cnt = 1
+	vec, err = colexec.EvalExpr(tmpBat, proc, param.ExprList[0])
 	if err != nil {
 		return false, err
 	}
 	col := vector.MustStrCols(vec)
-	path, err := types.ParseStringToPath(param.path)
+	path, err = types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
-	rbat := batch.New(false, param.Attrs)
+	rbat = batch.New(false, param.Attrs)
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
 	rows := 0
 	for i := range col {
-		json, err := types.ParseStringToByteJson(col[i])
+		var ures []bytejson.UnnestResult
+		json, err = types.ParseStringToByteJson(col[i])
 		if err != nil {
 			return false, err
 		}
-		ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+		ures, err = json.Unnest(&path, param.outer, recursive, mode, param.filters)
 		if err != nil {
 			return false, err
 		}
@@ -113,23 +133,36 @@ func callByFunc(param *Param, proc *process.Process) (bool, error) {
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {
+	var (
+		err  error
+		rbat *batch.Batch
+		path bytejson.Path
+		json bytejson.ByteJson
+		ures []bytejson.UnnestResult
+	)
+	defer func() {
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
+		}
+	}()
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	json, err := types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
+	json, err = types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
 	if err != nil {
 		return false, err
 	}
-	path, err := types.ParseStringToPath(param.path)
+	path, err = types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
-	ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+	ures, err = json.Unnest(&path, param.outer, recursive, mode, param.filters)
 	if err != nil {
 		return false, err
 	}
-	rbat := batch.New(false, param.Attrs)
+	rbat = batch.New(false, param.Attrs)
+	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
@@ -143,6 +176,18 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 }
 
 func callByCol(param *Param, proc *process.Process) (bool, error) {
+	var (
+		err  error
+		vec  *vector.Vector
+		rbat *batch.Batch
+		path bytejson.Path
+		json bytejson.ByteJson
+	)
+	defer func() {
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
+		}
+	}()
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
@@ -150,23 +195,32 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) != 1 {
 		return false, moerr.NewInvalidArg("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
 	}
-	vec := bat.GetVector(0)
-	if vec.Typ.Oid != types.T_json {
+	vec = bat.GetVector(0)
+	if vec.Typ.Oid != types.T_json && vec.Typ.Oid != types.T_varchar {
 		return false, moerr.NewInvalidArg("unnest: invalid column type:%s", vec.Typ)
 	}
-	path, err := types.ParseStringToPath(param.path)
+	path, err = types.ParseStringToPath(param.path)
 	if err != nil {
 		return false, err
 	}
-	rbat := batch.New(false, param.Attrs)
+	rbat = batch.New(false, param.Attrs)
+	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
 	col := vector.GetBytesVectorValues(vec)
 	rows := 0
 	for i := 0; i < len(col); i++ {
-		json := types.DecodeJson(col[i])
-		ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+		var ures []bytejson.UnnestResult
+		if vec.Typ.Oid == types.T_json {
+			json = types.DecodeJson(col[i])
+		} else {
+			json, err = types.ParseSliceToByteJson(col[i])
+			if err != nil {
+				return false, err
+			}
+		}
+		ures, err = json.Unnest(&path, param.outer, recursive, mode, param.filters)
 		if err != nil {
 			return false, err
 		}
@@ -214,10 +268,5 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 	return bat, nil
 }
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:       types.T(typ.Id),
-		Width:     typ.Width,
-		Size:      typ.Size,
-		Precision: typ.Precision,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
 }

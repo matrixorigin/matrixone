@@ -48,3 +48,7 @@ select * from v1;
 select * from v1 where `index` is null;
 select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;
 select `key`,path,value from unnest(substring('{"a":1}...',1,7), '$') u;
+drop table if exists t2;
+create table t2 (a varchar);
+insert into t2 values ('{"a":1}.');
+with tmpt as (select substring(a,1,7) as a from t2) select * from tmpt, unnest(tmpt.a, '$') u;
