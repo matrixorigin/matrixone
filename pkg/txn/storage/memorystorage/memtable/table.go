@@ -471,7 +471,7 @@ func validate[
 }
 
 func (t *Table[K, V, R]) Dump(out io.Writer) {
-	iter := t.NewPhysicalIter()
+	iter := t.state.Load().rows.Copy().Iter()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		item := iter.Item()
 		fmt.Fprintf(out, "key: %+v\n", item.Key)

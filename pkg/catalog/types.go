@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	Row_ID = "__rowid"
+	Row_ID           = "__mo_rowid"
+	PrefixPriColName = "__mo_cpkey_"
 )
 
 const (
