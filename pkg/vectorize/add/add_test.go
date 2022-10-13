@@ -1317,3 +1317,321 @@ func TestSignedAddString(t *testing.T) {
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 }
+
+func TestUnsignedAddString(t *testing.T) {
+	convey.Convey("test01", t, func() {
+		type kase struct {
+			left  uint64
+			right string
+			want  float64
+		}
+
+		kases := []kase{
+			{
+				left:  7,
+				right: "1",
+				want:  8,
+			},
+			{
+				left:  7,
+				right: "0",
+				want:  7,
+			},
+			{
+				left:  7,
+				right: "12",
+				want:  19,
+			},
+			{
+				left:  7,
+				right: "10",
+				want:  17,
+			},
+			{
+				left:  7,
+				right: "8.5",
+				want:  15.5,
+			},
+			{
+				left:  7,
+				right: "1.5",
+				want:  8.5,
+			},
+			{
+				left:  7,
+				right: "12.5",
+				want:  19.5,
+			},
+			{
+				left:  7,
+				right: "a",
+				want:  7,
+			},
+			{
+				left:  7,
+				right: "a",
+				want:  7,
+			},
+			{
+				left:  7,
+				right: "xc",
+				want:  7,
+			},
+			{
+				left:  7,
+				right: "xc",
+				want:  7,
+			},
+		}
+
+		var leftInt []uint64
+		var rightStrs []string
+		var wants []float64
+		for _, k := range kases {
+			leftInt = append(leftInt, k.left)
+			rightStrs = append(rightStrs, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeUint64Vector(leftInt, nil)
+		rv := testutil.MakeVarcharVector(rightStrs, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftInt)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := UnsignedAddString[uint64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test02", t, func() {
+		type kase struct {
+			right string
+			want  float64
+		}
+
+		kases := []kase{
+			{
+				right: "1",
+				want:  8,
+			},
+			{
+				right: "0",
+				want:  7,
+			},
+			{
+				right: "12",
+				want:  19,
+			},
+			{
+				right: "10",
+				want:  17,
+			},
+			{
+				right: "8.5",
+				want:  15.5,
+			},
+			{
+				right: "1.5",
+				want:  8.5,
+			},
+			{
+				right: "12.5",
+				want:  19.5,
+			},
+			{
+				right: "a",
+				want:  7,
+			},
+			{
+				right: "a",
+				want:  7,
+			},
+			{
+				right: "xc",
+				want:  7,
+			},
+			{
+				right: "xc",
+				want:  7,
+			},
+		}
+
+		var rightStrs []string
+		var wants []float64
+		for _, k := range kases {
+			rightStrs = append(rightStrs, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeScalarUint64(7, 10)
+		rv := testutil.MakeVarcharVector(rightStrs, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(rightStrs)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := UnsignedAddString[uint64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test03", t, func() {
+		type kase struct {
+			left uint64
+			want float64
+		}
+
+		kases := []kase{
+			{
+				left: 1,
+				want: 8,
+			},
+			{
+				left: 0,
+				want: 7,
+			},
+			{
+				left: 12,
+				want: 19,
+			},
+			{
+				left: 10,
+				want: 17,
+			},
+		}
+
+		var leftInt []uint64
+		var wants []float64
+		for _, k := range kases {
+			leftInt = append(leftInt, k.left)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeUint64Vector(leftInt, nil)
+		rv := testutil.MakeScalarVarchar("7", 5)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftInt)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := UnsignedAddString[uint64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+}
+
+func TestFloatAddString(t *testing.T) {
+	convey.Convey("test01", t, func() {
+		type kase struct {
+			left  float64
+			right string
+			want  float64
+		}
+
+		kases := []kase{
+			{left: 5.3, right: "1", want: 6.3},
+			{left: 5.3, right: "0", want: 5.3},
+			{left: 5.3, right: "12", want: 17.3},
+			{left: 5.3, right: "10", want: 15.3},
+			{left: 5.3, right: "8.5", want: 13.8},
+			{left: 5.3, right: "1.5", want: 6.8},
+			{left: 5.3, right: "12.5", want: 17.8},
+			{left: 5.3, right: "a", want: 5.3},
+			{left: 5.3, right: "a", want: 5.3},
+			{left: 5.3, right: "xc", want: 5.3},
+			{left: 5.3, right: "xc", want: 5.3},
+		}
+
+		var leftFloat []float64
+		var rightStrs []string
+		var wants []float64
+		for _, k := range kases {
+			leftFloat = append(leftFloat, k.left)
+			rightStrs = append(rightStrs, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeFloat64Vector(leftFloat, nil)
+		rv := testutil.MakeVarcharVector(rightStrs, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftFloat)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := FloatAddString[float64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test02", t, func() {
+		type kase struct {
+			left  float64
+			right string
+			want  float64
+		}
+
+		kases := []kase{
+			{left: 5.3, right: "1", want: 6.3},
+			{left: 5.3, right: "0", want: 5.3},
+			{left: 5.3, right: "12", want: 17.3},
+			{left: 5.3, right: "10", want: 15.3},
+			{left: 5.3, right: "8.5", want: 13.8},
+			{left: 5.3, right: "1.5", want: 6.8},
+			{left: 5.3, right: "12.5", want: 17.8},
+			{left: 5.3, right: "a", want: 5.3},
+			{left: 5.3, right: "a", want: 5.3},
+			{left: 5.3, right: "xc", want: 5.3},
+			{left: 5.3, right: "xc", want: 5.3},
+		}
+
+		var rightStrs []string
+		var wants []float64
+		for _, k := range kases {
+			rightStrs = append(rightStrs, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeScalarFloat64(5.3, 10)
+		rv := testutil.MakeVarcharVector(rightStrs, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(rightStrs)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := FloatAddString[float64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test03", t, func() {
+		type kase struct {
+			left  float64
+			right string
+			want  float64
+		}
+
+		kases := []kase{
+			{left: 1, right: "5.3", want: 6.3},
+			{left: 0, right: "5.3", want: 5.3},
+			{left: 12, right: "5.3", want: 17.3},
+			{left: 10, right: "5.3", want: 15.3},
+			{left: 8.5, right: "5.3", want: 13.8},
+			{left: 1.5, right: "5.3", want: 6.8},
+			{left: 12.5, right: "5.3", want: 17.8},
+		}
+
+		var leftFloat []float64
+		var wants []float64
+		for _, k := range kases {
+			leftFloat = append(leftFloat, k.left)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeFloat64Vector(leftFloat, nil)
+		rv := testutil.MakeScalarVarchar("5.3", 5)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftFloat)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := FloatAddString[float64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+}
