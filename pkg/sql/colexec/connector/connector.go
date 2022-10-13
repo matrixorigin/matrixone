@@ -34,12 +34,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
-		select {
-		case ap.Reg.Ch <- nil:
-			return true, nil
-		case <-ap.Reg.Ctx.Done():
-			return true, nil
-		}
+		return true, nil
 	}
 	if bat.Length() == 0 {
 		return false, nil
