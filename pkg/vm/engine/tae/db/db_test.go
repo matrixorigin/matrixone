@@ -83,9 +83,14 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, db.LogtailMgr, db.Catalog)
-	beater.Start()
-	defer beater.Stop()
+	forest := newDirtyForest(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 400
 	schema.SegmentMaxBlocks = 10
@@ -2150,7 +2155,61 @@ func TestMergeblocks2(t *testing.T) {
 	// tae.restart()
 	// assert.Equal(t, int64(2), rel.Rows())
 }
+func TestMergeEmptyBlocks(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 3
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 6)
+	bats := bat.Split(2)
+	defer bat.Close()
 
+	tae.createRelAndAppend(bats[0], true)
+
+	assert.NoError(t, tae.deleteAll(false))
+
+	txn, rel := tae.getRelation()
+	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, txn.Commit())
+
+	{
+		t.Log("************merge************")
+
+		txn, rel = tae.getRelation()
+
+		segIt := rel.MakeSegmentIt()
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(seg.ID)
+		assert.NoError(t, err)
+
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+
+		{
+			v := getSingleSortKeyValue(bat, schema, 4)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		err = txn.Commit()
+		assert.NoError(t, err)
+	}
+}
 func TestDelete2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -2687,13 +2746,13 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	beater := NewTestUnflushedDirtyObserver(10*time.Millisecond, opts.Clock, tae.LogtailMgr, tae.Catalog)
-	beater.Start()
-	defer func() {
-		// sleep to see more blocks flush
-		time.Sleep(500 * time.Millisecond)
-		beater.Stop()
-	}()
+	forest := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -3557,7 +3616,7 @@ func TestWatchDirty(t *testing.T) {
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := NewDirtyWatcher(logMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(logMgr, opts.Clock, tae.Catalog, visitor)
 	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
 	watcher.WithDelay(10 * time.Nanosecond)
 
@@ -3660,7 +3719,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := NewDirtyWatcher(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
+	watcher := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
 	watcher.WithDelay(10 * time.Nanosecond)
 
 	wg := &sync.WaitGroup{}

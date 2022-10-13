@@ -34,7 +34,7 @@ func (w *StoreImpl) Replay(h ApplyHandle) error {
 	}
 	w.StoreInfo.onCheckpoint()
 	w.driverCheckpointed = lsn
-	w.driverCheckpointing = lsn
+	w.driverCheckpointing.Store(lsn)
 	for g, lsn := range w.syncing {
 		w.walCurrentLsn[g] = lsn
 		w.synced[g] = lsn
