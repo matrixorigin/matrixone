@@ -191,7 +191,6 @@ type databaseKey struct {
 
 // block list information of table
 type tableMeta struct {
-	tableId       uint64
 	tableName     string
 	blocks        [][]BlockMeta
 	modifedBlocks [][]BlockMeta

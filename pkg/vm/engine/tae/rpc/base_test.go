@@ -17,6 +17,9 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"testing"
-	"time"
 )
 
 const ModuleName = "TAEHANDLE"
@@ -157,12 +158,14 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	return mh
 }
 
+/*
 func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
 }
+*/
 
 func mockDNShard(id uint64) metadata.DNShard {
 	return metadata.DNShard{
