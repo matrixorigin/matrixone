@@ -97,14 +97,24 @@ func (t MergeLogType) String() string { return string(t) }
 
 const MergeLogTypeMerged MergeLogType = "merged"
 const MergeLogTypeLog MergeLogType = "log"
+const MergeLogTypeALL MergeLogType = "*"
 
 const FilenameSeparator = "_"
 const CsvExtension = ".csv"
+
+const ETLParamTypeAll = MergeLogTypeALL
+const ETLParamAccountAll = "*"
+
+var ETLParamTSAll = time.Time{}
 
 // PathBuilder hold strategy to build filepath
 type PathBuilder interface {
 	// Build directory path
 	Build(account string, typ MergeLogType, ts time.Time, db string, name string) string
+	// BuildETLPath return path for EXTERNAL table 'infile' options
+	//
+	// like: {account}/merged/*/*/*/{name}/*.csv
+	BuildETLPath(db string, name string) string
 	// ParsePath
 	//
 	// switch path {
@@ -196,13 +206,27 @@ func NewMetricLogPathBuilder() *MetricLogPathBuilder {
 }
 
 func (m *MetricLogPathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
-	return path.Join(account,
-		typ.String(),
-		fmt.Sprintf("%d", ts.Year()),
-		fmt.Sprintf("%02d", ts.Month()),
-		fmt.Sprintf("%02d", ts.Day()),
-		name,
-	)
+	if ts != ETLParamTSAll {
+		return path.Join(account,
+			typ.String(),
+			fmt.Sprintf("%d", ts.Year()),
+			fmt.Sprintf("%02d", ts.Month()),
+			fmt.Sprintf("%02d", ts.Day()),
+			name,
+		)
+	} else {
+		return path.Join(account, typ.String(), "*/*/*" /*All datetime*/, name)
+	}
+}
+
+// BuildETLPath implement PathBuilder
+//
+// #     account | typ | ts   | table | filename
+// like: *       /*    /*/*/* /metric /*.csv
+func (m *MetricLogPathBuilder) BuildETLPath(db string, name string) string {
+	etlDirectory := m.Build(ETLParamAccountAll, ETLParamTypeAll, ETLParamTSAll, db, name)
+	etlFilename := "*" + CsvExtension
+	return path.Join(etlDirectory, etlFilename)
 }
 
 func (m *MetricLogPathBuilder) ParsePath(path string) (CSVPath, error) {
@@ -221,6 +245,13 @@ func (m *MetricLogPathBuilder) NewLogFilename(name, nodeUUID, nodeType string, t
 var _ PathBuilder = (*DBTablePathBuilder)(nil)
 
 type DBTablePathBuilder struct {
+}
+
+// BuildETLPath implement PathBuilder
+//
+// like: system/metric_*.csv
+func (m *DBTablePathBuilder) BuildETLPath(db string, name string) string {
+	return fmt.Sprintf("%s/%s_*", db, name) + CsvExtension
 }
 
 func NewDBTablePathBuilder() *DBTablePathBuilder {

@@ -16,6 +16,7 @@ package trace
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,6 +54,7 @@ type Table struct {
 	Engine           string
 	Comment          string
 	TableOptions     TableOptions
+	PathBuilder      export.PathBuilder
 
 	AccountColumn *Column
 }
@@ -65,7 +67,7 @@ type TableOptions interface {
 	FormatDdl(ddl string) string
 	// GetCreateOptions return option for `create {option}table`, which should end with ' '
 	GetCreateOptions() string
-	GetTableOptions() string
+	GetTableOptions(export.PathBuilder) string
 }
 
 func (tbl *Table) ToCreateSql(ifNotExists bool) string {
@@ -108,7 +110,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
-	sb.WriteString(tbl.TableOptions.GetTableOptions())
+	sb.WriteString(tbl.TableOptions.GetTableOptions(tbl.PathBuilder))
 
 	return sb.String()
 }
@@ -231,6 +233,6 @@ var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
 
-func (o NoopTableOptions) FormatDdl(ddl string) string { return ddl }
-func (o NoopTableOptions) GetCreateOptions() string    { return "" }
-func (o NoopTableOptions) GetTableOptions() string     { return "" }
+func (o NoopTableOptions) FormatDdl(ddl string) string               { return ddl }
+func (o NoopTableOptions) GetCreateOptions() string                  { return "" }
+func (o NoopTableOptions) GetTableOptions(export.PathBuilder) string { return "" }
