@@ -15,7 +15,6 @@
 package add
 
 import (
-	"fmt"
 	"github.com/smartystreets/goconvey/convey"
 	"math"
 	"testing"
@@ -415,9 +414,6 @@ func TestStringAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddString(lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -502,9 +498,6 @@ func TestStringAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddString(lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -575,9 +568,6 @@ func TestStringAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddString(lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -670,9 +660,6 @@ func TestStringAddSigned(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddSigned[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -749,9 +736,6 @@ func TestStringAddSigned(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddSigned[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -794,9 +778,219 @@ func TestStringAddSigned(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(rightStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddSigned[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+}
+
+func TestStringAddUnSigned(t *testing.T) {
+	convey.Convey("test01", t, func() {
+		type kase struct {
+			left  string
+			right uint64
+			want  float64
 		}
+
+		kases := []kase{
+			{
+
+				left:  "1",
+				right: 7,
+				want:  8,
+			},
+			{
+
+				left:  "0",
+				right: 7,
+				want:  7,
+			},
+			{
+				left:  "12",
+				right: 7,
+				want:  19,
+			},
+			{
+				left:  "10",
+				right: 7,
+				want:  17,
+			},
+			{
+
+				left:  "8.5",
+				right: 7,
+				want:  15.5,
+			},
+			{
+
+				left:  "1.5",
+				right: 7,
+				want:  8.5,
+			},
+			{
+
+				left:  "12.5",
+				right: 7,
+				want:  19.5,
+			},
+			{
+
+				left:  "a",
+				right: 7,
+				want:  7,
+			},
+			{
+				left:  "a",
+				right: 7,
+				want:  7,
+			},
+			{
+				left:  "xc",
+				right: 7,
+				want:  7,
+			},
+			{
+				left:  "xc",
+				right: 7,
+				want:  7,
+			},
+		}
+
+		var leftStrs []string
+		var rightInt []uint64
+		var wants []float64
+		for _, k := range kases {
+			leftStrs = append(leftStrs, k.left)
+			rightInt = append(rightInt, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeVarcharVector(leftStrs, nil)
+		rv := testutil.MakeUint64Vector(rightInt, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := StringAddUnsigned[uint64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test02", t, func() {
+		type kase struct {
+			left string
+			want float64
+		}
+
+		kases := []kase{
+			{
+
+				left: "1",
+				want: 8,
+			},
+			{
+
+				left: "0",
+				want: 7,
+			},
+			{
+				left: "12",
+				want: 19,
+			},
+			{
+				left: "10",
+				want: 17,
+			},
+			{
+
+				left: "8.5",
+				want: 15.5,
+			},
+			{
+
+				left: "1.5",
+				want: 8.5,
+			},
+			{
+
+				left: "12.5",
+				want: 19.5,
+			},
+			{
+
+				left: "a",
+				want: 7,
+			},
+			{
+				left: "a",
+				want: 7,
+			},
+			{
+				left: "xc",
+				want: 7,
+			},
+			{
+				left: "xc",
+				want: 7,
+			},
+		}
+
+		var leftStrs []string
+		var wants []float64
+		for _, k := range kases {
+			leftStrs = append(leftStrs, k.left)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeVarcharVector(leftStrs, nil)
+		rv := testutil.MakeScalarUint64(7, 10)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := StringAddUnsigned[uint64](lv, rv, retVec)
+
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("test03", t, func() {
+		type kase struct {
+			right uint64
+			want  float64
+		}
+
+		kases := []kase{
+			{
+				right: 1,
+				want:  8,
+			},
+			{
+				right: 0,
+				want:  7,
+			},
+			{
+				right: 12,
+				want:  19,
+			},
+			{
+				right: 10,
+				want:  17,
+			},
+		}
+
+		var rightStrs []uint64
+		var wants []float64
+		for _, k := range kases {
+			rightStrs = append(rightStrs, k.right)
+			wants = append(wants, k.want)
+		}
+
+		lv := testutil.MakeScalarVarchar("7", 5)
+		rv := testutil.MakeUint64Vector(rightStrs, nil)
+		retVec := testutil.MakeFloat64Vector(make([]float64, len(rightStrs)), nil)
+		wantVec := testutil.MakeFloat64Vector(wants, nil)
+		err := StringAddUnsigned[uint64](lv, rv, retVec)
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -839,9 +1033,7 @@ func TestStringAddFloat(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddFloat[float64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -882,9 +1074,6 @@ func TestStringAddFloat(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddFloat[float64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -921,9 +1110,7 @@ func TestStringAddFloat(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := StringAddFloat[float64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -1010,9 +1197,7 @@ func TestSignedAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftInt)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := SignedAddString[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -1083,9 +1268,7 @@ func TestSignedAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(rightStrs)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := SignedAddString[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
@@ -1128,9 +1311,7 @@ func TestSignedAddString(t *testing.T) {
 		retVec := testutil.MakeFloat64Vector(make([]float64, len(leftInt)), nil)
 		wantVec := testutil.MakeFloat64Vector(wants, nil)
 		err := SignedAddString[int64](lv, rv, retVec)
-		if err != nil {
-			fmt.Print(err)
-		}
+
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVec, retVec)
 		convey.So(ret, convey.ShouldBeTrue)
