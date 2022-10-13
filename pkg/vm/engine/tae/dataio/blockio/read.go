@@ -45,7 +45,15 @@ Notes:
 */
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
-func BlockRead(ctx context.Context, columns []string, fs fileservice.FileService, pool *mpool.MPool, tableDef *plan.TableDef, metaloc, deltaloc string, ts timestamp.Timestamp) (*batch.Batch, error) {
+func BlockRead(
+	ctx context.Context,
+	columns []string,
+	tableDef *plan.TableDef,
+	metaloc, deltaloc string,
+	ts timestamp.Timestamp,
+	fs fileservice.FileService,
+	pool *mpool.MPool) (*batch.Batch, error) {
+
 	// prepare
 	columnLength := len(columns)
 	colIdxs := make([]uint16, columnLength)
@@ -61,7 +69,7 @@ func BlockRead(ctx context.Context, columns []string, fs fileservice.FileService
 	}
 
 	// read
-	columnBatch, err := BlockReadInner(ctx, columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, types.TimestampToTS(ts))
+	columnBatch, err := BlockReadInner(ctx, columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, types.TimestampToTS(ts), fs, pool)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +89,17 @@ func BlockRead(ctx context.Context, columns []string, fs fileservice.FileService
 	return bat, nil
 }
 
-func BlockReadInner(ctx context.Context, colNames []string, colIdxs []uint16, colTyps []types.Type, colNulls []bool, fs fileservice.FileService, pool *mpool.MPool, metaloc, deltaloc string, ts types.TS) (*containers.Batch, error) {
-	columnBatch, err := readColumnBatchByMetaloc(metaloc, fs, pool, colNames, colIdxs, colTyps, colNulls)
+func BlockReadInner(
+	ctx context.Context,
+	colNames []string,
+	colIdxs []uint16,
+	colTyps []types.Type,
+	colNulls []bool,
+	metaloc, deltaloc string,
+	ts types.TS,
+	fs fileservice.FileService,
+	pool *mpool.MPool) (*containers.Batch, error) {
+	columnBatch, err := readColumnBatchByMetaloc(metaloc, colNames, colIdxs, colTyps, colNulls, fs, pool)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +114,14 @@ func BlockReadInner(ctx context.Context, colNames []string, colIdxs []uint16, co
 	return columnBatch, nil
 }
 
-func readColumnBatchByMetaloc(metaloc string, fs fileservice.FileService, pool *mpool.MPool, colNames []string, colIdxs []uint16, colTyps []types.Type, colNulls []bool) (*containers.Batch, error) {
+func readColumnBatchByMetaloc(
+	metaloc string,
+	colNames []string,
+	colIdxs []uint16,
+	colTyps []types.Type,
+	colNulls []bool,
+	fs fileservice.FileService,
+	pool *mpool.MPool) (*containers.Batch, error) {
 	name, extent, rows := DecodeMetaLoc(metaloc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector

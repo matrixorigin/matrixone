@@ -3756,7 +3756,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	wg.Wait()
 }
 
-func TestCNBlockRead(t *testing.T) {
+func TestBlockRead(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	tsAlloc := types.NewTsAlloctor(opts.Clock)
@@ -3809,20 +3809,20 @@ func TestCNBlockRead(t *testing.T) {
 	fs := tae.DB.FileFactory.(*blockio.ObjectFactory).Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, beforeDel)
+	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
 	assert.NoError(t, err)
 	defer b1.Close()
 	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
-	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, afterFirstDel)
+	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterFirstDel, fs, pool)
 	assert.NoError(t, err)
 	defer b2.Close()
 	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
-	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, fs, pool, metaloc, deltaloc, afterSecondDel)
+	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterSecondDel, fs, pool)
 	assert.NoError(t, err)
 	defer b3.Close()
 	assert.Equal(t, columns, b2.Attrs)
@@ -3830,7 +3830,15 @@ func TestCNBlockRead(t *testing.T) {
 	assert.Equal(t, 16, b3.Vecs[0].Length())
 
 	// read rowid column only
-	b4, err := blockio.BlockReadInner(context.Background(), []string{catalog.AttrRowID}, []uint16{2}, []types.Type{types.T_Rowid.ToType()}, []bool{false}, fs, pool, metaloc, deltaloc, afterSecondDel)
+	b4, err := blockio.BlockReadInner(
+		context.Background(),
+		[]string{catalog.AttrRowID},
+		[]uint16{2},
+		[]types.Type{types.T_Rowid.ToType()},
+		[]bool{false},
+		metaloc, deltaloc, afterSecondDel,
+		fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b4.Close()
 	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
