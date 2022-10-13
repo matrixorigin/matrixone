@@ -345,6 +345,14 @@ func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation ha
 	return db.DropRelationByName(name)
 }
 
+func (store *txnStore) UnsafeGetRelation(dbId, id uint64) (relation handle.Relation, err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return nil, err
+	}
+	return db.UnsafeGetRelation(id)
+}
+
 func (store *txnStore) GetRelationByName(dbId uint64, name string) (relation handle.Relation, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

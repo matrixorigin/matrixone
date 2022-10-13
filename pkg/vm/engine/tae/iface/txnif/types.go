@@ -115,6 +115,7 @@ type TxnTest interface {
 
 type TxnUnsafe interface {
 	UnsafeGetDatabase(id uint64) (h handle.Database, err error)
+	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
 }
 
 type AsyncTxn interface {

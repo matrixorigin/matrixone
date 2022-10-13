@@ -57,6 +57,10 @@ func (txn *txnImpl) UnsafeGetDatabase(id uint64) (db handle.Database, err error)
 	return txn.Store.UnsafeGetDatabase(id)
 }
 
+func (txn *txnImpl) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err error) {
+	return txn.Store.UnsafeGetRelation(dbId, id)
+}
+
 func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.GetDatabase(name)
 }
