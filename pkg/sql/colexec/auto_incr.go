@@ -390,6 +390,9 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 				continue
 			}
 			bat := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			if bat == nil {
+				continue
+			}
 			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}
