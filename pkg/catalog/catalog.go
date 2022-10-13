@@ -15,6 +15,9 @@
 package catalog
 
 import (
+	"regexp"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,7 +82,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropTables(GenRows(bat)), es[1:], nil
+			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
@@ -162,13 +165,22 @@ func genCreateTables(rows [][]any) []CreateTable {
 	return cmds
 }
 
-func genDropTables(rows [][]any) []DropTable {
-	cmds := make([]DropTable, len(rows))
+func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
+	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		if id, ok := isTruncate(name); ok {
+			cmds[i].Id = id
+			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		} else {
+			cmds[i].IsDrop = true
+			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].Name = name
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		}
 	}
 	return cmds
 }
@@ -338,4 +350,15 @@ func GenRows(bat *batch.Batch) [][]any {
 		}
 	}
 	return rows
+}
+
+func isTruncate(name string) (uint64, bool) {
+	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
+	if !ok {
+		return 0, false
+	}
+	reg, _ := regexp.Compile(`\d+`)
+	str := reg.FindString(name)
+	id, _ := strconv.ParseUint(str, 10, 64)
+	return id, true
 }

@@ -190,8 +190,10 @@ type CreateTable struct {
 	Defs         []engine.TableDef
 }
 
-type DropTable struct {
+type DropOrTruncateTable struct {
+	IsDrop       bool // true for Drop and false for Truncate
 	Id           uint64
+	NewId        uint64
 	Name         string
 	DatabaseId   uint64
 	DatabaseName string

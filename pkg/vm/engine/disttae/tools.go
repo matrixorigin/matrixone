@@ -335,6 +335,36 @@ func genDropTableTuple(id, databaseId uint64, name, databaseName string,
 	return bat, nil
 }
 
+func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
+	m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(4)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
+	bat.SetZs(1, m)
+	{
+		idx := catalog.MO_TABLES_REL_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
+		if err := bat.Vecs[idx].Append(id, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_REL_NAME_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // relname
+		if err := bat.Vecs[idx].Append([]byte(name), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase
+		if err := bat.Vecs[idx].Append([]byte(databaseName), false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_TABLES_RELDATABASE_ID_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // reldatabase_id
+		if err := bat.Vecs[idx].Append(databaseId, false, m); err != nil {
+			return nil, err
+		}
+	}
+	return bat, nil
+}
+
 /*
 func genDropColumnsTuple(name string) *batch.Batch {
 	return &batch.Batch{}
@@ -907,7 +937,7 @@ func genMetaTableName(id uint64) string {
 }
 
 func isMetaTable(name string) bool {
-	ok, _ := regexp.MatchString(`\_\d\_meta`, name)
+	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
 	return ok
 }
 
