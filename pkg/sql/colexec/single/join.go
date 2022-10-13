@@ -55,9 +55,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
 				return true, err
 			}
 			ctr.state = Probe
@@ -73,9 +70,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
 					proc.SetInputBatch(nil)
 					return true, err
 				}
@@ -83,9 +77,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
 					proc.SetInputBatch(nil)
 					return true, err
 				}
