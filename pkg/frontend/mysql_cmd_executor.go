@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -1709,6 +1710,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
 		cwft.plan = newPlan
+
+		//check privilege
+		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
@@ -1764,12 +1771,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
-			}
-			if !yes {
-				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 		}
 		return ret, err
@@ -1795,12 +1799,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
-			}
-			if !yes {
-				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 		}
 	}
@@ -1868,6 +1869,78 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+// authenticatePrivilegeOfStatement checks the user can execute the statement
+func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	var havePrivilege bool
+	var err error
+	if ses.GetTenantInfo() != nil {
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+		if err != nil {
+			return err
+		}
+
+		if !havePrivilege {
+			err = moerr.NewInternalError("do not have privilege to execute the statement")
+			return err
+		}
+
+		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+		if err != nil {
+			return err
+		}
+
+		if !havePrivilege {
+			err = moerr.NewInternalError("do not have privilege to execute the statement")
+			return err
+		}
+	}
+	return err
+}
+
+// authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
+func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		return moerr.NewInternalError("do not have privilege to execute the statement")
+	}
+	return nil
+}
+
+// authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
+func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	err := authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+	if err != nil {
+		return err
+	}
+	err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, p)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+// canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
+func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(stmt tree.Statement) error {
+	can := StatementCanBeExecutedInUncommittedTransaction(stmt)
+	if !can {
+		//is ddl statement
+		if IsDDL(stmt) {
+			return errorOnlyCreateStatement
+		} else if IsAdministrativeStatement(stmt) {
+			return errorAdministrativeStatement
+		} else if IsParameterModificationStatement(stmt) {
+			return errorParameterModificationInTxn
+		} else {
+			return errorUnclassifiedStatement
+		}
+	}
+	return nil
+}
+
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
 	beginInstant := time.Now()
@@ -1920,7 +1993,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
-	var havePrivilege bool
 	var err2 error
 	var columns []interface{}
 
@@ -1929,31 +2001,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 		tenant := sysAccountName
-		if ses.GetTenantInfo() != nil {
+		//skip PREPARE statement here
+		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			tenant = ses.GetTenantInfo().GetTenant()
-			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
-			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
-			if err2 != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, err2)
-				return err2
-			}
-
-			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
-			}
-
-			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
-			if err2 != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, err2)
-				return err2
-			}
-
-			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
+			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -1971,26 +2024,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			                     <- has active transaction
 		*/
 		if ses.InActiveTransaction() {
-			can := StatementCanBeExecutedInUncommittedTransaction(stmt)
-			if !can {
-				//is ddl statement
-				if IsDDL(stmt) {
-					retErr = errorOnlyCreateStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else if IsAdministrativeStatement(stmt) {
-					retErr = errorAdministrativeStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else if IsParameterModificationStatement(stmt) {
-					retErr = errorParameterModificationInTxn
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				} else {
-					retErr = errorUnclassifiedStatement
-					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-					return retErr
-				}
+			err = mce.canExecuteStatementInUncommittedTransaction(stmt)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -2061,9 +2097,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.PrepareString:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareString(st)
+			if err != nil {
+				goto handleFailed
+			}
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2296,7 +2340,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				cwft.RecordExecPlan(requestCtx)
+				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2333,7 +2377,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				cwft.RecordExecPlan(requestCtx)
+				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		case *tree.ExplainAnalyze:
 			explainColName := "QUERY PLAN"
@@ -2770,6 +2814,15 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.SetVar:
+		return true
+	}
+	return false
+}
+
+// IsPrepareStatement checks the statement is the prepare statement.
+func IsPrepareStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.PrepareStmt, *tree.PrepareString:
 		return true
 	}
 	return false

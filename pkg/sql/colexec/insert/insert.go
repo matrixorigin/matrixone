@@ -30,14 +30,16 @@ import (
 )
 
 type Argument struct {
-	Ts            uint64
-	TargetTable   engine.Relation
-	TargetColDefs []*plan.ColDef
-	Affected      uint64
-	Engine        engine.Engine
-	DB            engine.Database
-	TableID       string
-	CPkeyColDef   *plan.ColDef
+	Ts                 uint64
+	TargetTable        engine.Relation
+	TargetColDefs      []*plan.ColDef
+	Affected           uint64
+	Engine             engine.Engine
+	DB                 engine.Database
+	TableID            string
+	CPkeyColDef        *plan.ColDef
+	ComputeIndexTables []engine.Relation
+	ComputeIndexInfos  []*plan.ComputeIndexInfo
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -100,6 +102,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
+	}
+	for idx, info := range n.ComputeIndexInfos {
+		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
+		if rowNum != 0 {
+			err := n.ComputeIndexTables[idx].Write(ctx, b)
+			if err != nil {
+				return false, err
+			}
+		}
+		b.Clean(proc.Mp())
 	}
 	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))

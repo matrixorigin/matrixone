@@ -268,6 +268,18 @@ message ViewDef {
 	string view  = 1;
 }
 
+message ComputeIndexDef {
+	repeated string names = 1;
+	repeated string table_names = 2;
+	repeated bool uniques = 3;
+}
+
+message ComputeIndexInfo {
+	string table_name = 1;
+	repeated string attrs = 2;
+	repeated ColDef cols = 3;
+}
+
 message TableDef {
 	message DefType {
 		oneof def {
@@ -276,6 +288,7 @@ message TableDef {
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
 			PartitionInfo partition				= 5;
+			ComputeIndexDef compute_index = 6;
 		}
 	}
 	string name				= 1;
@@ -286,6 +299,7 @@ message TableDef {
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
 	TableFunction tbl_func = 8;
+	repeated ComputeIndexInfo compute_index_infos = 9;
 }
 
 message TableFunction{
@@ -351,6 +365,7 @@ message UpdateCtx {
 	repeated string other_attrs = 8;
 	repeated string order_attrs = 9;
 	ColDef composite_pkey = 10;
+	repeated string index_attrs = 11;
 }
 
 message AnalyzeInfo {
@@ -482,6 +497,8 @@ message DeleteTableCtx {
 	bool canTruncate = 4;
 	bool isHideKey = 5;
 	int32 colIndex = 6;
+	repeated ComputeIndexInfo compute_index_infos = 7;
+	repeated string index_attrs = 8;
 }
 
 message Query {
@@ -571,6 +588,7 @@ message InsertValues {
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
 	ColDef composite_pkey = 7;
+	repeated ComputeIndexInfo compute_index_infos = 8;
 }
 
 message column{
@@ -666,6 +684,7 @@ message CreateTable {
 	bool temporary 		= 2;
 	string database 	= 3;
 	TableDef table_def 	= 4;
+	repeated TableDef index_tables = 5;
 }
 
 message AlterTable {
@@ -677,6 +696,7 @@ message DropTable {
 	bool if_exists 	= 1;
 	string database = 2;
 	string table 	= 3;
+	repeated string index_table_names = 4;
 }
 
 message CreateIndex {
@@ -728,4 +748,9 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message IndexTableInfo {
+	string index_table_name = 1;
+	repeated ColDef cols = 2;
 }
