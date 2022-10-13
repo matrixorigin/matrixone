@@ -16,6 +16,7 @@ package memorystorage
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -109,6 +110,13 @@ func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req 
 			if err != nil {
 				return err
 			}
+			{
+				fmt.Printf("+++++commit write %v: %v\n", bat.Attrs, bat.VectorCount())
+				for i, vec := range bat.Vecs {
+					fmt.Printf("\t[%v] = %v\n", i, vec)
+				}
+			}
+
 			if pe.EntryType == apipb.Entry_Insert {
 				req := txnengine.WriteReq{
 					TableID:      txnengine.ID(pe.GetTableId()),

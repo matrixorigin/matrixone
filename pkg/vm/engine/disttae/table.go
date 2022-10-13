@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"strconv"
 
@@ -205,6 +206,12 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+	{
+		fmt.Printf("+++++write %v: %v\n", bat.Attrs, bat.VectorCount())
+		for i, vec := range bat.Vecs {
+			fmt.Printf("\t[%v] = %v\n", i, vec)
+		}
+	}
 	if tbl.insertExpr == nil {
 		ibat := batch.New(true, bat.Attrs)
 		for j := range bat.Vecs {
@@ -238,6 +245,13 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	{
+		fmt.Printf("+++++delete %v: %v\n", bat.Attrs, bat.VectorCount())
+		for i, vec := range bat.Vecs {
+			fmt.Printf("\t[%v], %v = %v\n", i, vec.Typ, vec)
+		}
+	}
+
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {

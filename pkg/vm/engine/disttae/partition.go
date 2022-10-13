@@ -17,11 +17,13 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -90,6 +92,12 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
+	}
+	{
+		fmt.Printf("+++++logtail delete %v: %v\n", bat.Attrs, bat.VectorCount())
+		for i, vec := range bat.Vecs {
+			fmt.Printf("\t[%v], %v = %v\n", i, vec.Typ, vec)
+		}
 	}
 
 	txID := uuid.NewString()
@@ -190,13 +198,19 @@ func (p *Partition) NewReader(
 	)
 
 	inserts := make([]*batch.Batch, 0, len(entries))
-	deletes := make([]*batch.Batch, 0, len(entries))
+	deletes := make(map[types.Rowid]uint8)
 	for _, entry := range entries {
 		if entry.typ == INSERT {
 			inserts = append(inserts, entry.bat)
 		} else {
-			deletes = append(deletes, entry.bat)
+			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				deletes[v] = 0
+			}
 		}
+	}
+	{
+		fmt.Printf("+++deletes: %v\n", deletes)
 	}
 
 	readers := make([]engine.Reader, readerNumber)

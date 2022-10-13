@@ -310,7 +310,7 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 			a.Type.Oid == types.T_uint64 ||
 			a.Type.Oid == types.T_uint128)
 	case catalog.SystemColAttr_IsAutoIncrement:
-		ret.Value = boolToInt8(false)
+		ret.Value = boolToInt8(a.AutoIncrement)
 	case catalog.SystemColAttr_IsHidden:
 		ret.Value = boolToInt8(a.IsHidden)
 	case catalog.SystemColAttr_Comment:
