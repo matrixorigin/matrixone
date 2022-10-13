@@ -143,11 +143,11 @@ a    b
 drop table if exists t1;
 create table t1(a int, b int, primary key(a));
 insert into t1 values(null, 1);
-constraint vialation: Column 'a' cannot be null
+constraint violation: Column 'a' cannot be null
 drop table if exists t1;
 create table t1(a int, b int, primary key(a, b));
 insert into t1 values(null, 1);
-constraint vialation: Column 'a' cannot be null
+constraint violation: Column 'a' cannot be null
 drop table if exists t1;
 create table t1(a int, b varchar(20), primary key(a, b));
 insert into t1 values(1, '2');
