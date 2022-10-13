@@ -255,7 +255,6 @@ var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
-var _ Binder = (*TableFunctionBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32

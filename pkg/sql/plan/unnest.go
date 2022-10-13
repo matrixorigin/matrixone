@@ -221,7 +221,8 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			},
 		}
 	case *tree.FuncExpr:
-		ctx.binder = NewTableFunctionBinder(builder, ctx)
+		//ctx.binder = NewDefaultBinder(builder, ctx, &plan.Type{Id: int32(types.T_varchar)},[]string{"unnest"})
+		ctx.binder = NewTableBinder(builder, ctx) // TODO: find a better way to build table function
 		expr, err := ctx.binder.BindExpr(tbl.Func.Exprs[0], 0, false)
 		if err != nil {
 			return 0, err
