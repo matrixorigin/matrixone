@@ -1068,6 +1068,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Partition: p,
 				},
 			})
+		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_ComputeIndex{
+					ComputeIndex: &plan2.ComputeIndexDef{
+						Names:      indexDef.Names,
+						TableNames: indexDef.TableNames,
+						Uniques:    indexDef.Uniques,
+					},
+				},
+			})
 		}
 	}
 	if len(properties) > 0 {
