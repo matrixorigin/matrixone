@@ -303,8 +303,6 @@ github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
 github.com/labstack/echo/v4 v4.1.11/go.mod h1:i541M3Fj6f76NZtHSj7TXnyM8n2gaodfvfxNnFqi74g=
 github.com/labstack/echo/v4 v4.5.0/go.mod h1:czIriw4a0C1dFun+ObrXp7ok03xON0N1awStJ6ArI7Y=
 github.com/labstack/gommon v0.3.0/go.mod h1:MULnywXg0yavhxWKc+lOruYdAhDwPK9wf0OL7NoOu+k=
-github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef h1:Pk7v7YAMqQrL0nbHyoffdmr9BArHN03hEqBgeru8VcI=
-github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:6gzI38ZJmbzZ7oZebXz6jII0uVK+MZ3+ds+7mIt1ioI=
 github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/lni/memberlist v0.3.2-0.20220811084252-8a89d1ea99cb h1:X1Id1MHzgBNoqNDiOlzsgxjN7CDGzJFzvXPQqR1/Lbc=
@@ -314,6 +312,8 @@ github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376/go.mod h1:LOatfyR8Xeej1j
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef h1:Udh5GWnPGXDcVWwyKLsWlfoaumF8xVMJmQD1d5L0T0g=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8 h1:yr5ZAK1xhBs9i6YUNNjCXrMp2i2pA3gLH0ubNKOyxQU=
 github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=

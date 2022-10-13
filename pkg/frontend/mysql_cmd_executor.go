@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -32,6 +31,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1924,7 +1924,10 @@ func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Se
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(stmt tree.Statement) error {
-	can := StatementCanBeExecutedInUncommittedTransaction(stmt)
+	can, err := StatementCanBeExecutedInUncommittedTransaction(mce.ses, stmt)
+	if err != nil {
+		return err
+	}
 	if !can {
 		//is ddl statement
 		if IsDDL(stmt) {
@@ -2740,37 +2743,52 @@ func (mce *MysqlCmdExecutor) Close() {
 /*
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
 */
-func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
+func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
-		return true
+		return true, nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
-		return true
+		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-		return true
+		return true, nil
 		//show
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowDatabases,
 		*tree.ShowVariables, *tree.ShowColumns, *tree.ShowErrors, *tree.ShowIndex, *tree.ShowProcessList,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
-		return true
+		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
-		return true
-	case *tree.PrepareStmt, *tree.PrepareString, *tree.Execute, *tree.Deallocate:
-		return true
+		return true, nil
+	case *tree.PrepareStmt:
+		return StatementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
+	case *tree.PrepareString:
+		preStmt, err := mysql.ParseOne(st.Sql)
+		if err != nil {
+			return false, err
+		}
+		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt)
+	case *tree.Execute:
+		preName := string(st.Name)
+		preStmt, err := ses.GetPrepareStmt(preName)
+		if err != nil {
+			return false, err
+		}
+		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
+	case *tree.Deallocate:
+		return true, nil
 	case *tree.Use:
 		/*
 			These statements can not be executed in an uncommitted transaction:
 				USE SECONDARY ROLE { ALL | NONE }
 				USE ROLE role;
 		*/
-		return !st.IsUseRole()
+		return !st.IsUseRole(), nil
 	}
 
-	return false
+	return false, nil
 }
 
 // IsDDL checks the statement is the DDL statement.

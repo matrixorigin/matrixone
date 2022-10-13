@@ -99,3 +99,21 @@ prepare s7 from 'drop table t1';
 execute s7;
 show tables;
 tables_in_db1
+drop table if exists t1;
+create table t1(a int);
+set autocommit=0;
+insert into t1 values (1);
+prepare s1 from "create table t2(a int)";
+prepare s1 from "drop table t1";
+unclassified statement appears in uncommitted transaction
+rollback;
+prepare s1 from "create table t2(a int)";
+commit;
+prepare s2 from "drop table t1";
+commit;
+insert into t1 values (1);
+execute s1;
+execute s2;
+unclassified statement appears in uncommitted transaction
+rollback;
+set autocommit=1;
