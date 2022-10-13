@@ -84,11 +84,13 @@ test_user
 set autocommit=0;
 prepare s7 from 'drop table test_user';
 execute s7;
+unclassified statement appears in uncommitted transaction
 deallocate prepare s7;
 commit;
 set autocommit=1;
 show tables like 'test_user';
 tables_in_prepare_transaction
+test_user
 drop table user;
 drop table if exists user;
 CREATE TABLE user
@@ -163,6 +165,7 @@ commit;
 begin;
 prepare s6 from 'create table test_user(a int)';
 execute s6;
+table test_user already exists
 deallocate prepare s6;
 commit;
 show tables like 'test_user';
@@ -170,8 +173,11 @@ tables_in_prepare_transaction
 test_user
 begin;
 prepare s7 from 'drop table test_user';
+unclassified statement appears in uncommitted transaction
 execute s7;
+invalid state prepared statement 's7' does not exist
 deallocate prepare s7;
 commit;
 show tables like 'test_user';
 tables_in_prepare_transaction
+test_user

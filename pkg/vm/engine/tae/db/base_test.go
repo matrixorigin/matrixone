@@ -56,7 +56,8 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 }
 
 func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
-func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
+
+// func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
 	_ = e.DB.Close()
