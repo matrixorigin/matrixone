@@ -17,5 +17,5 @@ package catalog
 import "testing"
 
 func TestGenBlockMeta(t *testing.T) {
-	_ = genBlockInfo(nil)
+	_ = GenBlockInfo(nil)
 }

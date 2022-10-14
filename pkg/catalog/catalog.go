@@ -123,7 +123,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 }
 
-func genBlockInfo(rows [][]any) []BlockInfo {
+func GenBlockInfo(rows [][]any) []BlockInfo {
 	infos := make([]BlockInfo, len(rows))
 	for i, row := range rows {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
