@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -43,6 +44,12 @@ type StoreImpl struct {
 
 	truncatingQueue sm.Queue
 	truncateQueue   sm.Queue
+}
+
+func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
+	cfg := logservicedriver.NewDefaultConfig(factory)
+	driver := logservicedriver.NewLogServiceDriver(cfg)
+	return NewStore(driver)
 }
 
 func NewStoreWithBatchStoreDriver(dir, name string, cfg *batchstoredriver.StoreCfg) Store {
