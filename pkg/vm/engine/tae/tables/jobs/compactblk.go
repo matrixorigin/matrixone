@@ -153,10 +153,14 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(), task.txn.GetStartTS(),
+	metaLoc, err := blockio.EncodeBlkMetaLocWithObject(ioTask.file.Fingerprint(),
 		ioTask.file.GetMeta().GetExtent(),
-		uint32(preparer.Columns.Length()))
-	logutil.Infof("node: %v", metaLoc)
+		uint32(preparer.Columns.Length()),
+		ioTask.file.GetObjectBlocks())
+	ioTask.file.FreeObjectBlocks()
+	if err != nil {
+		return err
+	}
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
@@ -198,15 +202,26 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
+		var metaLocABlk string
+		metaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(aBlockFile.Fingerprint(),
 			ablockTask.file.GetMeta().GetExtent(),
-			uint32(data.Length()))
+			uint32(data.Length()),
+			aBlockFile.GetObjectBlocks())
+		if err != nil {
+			return
+		}
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
 		if deletes != nil {
-			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
-				ablockTask.file.GetDelta().GetExtent())
+			var deltaLocABlk string
+			deltaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(aBlockFile.Fingerprint(),
+				ablockTask.file.GetDelta().GetExtent(),
+				0,
+				aBlockFile.GetObjectBlocks())
+			if err != nil {
+				return
+			}
 			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
 				return err
 			}
