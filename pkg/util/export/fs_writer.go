@@ -167,7 +167,10 @@ type FSWriterFactory func(ctx context.Context, db string, name batchpipe.HasName
 
 func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
 	return func(_ context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
-		options = append(options, WithDatabase(db), WithName(name), WithNode(nodeUUID, nodeType))
+		options = append(options, WithDatabase(db), WithNode(nodeUUID, nodeType))
+		if name != nil {
+			options = append(options, WithName(name))
+		}
 		return NewFSWriter(DefaultContext(), fs, options...)
 	}
 }

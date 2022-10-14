@@ -18,15 +18,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"io"
-	"path"
-	"strings"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"io"
+	"path"
+	"strings"
+	"time"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -41,6 +40,7 @@ type Merge struct {
 	DB          string                  // see WithDatabase
 	Datetime    time.Time               // see WithDatetime
 	FS          fileservice.FileService // see WithFileService
+	FSName      string                  // see WithFileServiceName, cooperate with FS
 	pathBuilder export.PathBuilder      // see WithPathBuilder
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
@@ -89,6 +89,11 @@ func WithFileService(fs fileservice.FileService) MergeOption {
 		m.FS = fs
 	})
 }
+func WithFileServiceName(name string) MergeOption {
+	return MergeOption(func(m *Merge) {
+		m.FSName = name
+	})
+}
 func WithPathBuilder(builder export.PathBuilder) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.pathBuilder = builder
@@ -111,9 +116,12 @@ func WithMinFilesMerge(files int) MergeOption {
 	})
 }
 
+const ETLFileServiceName = "ETL"
+
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
 		Datetime:      time.Now(),
+		FSName:        ETLFileServiceName,
 		pathBuilder:   export.NewMetricLogPathBuilder(),
 		MaxFileSize:   128 * MB,
 		MaxMergeJobs:  16,
@@ -123,6 +131,9 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
 		opt(m)
+	}
+	if fs, err := fileservice.Get[fileservice.FileService](m.FS, m.FSName); err == nil {
+		m.FS = fs
 	}
 	m.valid()
 	m.runningJobs = make(chan struct{}, m.MaxMergeJobs)
@@ -168,7 +179,7 @@ func (m *Merge) Stop() {
 // Main handle cron job
 // foreach all
 func (m *Merge) Main(ts time.Time) error {
-	var files = make([]string, 1000)
+	var files = make([]string, 0, 1000)
 	var totalSize int64
 
 	m.Datetime = ts
@@ -184,6 +195,7 @@ func (m *Merge) Main(ts time.Time) error {
 		}
 		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.DB, m.Table.GetName())
 		// get all file entry
+
 		fileEntry, err := m.FS.List(m.ctx, rootPath)
 		if err != nil {
 			// fixme: logutil.Error()
@@ -221,7 +233,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 	}
 
 	// Step 1. group by node_uuid, find target timestamp
-	timestamps := []string{}
+	timestamps := make([]string, 0, len(paths))
 	for _, path := range paths {
 		p, err := m.pathBuilder.ParsePath(path)
 		if err != nil {
@@ -316,7 +328,7 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 			},
 		},
 	}
-	// read whole file
+	// open file reader
 	if err := fs.Read(ctx, &vec); err != nil {
 		return nil, err
 	}
@@ -427,7 +439,9 @@ func (c *MapCache) Flush(writer CSVWriter) {
 
 func (c *MapCache) Reset() {
 	c.size = 0
-	c.m = make(map[string]*Row, len(c.m))
+	for key, _ := range c.m {
+		delete(c.m, key)
+	}
 }
 
 func (c *MapCache) IsEmpty() bool {
