@@ -36,7 +36,7 @@ const (
 
 	DefaultScannerInterval    = int64(5000)          // millisecond
 	DefaultExecutionInterval  = int64(2000)          // millisecond
-	DefaultFlushInterval      = int64(3 * 60 * 1000) // millisecond
+	DefaultFlushInterval      = int64(2 * 60 * 1000) // millisecond
 	DefaultExecutionLevels    = int16(30)
 	DefaultCatalogCkpInterval = int64(60000) // millisecond
 	DefaultCatalogUnCkpLimit  = int64(10)

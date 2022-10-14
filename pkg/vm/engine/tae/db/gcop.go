@@ -15,6 +15,9 @@
 package db
 
 import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -112,6 +115,7 @@ func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 // TODO
 func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 	return func() (err error) {
+		return
 		scopes := make([]common.ID, 0)
 		logutil.Debugf("[GCDB] | %s | Started", entry.String())
 		defer func() {
@@ -129,4 +133,55 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 		err = entry.GetCatalog().RemoveEntry(entry)
 		return
 	}
+}
+
+type garbageCollector struct {
+	*catalog.LoopProcessor
+	db          *DB
+	epoch       types.TS
+	runTs       types.TS
+	clock       *types.TsAlloctor
+	maxInterval time.Duration
+	// lastScheduleTime time.Time
+}
+
+func newGarbageCollector(
+	db *DB,
+	maxInterval time.Duration) *garbageCollector {
+	ckp := &garbageCollector{
+		LoopProcessor: new(catalog.LoopProcessor),
+		db:            db,
+		maxInterval:   maxInterval,
+		clock:         types.NewTsAlloctor(db.Opts.Clock),
+	}
+	ckp.BlockFn = ckp.onBlock
+	ckp.SegmentFn = ckp.onSegment
+	ckp.TableFn = ckp.onTable
+	ckp.DatabaseFn = ckp.onDatabase
+	return ckp
+}
+
+func (ckp *garbageCollector) PreExecute() (err error) {
+	ckp.runTs = ckp.clock.Alloc()
+	return
+}
+
+func (ckp *garbageCollector) PostExecute() (err error) {
+	return
+}
+
+func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
+	return
+}
+
+func (ckp *garbageCollector) onSegment(entry *catalog.SegmentEntry) (err error) {
+	return
+}
+
+func (ckp *garbageCollector) onTable(entry *catalog.TableEntry) (err error) {
+	return
+}
+
+func (ckp *garbageCollector) onDatabase(entry *catalog.DBEntry) (err error) {
+	return
 }
