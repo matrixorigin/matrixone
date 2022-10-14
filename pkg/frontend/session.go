@@ -132,8 +132,9 @@ type Session struct {
 
 // Clean up all resources hold by the session.  As of now, the mpool
 func (ses *Session) Dispose() {
-	mpool.DeleteMPool(ses.Mp)
-	ses.Mp = nil
+	mp := ses.GetMemPool()
+	mpool.DeleteMPool(mp)
+	ses.SetMemPool(mp)
 }
 
 type errInfo struct {
@@ -236,6 +237,85 @@ func (bgs *BackgroundSession) Close() {
 		bgs.cancel()
 	}
 }
+
+func (ses *Session) GetIsInternal() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.IsInternal
+}
+
+func (ses *Session) SetMemPool(mp *mpool.MPool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Mp = mp
+}
+
+func (ses *Session) GetMemPool() *mpool.MPool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Mp
+}
+
+func (ses *Session) GetParameterUnit() *config.ParameterUnit {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Pu
+}
+
+func (ses *Session) GetData() [][]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Data
+}
+
+func (ses *Session) SetData(data [][]interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Data = data
+}
+
+func (ses *Session) AppendData(row []interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Data = append(ses.Data, row)
+}
+
+func (ses *Session) SetExportParam(ep *tree.ExportParam) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ep = ep
+}
+
+func (ses *Session) GetExportParam() *tree.ExportParam {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ep
+}
+
+func (ses *Session) SetShowStmtType(sst ShowStatementType) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.showStmtType = sst
+}
+
+func (ses *Session) GetShowStmtType() ShowStatementType {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.showStmtType
+}
+
+func (ses *Session) GetOutputCallback() func(interface{}, *batch.Batch) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.outputCallback
+}
+
+func (ses *Session) GetErrInfo() *errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.errInfo
+}
+
 func (ses *Session) GenNewStmtId() uint32 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -271,6 +351,12 @@ func (ses *Session) GetTimeZone() *time.Location {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.timeZone
+}
+
+func (ses *Session) SetCmd(cmd int) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Cmd = cmd
 }
 
 func (ses *Session) GetCmd() int {
@@ -746,11 +832,13 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses.Mp, ses.Pu, sqlForCheckTenant)
+	pu := ses.GetParameterUnit()
+	mp := ses.GetMemPool()
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -767,11 +855,11 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -813,7 +901,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if tenant.HasDefaultRole() {
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -824,7 +912,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -841,7 +929,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	} else {
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
 		if err != nil {
 			return nil, err
 		}

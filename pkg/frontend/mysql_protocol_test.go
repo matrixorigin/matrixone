@@ -987,7 +987,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	routine, ok := tRM.clients[rs]
 	tRM.rwlock.RUnlock()
 
-	pro := routine.protocol.(*MysqlProtocolImpl)
+	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
 	if !ok {
 		return moerr.NewInternalError("routine does not exist")
 	}

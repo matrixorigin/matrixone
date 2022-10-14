@@ -200,7 +200,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
-		_ = ses.txnHandler.GetTxn()
+		_ = ses.GetTxnHandler().GetTxn()
 
 		err = ses.SetAutocommit(true)
 		convey.So(err, convey.ShouldBeNil)

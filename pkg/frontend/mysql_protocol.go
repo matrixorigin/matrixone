@@ -1497,7 +1497,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.errInfo.push(errorCode, errorMessage)
+		mp.ses.GetErrInfo().push(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
@@ -1927,13 +1927,14 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 		return nil
 	}
 
+	cmd := mp.ses.GetCmd()
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
 	var err error = nil
 
 	binary := false
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	if mp.ses.Cmd == int(COM_STMT_EXECUTE) {
+	if cmd == int(COM_STMT_EXECUTE) {
 		binary = true
 	}
 
