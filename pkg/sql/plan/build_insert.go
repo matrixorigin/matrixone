@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -169,14 +167,6 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 					if err != nil {
 						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
 						return nil, err
-					}
-					// do null check for case 3, for more details, please refer to comments of Function InsertValues in dml.go : 90
-					if col.Default != nil && !col.Default.NullAbility {
-						if isExprC := resExpr.GetC(); isExprC != nil {
-							if isExprC.Isnull {
-								return nil, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", col.Name))
-							}
-						}
 					}
 					columns[idx].Column = append(columns[idx].Column, resExpr)
 				}

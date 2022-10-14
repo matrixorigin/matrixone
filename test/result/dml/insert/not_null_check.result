@@ -20,14 +20,10 @@ a    b
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
-create table t1(a int not null auto_increment,b int);
-insert into t1 values (null, 1);
-constraint vialation: Column 'a' cannot be null
-insert into t1(b) values (1);
-select * from t1;
-a    b
-1    1
-create table t2(a int, b int);
-insert into t2 values (null, null);
-insert into t1 select * from t2;
+create table t(a int not null, b int);
+insert into t values (1, 1);
+insert into t values (1, null);
+insert into t values (2, null);
+insert into t values (3, null);
+update t set a=null;
 constraint vialation: Column 'a' cannot be null
