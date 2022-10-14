@@ -66,7 +66,7 @@ type Request interface {
 	CreateDatabaseReq |
 		DropDatabaseReq |
 		CreateRelationReq |
-		DropRelationReq |
+		DropOrTruncateRelationReq |
 		WriteReq |
 		apipb.SyncLogTailReq
 }
@@ -75,8 +75,8 @@ type Response interface {
 	CreateDatabaseResp |
 		DropDatabaseResp |
 		CreateRelationResp |
-		DropRelationResp |
-		WriteResp |
+		DropOrTruncateRelationResp
+	WriteResp |
 		apipb.SyncLogTailResp
 }
 
@@ -96,6 +96,8 @@ type AccessInfo struct {
 type CreateDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
+	//Global unique, allocated by CN .
+	DatabaseId uint64
 }
 
 type CreateDatabaseResp struct {
@@ -117,6 +119,7 @@ type CreateRelationReq struct {
 	DatabaseID   uint64
 	DatabaseName string
 	Name         string
+	RelationId   uint64
 	Type         RelationType
 	Defs         []engine.TableDef
 }
@@ -125,16 +128,17 @@ type CreateRelationResp struct {
 	ID uint64
 }
 
-type DropRelationReq struct {
+type DropOrTruncateRelationReq struct {
 	AccessInfo   AccessInfo
+	IsDrop       bool
 	DatabaseID   uint64
 	DatabaseName string
 	Name         string
 	ID           uint64
+	NewId        uint64
 }
 
-type DropRelationResp struct {
-	ID uint64
+type DropOrTruncateRelationResp struct {
 }
 
 type EntryType int32

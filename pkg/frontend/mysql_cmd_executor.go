@@ -19,9 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -29,8 +27,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,21 +39,19 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -69,13 +68,10 @@ func parameterModificationInTxnErrorInfo() string {
 }
 
 var (
-	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
-	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
-	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
-	errorOnlyCreateStatement                       = goErrors.New(onlyCreateStatementErrorInfo())
-	errorAdministrativeStatement                   = goErrors.New("administrative command is unsupported in transactions")
-	errorParameterModificationInTxn                = goErrors.New(parameterModificationInTxnErrorInfo())
-	errorUnclassifiedStatement                     = goErrors.New("unclassified statement appears in uncommitted transaction")
+	errorOnlyCreateStatement        = moerr.NewInternalError(onlyCreateStatementErrorInfo())
+	errorAdministrativeStatement    = moerr.NewInternalError("administrative command is unsupported in transactions")
+	errorParameterModificationInTxn = moerr.NewInternalError(parameterModificationInTxnErrorInfo())
+	errorUnclassifiedStatement      = moerr.NewInternalError("unclassified statement appears in uncommitted transaction")
 )
 
 const (
@@ -119,13 +115,19 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 
 	cancelRequestFunc context.CancelFunc
+
+	mu sync.Mutex
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.ses = ses
 }
 
 func (mce *MysqlCmdExecutor) GetSession() *Session {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.ses
 }
 
@@ -140,14 +142,20 @@ func (mce *MysqlCmdExecutor) getNextProcessId() string {
 }
 
 func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.sqlCount += a
 }
 
 func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.routineMgr = mgr
 }
 
 func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.routineMgr
 }
 
@@ -282,7 +290,7 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if o.showStmtType == ShowColumns {
+		if o.showStmtType == ShowColumns || o.showStmtType == ShowTableStatus {
 			o.rowIdx = 0
 			return nil
 		}
@@ -353,7 +361,7 @@ func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
-		if colName == catalog.PhyAddrColumnName {
+		if colName == catalog.Row_ID {
 			continue
 		}
 		row[0] = colName
@@ -371,6 +379,30 @@ func handleShowColumns(ses *Session) error {
 		row[3] = d[3]
 		row[4] = "NULL"
 		row[5] = d[5]
+		ses.Mrs.AddRow(row)
+	}
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
+		logutil.Errorf("handleShowColumns error %v \n", err)
+		return err
+	}
+	return nil
+}
+
+func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
+	db, err := ses.GetStorage().Database(ses.requestCtx, stmt.DbName, proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	for _, row := range ses.Data {
+		tableName := string(row[0].([]byte))
+		r, err := db.Relation(ses.requestCtx, tableName)
+		if err != nil {
+			return err
+		}
+		row[3], err = r.Rows(ses.requestCtx)
+		if err != nil {
+			return err
+		}
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
@@ -459,7 +491,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowColumns {
+		if oq.showStmtType == ShowColumns || oq.showStmtType == ShowTableStatus {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.Data = append(ses.Data, row2)
@@ -1089,8 +1121,6 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		//TODO: set var needs to be moved into plan2
-		//convert into definite type
 		value, err = GetSimpleExprValue(assign.Value)
 		if err != nil {
 			return err
@@ -1925,7 +1955,10 @@ func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Se
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(stmt tree.Statement) error {
-	can := StatementCanBeExecutedInUncommittedTransaction(stmt)
+	can, err := StatementCanBeExecutedInUncommittedTransaction(mce.ses, stmt)
+	if err != nil {
+		return err
+	}
 	if !can {
 		//is ddl statement
 		if IsDDL(stmt) {
@@ -2158,6 +2191,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
+		case *tree.ShowTableStatus:
+			ses.showStmtType = ShowTableStatus
+			ses.Data = nil
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
@@ -2308,8 +2344,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			if ses.showStmtType == ShowColumns {
+			switch ses.showStmtType {
+			case ShowColumns:
 				if err = handleShowColumns(ses); err != nil {
+					goto handleFailed
+				}
+			case ShowTableStatus:
+				if err = handleShowTableStatus(ses, statement.(*tree.ShowTableStatus), proc); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2715,10 +2756,14 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 }
 
 func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	mce.cancelRequestFunc = cancelFunc
 }
 
 func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
 	return mce.cancelRequestFunc
 }
 
@@ -2741,37 +2786,52 @@ func (mce *MysqlCmdExecutor) Close() {
 /*
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
 */
-func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
+func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
-		return true
+		return true, nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
-		return true
+		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-		return true
+		return true, nil
 		//show
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowDatabases,
 		*tree.ShowVariables, *tree.ShowColumns, *tree.ShowErrors, *tree.ShowIndex, *tree.ShowProcessList,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
-		return true
+		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
-		return true
-	case *tree.PrepareStmt, *tree.PrepareString, *tree.Execute, *tree.Deallocate:
-		return true
+		return true, nil
+	case *tree.PrepareStmt:
+		return StatementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
+	case *tree.PrepareString:
+		preStmt, err := mysql.ParseOne(st.Sql)
+		if err != nil {
+			return false, err
+		}
+		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt)
+	case *tree.Execute:
+		preName := string(st.Name)
+		preStmt, err := ses.GetPrepareStmt(preName)
+		if err != nil {
+			return false, err
+		}
+		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
+	case *tree.Deallocate:
+		return true, nil
 	case *tree.Use:
 		/*
 			These statements can not be executed in an uncommitted transaction:
 				USE SECONDARY ROLE { ALL | NONE }
 				USE ROLE role;
 		*/
-		return !st.IsUseRole()
+		return !st.IsUseRole(), nil
 	}
 
-	return false
+	return false, nil
 }
 
 // IsDDL checks the statement is the DDL statement.
