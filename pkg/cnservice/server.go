@@ -216,7 +216,7 @@ func (s *service) initEngine(
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
-		if err := initTAE(cancelMoServerCtx, pu); err != nil {
+		if err := initTAE(cancelMoServerCtx, pu, s.cfg); err != nil {
 			return err
 		}
 

@@ -62,11 +62,11 @@ type LogServiceDriver struct {
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	clientpoolConfig := &clientConfig{
-		cancelDuration:         cfg.NewClientDuration,
-		recordSize:             cfg.NewRecordSize,
-		logserviceClientConfig: cfg.ClientConfig,
-		GetClientRetryTimeOut:  cfg.GetClientRetryTimeOut,
-		retryDuration:          cfg.RetryTimeout,
+		cancelDuration:        cfg.NewClientDuration,
+		recordSize:            cfg.NewRecordSize,
+		clientFactory:         cfg.ClientFactory,
+		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
+		retryDuration:         cfg.RetryTimeout,
 	}
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),

@@ -69,7 +69,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		Closed:      new(atomic.Value),
 	}
 
-	db.Wal = wal.NewDriver(dirname, WALDir, nil)
+	switch opts.LogStoreT {
+	case options.LogstoreBatchStore:
+		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
+	case options.LogstoreLogservice:
+		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
+	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
