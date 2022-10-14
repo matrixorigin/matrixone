@@ -34,7 +34,6 @@ role = "TP"
 
 [cn.Engine]
 type = "tae"
-logstore = "logservice"
 
 [observability]
 statusPort = 9001
