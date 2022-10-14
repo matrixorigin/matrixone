@@ -17,8 +17,7 @@ package mergelimit
 import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 type container struct {
-	state int
-	seen  uint64
+	seen uint64
 }
 
 type Argument struct {

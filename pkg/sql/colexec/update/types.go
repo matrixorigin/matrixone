@@ -31,7 +31,6 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	return
 }
 
 type UpdateCtx struct {
