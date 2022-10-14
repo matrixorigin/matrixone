@@ -312,11 +312,11 @@ func (c *testCluster) Start() error {
 	if err := c.startDNServices(); err != nil {
 		return err
 	}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel1()
+	c.WaitDNShardsReported(ctx1)
 
 	if c.opt.initial.cnServiceNum != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}

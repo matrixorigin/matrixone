@@ -137,7 +137,6 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 			time.Sleep(time.Second)
 			continue
 		}
-		time.Sleep(time.Second)
 		return nil
 	}
 }
