@@ -88,6 +88,10 @@ func NewSegmentTree(id uint64) *SegmentTree {
 	}
 }
 
+func (tree *Tree) Reset() {
+	tree.Tables = make(map[uint64]*TableTree)
+}
+
 func (tree *Tree) String() string {
 	visitor := new(stringVisitor)
 	_ = tree.Visit(visitor)

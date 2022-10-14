@@ -101,8 +101,13 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
 	// catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
-	catalogCheckpointer := newCatalogCheckpointer(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
-	gcCollector := newGarbageCollector(db, time.Duration(opts.CheckpointCfg.FlushInterval*10))
+	catalogCheckpointer := newCatalogCheckpointer(
+		db,
+		opts.CheckpointCfg.CatalogUnCkpLimit,
+		time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond)
+	gcCollector := newGarbageCollector(
+		db,
+		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
 	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(gcCollector)
 	scanner.RegisterOp(catalogCheckpointer)

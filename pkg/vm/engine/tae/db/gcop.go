@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -34,6 +36,13 @@ const (
 	GCType_Segment
 	GCType_Table
 	GCType_DB
+)
+
+const (
+	GCState_Active int32 = iota
+	GCState_Noop
+	GCState_Scheduled
+	GCState_ScheduledDone
 )
 
 // Destroy is not thread-safe
@@ -154,6 +163,13 @@ func newGCCandidates() *gcCandidates {
 	}
 }
 
+func (candidates *gcCandidates) Reset() {
+	candidates.blocks.Reset()
+	candidates.segments.Reset()
+	candidates.tables.Reset()
+	candidates.dbs = make(map[uint64]bool)
+}
+
 func (candidates *gcCandidates) IsEmpty() bool {
 	if !candidates.blocks.IsEmpty() {
 		return false
@@ -216,12 +232,15 @@ func (candidates *gcCandidates) String() string {
 type garbageCollector struct {
 	*catalog.LoopProcessor
 	db              *DB
+	state           atomic.Int32
+	loopState       int32
 	epoch           types.TS
 	runTs           types.TS
 	checkpointedLsn uint64
 	clock           *types.TsAlloctor
 	candidates      *gcCandidates
 	minInterval     time.Duration
+	lastRunTime     time.Time
 }
 
 func newGarbageCollector(
@@ -239,7 +258,22 @@ func newGarbageCollector(
 	ckp.TableFn = ckp.onTable
 	ckp.DatabaseFn = ckp.onDatabase
 	ckp.refreshEpoch()
+	ckp.ToActive()
 	return ckp
+}
+
+func (ckp *garbageCollector) ToActive() {
+	ckp.state.Store(GCState_Active)
+}
+
+func (ckp *garbageCollector) StopSchedule() {
+	ckp.state.Store(GCState_ScheduledDone)
+	logutil.Infof("Stop Schedule GCJOB")
+}
+
+func (ckp *garbageCollector) StartSchedule() {
+	ckp.state.Store(GCState_Scheduled)
+	logutil.Infof("Start Schedule GCJOB")
 }
 
 func (ckp *garbageCollector) refreshEpoch() {
@@ -247,18 +281,52 @@ func (ckp *garbageCollector) refreshEpoch() {
 }
 
 func (ckp *garbageCollector) PreExecute() (err error) {
-	ckp.runTs = ckp.clock.Alloc()
+	logutil.Infof("GCJOB INV=%d, ACT INV=%s", ckp.minInterval.Milliseconds()/2, time.Since(ckp.lastRunTime))
 	ckp.checkpointedLsn = ckp.db.Scheduler.GetCheckpointedLSN()
+	ckp.loopState = ckp.state.Load()
+	// If scheduled done, we need to refresh a new gc epoch
+	if ckp.loopState == GCState_ScheduledDone {
+		ckp.refreshEpoch()
+		ckp.ToActive()
+		ckp.loopState = GCState_Active
+	}
+	// If state is active and the interval since last run time is below a limit. Skip this loop
+	if ckp.canRun() && time.Since(ckp.lastRunTime) < ckp.minInterval/2 {
+		ckp.loopState = GCState_Noop
+		logutil.Infof("Start Noop GCJOB")
+	}
+	if ckp.canRun() {
+		ckp.refreshRunTime()
+		logutil.Infof("Start Run GCJOB")
+	}
 	return
 }
 
+func (ckp *garbageCollector) refreshRunTime() {
+	ckp.lastRunTime = time.Now()
+}
+
 func (ckp *garbageCollector) PostExecute() (err error) {
+	if !ckp.canRun() {
+		return
+	}
 	if ckp.candidates.IsEmpty() {
 		ckp.refreshEpoch()
 	} else {
+		logutil.Infof("Epoch: %s", ckp.epoch.ToString())
 		logutil.Info(ckp.candidates.String())
+		ckp.StartSchedule()
+		go func() {
+			defer ckp.StopSchedule()
+			time.Sleep(time.Millisecond * 500)
+			ckp.candidates.Reset()
+		}()
 	}
 	return
+}
+
+func (ckp *garbageCollector) canRun() bool {
+	return ckp.loopState == GCState_Active
 }
 
 func (ckp *garbageCollector) isEntryCheckpointed(entry catalog.BaseEntry) bool {
@@ -295,6 +363,9 @@ func (ckp *garbageCollector) isCandidate(
 }
 
 func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
+	if !ckp.canRun() {
+		return
+	}
 	var ts types.TS
 	var terminated bool
 	if ts, terminated = entry.GetTerminationTS(); terminated {
@@ -313,6 +384,9 @@ func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
 }
 
 func (ckp *garbageCollector) onSegment(entry *catalog.SegmentEntry) (err error) {
+	if !ckp.canRun() {
+		return moerr.GetOkStopCurrRecur()
+	}
 	var ts types.TS
 	var terminated bool
 	if ts, terminated = entry.GetTerminationTS(); terminated {
@@ -330,6 +404,9 @@ func (ckp *garbageCollector) onSegment(entry *catalog.SegmentEntry) (err error) 
 }
 
 func (ckp *garbageCollector) onTable(entry *catalog.TableEntry) (err error) {
+	if !ckp.canRun() {
+		return moerr.GetOkStopCurrRecur()
+	}
 	var ts types.TS
 	var terminated bool
 	if ts, terminated = entry.GetTerminationTS(); terminated {
@@ -344,6 +421,9 @@ func (ckp *garbageCollector) onTable(entry *catalog.TableEntry) (err error) {
 }
 
 func (ckp *garbageCollector) onDatabase(entry *catalog.DBEntry) (err error) {
+	if !ckp.canRun() {
+		return moerr.GetOkStopCurrRecur()
+	}
 	if ckp.isCandidate(entry.DBBaseEntry, false, entry.RWMutex) {
 		ckp.candidates.AddDB(entry.ID)
 	}
