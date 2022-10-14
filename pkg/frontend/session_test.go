@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"testing"
 	"time"
 
@@ -31,50 +32,48 @@ import (
 )
 
 func TestTxnHandler_NewTxn(t *testing.T) {
-	//TODO:fix data race
-	//convey.Convey("new txn", t, func() {
-	//	ctrl := gomock.NewController(t)
-	//	defer ctrl.Finish()
-	//
-	//	ctx := context.TODO()
-	//	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	//	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-	//	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	//	cnt := 0
-	//	txnClient.EXPECT().New().DoAndReturn(
-	//		func(ootions ...client.TxnOption) (client.TxnOperator, error) {
-	//			cnt++
-	//			if cnt%2 != 0 {
-	//				return txnOperator, nil
-	//			} else {
-	//				return nil, moerr.NewInternalError("startTxn failed")
-	//			}
-	//		}).AnyTimes()
-	//	eng := mock_frontend.NewMockEngine(ctrl)
-	//	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Hints().Return(engine.Hints{
-	//		CommitOrRollbackTimeout: time.Second,
-	//	}).AnyTimes()
-	//
-	//	txn := InitTxnHandler(eng, txnClient)
-	//	txn.ses = &Session{
-	//		requestCtx: ctx,
-	//	}
-	//	err := txn.NewTxn()
-	//	convey.So(err, convey.ShouldBeNil)
-	//	err = txn.NewTxn()
-	//	convey.So(err, convey.ShouldNotBeNil)
-	//	err = txn.NewTxn()
-	//	convey.So(err, convey.ShouldBeNil)
-	//})
+	convey.Convey("new txn", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.TODO()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		cnt := 0
+		txnClient.EXPECT().New().DoAndReturn(
+			func(ootions ...client.TxnOption) (client.TxnOperator, error) {
+				cnt++
+				if cnt%2 != 0 {
+					return txnOperator, nil
+				} else {
+					return nil, moerr.NewInternalError("startTxn failed")
+				}
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		txn := InitTxnHandler(eng, txnClient)
+		txn.ses = &Session{
+			requestCtx: ctx,
+		}
+		err := txn.NewTxn()
+		convey.So(err, convey.ShouldBeNil)
+		err = txn.NewTxn()
+		convey.So(err, convey.ShouldNotBeNil)
+		err = txn.NewTxn()
+		convey.So(err, convey.ShouldBeNil)
+	})
 }
 
-/*
 func TestTxnHandler_CommitTxn(t *testing.T) {
 	convey.Convey("commit txn", t, func() {
 		ctrl := gomock.NewController(t)
@@ -118,7 +117,6 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
-*/
 
 func TestTxnHandler_RollbackTxn(t *testing.T) {
 	convey.Convey("rollback txn", t, func() {
@@ -164,7 +162,6 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 	})
 }
 
-/*
 func TestSession_TxnBegin(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -177,7 +174,11 @@ func TestSession_TxnBegin(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		session := NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
+		eng.EXPECT().Hints().Return(hints).AnyTimes()
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -199,7 +200,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
-		_ = ses.txnHandler.GetTxn()
+		_ = ses.GetTxnHandler().GetTxn()
 
 		err = ses.SetAutocommit(true)
 		convey.So(err, convey.ShouldBeNil)
@@ -208,7 +209,6 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
-*/
 
 func TestVariables(t *testing.T) {
 	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
@@ -236,7 +236,7 @@ func TestVariables(t *testing.T) {
 		v1_val, err := ses.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
-		v1_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, false)
+		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
@@ -244,7 +244,7 @@ func TestVariables(t *testing.T) {
 		v2_val, err := existSes.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
-		v2_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, false)
+		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
@@ -252,7 +252,7 @@ func TestVariables(t *testing.T) {
 		v3_val, err := newSesAfterSession.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
-		v3_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, false)
+		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
@@ -260,7 +260,7 @@ func TestVariables(t *testing.T) {
 		v4_val, err := ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(saneSesGlobalWant4, convey.ShouldEqual, v4_val)
-		v4_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, true)
+		v4_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v4_ctx_val, convey.ShouldEqual, v4_val)
 
@@ -268,7 +268,7 @@ func TestVariables(t *testing.T) {
 		v5_val, err := existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesGlobalWant5, convey.ShouldEqual, v5_val)
-		v5_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, true)
+		v5_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v5_ctx_val, convey.ShouldEqual, v5_val)
 
@@ -276,7 +276,7 @@ func TestVariables(t *testing.T) {
 		v6_val, err := newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesGlobalWant6, convey.ShouldEqual, v6_val)
-		v6_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, true)
+		v6_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v6_ctx_val, convey.ShouldEqual, v6_val)
 	}
@@ -289,7 +289,7 @@ func TestVariables(t *testing.T) {
 		v1_val, err := ses.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
-		v1_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, false)
+		v1_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
@@ -297,7 +297,7 @@ func TestVariables(t *testing.T) {
 		v2_val, err := existSes.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
-		v2_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, false)
+		v2_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
@@ -305,7 +305,7 @@ func TestVariables(t *testing.T) {
 		v3_val, err := newSesAfterSession.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
-		v3_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, false)
+		v3_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
@@ -313,7 +313,7 @@ func TestVariables(t *testing.T) {
 		_, err = ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
-		_, err = ses.txnCompileCtx.ResolveVariable(v, true, true)
+		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 
@@ -321,7 +321,7 @@ func TestVariables(t *testing.T) {
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
-		_, err = existSes.txnCompileCtx.ResolveVariable(v, true, true)
+		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 
@@ -329,7 +329,7 @@ func TestVariables(t *testing.T) {
 		_, err = newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
-		_, err = newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, true)
+		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 	}
@@ -538,7 +538,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 
 		ses := genSession(ctrl, pu, gSysVars)
 
-		tcc := ses.GetTxnCompilerContext()
+		tcc := ses.GetTxnCompileCtx()
 		defDBName := tcc.DefaultDatabase()
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)

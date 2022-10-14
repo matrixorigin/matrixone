@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -55,6 +56,7 @@ type TxnHandler struct {
 	txnClient TxnClient
 	ses       *Session
 	txn       TxnOperator
+	mu        sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -125,12 +127,15 @@ type Session struct {
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
 	fromRealUser bool
+
+	mu sync.Mutex
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
 func (ses *Session) Dispose() {
-	mpool.DeleteMPool(ses.Mp)
-	ses.Mp = nil
+	mp := ses.GetMemPool()
+	mpool.DeleteMPool(mp)
+	ses.SetMemPool(mp)
 }
 
 type errInfo struct {
@@ -233,66 +238,187 @@ func (bgs *BackgroundSession) Close() {
 		bgs.cancel()
 	}
 }
+
+func (ses *Session) GetIsInternal() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.IsInternal
+}
+
+func (ses *Session) SetMemPool(mp *mpool.MPool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Mp = mp
+}
+
+func (ses *Session) GetMemPool() *mpool.MPool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Mp
+}
+
+func (ses *Session) GetParameterUnit() *config.ParameterUnit {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Pu
+}
+
+func (ses *Session) GetData() [][]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Data
+}
+
+func (ses *Session) SetData(data [][]interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Data = data
+}
+
+func (ses *Session) AppendData(row []interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Data = append(ses.Data, row)
+}
+
+func (ses *Session) SetExportParam(ep *tree.ExportParam) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ep = ep
+}
+
+func (ses *Session) GetExportParam() *tree.ExportParam {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ep
+}
+
+func (ses *Session) SetShowStmtType(sst ShowStatementType) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.showStmtType = sst
+}
+
+func (ses *Session) GetShowStmtType() ShowStatementType {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.showStmtType
+}
+
+func (ses *Session) GetOutputCallback() func(interface{}, *batch.Batch) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.outputCallback
+}
+
+func (ses *Session) GetErrInfo() *errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.errInfo
+}
+
 func (ses *Session) GenNewStmtId() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.lastStmtId = ses.lastStmtId + 1
 	return ses.lastStmtId
 }
 
 func (ses *Session) GetLastStmtId() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.lastStmtId
 }
 
 func (ses *Session) SetRequestContext(reqCtx context.Context) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.requestCtx = reqCtx
 }
 
 func (ses *Session) GetRequestContext() context.Context {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.requestCtx
 }
 
 func (ses *Session) SetTimeZone(loc *time.Location) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.timeZone = loc
 }
 
 func (ses *Session) GetTimeZone() *time.Location {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.timeZone
 }
 
+func (ses *Session) SetCmd(cmd int) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.Cmd = cmd
+}
+
+func (ses *Session) GetCmd() int {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.Cmd
+}
+
 func (ses *Session) SetMysqlResultSet(mrs *MysqlResultSet) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.Mrs = mrs
 }
 
 func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.Mrs
 }
 
 func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.allResultSet = append(ses.allResultSet, mrs)
 }
 
 func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.allResultSet
 }
 
 func (ses *Session) ClearAllMysqlResultSet() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if ses.allResultSet != nil {
 		ses.allResultSet = ses.allResultSet[:0]
 	}
 }
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.tenant
 }
 
 func (ses *Session) GetUUID() []byte {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.tenant = ti
 }
 
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
 			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
@@ -303,6 +429,8 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 }
 
 func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
@@ -310,18 +438,45 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	delete(ses.prepareStmts, name)
+}
+
+func (ses *Session) SetSysVar(name string, value interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.sysVars[name] = value
+}
+
+func (ses *Session) GetSysVar(name string) interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.sysVars[name]
+}
+
+func (ses *Session) GetSysVars() map[string]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.sysVars
+}
+
+func (ses *Session) GetGlobalSysVars() *GlobalSystemVariables {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.gSysVars
 }
 
 // SetGlobalVar sets the value of system variable in global.
 // used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
-	return ses.gSysVars.SetGlobalSysVar(name, value)
+	return ses.GetGlobalSysVars().SetGlobalSysVar(name, value)
 }
 
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
-	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, errorSystemVariableSessionEmpty
@@ -332,12 +487,15 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.txnCompileCtx
 }
 
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
-	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
 		}
@@ -352,9 +510,9 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		}
 
 		if def.UpdateSessVar == nil {
-			ses.sysVars[def.GetName()] = cv
+			ses.SetSysVar(def.GetName(), cv)
 		} else {
-			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
 		}
 	} else {
 		return errorSystemVariableDoesNotExist
@@ -364,18 +522,21 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 
 // GetSessionVar gets this value of the system variable in session
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
-	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, gVal, ok := gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
 		if def.GetScope() == ScopeGlobal {
 			return gVal, nil
 		}
-		return ses.sysVars[ciname], nil
+		return ses.GetSysVar(ciname), nil
 	} else {
 		return nil, errorSystemVariableDoesNotExist
 	}
 }
 
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	cp := make(map[string]interface{})
 	for k, v := range ses.sysVars {
 		cp[k] = v
@@ -385,12 +546,16 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = value
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
 func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
 	if !ok {
 		return SystemVariableNullType{}, nil, nil
@@ -399,37 +564,43 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interfac
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.txnHandler
 }
 
-func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
-	return ses.txnCompileCtx
-}
-
 func (ses *Session) SetSql(sql string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.sql = sql
 }
 
 func (ses *Session) GetSql() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.sql
 }
 
 func (ses *Session) IsTaeEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	_, ok := ses.storage.(moengine.TxnEngine)
 	return ok
 }
 
 func (ses *Session) GetStorage() engine.Engine {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.storage
 }
 
 func (ses *Session) GetDatabaseName() string {
-	return ses.protocol.GetDatabaseName()
+	return ses.GetMysqlProtocol().GetDatabaseName()
 }
 
 func (ses *Session) SetDatabaseName(db string) {
-	ses.protocol.SetDatabaseName(db)
-	ses.txnCompileCtx.SetDatabase(db)
+	ses.GetMysqlProtocol().SetDatabaseName(db)
+	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
 func (ses *Session) DatabaseNameIsEmpty() bool {
@@ -437,38 +608,50 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 }
 
 func (ses *Session) GetUserName() string {
-	return ses.protocol.GetUserName()
+	return ses.GetMysqlProtocol().GetUserName()
 }
 
 func (ses *Session) SetUserName(uname string) {
-	ses.protocol.SetUserName(uname)
+	ses.GetMysqlProtocol().SetUserName(uname)
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	return ses.protocol.ConnectionID()
+	return ses.GetMysqlProtocol().ConnectionID()
 }
 
 func (ses *Session) SetOptionBits(bit uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.optionBits |= bit
 }
 
 func (ses *Session) ClearOptionBits(bit uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.optionBits &= ^bit
 }
 
 func (ses *Session) OptionBitsIsSet(bit uint32) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.optionBits&bit != 0
 }
 
 func (ses *Session) SetServerStatus(bit uint16) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.serverStatus |= bit
 }
 
 func (ses *Session) ClearServerStatus(bit uint16) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.serverStatus &= ^bit
 }
 
 func (ses *Session) ServerStatusIsSet(bit uint16) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.serverStatus&bit != 0
 }
 
@@ -524,8 +707,8 @@ func (ses *Session) TxnStart() error {
 	if ses.InMultiStmtTransactionMode() {
 		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	}
-	if !ses.txnHandler.IsValidTxn() {
-		err = ses.txnHandler.NewTxn()
+	if !ses.GetTxnHandler().IsValidTxn() {
+		err = ses.GetTxnHandler().NewTxn()
 	}
 	return err
 }
@@ -545,7 +728,7 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
-		err = ses.txnHandler.CommitTxn()
+		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
 	}
@@ -567,7 +750,7 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
-		err = ses.txnHandler.RollbackTxn()
+		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
 	}
@@ -582,7 +765,7 @@ func (ses *Session) TxnBegin() error {
 	var err error
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		err = ses.txnHandler.CommitTxn()
+		err = ses.GetTxnHandler().CommitTxn()
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
@@ -590,7 +773,7 @@ func (ses *Session) TxnBegin() error {
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
-	err = ses.txnHandler.NewTxn()
+	err = ses.GetTxnHandler().NewTxn()
 	return err
 }
 
@@ -598,7 +781,7 @@ func (ses *Session) TxnBegin() error {
 func (ses *Session) TxnCommit() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
-	err = ses.txnHandler.CommitTxn()
+	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
@@ -608,7 +791,7 @@ func (ses *Session) TxnCommit() error {
 func (ses *Session) TxnRollback() error {
 	var err error
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
-	err = ses.txnHandler.RollbackTxn()
+	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
 }
@@ -620,7 +803,7 @@ func (ses *Session) InActiveTransaction() bool {
 	if ses.InActiveMultiStmtTransaction() {
 		return true
 	} else {
-		return ses.txnHandler.IsValidTxn()
+		return ses.GetTxnHandler().IsValidTxn()
 	}
 }
 
@@ -645,6 +828,8 @@ func (ses *Session) SetAutocommit(on bool) error {
 }
 
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.outputCallback = callback
 }
 
@@ -667,11 +852,13 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses.Mp, ses.Pu, sqlForCheckTenant)
+	pu := ses.GetParameterUnit()
+	mp := ses.GetMemPool()
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -688,11 +875,11 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForPasswordOfUser)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -734,7 +921,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	if tenant.HasDefaultRole() {
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -745,7 +932,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -762,7 +949,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	} else {
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.Mp, ses.Pu, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -783,23 +970,54 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 }
 
 func (ses *Session) GetPrivilege() *privilege {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.priv
 }
 
 func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.priv = priv
 }
 
 func (ses *Session) SetFromRealUser(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.fromRealUser = b
 }
 
 func (ses *Session) GetFromRealUser() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.fromRealUser
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	th.ses = ses
+}
+
+func (th *TxnHandler) GetTxnClient() TxnClient {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txnClient
+}
+
+// TxnClientNew creates a new txn
+func (th *TxnHandler) TxnClientNew() error {
+	var err error
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.txnClient == nil {
+		panic("must set txn client")
+	}
+	th.txn, err = th.txnClient.New()
+	if err != nil {
+		return err
+	}
+	return err
 }
 
 // NewTxn commits the old transaction if it existed.
@@ -813,51 +1031,67 @@ func (th *TxnHandler) NewTxn() error {
 		}
 	}
 	th.SetInvalid()
-	if th.txnClient == nil {
-		panic("must set txn client")
-	}
-	th.txn, err = th.txnClient.New()
+	err = th.TxnClientNew()
 	if err != nil {
 		return err
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	return th.storage.New(ctx, th.txn)
+	return storage.New(ctx, th.GetTxnOperator())
 }
 
 // IsValidTxn checks the transaction is true or not.
 func (th *TxnHandler) IsValidTxn() bool {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn != nil
 }
 
 func (th *TxnHandler) SetInvalid() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	th.txn = nil
+}
+
+func (th *TxnHandler) GetTxnOperator() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txn
+}
+
+func (th *TxnHandler) GetSession() *Session {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.ses
 }
 
 func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	if err := th.storage.Commit(ctx, th.txn); err != nil {
+	txnOp := th.GetTxnOperator()
+	if err := storage.Commit(ctx, txnOp); err != nil {
 		return err
 	}
-	err := th.txn.Commit(ctx)
+	err := txnOp.Commit(ctx)
 	th.SetInvalid()
 	return err
 }
@@ -866,33 +1100,37 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.ses.GetRequestContext()
+	ctx := th.GetSession().GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	storage := th.GetStorage()
 	ctx, cancel := context.WithTimeout(
 		ctx,
-		th.storage.Hints().CommitOrRollbackTimeout,
+		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	if err := th.storage.Rollback(ctx, th.txn); err != nil {
+	txnOp := th.GetTxnOperator()
+	if err := storage.Rollback(ctx, txnOp); err != nil {
 		return err
 	}
-	err := th.txn.Rollback(ctx)
+	err := txnOp.Rollback(ctx)
 	th.SetInvalid()
 	return err
 }
 
 func (th *TxnHandler) GetStorage() engine.Engine {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.storage
 }
 
 func (th *TxnHandler) GetTxn() TxnOperator {
-	err := th.ses.TxnStart()
+	err := th.GetSession().TxnStart()
 	if err != nil {
 		panic(err)
 	}
-	return th.txn
+	return th.GetTxnOperator()
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -910,36 +1148,63 @@ type TxnCompilerContext struct {
 	QryTyp     QueryType
 	txnHandler *TxnHandler
 	ses        *Session
+	mu         sync.Mutex
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
 }
 
+func (tcc *TxnCompilerContext) GetQueryType() QueryType {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.QryTyp
+}
+
 func (tcc *TxnCompilerContext) SetSession(ses *Session) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.ses = ses
 }
 
+func (tcc *TxnCompilerContext) GetSession() *Session {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses
+}
+
+func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.txnHandler
+}
+
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tcc.dbName = db
 }
 
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	return tcc.dbName
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
-	return tcc.ses.GetSql()
+	return tcc.GetSession().GetSql()
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.txnHandler.GetStorage().Database(tcc.ses.GetRequestContext(), name, tcc.txnHandler.GetTxn())
+	_, err = tcc.GetTxnHandler().GetStorage().Database(tcc.GetSession().GetRequestContext(), name, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v failed. error %v", name, err)
 		return false
@@ -954,9 +1219,9 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
@@ -997,7 +1262,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
@@ -1091,7 +1356,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		})
 	}
 
-	if tcc.QryTyp != TXN_DEFAULT {
+	if tcc.GetQueryType() != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
 		if err != nil {
 			return nil, nil
@@ -1129,18 +1394,18 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.ses.GetGlobalVar(varName)
+			return tcc.GetSession().GetGlobalVar(varName)
 		} else {
-			return tcc.ses.GetSessionVar(varName)
+			return tcc.GetSession().GetSessionVar(varName)
 		}
 	} else {
-		_, val, err := tcc.ses.GetUserDefinedVar(varName)
+		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
 		return val, err
 	}
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -1178,7 +1443,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	ctx := tcc.ses.GetRequestContext()
+	ctx := tcc.GetSession().GetRequestContext()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
@@ -1223,7 +1488,7 @@ func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *
 	if err != nil {
 		return
 	}
-	rows, err := table.Rows(tcc.ses.GetRequestContext())
+	rows, err := table.Rows(tcc.GetSession().GetRequestContext())
 	if err != nil {
 		return
 	}
