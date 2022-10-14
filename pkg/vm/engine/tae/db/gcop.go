@@ -15,6 +15,7 @@
 package db
 
 import (
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,44 +138,112 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 
 type garbageCollector struct {
 	*catalog.LoopProcessor
-	db          *DB
-	epoch       types.TS
-	runTs       types.TS
-	clock       *types.TsAlloctor
-	maxInterval time.Duration
-	// lastScheduleTime time.Time
+	db              *DB
+	epoch           types.TS
+	runTs           types.TS
+	checkpointedLsn uint64
+	clock           *types.TsAlloctor
+	tree            *common.Tree
+	minInterval     time.Duration
 }
 
 func newGarbageCollector(
 	db *DB,
-	maxInterval time.Duration) *garbageCollector {
+	minInterval time.Duration) *garbageCollector {
 	ckp := &garbageCollector{
 		LoopProcessor: new(catalog.LoopProcessor),
 		db:            db,
-		maxInterval:   maxInterval,
+		minInterval:   minInterval,
 		clock:         types.NewTsAlloctor(db.Opts.Clock),
+		tree:          common.NewTree(),
 	}
 	ckp.BlockFn = ckp.onBlock
 	ckp.SegmentFn = ckp.onSegment
 	ckp.TableFn = ckp.onTable
 	ckp.DatabaseFn = ckp.onDatabase
+	ckp.epoch = types.BuildTS(time.Now().UTC().UnixNano()-minInterval.Nanoseconds(), 0)
 	return ckp
 }
 
 func (ckp *garbageCollector) PreExecute() (err error) {
 	ckp.runTs = ckp.clock.Alloc()
+	ckp.checkpointedLsn = ckp.db.Scheduler.GetCheckpointedLSN()
+	// logutil.Infof("epoch=%s, lsn=%d", ckp.epoch.ToString(), ckp.checkpointedLsn)
 	return
 }
 
 func (ckp *garbageCollector) PostExecute() (err error) {
+	if ckp.tree.IsEmpty() {
+		ckp.epoch = types.BuildTS(time.Now().UTC().UnixNano()-ckp.minInterval.Nanoseconds(), 0)
+	}
+	return
+}
+
+func (ckp *garbageCollector) isEntryCheckpointed(entry catalog.BaseEntry) bool {
+	node := entry.GetLatestNodeLocked()
+	index := node.GetLogIndex()
+	if index == nil {
+		return false
+	}
+	if index.LSN <= ckp.checkpointedLsn {
+		return true
+	}
+	return false
+}
+
+func (ckp *garbageCollector) isCandidate(
+	entry catalog.BaseEntry,
+	terminated bool,
+	rwlocker *sync.RWMutex) (ok bool) {
+	entry.RLock()
+	defer entry.RUnlock()
+	ok = false
+	if terminated {
+		ok = ckp.isEntryCheckpointed(entry)
+		return
+	}
+	if !entry.HasDropCommittedLocked() {
+		return
+	}
+	if visible, _ := entry.IsVisible(ckp.epoch, rwlocker); visible {
+		return
+	}
+	ok = ckp.isEntryCheckpointed(entry)
 	return
 }
 
 func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
+	var ts types.TS
+	var terminated bool
+	if ts, terminated = entry.GetTerminationTS(); terminated {
+		if ts.Greater(ckp.epoch) {
+			terminated = false
+		}
+	}
+	if ckp.isCandidate(entry.MetaBaseEntry, terminated, entry.RWMutex) {
+		id := entry.AsCommonID()
+		ckp.tree.AddBlock(entry.GetSegment().GetTable().GetDB().ID,
+			id.TableID,
+			id.SegmentID,
+			id.BlockID)
+	}
 	return
 }
 
 func (ckp *garbageCollector) onSegment(entry *catalog.SegmentEntry) (err error) {
+	// var ts types.TS
+	// var terminated bool
+	// if ts, terminated = entry.TryGetTerminatedTS(); terminated {
+	// 	if ts.Greater(ckp.epoch) {
+	// 		terminated = false
+	// 	}
+	// }
+	// if ckp.isCandidate(entry.MetaBaseEntry, terminated, entry.RWMutex) {
+	// 	id := entry.AsCommonID()
+	// 	ckp.tree.AddSegment(entry.GetTable().GetDB().ID,
+	// 		id.TableID,
+	// 		id.SegmentID)
+	// }
 	return
 }
 

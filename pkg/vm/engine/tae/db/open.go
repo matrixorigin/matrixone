@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -103,8 +102,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	calibrationOp := newCalibrationOp(db)
 	// catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
 	catalogCheckpointer := newCatalogCheckpointer(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
+	gcCollector := newGarbageCollector(db, time.Duration(opts.CheckpointCfg.FlushInterval*10))
 	scanner.RegisterOp(calibrationOp)
-	// scanner.RegisterOp(catalogMonotor)
+	scanner.RegisterOp(gcCollector)
 	scanner.RegisterOp(catalogCheckpointer)
 
 	// Start workers
@@ -119,7 +119,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			if dirtyTree.IsEmpty() {
 				return
 			}
-			logutil.Infof(dirtyTree.String())
+			// logutil.Infof(dirtyTree.String())
 		}, nil)
 		hb.Start()
 		<-ctx.Done()
