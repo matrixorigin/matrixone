@@ -61,7 +61,6 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	}
 	_, ok := db.txn.createTableMap[tbl.tableId]
 	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok)
-
 	if err != nil {
 		return nil, err
 	}
