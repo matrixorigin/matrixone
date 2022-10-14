@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func startCluster(stopper *stopper.Stopper) error {
@@ -119,6 +120,25 @@ func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeep
 			continue
 		}
 		return client, err
+	}
+}
+
+func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	defer cancel()
+
+	// wait HAKeeper running
+	for {
+		state, err := client.GetClusterState(ctx)
+		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
+			state.State != logpb.HAKeeperRunning {
+			// not ready
+			logutil.Info("hakeeper not ready, retry")
+			time.Sleep(time.Second)
+			continue
+		}
+		time.Sleep(time.Second)
+		return nil
 	}
 }
 

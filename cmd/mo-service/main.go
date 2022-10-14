@@ -135,6 +135,9 @@ func startCNService(
 	if err != nil {
 		return err
 	}
+	if err := waitHAKeeperRunning(client); err != nil {
+		return err
+	}
 	if err := waitAnyShardReady(client); err != nil {
 		return err
 	}
