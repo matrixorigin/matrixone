@@ -58,13 +58,13 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 		meta:      meta,
 		scheduler: scheduler,
 	}
-	dbName := meta.GetSegment().GetTable().GetDB().GetName()
-	database, err := txn.GetDatabase(dbName)
+	dbId := meta.GetSegment().GetTable().GetDB().GetID()
+	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	relName := meta.GetSchema().Name
-	rel, err := database.GetRelationByName(relName)
+	tableId := meta.GetSegment().GetTable().GetID()
+	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return
 	}
