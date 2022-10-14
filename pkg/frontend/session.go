@@ -442,19 +442,40 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	delete(ses.prepareStmts, name)
 }
 
+func (ses *Session) SetSysVar(name string, value interface{}) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.sysVars[name] = value
+}
+
+func (ses *Session) GetSysVar(name string) interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.sysVars[name]
+}
+
+func (ses *Session) GetSysVars() map[string]interface{} {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.sysVars
+}
+
+func (ses *Session) GetGlobalSysVars() *GlobalSystemVariables {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.gSysVars
+}
+
 // SetGlobalVar sets the value of system variable in global.
 // used by SET GLOBAL
 func (ses *Session) SetGlobalVar(name string, value interface{}) error {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.gSysVars.SetGlobalSysVar(name, value)
+	return ses.GetGlobalSysVars().SetGlobalSysVar(name, value)
 }
 
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, val, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, errorSystemVariableSessionEmpty
@@ -472,9 +493,8 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
 		}
@@ -489,9 +509,9 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		}
 
 		if def.UpdateSessVar == nil {
-			ses.sysVars[def.GetName()] = cv
+			ses.SetSysVar(def.GetName(), cv)
 		} else {
-			return def.UpdateSessVar(ses, ses.sysVars, def.GetName(), cv)
+			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
 		}
 	} else {
 		return errorSystemVariableDoesNotExist
@@ -501,14 +521,13 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 
 // GetSessionVar gets this value of the system variable in session
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, gVal, ok := gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
 		if def.GetScope() == ScopeGlobal {
 			return gVal, nil
 		}
-		return ses.sysVars[ciname], nil
+		return ses.GetSysVar(ciname), nil
 	} else {
 		return nil, errorSystemVariableDoesNotExist
 	}
