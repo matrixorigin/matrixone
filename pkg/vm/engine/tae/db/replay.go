@@ -18,12 +18,10 @@ import (
 	"bytes"
 
 	//"fmt"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"path"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -83,26 +81,6 @@ func (replayer *Replayer) PreReplayWal() {
 			panic(err)
 		}
 	}
-}
-
-func (replayer *Replayer) scanFiles() map[uint64]string {
-	files := make(map[uint64]string)
-	infos, err := os.ReadDir(replayer.db.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, info := range infos {
-		if info.IsDir() {
-			continue
-		}
-		name := info.Name()
-		id, err := replayer.db.FileFactory.DecodeName(name)
-		if err != nil {
-			continue
-		}
-		files[id] = path.Join(replayer.db.Dir, name)
-	}
-	return files
 }
 
 func (replayer *Replayer) Replay() {
