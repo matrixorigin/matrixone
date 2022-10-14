@@ -195,9 +195,11 @@ func (p *Partition) NewReader(
 		if entry.typ == INSERT {
 			inserts = append(inserts, entry.bat)
 		} else {
-			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				deletes[v] = 0
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
 			}
 		}
 	}
