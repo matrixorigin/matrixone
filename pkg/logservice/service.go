@@ -386,7 +386,10 @@ func (s *Service) handleDNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
-		resp.IsHAKeeper = true
+		state, err := s.store.getCheckerState()
+		if err == nil && state.State == pb.HAKeeperRunning {
+			resp.IsHAKeeper = true
+		}
 	}
 	return resp
 }
