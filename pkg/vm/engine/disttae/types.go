@@ -100,9 +100,10 @@ type Engine struct {
 // DB is implementataion of cache
 type DB struct {
 	sync.RWMutex
-	dnMap  map[string]int
-	cli    client.TxnClient
-	tables map[[2]uint64]Partitions
+	dnMap      map[string]int
+	cli        client.TxnClient
+	metaTables map[string]Partitions
+	tables     map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
@@ -143,11 +144,13 @@ type Transaction struct {
 	rowId [2]uint64
 
 	// use to cache table
-	tableMap map[tableKey]*table
+	tableMap *sync.Map
 	// use to cache database
-	databaseMap map[databaseKey]*database
+	databaseMap *sync.Map
 
 	createTableMap map[uint64]uint8
+
+	deleteMetaTables []string
 }
 
 // Entry represents a delete/insert
@@ -188,7 +191,6 @@ type databaseKey struct {
 
 // block list information of table
 type tableMeta struct {
-	tableId       uint64
 	tableName     string
 	blocks        [][]BlockMeta
 	modifedBlocks [][]BlockMeta
@@ -206,6 +208,12 @@ type table struct {
 	defs       []engine.TableDef
 	tableDef   *plan.TableDef
 	proc       *process.Process
+
+	viewdef   string
+	comment   string
+	partition string
+	relKind   string
+	createSql string
 }
 
 type column struct {
@@ -226,6 +234,8 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+	hasUpdate       int8
+	updateExpr      []byte
 }
 
 type blockReader struct {

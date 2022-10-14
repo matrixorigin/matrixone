@@ -21,6 +21,8 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -197,9 +199,28 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_NullAbility:
 			colData.Append(bool2i8(colDef.NullAbility))
 		case pkgcatalog.SystemColAttr_HasExpr:
-			colData.Append(bool2i8(len(colDef.Default.Expr) > 0))
+			colData.Append(bool2i8(true)) // @imlinjunhong says always has Default
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			colData.Append(colDef.Default.Expr)
+			expr := &plan.Expr{}
+			if colDef.Default.Expr != nil {
+				if err := expr.Unmarshal(colDef.Default.Expr); err != nil {
+					logutil.Warnf("deserialze default expr err: %v", err)
+					expr = nil
+				}
+			} else {
+				expr = nil
+			}
+			pDefault := &plan.Default{
+				NullAbility:  colDef.Default.NullAbility,
+				OriginString: colDef.Default.OriginString,
+				Expr:         expr,
+			}
+			if val, err := types.Encode(pDefault); err == nil {
+				colData.Append(val)
+			} else {
+				logutil.Warnf("encode plan default expr err: %v", err)
+				colData.Append([]byte(""))
+			}
 		case pkgcatalog.SystemColAttr_IsDropped:
 			colData.Append(int8(0))
 		case pkgcatalog.SystemColAttr_IsHidden:
@@ -215,8 +236,25 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 			colData.Append(bool2i8(colDef.AutoIncrement))
 		case pkgcatalog.SystemColAttr_Comment:
 			colData.Append([]byte(colDef.Comment))
+		case pkgcatalog.SystemColAttr_HasUpdate:
+			colData.Append(bool2i8(colDef.OnUpdate != nil))
+		case pkgcatalog.SystemColAttr_Update:
+			if colDef.OnUpdate != nil {
+				update := &plan.Expr{}
+				var err error
+				// refer to pkg/vm/engine/tae/moengine/helper.go:89
+				// refer to pkg/txn/storage/memorystorage/catalog.go:288
+				if err = update.Unmarshal(colDef.OnUpdate); err == nil {
+					if val, err := types.Encode(update); err == nil {
+						colData.Append(val)
+						continue
+					}
+				}
+				logutil.Warnf("(de)serialize Update expr err: %v", err)
+			}
+			colData.Append([]byte(""))
 		default:
-			panic("unexpected")
+			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
 	}
 }
@@ -261,6 +299,8 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 		colData.Append([]byte(table.GetSchema().Relkind))
 	case pkgcatalog.SystemRelAttr_CreateSQL:
 		colData.Append([]byte(table.GetSchema().Createsql))
+	case pkgcatalog.SystemRelAttr_ViewDef:
+		colData.Append([]byte(schema.View))
 	case pkgcatalog.SystemRelAttr_Owner:
 		colData.Append(schema.AcInfo.RoleID)
 	case pkgcatalog.SystemRelAttr_Creator:
@@ -270,7 +310,7 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID)
 	default:
-		panic("unexpected")
+		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
 }
 
@@ -311,7 +351,7 @@ func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	case pkgcatalog.SystemDBAttr_AccID:
 		colData.Append(db.GetTenantID())
 	default:
-		panic("unexpected")
+		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
 }
 

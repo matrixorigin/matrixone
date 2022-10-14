@@ -34,7 +34,7 @@ import (
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
-	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
+	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
 		catalog.MoTablesTableDefs, []string{
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
@@ -52,28 +52,34 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 }
 
 func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
-	name string) (uint64, []engine.TableDef, error) {
+	name string) (*table, []engine.TableDef, error) {
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
 		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
-	id := row[0].(uint64)
-	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+	tbl := new(table)
+	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
+	tbl.viewdef = string(row[catalog.MO_TABLES_VIEWDEF_IDX].([]byte))
+	tbl.relKind = string(row[catalog.MO_TABLES_RELKIND_IDX].([]byte))
+	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
+	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
+	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
+	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
-		genColumnInfoExpr(accountId, databaseId, id))
+		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
 	cols := getColumnsFromRows(rows)
 	defs := make([]engine.TableDef, 0, len(cols))
-	defs = append(defs, genTableDefOfComment(string(row[6].([]byte))))
+	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
 	for _, col := range cols {
 		defs = append(defs, genTableDefOfColumn(col))
 	}
-	return id, defs, nil
+	return tbl, defs, nil
 }
 
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
@@ -95,7 +101,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 }
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
-	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		txn.dnStores[:1],
 		catalog.MoDatabaseTableDefs, []string{
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
@@ -129,32 +135,11 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 	name string, needUpdated bool) (*tableMeta, error) {
-	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
-	if err != nil && strings.Contains(err.Error(), "empty table") {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if needUpdated {
-		if err := txn.db.Update(ctx, txn.dnStores, databaseId,
-			id, txn.meta.SnapshotTS); err != nil {
-			return nil, err
-		}
-	}
-	cols := make([]string, 0, len(defs))
-	{
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				cols = append(cols, attr.Attr.Name)
-			}
-		}
-	}
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	if needUpdated {
 		for i, dnStore := range txn.dnStores {
-			rows, err := txn.getRows(ctx, databaseId, id,
-				[]DNStore{dnStore}, defs, cols, nil)
+			rows, err := txn.getRows(ctx, name, databaseId, 0,
+				[]DNStore{dnStore}, catalog.MoTableMetaDefs, catalog.MoTableMetaSchema, nil)
 			if err != nil && strings.Contains(err.Error(), "empty table") {
 				continue
 			}
@@ -165,10 +150,9 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 		}
 	}
 	return &tableMeta{
-		tableId:   id,
-		defs:      defs,
 		tableName: name,
 		blocks:    blocks,
+		defs:      catalog.MoTableMetaDefs,
 	}, nil
 }
 
@@ -237,7 +221,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 // getRow used to get a row of table based on a condition
 func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
 	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, defs, dnList, columns, expr)
+	bats, err := txn.readTable(ctx, "", databaseId, tableId, defs, dnList, columns, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -261,9 +245,9 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 }
 
 // getRows used to get rows of table
-func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId uint64,
+func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uint64, tableId uint64,
 	dnList []DNStore, defs []engine.TableDef, columns []string, expr *plan.Expr) ([][]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, defs, dnList, columns, expr)
+	bats, err := txn.readTable(ctx, name, databaseId, tableId, defs, dnList, columns, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -282,8 +266,9 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 
 // readTable used to get tuples of table based on a condition
 // only used to read data from catalog, for which the execution is currently single-core
-func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableId uint64,
+func (txn *Transaction) readTable(ctx context.Context, name string, databaseId uint64, tableId uint64,
 	defs []engine.TableDef, dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
+	var parts Partitions
 	/*
 		var writes [][]Entry
 		// consider halloween problem
@@ -292,11 +277,13 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 		}
 	*/
 	writes := make([]Entry, 0, len(txn.writes))
-	for i := range txn.writes {
-		for _, entry := range txn.writes[i] {
-			if entry.databaseId == databaseId &&
-				entry.tableId == tableId {
-				writes = append(writes, entry)
+	if len(name) == 0 { // meta table not need this
+		for i := range txn.writes {
+			for _, entry := range txn.writes[i] {
+				if entry.databaseId == databaseId &&
+					entry.tableId == tableId {
+					writes = append(writes, entry)
+				}
 			}
 		}
 	}
@@ -305,7 +292,11 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	for _, dn := range dnList {
 		accessed[dn.GetUUID()] = 0
 	}
-	parts := txn.db.getPartitions(databaseId, tableId)
+	if len(name) == 0 {
+		parts = txn.db.getPartitions(databaseId, tableId)
+	} else {
+		parts = txn.db.getMetaPartitions(name)
+	}
 	for i, dn := range txn.dnStores {
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
@@ -328,7 +319,6 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			}
 		}
 	}
-
 	for i, bat := range bats {
 		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
 		if err != nil {

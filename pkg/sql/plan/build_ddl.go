@@ -16,6 +16,8 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -283,6 +285,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported("text type in primary key")
 					}
+					if colType.GetId() == int32(types.T_json) {
+						return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+					}
 					pks = append(pks, def.Name.Parts[0])
 				}
 
@@ -434,6 +439,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	for _, str := range indexs {
 		if colMap[str].Typ.Id == int32(types.T_blob) {
 			return moerr.NewNotSupported("text type in index")
+		}
+		if colMap[str].Typ.Id == int32(types.T_json) {
+			return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
 

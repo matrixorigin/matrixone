@@ -36,7 +36,7 @@ type PartitionReader struct {
 	tx          *memtable.Transaction
 	expr        *plan.Expr
 	inserts     []*batch.Batch
-	deletes     []*batch.Batch
+	deletes     map[types.Rowid]uint8
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -80,6 +80,9 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		dataKey, dataValue, err := p.iter.Read()
 		if err != nil {
 			return nil, err
+		}
+		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
+			continue
 		}
 
 		//TODO handle iter.Expr

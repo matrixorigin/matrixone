@@ -29,7 +29,7 @@ import (
 // - open fds & max fds (not available on MacOS)
 // - virtual_resident_mem_bytes
 
-var processCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procFdsLimit{})
+var processCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{})
 
 var pid = int32(os.Getpid())
 
@@ -114,6 +114,9 @@ func (c procOpenFds) Metric(s *statCaches) (prom.Metric, error) {
 	}
 }
 
+// procFdsLimit means open file limit
+//
+// Deprecated
 type procFdsLimit struct{}
 
 func (c procFdsLimit) Desc() *prom.Desc {
