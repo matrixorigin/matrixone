@@ -1466,11 +1466,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a") as f`,
-			output: `select * from unnest(a, $, false) as f`,
+			output: `select * from unnest(a) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b") as f`,
-			output: `select * from unnest(a, b, false) as f`,
+			output: `select * from unnest(a, b) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true) as f`,
@@ -1478,11 +1478,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a")`,
-			output: `select * from unnest(a, $, false)`,
+			output: `select * from unnest(a)`,
 		},
 		{
 			input:  `select * from unnest("a", "b")`,
-			output: `select * from unnest(a, b, false)`,
+			output: `select * from unnest(a, b)`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true)`,
@@ -1490,11 +1490,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a)`,
-			output: `select * from unnest(t.a, $, false)`,
+			output: `select * from unnest(t.a)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b")`,
-			output: `select * from unnest(t.a, $.b, false)`,
+			output: `select * from unnest(t.a, $.b)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true)`,
@@ -1502,11 +1502,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a) as f`,
-			output: `select * from unnest(t.a, $, false) as f`,
+			output: `select * from unnest(t.a) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b") as f`,
-			output: `select * from unnest(t.a, $.b, false) as f`,
+			output: `select * from unnest(t.a, $.b) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true) as f`,

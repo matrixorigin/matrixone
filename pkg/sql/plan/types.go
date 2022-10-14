@@ -213,10 +213,6 @@ type TableBinder struct {
 	baseBinder
 }
 
-type TableFunctionBinder struct {
-	baseBinder
-}
-
 type WhereBinder struct {
 	baseBinder
 }
