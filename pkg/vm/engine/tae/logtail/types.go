@@ -15,7 +15,7 @@
 package logtail
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -32,15 +32,6 @@ const (
 	ScopeUserTables
 )
 
-const (
-	blkMetaAttrBlockID    = "block_id"
-	blkMetaAttrEntryState = "entry_state"
-	blkMetaAttrCreateAt   = "create_at"
-	blkMetaAttrDeleteAt   = "delete_at"
-	blkMetaAttrMetaLoc    = "meta_loc"
-	blkMetaAttrDeltaLoc   = "delta_loc"
-)
-
 var (
 	// for blk meta response
 	BlkMetaSchema *catalog.Schema
@@ -49,13 +40,21 @@ var (
 
 func init() {
 	BlkMetaSchema = catalog.NewEmptySchema("blkMeta")
-	BlkMetaSchema.AppendCol(blkMetaAttrBlockID, types.T_uint64.ToType())
-	BlkMetaSchema.AppendCol(blkMetaAttrEntryState, types.T_bool.ToType()) // 0: Nonappendable 1: appendable
-	BlkMetaSchema.AppendCol(blkMetaAttrCreateAt, types.T_TS.ToType())
-	BlkMetaSchema.AppendCol(blkMetaAttrDeleteAt, types.T_TS.ToType())
-	BlkMetaSchema.AppendCol(blkMetaAttrMetaLoc, types.T_varchar.ToType())
-	BlkMetaSchema.AppendCol(blkMetaAttrDeltaLoc, types.T_varchar.ToType())
-	BlkMetaSchema.Finalize(true) // no phyaddr column
+
+	for i, colname := range pkgcatalog.MoTableMetaSchema {
+		if i == 0 {
+			if err := BlkMetaSchema.AppendPKCol(colname, pkgcatalog.MoTableMetaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := BlkMetaSchema.AppendCol(colname, pkgcatalog.MoTableMetaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := BlkMetaSchema.Finalize(true); err != nil { // no phyaddr column
+		panic(err)
+	}
 
 	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
 	DelSchema = catalog.NewEmptySchema("del")
