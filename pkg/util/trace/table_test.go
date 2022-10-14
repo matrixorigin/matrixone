@@ -45,7 +45,7 @@ func TestNoopTableOptions_FormatDdl(t *testing.T) {
 			o := NoopTableOptions{}
 			assert.Equalf(t, tt.wantDdl, o.FormatDdl(tt.args.ddl), "FormatDdl(%v)", tt.args.ddl)
 			assert.Equalf(t, tt.wantCreateOpt, o.GetCreateOptions(), "GetCreateOptions()")
-			assert.Equalf(t, tt.wantTableOpt, o.GetTableOptions(), "GetTableOptions()")
+			assert.Equalf(t, tt.wantTableOpt, o.GetTableOptions(nil), "GetTableOptions()")
 		})
 	}
 }

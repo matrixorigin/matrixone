@@ -22,10 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -94,7 +94,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -132,7 +132,7 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -190,12 +190,17 @@ func (p *Partition) NewReader(
 	)
 
 	inserts := make([]*batch.Batch, 0, len(entries))
-	deletes := make([]*batch.Batch, 0, len(entries))
+	deletes := make(map[types.Rowid]uint8)
 	for _, entry := range entries {
 		if entry.typ == INSERT {
 			inserts = append(inserts, entry.bat)
 		} else {
-			deletes = append(deletes, entry.bat)
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
 		}
 	}
 

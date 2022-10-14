@@ -28,7 +28,10 @@ func RegularSubstr(expr, pat string, pos, occurrence int64, match_type string) (
 		return nil, moerr.NewInvalidInput("regexp_substr have invalid input")
 	}
 	//regular expression pattern
-	reg := regexp.MustCompile(pat)
+	reg, err := regexp.Compile(pat)
+	if err != nil {
+		return nil, moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+	}
 	//match result strings
 	matchRes := reg.FindAllString(expr[pos-1:], -1)
 	if matchRes == nil || int64(len(matchRes)) < occurrence {
@@ -54,7 +57,10 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	var posValue int64
 	var occValue int64
 	if len(expr) == 1 && len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
@@ -91,7 +97,10 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		}
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(pat) == 1 {
-		reg := regexp.MustCompile(pat[0])
+		reg, err := regexp.Compile(pat[0])
+		if err != nil {
+			return moerr.NewInvalidArg("regexp_substr have invalid regexp pattern arg", pat)
+		}
 		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))

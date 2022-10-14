@@ -63,6 +63,7 @@ func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		panic(err)
 	}
+	e.Info = e.Entry.GetInfo().(*entry.Info)
 	return
 }
 

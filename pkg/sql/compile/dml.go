@@ -38,6 +38,12 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
 	if arg.DeleteCtxs[0].CanTruncate {
+		for _, rel := range arg.DeleteCtxs[0].ComputeIndexTables {
+			_, err := rel.Truncate(c.ctx)
+			if err != nil {
+				return arg.AffectedRows, err
+			}
+		}
 		return arg.DeleteCtxs[0].TableSource.Truncate(c.ctx)
 	}
 
@@ -114,6 +120,20 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
+	for _, computeIndexInfo := range p.ComputeIndexInfos {
+		computeRelation, err := dbSource.Relation(c.ctx, computeIndexInfo.TableName)
+		if err != nil {
+			return 0, err
+		}
+		computeBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, computeIndexInfo.Cols, c.proc)
+		if rowNum != 0 {
+			if err := computeRelation.Write(c.ctx, computeBatch); err != nil {
+				return 0, err
+			}
+		}
+		computeBatch.Clean(c.proc.Mp())
+	}
+
 	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err
 	}
