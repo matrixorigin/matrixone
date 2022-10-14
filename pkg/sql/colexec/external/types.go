@@ -64,5 +64,4 @@ type ParseLineHandler struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	return
 }
