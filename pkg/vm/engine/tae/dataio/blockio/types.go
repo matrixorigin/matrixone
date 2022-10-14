@@ -95,6 +95,27 @@ func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows u
 	return metaLoc
 }
 
+func EncodeBlkMetaLocWithObject(
+	id *common.ID,
+	ts types.TS,
+	extent objectio.Extent,
+	rows uint32,
+	blocks []objectio.BlockObject) (string, error) {
+	size, err := GetObjectSizeWithBlocks(blocks)
+	if err != nil {
+		return "", err
+	}
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
+		EncodeBlkName(id, ts),
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		rows,
+		size,
+	)
+	return metaLoc, nil
+}
+
 func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
 		EncodeSegName(id),
@@ -104,6 +125,26 @@ func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string
 		rows,
 	)
 	return metaLoc
+}
+
+func EncodeSegMetaLocWithObject(
+	id *common.ID,
+	extent objectio.Extent,
+	rows uint32,
+	blocks []objectio.BlockObject) (string, error) {
+	size, err := GetObjectSizeWithBlocks(blocks)
+	if err != nil {
+		return "", err
+	}
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
+		EncodeSegName(id),
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		rows,
+		size,
+	)
+	return metaLoc, nil
 }
 
 func EncodeBlkDeltaLoc(id *common.ID, ts types.TS, extent objectio.Extent) string {
@@ -158,4 +199,21 @@ func DecodeDeltaLoc(metaLoc string) (string, objectio.Extent) {
 	}
 	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
 	return name, extent
+}
+
+func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
+	objectSize := uint32(0)
+	for _, block := range blocks {
+		meta := block.GetMeta()
+		header := meta.GetHeader()
+		count := header.GetColumnCount()
+		for i := 0; i < int(count); i++ {
+			col, err := block.GetColumn(uint16(i))
+			if err != nil {
+				return 0, err
+			}
+			objectSize += col.GetMeta().GetLocation().Length()
+		}
+	}
+	return objectSize, nil
 }
