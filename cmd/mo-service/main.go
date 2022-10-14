@@ -131,22 +131,9 @@ func startCNService(
 	fileService fileservice.FileService,
 	taskService taskservice.TaskService,
 ) error {
-	client, err := waitHAKeeperReady(cfg.HAKeeperClient)
-	if err != nil {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
-	if err := waitHAKeeperRunning(client); err != nil {
-		return err
-	}
-	if err := waitAnyShardReady(client); err != nil {
-		return err
-	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			logutil.Error("close hakeeper client failed", zap.Error(err))
-		}
-	}()
-
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
@@ -182,14 +169,9 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
-	client, err := waitHAKeeperReady(cfg.HAKeeperClient)
-	if err != nil {
-		panic(err)
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
 	}
-	if err := client.Close(); err != nil {
-		logutil.Error("close hakeeper client failed", zap.Error(err))
-	}
-
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(

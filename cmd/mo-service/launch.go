@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 func startCluster(stopper *stopper.Stopper) error {
@@ -167,4 +168,21 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+func waitClusterContidion(
+	cfg logservice.HAKeeperClientConfig,
+	waitFunc func(logservice.CNHAKeeperClient) error,
+) error {
+	client, err := waitHAKeeperReady(cfg)
+	if err != nil {
+		return err
+	}
+	if err := waitFunc(client); err != nil {
+		return err
+	}
+	if err := client.Close(); err != nil {
+		logutil.Error("close hakeeper client failed", zap.Error(err))
+	}
+	return nil
 }
