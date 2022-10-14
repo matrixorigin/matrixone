@@ -293,5 +293,11 @@ a    b
 update t1 set a = 2 where a = 1;
 tae data: duplicate
 update t1 set a = null where a = 1;
+drop table if exists t1;
+create table t1(a int, b int, c datetime on update CURRENT_TIMESTAMP);
+insert into t1(a) values(1);
+update t1 set a = 2 where a = 1;
+select c is not null from t1;
+c is not null
+true
 drop database if exists db1;
-
