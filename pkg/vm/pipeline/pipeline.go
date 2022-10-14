@@ -99,19 +99,20 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	bat.Cnt = 1
 	// processing the batch according to the instructions
 	pipelineInputs := []*batch.Batch{bat, nil}
-	for i := range pipelineInputs {
-		proc.Reg.InputBatch = pipelineInputs[i]
-		end, err = vm.Run(p.instructions, proc)
-		if err != nil {
-			cleanup(p, proc, false)
-			return end, err
-		}
-		if end {
-			cleanup(p, proc, true)
-			return end, nil
+	for {
+		for i := range pipelineInputs {
+			proc.Reg.InputBatch = pipelineInputs[i]
+			end, err = vm.Run(p.instructions, proc)
+			if err != nil {
+				cleanup(p, proc, false)
+				return end, err
+			}
+			if end {
+				cleanup(p, proc, true)
+				return end, nil
+			}
 		}
 	}
-	return true, nil
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
