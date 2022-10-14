@@ -290,7 +290,9 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithFileService(fs),
 				trace.WithMinFilesMerge(1),
 			)
-			go merge.Start(15 * time.Second)
+			cycle := time.Duration(SV.MergeCycle) * time.Second
+			logutil.Infof("merge cycle: %v", cycle)
+			go merge.Start(cycle)
 			<-ctx.Done()
 			merge.Stop()
 		})
