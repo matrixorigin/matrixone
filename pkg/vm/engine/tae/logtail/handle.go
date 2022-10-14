@@ -398,7 +398,9 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 	// for now, we treat all mvcc nodes as update operation. Only Insert
 	dstBatch := b.blkMetaInsBatch
 
-	logutil.Infof("[Logtail] record block meta row", e.AsCommonID().String(), e.IsAppendable(), metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
+	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
+		e.AsCommonID().String(), e.IsAppendable(),
+		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
