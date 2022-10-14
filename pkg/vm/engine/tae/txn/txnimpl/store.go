@@ -269,6 +269,19 @@ func (store *txnStore) UseDatabase(name string) (err error) {
 	return err
 }
 
+func (store *txnStore) UnsafeGetDatabase(id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.GetDatabaseByID(id)
+	if err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
+		return
+	}
+	h = buildDB(db)
+	return
+}
+
 func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
 	meta, err := store.catalog.GetDBEntry(name, store.txn)
 	if err != nil {
@@ -330,6 +343,14 @@ func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation ha
 		return nil, err
 	}
 	return db.DropRelationByName(name)
+}
+
+func (store *txnStore) UnsafeGetRelation(dbId, id uint64) (relation handle.Relation, err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return nil, err
+	}
+	return db.UnsafeGetRelation(id)
 }
 
 func (store *txnStore) GetRelationByName(dbId uint64, name string) (relation handle.Relation, err error) {

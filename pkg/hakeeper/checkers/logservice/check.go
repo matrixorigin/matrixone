@@ -18,12 +18,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
 	executing operator.ExecutingReplicas, currentTick uint64) (operators []*operator.Operator) {
 	working, expired := parseLogStores(cfg, infos, currentTick)
+	for _, node := range expired {
+		logutil.Info("node is expired", zap.String("uuid", node))
+	}
 	stats := parseLogShards(cluster, infos, expired)
 
 	removing := executing.Removing

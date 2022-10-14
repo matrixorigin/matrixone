@@ -94,24 +94,33 @@ func (checker *warChecker) check() (err error) {
 			panic(err)
 		}
 		switch keyt {
-		case txnbase.KeyT_DBEntry:
-			entry = db.DBBaseEntry
-		case txnbase.KeyT_TableEntry:
-			tb, err := db.GetTableEntryByID(tid)
-			if err != nil {
-				panic(err)
-			}
-			entry = tb.TableBaseEntry
-		case txnbase.KeyT_SegmentEntry:
-			tb, err := db.GetTableEntryByID(tid)
-			if err != nil {
-				panic(err)
-			}
-			seg, err := tb.GetSegmentByID(sid)
-			if err != nil {
-				panic(err)
-			}
-			entry = seg.MetaBaseEntry
+		// XXX  Here we skip checking database, table and segment.
+		// XXX  We still check block
+		// 1. Start txn1
+		// 2. Start txn2
+		// 3. txn2 delete table A and commit
+		// 4. txn1 dml on table A and commit
+		//    - Previously, txn1 will get a rw conflict
+		//    - Now, txn1 can commit successfully
+
+		// case txnbase.KeyT_DBEntry:
+		// 	entry = db.DBBaseEntry
+		// case txnbase.KeyT_TableEntry:
+		// 	tb, err := db.GetTableEntryByID(tid)
+		// 	if err != nil {
+		// 		panic(err)
+		// 	}
+		// 	entry = tb.TableBaseEntry
+		// case txnbase.KeyT_SegmentEntry:
+		// 	tb, err := db.GetTableEntryByID(tid)
+		// 	if err != nil {
+		// 		panic(err)
+		// 	}
+		// 	seg, err := tb.GetSegmentByID(sid)
+		// 	if err != nil {
+		// 		panic(err)
+		// 	}
+		// 	entry = seg.MetaBaseEntry
 		case txnbase.KeyT_BlockEntry:
 			tb, err := db.GetTableEntryByID(tid)
 			if err != nil {
@@ -126,6 +135,8 @@ func (checker *warChecker) check() (err error) {
 				panic(err)
 			}
 			entry = blk.MetaBaseEntry
+		default:
+			entry = nil
 		}
 		if entry != nil {
 			commitTs := checker.txn.GetCommitTS()

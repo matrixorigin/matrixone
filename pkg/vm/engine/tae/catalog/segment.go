@@ -423,3 +423,22 @@ func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	}
 	return nil
 }
+
+// GetTerminationTS is coarse API: no consistency check
+func (entry *SegmentEntry) GetTerminationTS() (ts types.TS, terminated bool) {
+	tableEntry := entry.GetTable()
+	dbEntry := tableEntry.GetDB()
+
+	dbEntry.RLock()
+	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	if terminated {
+		dbEntry.RUnlock()
+		return
+	}
+	dbEntry.RUnlock()
+
+	tableEntry.RLock()
+	terminated, ts = tableEntry.TryGetTerminatedTS(true)
+	tableEntry.RUnlock()
+	return
+}
