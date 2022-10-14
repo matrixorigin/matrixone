@@ -30,7 +30,7 @@ import (
 )
 
 func initTAE(
-	cancelMoServerCtx context.Context,
+	ctx context.Context,
 	pu *config.ParameterUnit,
 	cfg *Config,
 ) error {
@@ -49,7 +49,7 @@ func initTAE(
 	switch cfg.Engine.Logstore {
 	case options.LogstoreLogservice:
 		lc := func() (logservice.Client, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			ctx, cancel := context.WithTimeout(ctx, time.Minute)
 			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
 				ReadOnly:         false,
 				LogShardID:       pu.SV.LogShardID,
