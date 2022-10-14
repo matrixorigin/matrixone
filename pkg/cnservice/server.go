@@ -225,13 +225,18 @@ func (s *service) initEngine(
 			return err
 		}
 
+	case EngineDistributedTAEDebug:
+		if err := s.initDistributedTAEDebug(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
+
 	case EngineMemory:
 		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
 			return err
 		}
 
-	case EngineNonDistributedMemory:
-		if err := s.initMemoryEngineNonDist(cancelMoServerCtx, pu); err != nil {
+	case EngineMemoryDebug:
+		if err := s.initMemoryEngineDebug(cancelMoServerCtx, pu); err != nil {
 			return err
 		}
 

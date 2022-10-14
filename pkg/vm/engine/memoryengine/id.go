@@ -76,6 +76,14 @@ func (r *randomIDGenerator) NewID(_ context.Context) (ID, error) {
 	return ID(ts<<n + atomic.AddInt64(&idCounter, 1)%(1<<n)), nil
 }
 
+func (r *randomIDGenerator) AllocateID(ctx context.Context) (uint64, error) {
+	id, err := r.NewID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(id), nil
+}
+
 var RandomIDGenerator = new(randomIDGenerator)
 
 type hakeeperIDGenerator interface {

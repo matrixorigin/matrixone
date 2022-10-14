@@ -29,7 +29,7 @@ data-dir = "store"
 uuid = "cn1"
 
 [cn.Engine]
-type = "non-distributed-memory"
+type = "distributed-tae-debug"
 
 # you can move your vars in system_vars_config.toml to here. empty for default value
 # log vars in system_vars_config.toml was removed. use [log] to set log vars

@@ -61,10 +61,11 @@ func (s *service) initMemoryEngine(
 	return nil
 }
 
-func (s *service) initMemoryEngineNonDist(
+func (s *service) initMemoryEngineDebug(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
+
 	ck := clock.DefaultClock()
 	if ck == nil {
 		ck = clock.NewHLCClock(func() int64 {
@@ -72,7 +73,7 @@ func (s *service) initMemoryEngineNonDist(
 		}, math.MaxInt)
 	}
 
-	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.Mid)
+	mp, err := mpool.NewMPool("cnservice_mem_engine_debug", 0, mpool.Mid)
 	if err != nil {
 		return err
 	}

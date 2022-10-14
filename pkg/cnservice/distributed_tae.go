@@ -16,9 +16,15 @@ package cnservice
 
 import (
 	"context"
+	"math"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -64,6 +70,81 @@ func (s *service) initDistributedTAE(
 			ctx,
 			hakeeper,
 		),
+	)
+
+	return nil
+}
+
+func (s *service) initDistributedTAEDebug(
+	ctx context.Context,
+	pu *config.ParameterUnit,
+) error {
+
+	ck := clock.DefaultClock()
+	if ck == nil {
+		ck = clock.NewHLCClock(func() int64 {
+			return time.Now().Unix()
+		}, math.MaxInt)
+	}
+
+	// Should be no fixed or some size?
+	mp, err := mpool.NewMPool("distributed_tae_debug", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnAddr := "1"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
+	storage, err := memorystorage.NewMemoryStorage(
+		mp,
+		memorystorage.SnapshotIsolation,
+		ck,
+		memoryengine.RandomIDGenerator,
+	)
+	if err != nil {
+		return err
+	}
+
+	txnClient := memorystorage.NewStorageTxnClient(
+		ck,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
+	)
+	pu.TxnClient = txnClient
+
+	txnOperator, err := pu.TxnClient.New()
+	if err != nil {
+		return err
+	}
+
+	proc := process.New(ctx, mp, pu.TxnClient, txnOperator, pu.FileService)
+
+	// engine
+	pu.StorageEngine = disttae.New(
+		proc,
+		ctx,
+		txnClient,
+		memoryengine.RandomIDGenerator,
+		func() (logservicepb.ClusterDetails, error) {
+			return logservicepb.ClusterDetails{
+				DNStores: []logservicepb.DNStore{
+					dnStore,
+				},
+			}, nil
+		},
 	)
 
 	return nil

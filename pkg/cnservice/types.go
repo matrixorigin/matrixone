@@ -48,10 +48,11 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineTAE                  EngineType = "tae"
-	EngineDistributedTAE       EngineType = "distributed-tae"
-	EngineMemory               EngineType = "memory"
-	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	EngineTAE                 EngineType = "tae"
+	EngineDistributedTAE      EngineType = "distributed-tae"
+	EngineDistributedTAEDebug EngineType = "distributed-tae-debug"
+	EngineMemory              EngineType = "memory"
+	EngineMemoryDebug         EngineType = "memory-debug"
 )
 
 // Config cn service
