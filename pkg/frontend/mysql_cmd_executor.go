@@ -833,6 +833,25 @@ func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.D
 		if err != nil {
 			return err
 		}
+		for _, dbName := range dbs {
+			db, err := ses.Pu.StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn())
+			if err != nil {
+				return err
+			}
+			rels, err := db.Relations(requestCtx)
+			if err != nil {
+				return err
+			}
+			for _, relName := range rels {
+				rel, err := db.Relation(requestCtx, relName)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
 		logutil.Infof("Dump all databases %v\n", dbs)
 	}
 	return nil
