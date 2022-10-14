@@ -100,7 +100,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
-	// catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
 	catalogCheckpointer := newCatalogCheckpointer(
 		db,
 		opts.CheckpointCfg.CatalogUnCkpLimit,
