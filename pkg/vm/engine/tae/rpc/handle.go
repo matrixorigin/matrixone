@@ -163,7 +163,8 @@ func (h *Handle) HandlePreCommit(
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
 				req := db.CreateDatabaseReq{
-					Name: cmd.Name,
+					Name:       cmd.Name,
+					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Owner,
 						RoleID:    cmd.Creator,
@@ -184,6 +185,7 @@ func (h *Handle) HandlePreCommit(
 						AccountID: req.AccountId,
 					},
 					Name:         cmd.Name,
+					RelationId:   cmd.TableId,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
@@ -211,19 +213,21 @@ func (h *Handle) HandlePreCommit(
 			}
 		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
-				req := db.DropRelationReq{
+				req := db.DropOrTruncateRelationReq{
 					AccessInfo: db.AccessInfo{
 						UserID:    req.UserId,
 						RoleID:    req.RoleId,
 						AccountID: req.AccountId,
 					},
+					IsDrop:       cmd.IsDrop,
 					Name:         cmd.Name,
 					ID:           cmd.Id,
+					NewId:        cmd.NewId,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
-				if err = h.HandleDropRelation(ctx, meta, req,
-					new(db.DropRelationResp)); err != nil {
+				if err = h.HandleDropOrTruncateRelation(ctx, meta, req,
+					new(db.DropOrTruncateRelationResp)); err != nil {
 					return err
 				}
 			}
@@ -347,11 +351,11 @@ func (h *Handle) HandleCreateRelation(
 	return
 }
 
-func (h *Handle) HandleDropRelation(
+func (h *Handle) HandleDropOrTruncateRelation(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req db.DropRelationReq,
-	resp *db.DropRelationResp) (err error) {
+	req db.DropOrTruncateRelationReq,
+	resp *db.DropOrTruncateRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
@@ -366,18 +370,19 @@ func (h *Handle) HandleDropRelation(
 	if err != nil {
 		return
 	}
-
 	tb, err := db.GetRelation(context.TODO(), req.Name)
 	if err != nil {
 		return
 	}
-	resp.ID = tb.GetRelationID(context.TODO())
-
-	err = db.DropRelation(context.TODO(), req.Name)
-	if err != nil {
+	if req.IsDrop {
+		err = db.DropRelation(context.TODO(), req.Name)
+		if err != nil {
+			return
+		}
 		return
 	}
-	return
+	_, err = tb.Truncate(context.TODO())
+	return err
 }
 
 // HandleWrite Handle DML commands
