@@ -978,7 +978,7 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		for _, k := range kases {
-			ret := StatementCanBeExecutedInUncommittedTransaction(k.stmt)
+			ret, _ := StatementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
 			convey.So(ret, convey.ShouldBeTrue)
 		}
 

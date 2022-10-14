@@ -29,9 +29,10 @@ func newDB(cli client.TxnClient, dnList []DNStore) *DB {
 		dnMap[dnList[i].UUID] = i
 	}
 	db := &DB{
-		cli:    cli,
-		dnMap:  dnMap,
-		tables: make(map[[2]uint64]Partitions),
+		cli:        cli,
+		dnMap:      dnMap,
+		metaTables: make(map[string]Partitions),
+		tables:     make(map[[2]uint64]Partitions),
 	}
 	return db
 }
@@ -83,8 +84,9 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0,
+			catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
 		if err != nil {
 			return err
 		}
@@ -123,8 +125,8 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
 		if err != nil {
 			return err
 		}
@@ -163,8 +165,8 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, "", m)
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
 		if err != nil {
 			return err
 		}
@@ -199,6 +201,27 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
+func (db *DB) delMetaTable(name string) {
+	db.Lock()
+	delete(db.metaTables, name)
+	db.Unlock()
+}
+
+func (db *DB) getMetaPartitions(name string) Partitions {
+	db.Lock()
+	parts, ok := db.metaTables[name]
+	if !ok { // create a new table
+		parts = make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.metaTables[name] = parts
+	}
+	db.Unlock()
+	return parts
+
+}
+
 func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	db.Lock()
 	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
@@ -229,11 +252,11 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore,
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
 	db.Unlock()
-	for _, dn := range dnList {
+	for i, dn := range dnList {
 		part := parts[db.dnMap[dn.UUID]]
 		part.Lock()
 		if part.ts.Less(ts) {
-			if err := updatePartition(ctx, op, part, dn,
+			if err := updatePartition(i, ctx, op, db, part, dn,
 				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
 				part.Unlock()
 				return err

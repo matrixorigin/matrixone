@@ -15,7 +15,6 @@
 package logservicedriver
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,11 +27,11 @@ var ErrNoClientAvailable = moerr.NewInternalError("no client available")
 var ErrClientPoolClosed = moerr.NewInternalError("client pool closed")
 
 type clientConfig struct {
-	cancelDuration         time.Duration
-	recordSize             int
-	logserviceClientConfig *logservice.ClientConfig
-	GetClientRetryTimeOut  time.Duration
-	retryDuration          time.Duration
+	cancelDuration        time.Duration
+	recordSize            int
+	clientFactory         LogServiceClientFactory
+	GetClientRetryTimeOut time.Duration
+	retryDuration         time.Duration
 }
 
 type clientWithRecord struct {
@@ -41,15 +40,11 @@ type clientWithRecord struct {
 	id     int
 }
 
-func newClient(cancelDuration, retryDuration time.Duration, recordsize int, cfg *logservice.ClientConfig) *clientWithRecord {
-	ctx, cancel := context.WithTimeout(context.Background(), cancelDuration)
-	logserviceClient, err := logservice.NewClient(ctx, *cfg)
-	cancel()
+func newClient(factory LogServiceClientFactory, recordSize int, retryDuration time.Duration) *clientWithRecord {
+	logserviceClient, err := factory()
 	if err != nil {
-		err = RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), cancelDuration)
-			logserviceClient, err = logservice.NewClient(ctx, *cfg)
-			cancel()
+		RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
+			logserviceClient, err = factory()
 			return err == nil
 		})
 		if err != nil {
@@ -58,7 +53,7 @@ func newClient(cancelDuration, retryDuration time.Duration, recordsize int, cfg 
 	}
 	c := &clientWithRecord{
 		c:      logserviceClient,
-		record: logserviceClient.GetLogRecord(recordsize),
+		record: logserviceClient.GetLogRecord(recordSize),
 	}
 	return c
 }
@@ -105,7 +100,7 @@ func newClientPool(maxsize, initsize int, cfg *clientConfig) *clientpool {
 func (c *clientpool) newClientFactory(cfg *clientConfig) func() *clientWithRecord {
 	return func() *clientWithRecord {
 		c.count++
-		client := newClient(cfg.retryDuration, cfg.cancelDuration, cfg.recordSize, cfg.logserviceClientConfig)
+		client := newClient(cfg.clientFactory, cfg.recordSize, cfg.retryDuration)
 		client.id = c.count
 		return client
 	}

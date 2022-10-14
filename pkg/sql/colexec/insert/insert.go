@@ -52,7 +52,8 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch, ) error {
+func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
+	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
@@ -79,7 +80,6 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	var err error
 	var txnOperator client.TxnOperator
 	txnOperator, err = proc.TxnClient.New()
-	fmt.Printf("wangjian sql5 is %T\n", txnOperator)
 	if err != nil {
 		return false, err
 	}
@@ -108,9 +108,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 	if err = n.Engine.Commit(ctx, txnOperator); err != nil {
 		return false, err
 	}
-	fmt.Println("wangjian sql5b is", err)
 	err = txnOperator.Commit(ctx)
-	fmt.Println("wangjian sql5c is", err)
 	return false, err
 }
 
