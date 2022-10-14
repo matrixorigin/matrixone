@@ -312,6 +312,16 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNull,
 			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
 		},
 	},
 
@@ -494,6 +504,16 @@ var operators = map[int]Functions{
 				Layout: IS_NULL_EXPRESSION,
 				Args: []types.T{
 					types.T_blob,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNotNull,

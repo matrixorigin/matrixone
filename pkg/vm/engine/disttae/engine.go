@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -92,8 +93,8 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	if db, ok := txn.databaseMap[key]; ok {
-		return db, nil
+	if db, ok := txn.databaseMap.Load(key); ok {
+		return db.(*database), nil
 	}
 	if name == catalog.MO_CATALOG {
 		db := &database{
@@ -102,7 +103,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
-		txn.databaseMap[key] = db
+		txn.databaseMap.Store(key, db)
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)
@@ -115,7 +116,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		databaseId:   id,
 		databaseName: name,
 	}
-	txn.databaseMap[key] = db
+	txn.databaseMap.Store(key, db)
 	return db, nil
 }
 
@@ -133,7 +134,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	delete(txn.databaseMap, key)
+	txn.databaseMap.Delete(key)
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return err
@@ -170,8 +171,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		rowId:          [2]uint64{math.MaxUint64, 0},
 		dnStores:       cluster.DNStores,
 		fileMap:        make(map[string]uint64),
-		tableMap:       make(map[tableKey]*table),
-		databaseMap:    make(map[databaseKey]*database),
+		tableMap:       new(sync.Map),
+		databaseMap:    new(sync.Map),
 		createTableMap: make(map[uint64]uint8),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
@@ -209,6 +210,11 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
+	if err == nil {
+		for _, name := range txn.deleteMetaTables {
+			txn.db.delMetaTable(name)
+		}
+	}
 	return err
 }
 

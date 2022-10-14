@@ -419,6 +419,8 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	return newBuffer2Sql(opts...)
 }
 
+type CSVRequests []*CSVRequest
+
 type CSVRequest struct {
 	writer  io.StringWriter
 	content string
@@ -441,7 +443,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	var f = func(b any) {
 		_, span := Start(DefaultContext(), "batchCSVHandler")
 		defer span.End()
-		req, ok := b.(CSVRequest) // see genCsvData
+		req, ok := b.(*CSVRequest) // see genCsvData
 		if !ok {
 			panic(moerr.NewInternalError("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
@@ -484,7 +486,7 @@ var QuoteFieldFunc = func(buf *bytes.Buffer, value string, enclose rune) string 
 func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
-		return CSVRequest{nil, ""}
+		return NewCSVRequest(nil, "")
 	}
 
 	i, ok := in[0].(CsvFields)
@@ -515,7 +517,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		}
 		buf.WriteRune(opts.Terminator)
 	}
-	return CSVRequest{writer, buf.String()}
+	return NewCSVRequest(writer, buf.String())
 }
 
 func filterTraceInsertSql(i IBuffer2SqlItem) {
