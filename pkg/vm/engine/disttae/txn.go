@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -473,19 +472,12 @@ func blockUnmarshal(data []byte) BlockMeta {
 }
 
 // write a block to s3
-func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
-	// 1. check columns length, check types
-	if len(blkInfo.columns) != len(bat.Vecs) {
-		return nil, moerr.NewInternalError(fmt.Sprintf("write block error: need %v columns, get %v columns", len(blkInfo.columns), len(bat.Vecs)))
-	}
-	for i, vec := range bat.Vecs {
-		if blkInfo.columns[i].typ != uint8(vec.Typ.Oid) {
-			return nil, moerr.NewInternalError(fmt.Sprintf("write block error: column[%v]'s type is not match", i))
-		}
-	}
-
+func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
 	// 2. write bat
-	s3FileName := getNameFromMeta(blkInfo)
+	s3FileName, err := getNewBlockName()
+	if err != nil {
+		return nil, err
+	}
 	writer, err := objectio.NewObjectWriter(s3FileName, fs)
 	if err != nil {
 		return nil, err
@@ -517,47 +509,6 @@ func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fil
 
 	// 4. get return
 	return writer.WriteEnd()
-}
-
-// read a block from s3
-func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs fileservice.FileService, tableDef *plan.TableDef) (*batch.Batch, error) {
-	// 1. get extent from meta
-	extent := getExtentFromMeta(blkInfo)
-
-	// 2. get idxs
-	columnLength := len(columns)
-	idxs := make([]uint16, columnLength)
-	columnTypes := make([]types.Type, columnLength)
-	for i, column := range columns {
-		idxs[i] = uint16(tableDef.Name2ColIndex[column])
-		columnTypes[i] = types.T(blkInfo.columns[idxs[i]].typ).ToType()
-	}
-
-	// 2. read data
-	s3FileName := getNameFromMeta(blkInfo)
-	reader, err := objectio.NewObjectReader(s3FileName, fs)
-	if err != nil {
-		return nil, err
-	}
-	ioVec, err := reader.Read(extent, idxs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. fill Batch
-	bat := batch.NewWithSize(columnLength)
-	bat.Attrs = columns
-	for i, entry := range ioVec.Entries {
-		vec := vector.New(columnTypes[i])
-		err := vec.Read(entry.Data)
-		if err != nil {
-			return nil, err
-		}
-		bat.Vecs[i] = vec
-	}
-	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
-
-	return bat, nil
 }
 
 func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {

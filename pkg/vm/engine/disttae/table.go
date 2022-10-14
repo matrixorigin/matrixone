@@ -301,18 +301,25 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := range ranges {
 		blks[i] = blockUnmarshal(ranges[i])
 	}
+	ts := tbl.db.txn.meta.SnapshotTS
+	tableDef := tbl.getTableDef()
+
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:       tbl.proc.FileService,
-				tableDef: tbl.getTableDef(),
+				tableDef: tableDef,
+				ts:       ts,
 				ctx:      ctx,
 				blks:     []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &blockReader{
-				ctx: ctx,
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
 			}
 		}
 		return rds, nil
@@ -324,13 +331,19 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				ctx:  ctx,
-				blks: blks[i*step:],
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
+				blks:     blks[i*step:],
 			}
 		} else {
 			rds[i] = &blockReader{
-				ctx:  ctx,
-				blks: blks[i*step : (i+1)*step],
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
+				blks:     blks[i*step : (i+1)*step],
 			}
 		}
 	}

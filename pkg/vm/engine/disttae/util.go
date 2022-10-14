@@ -25,12 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -124,27 +126,48 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	var columnMeta *ColumnMeta
+func fetchZonemapFromMeta(columnLength int, meta BlockMeta, fs fileservice.FileService) ([][64]byte, error) {
+	name, extent, _ := blockio.DecodeMetaLoc(meta.info.MetaLoc)
+	zonemapList := make([][64]byte, columnLength)
+	idxs := make([]uint16, columnLength)
+	for i := 0; i < columnLength; i++ {
+		idxs[i] = uint16(i)
+	}
 
+	// raed s3
+	reader, err := objectio.NewObjectReader(name, fs)
+	if err != nil {
+		return nil, err
+	}
+
+	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, data := range idxList {
+		bytes := data.(*objectio.ZoneMap).GetData()
+		copy(zonemapList[i][:], bytes[:])
+	}
+
+	return nil, nil
+}
+
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	getIdx := func(idx int) int {
 		return int(tableDef.Name2ColIndex[tableDef.Cols[columns[idx]].Name])
 	}
-
 	dataLength := len(columns)
-
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 
 	for i := 0; i < dataLength; i++ {
-		columnMeta = meta.columns[getIdx(i)]
-		dataTypes[i] = columnMeta.typ
-		typ := types.T(columnMeta.typ).ToType()
+		idx := getIdx(columns[i])
+		dataTypes[i] = uint8(tableDef.Cols[columns[i]].Typ.Id)
+		typ := types.T(dataTypes[i]).ToType()
 
-		czm, _ := columnMeta.zoneMap.(*objectio.ZoneMap)
-		buf := czm.GetData()
 		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(buf)
+		err := zm.Unmarshal(meta.zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -214,14 +237,13 @@ func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 	return vectors
 }
 
-// getNameFromMeta  TODO change later
-func getNameFromMeta(blkInfo BlockMeta) string {
-	return fmt.Sprintf("%s:%d_%d_%d.blk", "local", blkInfo.header.blockId, blkInfo.header.segmentId, blkInfo.header.tableId)
-}
-
-// getExtentFromMeta  TODO change later
-func getExtentFromMeta(blkInfo BlockMeta) objectio.Extent {
-	return objectio.NewExtent(blkInfo.localExtent.offset, blkInfo.localExtent.length, blkInfo.localExtent.originSize)
+// getNewBlockName Each time a unique name is generated in one CN
+func getNewBlockName() (string, error) {
+	uuid, err := types.BuildUuid()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s.blk", uuid.ToString()), nil
 }
 
 // computeRange compute primaryKey range by Expr

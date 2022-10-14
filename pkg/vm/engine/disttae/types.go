@@ -242,6 +242,7 @@ type blockReader struct {
 	blks     []BlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService
+	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
 }
 

@@ -14,37 +14,53 @@
 
 package disttae
 
-import "github.com/matrixorigin/matrixone/pkg/objectio"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+type BlockInfo struct {
+	BlockID    uint64
+	EntryState bool
+	CreateAt   types.Timestamp
+	DeleteAt   types.Timestamp
+	MetaLoc    string
+	DeltaLoc   string
+}
+
+type BlockMeta struct {
+	info    BlockInfo
+	zonemap [][64]byte
+}
 
 // tae's block metadata, which is currently just an test one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
-type BlockMeta struct {
-	header      BlockHeader
-	columns     []*ColumnMeta
-	localExtent Extent
-}
+// type BlockMeta struct {
+// header      BlockHeader
+// columns     []*ColumnMeta
+// localExtent Extent
+// }
 
-type BlockHeader struct {
-	tableId   uint64
-	segmentId uint64
-	blockId   uint64
-}
+// type BlockHeader struct {
+// 	tableId   uint64
+// 	segmentId uint64
+// 	blockId   uint64
+// }
 
-type ColumnMeta struct {
-	typ         uint8
-	idx         uint16
-	alg         uint8
-	location    Extent
-	zoneMap     objectio.IndexData
-	bloomFilter objectio.IndexData
-	dummy       [32]byte
-	checksum    uint32
-}
+// type ColumnMeta struct {
+// 	typ         uint8
+// 	idx         uint16
+// 	alg         uint8
+// 	location    Extent
+// 	zoneMap     objectio.IndexData
+// 	bloomFilter objectio.IndexData
+// 	dummy       [32]byte
+// 	checksum    uint32
+// }
 
-type Extent struct {
-	id         uint64
-	offset     uint32
-	length     uint32
-	originSize uint32
-}
+// type Extent struct {
+// 	id         uint64
+// 	offset     uint32
+// 	length     uint32
+// 	originSize uint32
+// }
