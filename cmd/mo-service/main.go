@@ -131,6 +131,13 @@ func startCNService(
 	fileService fileservice.FileService,
 	taskService taskservice.TaskService,
 ) error {
+	client, err := waitHAKeeperReady(cfg.HAKeeperClient)
+	if err != nil {
+		return err
+	}
+	if err := waitAnyShardReady(client); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
