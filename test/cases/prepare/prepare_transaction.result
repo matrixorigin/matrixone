@@ -84,7 +84,7 @@ test_user
 set autocommit=0;
 prepare s7 from 'drop table test_user';
 execute s7;
-unclassified statement appears in uncommitted transaction
+internal error: unclassified statement appears in uncommitted transaction
 deallocate prepare s7;
 commit;
 set autocommit=1;
@@ -173,7 +173,7 @@ tables_in_prepare_transaction
 test_user
 begin;
 prepare s7 from 'drop table test_user';
-unclassified statement appears in uncommitted transaction
+internal error: unclassified statement appears in uncommitted transaction
 execute s7;
 invalid state prepared statement 's7' does not exist
 deallocate prepare s7;
