@@ -58,3 +58,5 @@ insert into t1 values(8 , NULL);
 insert into t1 values( 9 , "Killers");
 SELECT a, REGEXP_LIKE(b, '^P') from t1;
 drop table t1;
+
+select regexp_like('Cat', '*');

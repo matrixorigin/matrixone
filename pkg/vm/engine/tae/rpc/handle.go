@@ -16,9 +16,10 @@ package rpc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"syscall"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -208,7 +209,7 @@ func (h *Handle) HandlePreCommit(
 					return err
 				}
 			}
-		case []catalog.DropTable:
+		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
 				req := db.DropRelationReq{
 					AccessInfo: db.AccessInfo{

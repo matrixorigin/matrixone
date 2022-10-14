@@ -15,17 +15,18 @@
 package util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"strconv"
 
 	"github.com/fagongzi/util/format"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-var prefixPriColName string = "__mo_cpkey_"
 
 func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*plan.ColDef, *plan.ColDef) {
 	for num := range colDefs {
@@ -39,15 +40,15 @@ func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*pla
 }
 
 func JudgeIsCompositePrimaryKeyColumn(s string) bool {
-	if len(s) < len(prefixPriColName) {
+	if len(s) < len(catalog.PrefixPriColName) {
 		return false
 	}
-	return s[0:len(prefixPriColName)] == prefixPriColName
+	return s[0:len(catalog.PrefixPriColName)] == catalog.PrefixPriColName
 }
 
 func BuildCompositePrimaryKeyColumnName(s []string) string {
 	var name string
-	name = prefixPriColName
+	name = catalog.PrefixPriColName
 	for _, single := range s {
 		lenNum := format.Int64ToString(int64(len(single)))
 		for num := 0; num < 3-len(lenNum); num++ {
@@ -61,7 +62,7 @@ func BuildCompositePrimaryKeyColumnName(s []string) string {
 
 func SplitCompositePrimaryKeyColumnName(s string) []string {
 	var names []string
-	for next := len(prefixPriColName); next < len(s); {
+	for next := len(catalog.PrefixPriColName); next < len(s); {
 		strLen, _ := strconv.Atoi(s[next : next+3])
 		names = append(names, s[next+3:next+3+strLen])
 		next += strLen + 3
@@ -84,6 +85,11 @@ func FillCompositePKeyBatch(bat *batch.Batch, p *plan.ColDef, proc *process.Proc
 	for _, name := range names {
 		v := cPkeyVecMap[name]
 		vs = append(vs, v)
+	}
+	for _, v := range vs {
+		if nulls.Any(v.Nsp) {
+			return moerr.NewConstraintViolation("composite pkey don't support null value")
+		}
 	}
 	vec, err := multi.Serial(vs, proc)
 	if err != nil {

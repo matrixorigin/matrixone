@@ -61,9 +61,6 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
-		if len(args) == 0 {
-			return 0, nil
-		}
 		matched := make([]int32, 0, 4)   // function overload which can be matched directly
 		byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
 		convertCost := make([]int, 0, 4) // records the cost of conversion for byCast

@@ -18,16 +18,21 @@ import (
 	"context"
 	"os"
 	"syscall"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func initTAE(
 	cancelMoServerCtx context.Context,
 	pu *config.ParameterUnit,
+	cfg *Config,
 ) error {
 
 	targetDir := pu.SV.StorePath
@@ -40,7 +45,29 @@ func initTAE(
 	}
 	syscall.Umask(mask)
 
-	tae, err := db.Open(targetDir+"/tae", nil)
+	opts := &options.Options{}
+	switch cfg.Engine.Logstore {
+	case options.LogstoreLogservice:
+		lc := func() (logservice.Client, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			lc, err := logservice.NewClient(ctx, logservice.ClientConfig{
+				ReadOnly:         false,
+				LogShardID:       pu.SV.LogShardID,
+				DNReplicaID:      pu.SV.DNReplicaID,
+				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+			})
+			cancel()
+			return lc, err
+		}
+		opts.Lc = lc
+		opts.LogStoreT = options.LogstoreLogservice
+	case options.LogstoreBatchStore, "":
+		opts.LogStoreT = options.LogstoreBatchStore
+	default:
+		return moerr.NewInternalError("invalid logstore type: %v", cfg.Engine.Logstore)
+	}
+
+	tae, err := db.Open(targetDir+"/tae", opts)
 	if err != nil {
 		logutil.Infof("Open tae failed. error:%v", err)
 		return err

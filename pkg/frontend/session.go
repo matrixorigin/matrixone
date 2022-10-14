@@ -120,6 +120,10 @@ type Session struct {
 	priv *privilege
 
 	errInfo *errInfo
+
+	//fromRealUser distinguish the sql that the user inputs from the one
+	//that the internal or background program executes
+	fromRealUser bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool
@@ -785,6 +789,14 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.priv = priv
 }
 
+func (ses *Session) SetFromRealUser(b bool) {
+	ses.fromRealUser = b
+}
+
+func (ses *Session) GetFromRealUser() bool {
+	return ses.fromRealUser
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
@@ -1054,6 +1066,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_Partition{
 					Partition: p,
+				},
+			})
+		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_ComputeIndex{
+					ComputeIndex: &plan2.ComputeIndexDef{
+						Names:      indexDef.Names,
+						TableNames: indexDef.TableNames,
+						Uniques:    indexDef.Uniques,
+					},
 				},
 			})
 		}

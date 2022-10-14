@@ -1,0 +1,15 @@
+drop user if exists eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiO@fqw8dge;
+create user eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiO@fqw8dge identified by '芸05弻542阍硉12311';
+create user eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiO@fqw8dge identified by '芸05弻542阍硉12311';
+create user if not exists eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiO@fqw8dge identified by '芸05弻542阍硉12311';
+create user if not exists eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiO@fqw8dge identified by '芸05弻542阍硉12311',mHFHomYNflTqe43@DQ$ identified by '5漽8查5907栌8521绬';
+drop user eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiO@fqw8dge;
+drop user eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiO@fqw8dge;
+drop user if exists eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiO@fqw8dge,mHFHomYNflTqe43@DQ$;
+drop user if exists eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiO@fqw8dge,mHFHomYNflTqe43@DQ$;
+drop user if exists t7CY356EM3Uhd@IR@9_0KYEXY;
+create user t7CY356EM3Uhd@IR@9_0KYEXY identified by '殜瀃03昲25誻519158',t7CY356EM3Uhd@IR@9_0KYEXY identified by '殜瀃03昲25誻519158',t7CY356EM3Uhd@IR@9_0KYEXY identified by '殜瀃03昲25誻519158';
+drop user if exists LXT5kBkD2Q393W@Xri3e3Uq3G8y;
+create user LXT5kBkD2Q393W@Xri3e3Uq3G8y identified by '438悍420阉扄663萍4';
+drop user LXT5kBkD2Q393W@Xri3e3Uq3G8y,LXT5kBkD2Q393W@Xri3e3Uq3G8y,LXT5kBkD2Q393W@Xri3e3Uq3G8y;
+drop user LXT5kBkD2Q393W@Xri3e3Uq3G8y;
