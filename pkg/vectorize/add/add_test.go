@@ -1061,11 +1061,9 @@ func TestStringAddFloat(t *testing.T) {
 		}
 
 		var leftStrs []string
-		var rightFloat []float64
 		var wants []float64
 		for _, k := range kases {
 			leftStrs = append(leftStrs, k.left)
-			rightFloat = append(rightFloat, k.right)
 			wants = append(wants, k.want)
 		}
 

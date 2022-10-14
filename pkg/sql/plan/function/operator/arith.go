@@ -37,10 +37,6 @@ type arithT interface {
 		types.Decimal64 | types.Decimal128 | types.Varlena
 }
 
-type numericT interface {
-	constraints.Integer | constraints.Float
-}
-
 type arithFn func(v1, v2, r *vector.Vector) error
 
 // Generic T1 is the operand type and generic T2 is the return value type
