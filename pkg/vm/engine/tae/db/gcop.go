@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -44,6 +43,8 @@ const (
 	GCState_Scheduled
 	GCState_ScheduledDone
 )
+
+/*
 
 // Destroy is not thread-safe
 func gcBlockClosure(entry *catalog.BlockEntry, gct GCType) tasks.FuncT {
@@ -146,6 +147,7 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 		return
 	}
 }
+*/
 
 type gcCandidates struct {
 	blocks   *common.Tree
@@ -258,22 +260,22 @@ func newGarbageCollector(
 	ckp.TableFn = ckp.onTable
 	ckp.DatabaseFn = ckp.onDatabase
 	ckp.refreshEpoch()
-	ckp.ToActive()
+	ckp.ResetState()
 	return ckp
 }
 
-func (ckp *garbageCollector) ToActive() {
+func (ckp *garbageCollector) ResetState() {
 	ckp.state.Store(GCState_Active)
 }
 
 func (ckp *garbageCollector) StopSchedule() {
 	ckp.state.Store(GCState_ScheduledDone)
-	logutil.Infof("Stop Schedule GCJOB")
+	// logutil.Infof("Stop Schedule GCJOB")
 }
 
 func (ckp *garbageCollector) StartSchedule() {
 	ckp.state.Store(GCState_Scheduled)
-	logutil.Infof("Start Schedule GCJOB")
+	// logutil.Infof("Start Schedule GCJOB")
 }
 
 func (ckp *garbageCollector) refreshEpoch() {
@@ -281,23 +283,23 @@ func (ckp *garbageCollector) refreshEpoch() {
 }
 
 func (ckp *garbageCollector) PreExecute() (err error) {
-	logutil.Infof("GCJOB INV=%d, ACT INV=%s", ckp.minInterval.Milliseconds()/2, time.Since(ckp.lastRunTime))
+	// logutil.Infof("GCJOB INV=%d, ACT INV=%s", ckp.minInterval.Milliseconds()/2, time.Since(ckp.lastRunTime))
 	ckp.checkpointedLsn = ckp.db.Scheduler.GetCheckpointedLSN()
 	ckp.loopState = ckp.state.Load()
 	// If scheduled done, we need to refresh a new gc epoch
 	if ckp.loopState == GCState_ScheduledDone {
 		ckp.refreshEpoch()
-		ckp.ToActive()
+		ckp.ResetState()
 		ckp.loopState = GCState_Active
 	}
 	// If state is active and the interval since last run time is below a limit. Skip this loop
 	if ckp.canRun() && time.Since(ckp.lastRunTime) < ckp.minInterval/2 {
 		ckp.loopState = GCState_Noop
-		logutil.Infof("Start Noop GCJOB")
+		// logutil.Infof("Start Noop GCJOB")
 	}
 	if ckp.canRun() {
 		ckp.refreshRunTime()
-		logutil.Infof("Start Run GCJOB")
+		// logutil.Infof("Start Run GCJOB")
 	}
 	return
 }
@@ -313,14 +315,19 @@ func (ckp *garbageCollector) PostExecute() (err error) {
 	if ckp.candidates.IsEmpty() {
 		ckp.refreshEpoch()
 	} else {
-		logutil.Infof("Epoch: %s", ckp.epoch.ToString())
-		logutil.Info(ckp.candidates.String())
+		// logutil.Infof("Epoch: %s", ckp.epoch.ToString())
+		ckp.db.PrintStats()
 		ckp.StartSchedule()
-		go func() {
-			defer ckp.StopSchedule()
-			time.Sleep(time.Millisecond * 500)
-			ckp.candidates.Reset()
-		}()
+		_, err = ckp.db.Scheduler.ScheduleFn(
+			nil,
+			tasks.GCTask,
+			func() error {
+				defer ckp.StopSchedule()
+				// logutil.Info(ckp.candidates.String())
+				// TODO: GC all candidates
+				ckp.candidates.Reset()
+				return nil
+			})
 	}
 	return
 }
