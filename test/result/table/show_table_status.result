@@ -1,0 +1,89 @@
+SHOW TABLE STATUS;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
+DROP TABLE IF EXISTS t;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t(
+id INT NOT NULL DEFAULT 0,
+name CHAR(20) NOT NULL,
+PRIMARY KEY (id)
+);
+CREATE TABLE t1(
+cid FLOAT NOT NULL,
+cls VARCHAR(20) NOT NULL,
+PRIMARY KEY(cid, cls)
+);
+SHOW TABLE STATUS LIKE 't' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near " \G;";
+SHOW TABLE STATUS LIKE 't%' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+SHOW VARIABLES LIKE '%time_zone%';
+Variable_name    Value
+system_time_zone    
+time_zone    SYSTEM
+DROP TABLE IF EXISTS t;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t(
+id CHAR(200) NOT NULL DEFAULT 'FLJDIAOJFDKLA',
+name CHAR(200) NOT NULL,
+PRIMARY KEY (id)
+);
+CREATE TABLE t1(
+cid FLOAT NOT NULL,
+cls VARCHAR(200) NOT NULL,
+PRIMARY KEY(cid, cls)
+);
+INSERT INTO t VALUES ('lijljidlsajfdklsafjd', 'fijiofjdizvckxzjvico');
+INSERT INTO t VALUES ('&(*^&*T&YD(SF*(DUS(*F', '0');
+INSERT INTO t1 VALUES (1.101, 'I have a dream that one day this nation will rise up');
+INSERT INTO t1 VALUES (0.1, 'wo will never surender dukerke is a');
+SHOW TABLE STATUS LIKE 't_' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+SHOW TABLE STATUS FROM test \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+SHOW TABLE STATUS FROM test WHERE Name = 't' \G;
+[unknown result because it is related to issue#5548]
+DROP TABLE IF EXISTS t;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t(
+tiny TINYINT NOT NULL,
+small SMALLINT NOT NULL,
+int_t INT NOT NULL,
+big BIGINT NOT NULL,
+str1 VARCHAR(200),
+str2 CHAR(200),
+float_32 FLOAT,
+float_64 DOUBLE,
+d1 DATE,
+d2 DATETIME,
+d3 TIMESTAMP,
+PRIMARY KEY (tiny, str1, d1)
+);
+SHOW TABLE STATUS LIKE 't_' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+DROP TABLE IF EXISTS t;
+CREATE TABLE t(
+tiny TINYINT,
+small SMALLINT,
+int_t INT,
+big BIGINT,
+str1 VARCHAR(200),
+str2 CHAR(200),
+float_32 FLOAT,
+float_64 DOUBLE,
+d1 DATE,
+d2 DATETIME,
+d3 TIMESTAMP
+);
+INSERT INTO t(str1,str2) VALUES ('jixlzvcxfiowurioewmnklrn', 'abc');
+SHOW TABLE STATUS LIKE NULL \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+SHOW TABLE STATUS LIKE 'NULL' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 31 near " \G;";
+SHOW TABLE STATUS LIKE '_' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near " \G;";
+SHOW TABLE STATUS LIKE 't*' \G;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " \G;";
+SHOW TABLE STATUS LIKE 't' \G;
+[unknown result because it is related to issue#5557]
+SHOW TABLE STATUS LIKE '*' \G;
+[unknown result because it is related to issue#5556]
