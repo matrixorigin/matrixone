@@ -992,7 +992,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 		return moerr.NewInternalError("routine does not exist")
 	}
 	packet, ok := msg.(*Packet)
-	pro.sequenceId = uint8(packet.SequenceID + 1)
+	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
 		return moerr.NewInternalError("message is not Packet")
 	}
@@ -1011,7 +1011,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 			return moerr.NewInternalError("message is not Packet")
 		}
 
-		pro.sequenceId = uint8(packet.SequenceID + 1)
+		pro.SetSequenceID(uint8(packet.SequenceID + 1))
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -1696,7 +1696,7 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		for _, c := range kases {
-			proto.setSequenceID(0)
+			proto.SetSequenceID(0)
 
 			err = proto.openRow(nil)
 			convey.So(err, convey.ShouldBeNil)

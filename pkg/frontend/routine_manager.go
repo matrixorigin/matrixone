@@ -158,10 +158,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	packet, ok := msg.(*Packet)
 
-	protocol.m.Lock()
-	protocol.sequenceId = uint8(packet.SequenceID + 1)
-	var seq = protocol.sequenceId
-	protocol.m.Unlock()
+	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
+	var seq = protocol.GetSequenceId()
 	if !ok {
 		return moerr.NewInternalError("message is not Packet")
 	}
@@ -170,7 +168,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = protocol.tcpConn.Read(goetty.ReadOptions{})
+		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
 			return moerr.NewInternalError("read msg error")
 		}
@@ -180,8 +178,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return moerr.NewInternalError("message is not Packet")
 		}
 
-		protocol.sequenceId = uint8(packet.SequenceID + 1)
-		seq = protocol.sequenceId
+		protocol.SetSequenceID(uint8(packet.SequenceID + 1))
+		seq = protocol.GetSequenceId()
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -194,8 +192,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-
-		if protocol.capability&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
+		ses := protocol.GetSession()
+		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			isTlsHeader, err := protocol.handleHandshake(payload)
 			if err != nil {
 				return err
@@ -205,7 +203,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				logutil.Infof("get TLS conn ok")
-				newCtx, cancelFun := context.WithTimeout(protocol.ses.GetRequestContext(), 20*time.Second)
+				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
 				if err := tlsConn.HandshakeContext(newCtx); err != nil {
 					cancelFun()
 					return err
@@ -230,8 +228,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			protocol.SetEstablished()
 		}
 
-		if protocol.ses != nil && protocol.database != "" {
-			protocol.ses.SetDatabaseName(protocol.database)
+		dbName := protocol.GetDatabaseName()
+		if ses != nil && dbName != "" {
+			ses.SetDatabaseName(dbName)
 		}
 		return nil
 	}

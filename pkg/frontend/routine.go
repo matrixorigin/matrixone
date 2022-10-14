@@ -143,7 +143,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		mgr := routine.GetRoutineMgr()
 
 		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
-		mpi.sequenceId = req.seq
+		mpi.SetSequenceID(req.seq)
 
 		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
 		executor := routine.GetCmdExecutor()
