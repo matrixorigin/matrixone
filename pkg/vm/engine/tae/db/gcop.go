@@ -15,6 +15,8 @@
 package db
 
 import (
+	"bytes"
+	"fmt"
 	"sync"
 	"time"
 
@@ -136,6 +138,81 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 	}
 }
 
+type gcCandidates struct {
+	blocks   *common.Tree
+	segments *common.Tree
+	tables   *common.Tree
+	dbs      map[uint64]bool
+}
+
+func newGCCandidates() *gcCandidates {
+	return &gcCandidates{
+		blocks:   common.NewTree(),
+		segments: common.NewTree(),
+		tables:   common.NewTree(),
+		dbs:      make(map[uint64]bool),
+	}
+}
+
+func (candidates *gcCandidates) IsEmpty() bool {
+	if !candidates.blocks.IsEmpty() {
+		return false
+	}
+	if !candidates.segments.IsEmpty() {
+		return false
+	}
+	if !candidates.tables.IsEmpty() {
+		return false
+	}
+	return len(candidates.dbs) == 0
+}
+
+func (candidates *gcCandidates) AddBlock(dbId, tableId, segmentId, blockId uint64) {
+	candidates.blocks.AddBlock(dbId, tableId, segmentId, blockId)
+}
+
+func (candidates *gcCandidates) AddSegment(dbId, tableId, segmentId uint64) {
+	candidates.segments.AddSegment(dbId, tableId, segmentId)
+}
+
+func (candidates *gcCandidates) AddTable(dbId, tableId uint64) {
+	candidates.tables.AddTable(dbId, tableId)
+}
+
+func (candidates *gcCandidates) AddDB(dbId uint64) {
+	candidates.dbs[dbId] = true
+}
+
+func (candidates *gcCandidates) String() string {
+	if candidates.IsEmpty() {
+		return ""
+	}
+	var w bytes.Buffer
+	if len(candidates.dbs) != 0 {
+		_, _ = w.WriteString("DB TO GC:[")
+		for id := range candidates.dbs {
+			_, _ = w.WriteString(fmt.Sprintf(" %d", id))
+		}
+		_, _ = w.WriteString("]\n")
+	}
+	if !candidates.tables.IsEmpty() {
+		_, _ = w.WriteString("TABLE TO GC:[")
+		_, _ = w.WriteString(candidates.tables.String())
+		_, _ = w.WriteString("]\n")
+	}
+	if !candidates.segments.IsEmpty() {
+		_, _ = w.WriteString("SEMENT TO GC:[")
+		_, _ = w.WriteString(candidates.segments.String())
+		_, _ = w.WriteString("]\n")
+	}
+	if !candidates.blocks.IsEmpty() {
+		_, _ = w.WriteString("BLOCK TO GC:[")
+		_, _ = w.WriteString(candidates.blocks.String())
+		_, _ = w.WriteString("]\n")
+	}
+	return w.String()
+}
+
 type garbageCollector struct {
 	*catalog.LoopProcessor
 	db              *DB
@@ -143,7 +220,7 @@ type garbageCollector struct {
 	runTs           types.TS
 	checkpointedLsn uint64
 	clock           *types.TsAlloctor
-	tree            *common.Tree
+	candidates      *gcCandidates
 	minInterval     time.Duration
 }
 
@@ -155,26 +232,31 @@ func newGarbageCollector(
 		db:            db,
 		minInterval:   minInterval,
 		clock:         types.NewTsAlloctor(db.Opts.Clock),
-		tree:          common.NewTree(),
+		candidates:    newGCCandidates(),
 	}
 	ckp.BlockFn = ckp.onBlock
 	ckp.SegmentFn = ckp.onSegment
 	ckp.TableFn = ckp.onTable
 	ckp.DatabaseFn = ckp.onDatabase
-	ckp.epoch = types.BuildTS(time.Now().UTC().UnixNano()-minInterval.Nanoseconds(), 0)
+	ckp.refreshEpoch()
 	return ckp
+}
+
+func (ckp *garbageCollector) refreshEpoch() {
+	ckp.epoch = types.BuildTS(time.Now().UTC().UnixNano()-ckp.minInterval.Nanoseconds(), 0)
 }
 
 func (ckp *garbageCollector) PreExecute() (err error) {
 	ckp.runTs = ckp.clock.Alloc()
 	ckp.checkpointedLsn = ckp.db.Scheduler.GetCheckpointedLSN()
-	// logutil.Infof("epoch=%s, lsn=%d", ckp.epoch.ToString(), ckp.checkpointedLsn)
 	return
 }
 
 func (ckp *garbageCollector) PostExecute() (err error) {
-	if ckp.tree.IsEmpty() {
-		ckp.epoch = types.BuildTS(time.Now().UTC().UnixNano()-ckp.minInterval.Nanoseconds(), 0)
+	if ckp.candidates.IsEmpty() {
+		ckp.refreshEpoch()
+	} else {
+		logutil.Info(ckp.candidates.String())
 	}
 	return
 }
@@ -222,7 +304,7 @@ func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
 	}
 	if ckp.isCandidate(entry.MetaBaseEntry, terminated, entry.RWMutex) {
 		id := entry.AsCommonID()
-		ckp.tree.AddBlock(entry.GetSegment().GetTable().GetDB().ID,
+		ckp.candidates.AddBlock(entry.GetSegment().GetTable().GetDB().ID,
 			id.TableID,
 			id.SegmentID,
 			id.BlockID)
@@ -231,26 +313,39 @@ func (ckp *garbageCollector) onBlock(entry *catalog.BlockEntry) (err error) {
 }
 
 func (ckp *garbageCollector) onSegment(entry *catalog.SegmentEntry) (err error) {
-	// var ts types.TS
-	// var terminated bool
-	// if ts, terminated = entry.TryGetTerminatedTS(); terminated {
-	// 	if ts.Greater(ckp.epoch) {
-	// 		terminated = false
-	// 	}
-	// }
-	// if ckp.isCandidate(entry.MetaBaseEntry, terminated, entry.RWMutex) {
-	// 	id := entry.AsCommonID()
-	// 	ckp.tree.AddSegment(entry.GetTable().GetDB().ID,
-	// 		id.TableID,
-	// 		id.SegmentID)
-	// }
+	var ts types.TS
+	var terminated bool
+	if ts, terminated = entry.GetTerminationTS(); terminated {
+		if ts.Greater(ckp.epoch) {
+			terminated = false
+		}
+	}
+	if ckp.isCandidate(entry.MetaBaseEntry, terminated, entry.RWMutex) {
+		id := entry.AsCommonID()
+		ckp.candidates.AddSegment(entry.GetTable().GetDB().ID,
+			id.TableID,
+			id.SegmentID)
+	}
 	return
 }
 
 func (ckp *garbageCollector) onTable(entry *catalog.TableEntry) (err error) {
+	var ts types.TS
+	var terminated bool
+	if ts, terminated = entry.GetTerminationTS(); terminated {
+		if ts.Greater(ckp.epoch) {
+			terminated = false
+		}
+	}
+	if ckp.isCandidate(entry.TableBaseEntry, terminated, entry.RWMutex) {
+		ckp.candidates.AddTable(entry.GetDB().ID, entry.ID)
+	}
 	return
 }
 
 func (ckp *garbageCollector) onDatabase(entry *catalog.DBEntry) (err error) {
+	if ckp.isCandidate(entry.DBBaseEntry, false, entry.RWMutex) {
+		ckp.candidates.AddDB(entry.ID)
+	}
 	return
 }
