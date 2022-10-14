@@ -33,3 +33,17 @@ select * from t1 where left(str, len) = 'ABC';
 select left(str, 3) from t1;
 select left('sdfsdfsdfsdf', len) from t1;
 drop table t1;
+
+DROP TABLE IF EXISTS t2;
+CREATE TABLE t2(
+d INT,
+d1 BIGINT,
+d2 FLOAT,
+d3 DOUBLE,
+PRIMARY KEY (d)
+);
+
+INSERT INTO t2 VALUES (1,101210131014,50565056.5566,80898089.8899);
+INSERT INTO t2 VALUES (2,46863515648464,9876453.3156153,6486454631564.156153489);
+SELECT LEFT(d1,3), LEFT(d2,4), LEFT(d3,5) FROM t2;
+drop table t2;
