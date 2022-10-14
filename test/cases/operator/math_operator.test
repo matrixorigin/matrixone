@@ -24,8 +24,4 @@ INSERT INTO t1 values(7, 5.3, 'xc', 'df');
 INSERT INTO t1 values(7, 5.3, 'xc', '1');
 
 select str1+str2 from t1;
-select cint+str1,str1+cint from t1;
-select cint+str2,str2+cint from t1;
-select cfloat+str1,str1+cfloat from t1;
-select cfloat+str2,str2+cfloat from t1;
 drop table t1;

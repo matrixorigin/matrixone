@@ -107,30 +107,6 @@ func PlusStringAndString[T1 types.Varlena, T2 types.Varlena](args []*vector.Vect
 	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddString)
 }
 
-func PlusStringAndFloat[T1 types.Varlena, T2 constraints.Float](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddFloat[T2])
-}
-
-func PlusStringAndSigned[T1 types.Varlena, T2 constraints.Signed](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddSigned[T2])
-}
-
-func PlusStringAndUnsigned[T1 types.Varlena, T2 constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.StringAddUnsigned[T2])
-}
-
-func PlusFloatAndString[T1 constraints.Float, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.FloatAddString[T1])
-}
-
-func PlusSignedAndString[T1 constraints.Signed, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.SignedAddString[T1])
-}
-
-func PlusUnsignedAndString[T1 constraints.Unsigned, T2 types.Varlena](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Arith[T1, T2](args, proc, types.T_float64.ToType(), add.UnsignedAddString[T1])
-}
-
 // Subtraction operation
 func MinusUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, args[0].GetType(), sub.NumericSubUnsigned[T])

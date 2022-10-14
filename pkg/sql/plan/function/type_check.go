@@ -167,29 +167,9 @@ func initTypeCheckRelated() {
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_date, types.T_datetime, types.T_datetime, types.T_datetime})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_datetime, types.T_date, types.T_datetime, types.T_datetime})
 
-		{
-			for _, t1 := range strings {
-				for _, t2 := range ints {
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, t1, types.T_int64})
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, types.T_int64, t1})
-				}
-				for _, t2 := range uints {
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, t1, types.T_uint64})
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, types.T_uint64, t1})
-				}
-				for _, t2 := range floats {
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, t2, t1, types.T_float64})
-					convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t2, t1, types.T_float64, t1})
-				}
-			}
-		}
-
 		for _, t1 := range strings {
 			for _, t2 := range all {
 				if t1 == t2 || t2 == types.T_any {
-					continue
-				}
-				if types.IsInteger(t2) || types.IsFloat(t2) {
 					continue
 				}
 
