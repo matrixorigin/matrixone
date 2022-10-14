@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -65,7 +66,8 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type EngineType `toml:"type"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.

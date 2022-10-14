@@ -1,0 +1,12 @@
+logservices = [
+    "./etc/launch-mem-CN-mem-DN/log.toml",
+]
+
+dnservices = [
+    "./etc/launch-mem-CN-mem-DN/dn.toml"
+]
+
+cnservices = [
+    "./etc/launch-mem-CN-mem-DN/cn.toml",
+    "./etc/launch-mem-CN-mem-DN/cn2.toml",
+]

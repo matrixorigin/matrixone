@@ -92,9 +92,9 @@ func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
 	}
 	return lsn
 }
+
 func (info *driverInfo) isToTruncate(logserviceLsn, driverLsn uint64) bool {
 	maxlsn := info.getMaxDriverLsn(logserviceLsn)
-	logutil.Infof("service %d, max %d, target %d", logserviceLsn, maxlsn, driverLsn)
 	if maxlsn == 0 {
 		return false
 	}
@@ -104,7 +104,6 @@ func (info *driverInfo) isToTruncate(logserviceLsn, driverLsn uint64) bool {
 func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
 	info.addrMu.RLock()
 	intervals, ok := info.addr[logserviceLsn]
-	logutil.Infof("interval %v", intervals)
 	if !ok {
 		info.addrMu.RUnlock()
 		return 0

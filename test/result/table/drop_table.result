@@ -3,3 +3,11 @@ create table table01(a int);
 drop table table01;
 show tables;
 tables_in_drop_table
+drop table if exists t1;
+create table t1(a int, b int, unique key(a));
+drop table if exists t1;
+create table t1(a int, b int, unique key(a));
+drop table if exists t1;
+create table t1(a int, b int, unique key(a, b));
+drop table if exists t1;
+create table t1(a int, b int, unique key(a, b));

@@ -17,6 +17,8 @@ package memorystorage
 import (
 	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 type NamedRow interface {
@@ -91,4 +93,22 @@ var _ NamedRow = new(NamedDataRow)
 
 func (n *NamedDataRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (Nullable, error) {
 	return n.Value[n.AttrsMap[name].Order], nil
+}
+
+func appendNamedRowToBatch(
+	tx *Transaction,
+	handler *MemHandler,
+	offset int,
+	bat *batch.Batch,
+	row NamedRow,
+) error {
+	for i := offset; i < len(bat.Attrs); i++ {
+		name := bat.Attrs[i]
+		value, err := row.AttrByName(handler, tx, name)
+		if err != nil {
+			return err
+		}
+		value.AppendVector(bat.Vecs[i], handler.mheap)
+	}
+	return nil
 }

@@ -118,6 +118,12 @@ type ViewDef struct {
 	View string
 }
 
+type ComputeIndexDef struct {
+	Names      []string
+	TableNames []string
+	Uniques    []bool
+}
+
 type TableDef interface {
 	tableDef()
 }
@@ -129,6 +135,7 @@ func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
 func (*PrimaryIndexDef) tableDef() {}
+func (*ComputeIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics

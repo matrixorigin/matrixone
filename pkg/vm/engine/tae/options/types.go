@@ -17,11 +17,11 @@ package options
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
 const (
@@ -45,6 +45,15 @@ const (
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 1024
+
+	DefaultLogstoreType = LogstoreBatchStore
+)
+
+type LogstoreType string
+
+const (
+	LogstoreBatchStore LogstoreType = "batchstore"
+	LogstoreLogservice LogstoreType = "logservice"
 )
 
 type Options struct {
@@ -55,8 +64,9 @@ type Options struct {
 	LogtailCfg    *LogtailCfg
 	Catalog       *catalog.Catalog
 
-	Clock clock.Clock
-	Fs    fileservice.FileService
-	Lc    logservice.Client
-	Shard metadata.DNShard
+	Clock     clock.Clock
+	Fs        fileservice.FileService
+	Lc        logservicedriver.LogServiceClientFactory
+	Shard     metadata.DNShard
+	LogStoreT LogstoreType
 }
