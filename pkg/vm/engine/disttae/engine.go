@@ -43,14 +43,13 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	db := newDB(cli, cluster.DNStores)
+	db := newDB(cluster.DNStores)
 	if err := db.init(ctx, proc.Mp()); err != nil {
 		panic(err)
 	}
 	return &Engine{
 		db:                db,
 		proc:              proc,
-		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
@@ -164,6 +163,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	}
 	txn := &Transaction{
 		proc:           e.proc,
+		op:             op,
 		db:             e.db,
 		readOnly:       true,
 		meta:           op.Txn(),
@@ -178,15 +178,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
