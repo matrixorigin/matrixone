@@ -108,7 +108,7 @@ jobs:
 
   bvt-linux-x86:
     runs-on: x86-runner
-    name: BVT Test on linux/x64
+    name: BVT Test on Linux/x64
     timeout-minutes: 30
 
     steps:
@@ -163,17 +163,19 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
+          mkdir upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
-
+          mv ./mo-tester ./upload/
+          mv ./head/mo-service.log ./upload/
+          
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
         with:
           name: linux_x86_ci_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/upload
           retention-days: 7
           
   bvt-linux-arm:
