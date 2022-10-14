@@ -28,14 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type GCType int16
+// type GCType int16
 
-const (
-	GCType_Block GCType = iota
-	GCType_Segment
-	GCType_Table
-	GCType_DB
-)
+// const (
+// 	GCType_Block GCType = iota
+// 	GCType_Segment
+// 	GCType_Table
+// 	GCType_DB
+// )
 
 const (
 	GCState_Active int32 = iota
@@ -237,7 +237,6 @@ type garbageCollector struct {
 	state           atomic.Int32
 	loopState       int32
 	epoch           types.TS
-	runTs           types.TS
 	checkpointedLsn uint64
 	clock           *types.TsAlloctor
 	candidates      *gcCandidates
