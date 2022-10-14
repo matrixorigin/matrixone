@@ -19,6 +19,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -126,8 +127,8 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromMeta(columnLength int, meta BlockMeta, fs fileservice.FileService) ([][64]byte, error) {
-	name, extent, _ := blockio.DecodeMetaLoc(meta.info.MetaLoc)
+func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs fileservice.FileService) ([][64]byte, error) {
+	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, columnLength)
 	idxs := make([]uint16, columnLength)
 	for i := 0; i < columnLength; i++ {

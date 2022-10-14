@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -251,4 +252,9 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
+}
+
+type BlockMeta struct {
+	info    catalog.BlockInfo
+	zonemap [][64]byte
 }
