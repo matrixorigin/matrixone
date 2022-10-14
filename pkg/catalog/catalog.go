@@ -40,7 +40,7 @@ func init() {
 	for i, name := range MoColumnsSchema {
 		MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
 	}
-	MoTableMetaDefs = make([]engine.TableDef, len(MoDatabaseSchema))
+	MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
@@ -121,6 +121,19 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	default:
 		return e, es[1:], nil
 	}
+}
+
+func GenBlockInfo(rows [][]any) []BlockInfo {
+	infos := make([]BlockInfo, len(rows))
+	for i, row := range rows {
+		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
+		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
+		infos[i].CreateAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
+		infos[i].DeleteAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
+		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
+		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+	}
+	return infos
 }
 
 func genCreateDatabases(rows [][]any) []CreateDatabase {
