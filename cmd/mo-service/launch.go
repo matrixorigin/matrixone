@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 func startCluster(stopper *stopper.Stopper) error {
@@ -35,17 +34,10 @@ func startCluster(stopper *stopper.Stopper) error {
 		return err
 	}
 
-	client, err := startLogServiceCluster(cfg.LogServiceConfigFiles, stopper)
-	if err != nil {
+	if err := startLogServiceCluster(cfg.LogServiceConfigFiles, stopper); err != nil {
 		return err
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			logutil.Error("close hakeeper client failed", zap.Error(err))
-		}
-	}()
-
-	if err := startDNServiceCluster(cfg.DNServiceConfigsFiles, stopper, client); err != nil {
+	if err := startDNServiceCluster(cfg.DNServiceConfigsFiles, stopper); err != nil {
 		return err
 	}
 	if err := startCNServiceCluster(cfg.CNServiceConfigsFiles, stopper); err != nil {
@@ -56,28 +48,27 @@ func startCluster(stopper *stopper.Stopper) error {
 
 func startLogServiceCluster(
 	files []string,
-	stopper *stopper.Stopper) (logservice.CNHAKeeperClient, error) {
+	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
-		return nil, moerr.NewBadConfig("DN service config not set")
+		return moerr.NewBadConfig("Log service config not set")
 	}
 
 	var cfg *Config
 	for _, file := range files {
 		cfg = &Config{}
 		if err := parseConfigFromFile(file, cfg); err != nil {
-			return nil, err
+			return err
 		}
 		if err := startService(cfg, stopper); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return waitHAKeeperReady(cfg.HAKeeperClient)
+	return nil
 }
 
 func startDNServiceCluster(
 	files []string,
-	stopper *stopper.Stopper,
-	client logservice.CNHAKeeperClient) error {
+	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig("DN service config not set")
 	}
@@ -91,7 +82,7 @@ func startDNServiceCluster(
 			return nil
 		}
 	}
-	return waitAnyShardReady(client)
+	return nil
 }
 
 func startCNServiceCluster(

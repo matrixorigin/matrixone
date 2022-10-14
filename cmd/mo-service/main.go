@@ -138,6 +138,12 @@ func startCNService(
 	if err := waitAnyShardReady(client); err != nil {
 		return err
 	}
+	defer func() {
+		if err := client.Close(); err != nil {
+			logutil.Error("close hakeeper client failed", zap.Error(err))
+		}
+	}()
+
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
