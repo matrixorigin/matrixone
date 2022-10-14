@@ -123,19 +123,18 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 }
 
-// util function, it will be used later
-// func genBlockInfo(rows [][]any) []BlockInfo {
-// 	infos := make([]BlockInfo, len(rows))
-// 	for i, row := range rows {
-// 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
-// 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
-// 		infos[i].CreateAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
-// 		infos[i].DeleteAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
-// 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
-// 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
-// 	}
-// 	return infos
-// }
+func genBlockInfo(rows [][]any) []BlockInfo {
+	infos := make([]BlockInfo, len(rows))
+	for i, row := range rows {
+		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
+		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
+		infos[i].CreateAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
+		infos[i].DeleteAt = row[BLOCKMETA_CREATEAT_IDX].(types.TS)
+		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
+		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+	}
+	return infos
+}
 
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
