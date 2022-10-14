@@ -599,6 +599,9 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 	mp := make(map[string][]*api.Entry)
 	for i := range writes {
 		for _, e := range writes[i] {
+			if e.bat.Length() == 0 {
+				continue
+			}
 			pe, err := toPBEntry(e)
 			if err != nil {
 				return nil, err
