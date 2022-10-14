@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -95,7 +94,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -133,7 +132,7 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {

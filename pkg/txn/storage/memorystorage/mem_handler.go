@@ -552,7 +552,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
 				index_RowID, memtable.ToOrdered(rowID),
@@ -585,7 +585,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if len(entries) == 1 && entries[0].Value.Name == req.ColumnName {
 		// by primary key
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			key := DataKey{
 				tableID:    req.TableID,
 				primaryKey: Tuple{memtable.ToOrdered(value.Value)},
@@ -627,7 +627,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			break
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
@@ -1078,7 +1078,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m, 0, b, namedRow); err != nil {
+		if err := appendNamedRowToBatch(tx, m, 0, b, namedRow); err != nil {
 			return err
 		}
 	}
@@ -1187,7 +1187,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	// iter
-	batchIter := NewBatchIter(b)
+	batchIter := memtable.NewBatchIter(b)
 	for {
 		row := batchIter()
 		if len(row) == 0 {

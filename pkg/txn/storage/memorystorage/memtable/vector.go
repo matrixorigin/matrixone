@@ -12,42 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorystorage
+package memtable
 
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type BatchIter func() (tuple []Nullable)
-
-func NewBatchIter(b *batch.Batch) BatchIter {
-	i := 0
-	iter := func() (tuple []Nullable) {
-		for {
-			if i >= b.Vecs[0].Length() {
-				return
-			}
-			if i < len(b.Zs) && b.Zs[i] == 0 {
-				i++
-				continue
-			}
-			break
-		}
-		for _, vec := range b.Vecs {
-			value := vectorAt(vec, i)
-			tuple = append(tuple, value)
-		}
-		i++
-		return
-	}
-	return iter
-}
-
-func vectorAt(vec *vector.Vector, i int) (value Nullable) {
+func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	if vec.IsConst() {
 		i = 0
 	}
@@ -358,22 +332,4 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 	}
 
 	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
-}
-
-func appendNamedRow(
-	tx *Transaction,
-	handler *MemHandler,
-	offset int,
-	bat *batch.Batch,
-	row NamedRow,
-) error {
-	for i := offset; i < len(bat.Attrs); i++ {
-		name := bat.Attrs[i]
-		value, err := row.AttrByName(handler, tx, name)
-		if err != nil {
-			return err
-		}
-		value.AppendVector(bat.Vecs[i], handler.mheap)
-	}
-	return nil
 }
