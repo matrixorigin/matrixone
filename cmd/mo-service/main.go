@@ -179,6 +179,14 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
+	client, err := waitHAKeeperReady(cfg.HAKeeperClient)
+	if err != nil {
+		panic(err)
+	}
+	if err := client.Close(); err != nil {
+		logutil.Error("close hakeeper client failed", zap.Error(err))
+	}
+
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(

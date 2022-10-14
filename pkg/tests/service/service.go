@@ -304,6 +304,9 @@ func (c *testCluster) Start() error {
 	if err := c.startLogServices(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
 	if err := c.startDNServices(); err != nil {
@@ -313,7 +316,6 @@ func (c *testCluster) Start() error {
 	if c.opt.initial.cnServiceNum != 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
