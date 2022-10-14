@@ -196,12 +196,13 @@ func (m *Merge) Main(ts time.Time) error {
 		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.DB, m.Table.GetName())
 		// get all file entry
 
-		fileEntry, err := m.FS.List(m.ctx, rootPath)
+		fileEntrys, err := m.FS.List(m.ctx, rootPath)
 		if err != nil {
 			// fixme: logutil.Error()
 			return err
 		}
-		for _, f := range fileEntry {
+		files = files[:0]
+		for _, f := range fileEntrys {
 			filepath := path.Join(rootPath, f.Name)
 			totalSize += f.Size
 			files = append(files, filepath)
@@ -264,6 +265,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
 		if err != nil {
 			// fixme: handle this path ? just return
+			// errorFileHandler(m.ctx, m.FS, path) without continue
 			continue
 		}
 		for line := reader.ReadLine(); line != nil; line = reader.ReadLine() {
@@ -272,13 +274,20 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 			// fixme: if !obj.Valid() { continue }
 			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
 		}
+		// fixme: reader.Close()
 		if cacheFileData.Size() > m.FileCacheSize {
-			cacheFileData.Flush(newFileWriter)
+			if err := cacheFileData.Flush(newFileWriter); err != nil {
+				// fixme: handle error situation
+				logutil.Errorf("merge file meet flush error: %v", err)
+			}
 			cacheFileData.Reset()
 		}
 	}
 	if !cacheFileData.IsEmpty() {
-		cacheFileData.Flush(newFileWriter)
+		if err := cacheFileData.Flush(newFileWriter); err != nil {
+			// fixme: handle error situation
+			logutil.Errorf("merge file meet flush error: %v", err)
+		}
 		cacheFileData.Reset()
 	}
 	newFileWriter.FlushAndClose()
@@ -336,7 +345,7 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 
 	// parse csv content
 	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
-		CommonCsvOptions.Terminator,
+		CommonCsvOptions.FieldTerminator,
 		'#',
 		true,
 		true)
@@ -375,7 +384,11 @@ func NewContentWriter(writer io.StringWriter) *ContentWriter {
 }
 
 func (w *ContentWriter) WriteStrings(record []string) error {
-	return w.parser.Write(record)
+	if err := w.parser.Write(record); err != nil {
+		return err
+	}
+	w.parser.Flush()
+	return nil
 }
 
 func (w *ContentWriter) FlushAndClose() error {
@@ -394,7 +407,7 @@ func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string) 
 type Cache interface {
 	Put(*Row)
 	Size() int64
-	Flush(CSVWriter)
+	Flush(CSVWriter) error
 	Reset()
 	IsEmpty() bool
 }
@@ -404,9 +417,13 @@ type SliceCache struct {
 	size int64
 }
 
-func (c *SliceCache) Flush(writer CSVWriter) {
-	//TODO implement me
-	panic("implement me")
+func (c *SliceCache) Flush(writer CSVWriter) error {
+	for _, record := range c.m {
+		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *SliceCache) Reset() {
@@ -432,9 +449,13 @@ type MapCache struct {
 	size int64
 }
 
-func (c *MapCache) Flush(writer CSVWriter) {
-	//TODO implement me
-	panic("implement me")
+func (c *MapCache) Flush(writer CSVWriter) error {
+	for _, record := range c.m {
+		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *MapCache) Reset() {
