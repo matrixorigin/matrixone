@@ -286,6 +286,9 @@ import (
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
 
+// Dump
+%token <str> DUMP
+
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
 
@@ -359,6 +362,8 @@ import (
 %type <statement> do_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
+%type <statement> dump_stmt
+%type <str> dump_into_param
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -575,6 +580,7 @@ stmt_list:
 
 stmt:
     create_stmt
+|   dump_stmt
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
@@ -604,6 +610,38 @@ stmt:
     {
         $$ = tree.Statement(nil)
     }
+
+
+dump_stmt:
+    DUMP ALL dump_into_param
+    {
+	$$ = &tree.Dump{
+	    All: true,
+	    OutFile: $3,
+	}
+    }
+|   DUMP DATABASE database_id dump_into_param
+    {
+	$$ = &tree.Dump{
+	    Database: tree.Identifier($3),
+	    OutFile: $4,
+	}
+    }
+|   DUMP TABLE table_name dump_into_param
+    {
+	$$ = &tree.Dump{
+	    Table: $3,
+	    OutFile: $4,
+	}
+    }
+
+
+dump_into_param:
+    INTO STRING
+    {
+	$$ = $2
+    }
+
 
 import_data_stmt:
     IMPORT DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
@@ -7551,6 +7589,7 @@ reserved_keyword:
 |   UNBOUNDED
 |   SECONDARY
 |   DECLARE
+|   DUMP
 
 non_reserved_keyword:
     ACCOUNT

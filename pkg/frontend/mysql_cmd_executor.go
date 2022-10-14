@@ -818,6 +818,26 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.Dump) error {
+	ses := mce.GetSession()
+	txnHandler := ses.GetTxnHandler()
+	exists, _, err := PathExists(dump.OutFile)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return moerr.NewFileAlreadyExists(dump.OutFile)
+	}
+	if dump.All {
+		dbs, err := ses.Pu.StorageEngine.Databases(requestCtx, txnHandler.GetTxn())
+		if err != nil {
+			return err
+		}
+		logutil.Infof("Dump all databases %v\n", dbs)
+	}
+	return nil
+}
+
 /*
 handle "SELECT @@xxx.yyyy"
 */
@@ -2094,6 +2114,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.Dump:
+			selfHandle = true
+			//dump
+			err = mce.handleDump(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
@@ -2369,6 +2396,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
+			*tree.Dump,
 			*tree.Delete:
 			runBegin := time.Now()
 			/*
@@ -2494,7 +2522,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateView, *tree.DropView, *tree.Load,
+				*tree.CreateView, *tree.DropView, *tree.Load, *tree.Dump,
 				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -2766,7 +2794,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true, nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Dump:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
