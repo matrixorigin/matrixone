@@ -15,7 +15,6 @@
 package binary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,19 +23,46 @@ import (
 )
 
 func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var err error
+	var (
+		err    error
+		length int
+		ret    *vector.Vector
+	)
+	defer func() {
+		if err != nil && ret != nil {
+			ret.Free(proc.Mp())
+		}
+	}()
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_varchar
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if len(path) != 1 && len(path) != len(json) {
-		return nil, moerr.NewInvalidInput("path length must be 1 or equal to json length")
+	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+		resultValues := make([]*bytejson.ByteJson, 0, 1)
+		resultValues, err = json_extract.QueryByString(json, path, resultValues)
+		if err != nil {
+			return nil, err
+		}
+		ret = vector.New(types.Type{Oid: resultType})
+		for _, v := range resultValues {
+			err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+			if err != nil {
+				return nil, err
+			}
+		}
+		ret.MakeScalar(1)
+		return ret, nil
 	}
-	resultValues := make([]*bytejson.ByteJson, 0, len(json))
+	if len(json) > len(path) {
+		length = len(json)
+	} else {
+		length = len(path)
+	}
+	resultValues := make([]*bytejson.ByteJson, 0, length)
 	resultValues, err = json_extract.QueryByString(json, path, resultValues)
 	if err != nil {
 		return nil, err
 	}
-	ret := vector.New(types.Type{Oid: resultType})
+	ret = vector.New(types.Type{Oid: resultType})
 	for _, v := range resultValues {
 		err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
 		if err != nil {
@@ -47,19 +73,46 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 }
 
 func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var err error
+	var (
+		err    error
+		length int
+		ret    *vector.Vector
+	)
+	defer func() {
+		if err != nil && ret != nil {
+			ret.Free(proc.Mp())
+		}
+	}()
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_varchar
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	if len(path) != 1 && len(path) != len(json) {
-		return nil, moerr.NewInvalidInput("path length must be 1 or equal to json length")
+	if jsonBytes.IsScalar() && pathBytes.IsScalar() {
+		resultValues := make([]*bytejson.ByteJson, 0, 1)
+		resultValues, err = json_extract.QueryByJson(json, path, resultValues)
+		if err != nil {
+			return nil, err
+		}
+		ret = vector.New(types.Type{Oid: resultType})
+		for _, v := range resultValues {
+			err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
+			if err != nil {
+				return nil, err
+			}
+		}
+		ret.MakeScalar(1)
+		return ret, nil
 	}
-	resultValues := make([]*bytejson.ByteJson, 0, len(json))
+	if len(json) > len(path) {
+		length = len(json)
+	} else {
+		length = len(path)
+	}
+	resultValues := make([]*bytejson.ByteJson, 0, length)
 	resultValues, err = json_extract.QueryByJson(json, path, resultValues)
 	if err != nil {
 		return nil, err
 	}
-	ret := vector.New(types.Type{Oid: resultType})
+	ret = vector.New(types.Type{Oid: resultType})
 	for _, v := range resultValues {
 		err = ret.Append([]byte(v.String()), v.IsNull(), proc.Mp())
 		if err != nil {

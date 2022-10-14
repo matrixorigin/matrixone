@@ -44,6 +44,20 @@ func byJson(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.ByteJ
 		}
 		return result, nil
 	}
+	if len(json) == 1 {
+		for i := range path {
+			pStar, err := types.ParseStringToPath(string(path[i]))
+			if err != nil {
+				return nil, err
+			}
+			ret, err := byJsonOne(json[0], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
+	}
 	for i := range path {
 		pStar, err := types.ParseStringToPath(string(path[i]))
 		if err != nil {
@@ -71,6 +85,20 @@ func byString(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.Byt
 		}
 		for i := range json {
 			ret, err := byStringOne(json[i], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
+	}
+	if len(json) == 1 {
+		for i := range path {
+			pStar, err := types.ParseStringToPath(string(path[i]))
+			if err != nil {
+				return nil, err
+			}
+			ret, err := byStringOne(json[0], &pStar)
 			if err != nil {
 				return nil, err
 			}
