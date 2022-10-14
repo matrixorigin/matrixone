@@ -18,7 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/constant"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"os"
 	"runtime"
 	"strconv"
@@ -28,7 +34,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -360,59 +365,65 @@ func WildcardMatch(pattern, target string) bool {
 
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
-	var value interface{}
-	var err error
 	switch v := e.(type) {
-	case *tree.NumVal:
-		switch v.ValType {
-		case tree.P_null:
-			value = nil
-		case tree.P_bool:
-			value = constant.BoolVal(v.Value)
-		case tree.P_char:
-			value = constant.StringVal(v.Value)
-		case tree.P_int64:
-			value, _ = constant.Int64Val(v.Value)
-		case tree.P_uint64:
-			value, _ = constant.Uint64Val(v.Value)
-		case tree.P_float64:
-			value, _ = constant.Float64Val(v.Value)
-		case tree.P_hexnum:
-			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
-			if err != nil {
-				return nil, err
-			}
-		case tree.P_bit:
-			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
-			if err != nil {
-				return nil, err
-			}
-		default:
-			return nil, errorNumericTypeIsNotSupported
-		}
-	case *tree.UnaryExpr:
-		ival, err := GetSimpleExprValue(v.Expr)
+	case *tree.UnresolvedName:
+		// set @a = on, type of a is bool.
+		return v.Parts[0], nil
+	default:
+		binder := plan2.NewDefaultBinder(nil, nil, nil, nil)
+		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
-		if v.Op == tree.UNARY_MINUS {
-			switch iival := ival.(type) {
-			case float64:
-				value = -1 * iival
-			case int64:
-				value = -1 * iival
-			case uint64:
-				value = -1 * int64(iival)
-			default:
-				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
-			}
+		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		vec, err := colexec.EvalExpr(bat, nil, planExpr)
+		if err != nil {
+			return nil, err
 		}
-	case *tree.UnresolvedName:
-		return v.Parts[0], nil
-	default:
-		return nil, errorComplicateExprIsNotSupported
+		return getValueFromVector(vec)
 	}
-	return value, nil
+}
+
+func getValueFromVector(vec *vector.Vector) (interface{}, error) {
+	if nulls.Any(vec.Nsp) {
+		return nil, nil
+	}
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return vector.GetValueAt[bool](vec, 0), nil
+	case types.T_int8:
+		return vector.GetValueAt[int8](vec, 0), nil
+	case types.T_int16:
+		return vector.GetValueAt[int16](vec, 0), nil
+	case types.T_int32:
+		return vector.GetValueAt[int32](vec, 0), nil
+	case types.T_int64:
+		return vector.GetValueAt[int64](vec, 0), nil
+	case types.T_uint8:
+		return vector.GetValueAt[uint8](vec, 0), nil
+	case types.T_uint16:
+		return vector.GetValueAt[uint16](vec, 0), nil
+	case types.T_uint32:
+		return vector.GetValueAt[uint32](vec, 0), nil
+	case types.T_uint64:
+		return vector.GetValueAt[uint64](vec, 0), nil
+	case types.T_float32:
+		return vector.GetValueAt[float32](vec, 0), nil
+	case types.T_float64:
+		return vector.GetValueAt[float64](vec, 0), nil
+	case types.T_char, types.T_varchar:
+		return vec.GetString(0), nil
+	case types.T_decimal64:
+		val := vector.GetValueAt[types.Decimal64](vec, 0)
+		return val.String(), nil
+	case types.T_decimal128:
+		val := vector.GetValueAt[types.Decimal128](vec, 0)
+		return val.String(), nil
+	default:
+		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
+	}
 }
 
 type statementStatus int
