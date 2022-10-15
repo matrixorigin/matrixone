@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package handle
+package catalog
 
-import "io"
+import "testing"
 
-type Database interface {
-	io.Closer
-
-	GetID() uint64
-	GetName() string
-	CreateRelation(def any) (Relation, error)
-	DropRelationByName(name string) (Relation, error)
-	TruncateByName(name string) (Relation, error)
-
-	UnsafeGetRelation(id uint64) (Relation, error)
-	GetRelationByName(name string) (Relation, error)
-	RelationCnt() int64
-	Relations() []Relation
-
-	MakeRelationIt() RelationIt
-	String() string
-	GetMeta() any
+func TestGenBlockMeta(t *testing.T) {
+	_ = GenBlockInfo(nil)
 }
