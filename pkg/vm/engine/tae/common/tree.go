@@ -14,7 +14,43 @@
 
 package common
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+type TreeVisitor interface {
+	VisitTable(dbID, id uint64) error
+	VisitSegment(dbID, tableID, id uint64) error
+	VisitBlock(dbID, tableID, segmentID, id uint64) error
+	String() string
+}
+
+type stringVisitor struct {
+	buf bytes.Buffer
+}
+
+func (visitor *stringVisitor) VisitTable(dbID, id uint64) (err error) {
+	if visitor.buf.Len() != 0 {
+		_ = visitor.buf.WriteByte('\n')
+	}
+	_, _ = visitor.buf.WriteString(fmt.Sprintf("Tree-TBL(%d,%d)", dbID, id))
+	return
+}
+
+func (visitor *stringVisitor) VisitSegment(dbID, tableID, id uint64) (err error) {
+	_, _ = visitor.buf.WriteString(fmt.Sprintf("\n[SEG-%d]", id))
+	return
+}
+
+func (visitor *stringVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
+	_, _ = visitor.buf.WriteString(fmt.Sprintf(" BLK-%d", id))
+	return
+}
+
+func (visitor *stringVisitor) String() string { return visitor.buf.String() }
 
 type Tree struct {
 	Tables map[uint64]*TableTree
@@ -52,11 +88,71 @@ func NewSegmentTree(id uint64) *SegmentTree {
 	}
 }
 
+func (tree *Tree) Reset() {
+	tree.Tables = make(map[uint64]*TableTree)
+}
+
+func (tree *Tree) String() string {
+	visitor := new(stringVisitor)
+	_ = tree.Visit(visitor)
+	return visitor.String()
+}
+
+func (tree *Tree) visitSegment(visitor TreeVisitor, table *TableTree, segment *SegmentTree) (err error) {
+	for id := range segment.Blks {
+		if err = visitor.VisitBlock(table.DbID, table.ID, segment.ID, id); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+			}
+			return
+		}
+	}
+	return
+}
+
+func (tree *Tree) visitTable(visitor TreeVisitor, table *TableTree) (err error) {
+	for _, segment := range table.Segs {
+		if err = visitor.VisitSegment(table.DbID, table.ID, segment.ID); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+			}
+			return
+		}
+		if err = tree.visitSegment(visitor, table, segment); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (tree *Tree) Visit(visitor TreeVisitor) (err error) {
+	for _, table := range tree.Tables {
+		if err = visitor.VisitTable(table.DbID, table.ID); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+				return
+			}
+			return
+		}
+		if err = tree.visitTable(visitor, table); err != nil {
+			return
+		}
+	}
+	return
+}
+func (tree *Tree) IsEmpty() bool                 { return tree.TableCount() == 0 }
 func (tree *Tree) TableCount() int               { return len(tree.Tables) }
 func (tree *Tree) GetTable(id uint64) *TableTree { return tree.Tables[id] }
 func (tree *Tree) HasTable(id uint64) bool {
 	_, found := tree.Tables[id]
 	return found
+}
+
+func (tree *Tree) AddTable(dbID, id uint64) {
+	if _, exist := tree.Tables[id]; !exist {
+		table := NewTableTree(dbID, id)
+		tree.Tables[id] = table
+	}
 }
 
 func (tree *Tree) AddSegment(dbID, tableID, id uint64) {
@@ -74,6 +170,14 @@ func (tree *Tree) AddBlock(dbID, tableID, segID, id uint64) {
 	tree.Tables[tableID].AddBlock(segID, id)
 }
 
+func (tree *Tree) GetSegment(tableID, segID uint64) *SegmentTree {
+	table := tree.GetTable(tableID)
+	if table == nil {
+		return nil
+	}
+	return table.GetSegment(segID)
+}
+
 func (tree *Tree) Merge(ot *Tree) {
 	if ot == nil {
 		return
@@ -86,6 +190,10 @@ func (tree *Tree) Merge(ot *Tree) {
 		}
 		t.Merge(ott)
 	}
+}
+
+func (ttree *TableTree) GetSegment(id uint64) *SegmentTree {
+	return ttree.Segs[id]
 }
 
 func (ttree *TableTree) AddSegment(id uint64) {

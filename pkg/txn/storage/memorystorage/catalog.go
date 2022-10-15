@@ -158,13 +158,13 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 	case catalog.SystemRelAttr_Persistence:
 		ret.Value = []byte("")
 	case catalog.SystemRelAttr_Kind:
-		ret.Value = []byte("r")
+		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_Kind]) // tae's logic
 	case catalog.SystemRelAttr_Comment:
 		ret.Value = r.Comments
 	case catalog.SystemRelAttr_Partition:
 		ret.Value = r.PartitionDef
 	case catalog.SystemRelAttr_CreateSQL:
-		ret.Value = []byte("")
+		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_CreateSQL]) // tae's logic
 	case catalog.SystemRelAttr_Owner:
 		ret.Value = uint32(0) //TODO
 	case catalog.SystemRelAttr_Creator:
@@ -175,6 +175,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = uint32(0)
 	case rowIDColumnName:
 		ret.Value = r.ID.ToRowID()
+	case catalog.SystemRelAttr_ViewDef:
+		ret.Value = []byte(r.ViewDef)
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -281,6 +283,18 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		} else {
 			ret.Value = []byte("")
 		}
+	case catalog.SystemColAttr_HasUpdate:
+		ret.Value = boolToInt8(a.OnUpdate != nil)
+	case catalog.SystemColAttr_Update:
+		if a.OnUpdate != nil {
+			expr, err := types.Encode(a.OnUpdate)
+			if err != nil {
+				return ret, nil
+			}
+			ret.Value = expr
+		} else {
+			ret.Value = []byte("")
+		}
 	case catalog.SystemColAttr_IsDropped:
 		ret.Value = boolToInt8(false)
 	case catalog.SystemColAttr_ConstraintType:
@@ -296,7 +310,7 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 			a.Type.Oid == types.T_uint64 ||
 			a.Type.Oid == types.T_uint128)
 	case catalog.SystemColAttr_IsAutoIncrement:
-		ret.Value = boolToInt8(false)
+		ret.Value = boolToInt8(a.AutoIncrement)
 	case catalog.SystemColAttr_IsHidden:
 		ret.Value = boolToInt8(a.IsHidden)
 	case catalog.SystemColAttr_Comment:

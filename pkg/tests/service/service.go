@@ -271,7 +271,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	)
 
 	if c.clock == nil {
-		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
 	clock.SetupDefaultClock(c.clock)
 
@@ -304,16 +304,19 @@ func (c *testCluster) Start() error {
 	if err := c.startLogServices(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
 	if err := c.startDNServices(); err != nil {
 		return err
 	}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel1()
+	c.WaitDNShardsReported(ctx1)
 
 	if c.opt.initial.cnServiceNum != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}

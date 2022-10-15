@@ -15,9 +15,141 @@ grant dev to lead with grant option;
 grant create table on database * to lead with grant option;
 grant newrole to anne;
 grant create table on database * to newrole with grant option;
-grant dev to newrole;
+grant dev to newrole with grant option;
 grant newrole to lead with grant option;
 grant newrole to anne;
 grant newrole to rolex with grant option;
+grant rolex to anne;
+drop database if exists t;
+create database t;
+use t;
+create table A(a int);
+drop table A;
+grant create table on database * to rx;
+grant create database on account * to rx;
+internal error: do not have privilege to execute the statement
+grant drop database on account * to rx;
+internal error: do not have privilege to execute the statement
+grant drop table on database * to rx;
+internal error: do not have privilege to execute the statement
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+internal error: do not have privilege to execute the statement
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
+grant newrole to rx,bill;
+internal error: do not have privilege to execute the statement
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set role lead;
+drop database if exists t;
+create database t;
+use t;
+create table A(a int);
+drop table A;
+grant create table on database * to rx;
+grant create database on account * to rx;
+internal error: do not have privilege to execute the statement
+grant drop database on account * to rx;
+grant drop table on database * to rx;
+internal error: do not have privilege to execute the statement
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set role newrole;
+drop database if exists t;
+create database t;
+use t;
+create table A(a int);
+drop table A;
+grant create table on database * to rx;
+grant create database on account * to rx;
+internal error: do not have privilege to execute the statement
+grant drop database on account * to rx;
+grant drop table on database * to rx;
+internal error: do not have privilege to execute the statement
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
+grant newrole to rx,bill;
+internal error: do not have privilege to execute the statement
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set role rolex;
+drop database if exists t;
+create database t;
+use t;
+create table A(a int);
+drop table A;
+grant create table on database * to rx;
+grant create database on account * to rx;
+internal error: do not have privilege to execute the statement
+grant drop database on account * to rx;
+grant drop table on database * to rx;
+internal error: do not have privilege to execute the statement
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+grant test to rx,bill;
+internal error: do not have privilege to execute the statement
+grant dev to rx,bill;
+grant intern to rx,bill;
+internal error: do not have privilege to execute the statement
+grant lead to rx,bill;
+grant newrole to rx,bill;
+grant rolex to rx,bill;
+internal error: do not have privilege to execute the statement
+drop database t;
 drop user anne,bill;
 drop role intern,lead,newrole,rolex,dev,test,rx;

@@ -238,7 +238,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 		buf.WriteString("` varchar(20)")
 	}
 	buf.WriteRune(')')
-	buf.WriteString(opts.GetTableOptions())
+	buf.WriteString(opts.GetTableOptions(nil))
 	return buf.String()
 }
 
@@ -341,6 +341,8 @@ var singleMetricTable = &trace.Table{
 	Engine:           trace.ExternalTableEngine,
 	Comment:          `metric data`,
 	TableOptions:     trace.GetOptionFactory(trace.ExternalTableEngine)(MetricDBConst, `metric`),
+	PathBuilder:      export.NewDBTablePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
 }
 
 type ViewWhereCondition struct {
