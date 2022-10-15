@@ -105,12 +105,11 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	return nil
 }
 
-func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
+func (un *EntryMVCCNode) ReplayCommit(ts types.TS) {
 	if un.CreatedAt == txnif.UncommitTS {
 		un.CreatedAt = ts
 	}
 	if un.DeletedAt == txnif.UncommitTS {
 		un.DeletedAt = ts
 	}
-	return nil
 }

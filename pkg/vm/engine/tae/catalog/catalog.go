@@ -133,7 +133,7 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer, txn txnif.AsyncTxn) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -141,7 +141,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache, cmdType, commitTS)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache, txn)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
@@ -157,55 +157,40 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer, txn)
 	case CmdUpdateTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer, txn)
 	case CmdUpdateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache, cmdType, commitTS)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache, txn)
 	case CmdUpdateBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer, txn)
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver, txn txnif.AsyncTxn) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	prepareTS := txn.GetPrepareTS()
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
 	var err error
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
-	}
 	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
-	if cmdType == txnif.CmdCommit {
-		un.onReplayCommit(commitTS)
-		return
-	}
-	if cmdType == txnif.Cmd1PC || un.Is1PC() {
-		un.onReplayCommit(prepareTS)
-	}
 	un.SetLogIndex(idx)
+	un.Txn = txn
+	if un.Is1PC() {
+		un.onReplayCommit()
+	}
 
 	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
-		if cmdType == txnif.CmdCommit {
-			panic("logic err")
-		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
 		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
@@ -218,9 +203,9 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 
 	dbun := db.SearchNode(un)
 	if dbun == nil {
-		db.Insert(un) //TODO isvalid
+		db.Insert(un)
 	} else {
-		dbun.Update(un)
+		panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
 }
 
@@ -251,23 +236,14 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}, true)
 }
 
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, txn txnif.AsyncTxn) {
 	catalog.OnReplayTableID(cmd.Table.ID)
-	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	prepareTS := txn.GetPrepareTS()
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
-	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -276,13 +252,11 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
 
 	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
-	if cmdType == txnif.CmdCommit {
-		un.onReplayCommit(commitTS)
-	}
-	if cmdType == txnif.Cmd1PC || un.Is1PC() {
-		un.onReplayCommit(prepareTS)
-	}
 	un.SetLogIndex(idx)
+	un.Txn = txn
+	if un.Is1PC() {
+		un.onReplayCommit()
+	}
 
 	if err != nil {
 		cmd.Table.db = db
@@ -297,7 +271,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
 	} else {
-		tblun.Update(un)
+		panic(fmt.Sprintf("duplicate node %v and %v", tblun, un))
 	}
 
 }
@@ -336,38 +310,21 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	idx *wal.Index,
 	observer wal.ReplayObserver,
 	cache *bytes.Buffer,
-	cmdType txnif.CmdType,
-	commitTS types.TS) {
+	txn txnif.AsyncTxn) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
-	}
 
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un.SetLogIndex(idx)
+	un.Txn = txn
 	if un.Is1PC() {
-		cmdType = txnif.Cmd1PC
-	}
-	switch cmdType {
-	case txnif.CmdCommit:
-		un.onReplayCommit(commitTS)
-	case txnif.CmdPrepare:
-		un.SetLogIndex(idx)
-	case txnif.Cmd1PC:
-		un.SetLogIndex(idx)
-		un.onReplayCommit(prepareTS)
+		un.onReplayCommit()
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -425,24 +382,14 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	dataFactory DataFactory,
 	idx *wal.Index,
 	observer wal.ReplayObserver,
-	cmdType txnif.CmdType,
-	commitTS types.TS) {
+	txn txnif.AsyncTxn) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
-	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	prepareTS := txn.GetPrepareTS()
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
-	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -458,17 +405,10 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un.SetLogIndex(idx)
+	un.Txn = txn
 	if un.Is1PC() {
-		cmdType = txnif.Cmd1PC
-	}
-	switch cmdType {
-	case txnif.CmdCommit:
-		un.onReplayCommit(commitTS)
-	case txnif.CmdPrepare:
-		un.SetLogIndex(idx)
-	case txnif.Cmd1PC:
-		un.SetLogIndex(idx)
-		un.onReplayCommit(prepareTS)
+		un.onReplayCommit()
 	}
 	if err == nil {
 		blkun := blk.SearchNode(un)

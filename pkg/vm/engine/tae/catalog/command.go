@@ -161,7 +161,50 @@ func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	}
 	return cmd.entry.GetLatestNodeLocked().GetLogIndex()
 }
-
+func (cmd *EntryCommand) SetReplayTxn(txn txnif.AsyncTxn) {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment:
+		cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode).Txn = txn
+	case CmdUpdateTable:
+		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).Txn = txn
+	case CmdUpdateDatabase:
+		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).Txn = txn
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
+func (cmd *EntryCommand) ApplyCommit() {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment:
+		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+		if node.Is1PC() {
+			return
+		}
+		node.onReplayCommit()
+	case CmdUpdateTable:
+		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).onReplayCommit()
+	case CmdUpdateDatabase:
+		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).onReplayCommit()
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
+func (cmd *EntryCommand) ApplyRollback() {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment:
+		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+		if node.Is1PC() {
+			return
+		}
+		node.onReplayRollback()
+	case CmdUpdateTable:
+		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).onReplayRollback()
+	case CmdUpdateDatabase:
+		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).onReplayRollback()
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
 func (cmd *EntryCommand) GetTs() types.TS {
 	ts := cmd.entry.GetLatestNodeLocked().GetPrepare()
 	return ts

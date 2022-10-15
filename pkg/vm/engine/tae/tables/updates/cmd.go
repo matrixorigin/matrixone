@@ -91,7 +91,36 @@ func (c *UpdateCmd) GetDBID() uint64 {
 func (c *UpdateCmd) GetDest() *common.ID {
 	return c.dest
 }
-
+func (c *UpdateCmd) SetReplayTxn(txn txnif.AsyncTxn) {
+	switch c.cmdType {
+	case txnbase.CmdAppend:
+		c.append.Txn = txn
+	case txnbase.CmdDelete:
+		c.delete.Txn = txn
+	default:
+		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
+	}
+}
+func (c *UpdateCmd) ApplyCommit() {
+	switch c.cmdType {
+	case txnbase.CmdAppend:
+		c.append.OnReplayCommit()
+	case txnbase.CmdDelete:
+		c.delete.OnReplayCommit()
+	default:
+		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
+	}
+}
+func (c *UpdateCmd) ApplyRollback() {
+	switch c.cmdType {
+	case txnbase.CmdAppend:
+		c.append.OnReplayRollback()
+	case txnbase.CmdDelete:
+		c.delete.OnReplayRollback()
+	default:
+		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
+	}
+}
 func (c *UpdateCmd) Desc() string {
 	if c.cmdType == txnbase.CmdAppend {
 		return fmt.Sprintf("CmdName=Append;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.append.GeneralDesc(), c.ID)

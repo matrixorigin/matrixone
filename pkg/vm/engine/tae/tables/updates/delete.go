@@ -90,8 +90,8 @@ func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) OnReplayCommit(ts types.TS) {
-	node.TxnMVCCNode.OnReplayCommit(ts)
+func (node *DeleteNode) OnReplayCommit() {
+	node.TxnMVCCNode.OnReplayCommit()
 }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id

@@ -278,8 +278,15 @@ func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	return
 }
 
-func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
+func (un *TxnMVCCNode) OnReplayCommit() (ts types.TS) {
+	if un.Is1PC() {
+		ts = un.Txn.GetPrepareTS()
+	} else {
+		ts = un.Txn.GetCommitTS()
+	}
+	un.Txn = nil
 	un.End = ts
+	return
 }
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.End = un.Txn.GetCommitTS()
@@ -288,9 +295,12 @@ func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.SetLogIndex(index)
 	return
 }
-func (un *TxnMVCCNode) OnReplayRollback(ts types.TS) {
+func (un *TxnMVCCNode) OnReplayRollback() (ts types.TS) {
+	ts = un.Txn.GetCommitTS()
+	un.Txn = nil
 	un.End = ts
 	un.Aborted = true
+	return
 }
 func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
