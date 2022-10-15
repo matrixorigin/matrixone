@@ -104,9 +104,13 @@ func (c *UpdateCmd) SetReplayTxn(txn txnif.AsyncTxn) {
 func (c *UpdateCmd) ApplyCommit() {
 	switch c.cmdType {
 	case txnbase.CmdAppend:
-		c.append.OnReplayCommit()
+		if _, err := c.append.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	case txnbase.CmdDelete:
-		c.delete.OnReplayCommit()
+		if _, err := c.delete.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	default:
 		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
 	}
@@ -114,9 +118,13 @@ func (c *UpdateCmd) ApplyCommit() {
 func (c *UpdateCmd) ApplyRollback() {
 	switch c.cmdType {
 	case txnbase.CmdAppend:
-		c.append.OnReplayRollback()
+		if err := c.append.ApplyRollback(nil); err != nil {
+			panic(err)
+		}
 	case txnbase.CmdDelete:
-		c.delete.OnReplayRollback()
+		if err := c.delete.ApplyRollback(nil); err != nil {
+			panic(err)
+		}
 	default:
 		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
 	}

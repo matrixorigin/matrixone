@@ -77,16 +77,15 @@ func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	err = e.EntryMVCCNode.ApplyCommit(commitTS)
 	return err
 }
-
-func (e *TableMVCCNode) onReplayCommit() {
-	ts := e.TxnMVCCNode.OnReplayCommit()
-	e.EntryMVCCNode.ReplayCommit(ts)
+func (e *TableMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return err
 }
-func (e *TableMVCCNode) onReplayRollback() {
-	ts := e.TxnMVCCNode.OnReplayRollback()
-	e.EntryMVCCNode.ReplayCommit(ts)
-}
-
 func (e *TableMVCCNode) PrepareCommit() (err error) {
 	_, err = e.TxnMVCCNode.PrepareCommit()
 	if err != nil {

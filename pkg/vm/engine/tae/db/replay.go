@@ -272,7 +272,9 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
 	if deleteNode.Is1PC() {
-		deleteNode.OnReplayCommit()
+		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	id := deleteNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
@@ -298,7 +300,9 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
 	if appendNode.Is1PC() {
-		appendNode.OnReplayCommit()
+		if _, err := appendNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	id := appendNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)

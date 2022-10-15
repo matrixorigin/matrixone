@@ -185,7 +185,9 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		un.onReplayCommit()
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 
 	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
@@ -253,7 +255,9 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		un.onReplayCommit()
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 
 	if err != nil {
@@ -320,7 +324,9 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		un.onReplayCommit()
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -402,7 +408,9 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		un.onReplayCommit()
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	if err == nil {
 		blkun := blk.SearchNode(un)

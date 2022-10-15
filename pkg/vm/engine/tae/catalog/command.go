@@ -175,32 +175,26 @@ func (cmd *EntryCommand) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 func (cmd *EntryCommand) ApplyCommit() {
 	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateSegment:
-		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
+		node := cmd.entry.GetLatestNodeLocked()
 		if node.Is1PC() {
 			return
 		}
-		node.onReplayCommit()
-	case CmdUpdateTable:
-		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).onReplayCommit()
-	case CmdUpdateDatabase:
-		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).onReplayCommit()
+		if err := node.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	default:
 		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
 	}
 }
 func (cmd *EntryCommand) ApplyRollback() {
 	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateSegment:
+	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
 		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 		if node.Is1PC() {
 			return
 		}
-		node.onReplayRollback()
-	case CmdUpdateTable:
-		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).onReplayRollback()
-	case CmdUpdateDatabase:
-		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).onReplayRollback()
+		node.ApplyRollback(nil)
 	default:
 		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
 	}

@@ -78,14 +78,14 @@ func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	e.EntryMVCCNode.ApplyCommit(commitTS)
 	return nil
 }
-
-func (e *DBMVCCNode) onReplayCommit() {
-	ts := e.TxnMVCCNode.OnReplayCommit()
-	e.EntryMVCCNode.ReplayCommit(ts)
-}
-func (e *DBMVCCNode) onReplayRollback() {
-	ts := e.TxnMVCCNode.OnReplayRollback()
-	e.EntryMVCCNode.ReplayCommit(ts)
+func (e *DBMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	if err != nil {
+		return
+	}
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
 }
 
 func (e *DBMVCCNode) PrepareCommit() (err error) {

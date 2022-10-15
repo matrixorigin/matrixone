@@ -93,17 +93,17 @@ func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	if err != nil {
 		return
 	}
-	e.EntryMVCCNode.ApplyCommit(commitTS)
-	return nil
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return err
 }
-
-func (e *MetadataMVCCNode) onReplayCommit() {
-	ts := e.TxnMVCCNode.OnReplayCommit()
-	e.EntryMVCCNode.ReplayCommit(ts)
-}
-func (e *MetadataMVCCNode) onReplayRollback() {
-	ts := e.TxnMVCCNode.OnReplayRollback()
-	e.EntryMVCCNode.ReplayCommit(ts)
+func (e *MetadataMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return
 }
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
