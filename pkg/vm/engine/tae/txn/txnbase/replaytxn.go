@@ -81,7 +81,12 @@ func (txn *ReplayTxn) Rollback() (err error) {
 func (txn *ReplayTxn) Committing() (err error) {
 	panic("not support")
 }
-
+func (txn *ReplayTxn) UnsafeGetDatabase(id uint64) (h handle.Database, err error) {
+	panic("not support")
+}
+func (txn *ReplayTxn) UnsafeGetRelation(dbid, tblid uint64) (h handle.Relation, err error) {
+	panic("not support")
+}
 func (txn *ReplayTxn) Commit() (err error) {
 	defer func() {
 		txn.Cmd.Close()
