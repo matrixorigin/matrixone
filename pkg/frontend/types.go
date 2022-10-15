@@ -52,6 +52,8 @@ type ComputationWrapper interface {
 	GetUUID() []byte
 
 	RecordExecPlan(ctx context.Context) error
+
+	GetLoadTag() bool
 }
 
 type ColumnInfo interface {
