@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -139,8 +140,13 @@ func (l *store) hakeeperCheck() {
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
 		if state.TaskState == pb.TaskInitNotStart {
-			// TODO: generate task table user here
-			l.setTaskTableUser(pb.TaskTableUser{})
+			if err := l.setTaskTableUser(pb.TaskTableUser{
+				Username: uuid.NewString(),
+				Password: uuid.NewString(),
+			}); err != nil {
+				l.logger.Error("failed to set task table user", zap.Error(err))
+				return
+			}
 		}
 		l.healthCheck(term, state)
 		l.taskSchedule(state)
