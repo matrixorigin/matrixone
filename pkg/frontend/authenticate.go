@@ -1650,8 +1650,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		}
 
 		//step1 : check the role exists or not;
-		pu := ses.Pu
-		bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+		pu := ses.GetParameterUnit()
+		bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 		defer bh.Close()
 		var sql string
 		var rsset []ExecResult
@@ -1730,8 +1730,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	pu := ses.GetParameterUnit()
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 	var err error
 	var sql string
@@ -1825,8 +1825,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	pu := ses.GetParameterUnit()
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1891,8 +1891,8 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	pu := ses.GetParameterUnit()
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1963,9 +1963,9 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		return err
 	}
 
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
@@ -2240,9 +2240,9 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		return err
 	}
 
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//Get primary keys
@@ -2399,9 +2399,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2568,9 +2568,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -3360,8 +3360,8 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	pu := ses.GetParameterUnit()
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//step 1: The Set R1 {default role id}
@@ -3547,10 +3547,10 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 		return false, err
 	}
 
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -3871,10 +3871,10 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
-	pu := ses.Pu
+	pu := ses.GetParameterUnit()
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.

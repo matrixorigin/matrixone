@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
 
@@ -35,17 +36,10 @@ func startCluster(stopper *stopper.Stopper) error {
 		return err
 	}
 
-	client, err := startLogServiceCluster(cfg.LogServiceConfigFiles, stopper)
-	if err != nil {
+	if err := startLogServiceCluster(cfg.LogServiceConfigFiles, stopper); err != nil {
 		return err
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			logutil.Error("close hakeeper client failed", zap.Error(err))
-		}
-	}()
-
-	if err := startDNServiceCluster(cfg.DNServiceConfigsFiles, stopper, client); err != nil {
+	if err := startDNServiceCluster(cfg.DNServiceConfigsFiles, stopper); err != nil {
 		return err
 	}
 	if err := startCNServiceCluster(cfg.CNServiceConfigsFiles, stopper); err != nil {
@@ -56,28 +50,27 @@ func startCluster(stopper *stopper.Stopper) error {
 
 func startLogServiceCluster(
 	files []string,
-	stopper *stopper.Stopper) (logservice.CNHAKeeperClient, error) {
+	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
-		return nil, moerr.NewBadConfig("DN service config not set")
+		return moerr.NewBadConfig("Log service config not set")
 	}
 
 	var cfg *Config
 	for _, file := range files {
 		cfg = &Config{}
 		if err := parseConfigFromFile(file, cfg); err != nil {
-			return nil, err
+			return err
 		}
 		if err := startService(cfg, stopper); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return waitHAKeeperReady(cfg.HAKeeperClient)
+	return nil
 }
 
 func startDNServiceCluster(
 	files []string,
-	stopper *stopper.Stopper,
-	client logservice.CNHAKeeperClient) error {
+	stopper *stopper.Stopper) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig("DN service config not set")
 	}
@@ -91,7 +84,7 @@ func startDNServiceCluster(
 			return nil
 		}
 	}
-	return waitAnyShardReady(client)
+	return nil
 }
 
 func startCNServiceCluster(
@@ -131,6 +124,24 @@ func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeep
 	}
 }
 
+func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	defer cancel()
+
+	// wait HAKeeper running
+	for {
+		state, err := client.GetClusterState(ctx)
+		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
+			state.State != logpb.HAKeeperRunning {
+			// not ready
+			logutil.Info("hakeeper not ready, retry")
+			time.Sleep(time.Second)
+			continue
+		}
+		return err
+	}
+}
+
 func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
 	defer cancel()
@@ -157,4 +168,21 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+func waitClusterContidion(
+	cfg logservice.HAKeeperClientConfig,
+	waitFunc func(logservice.CNHAKeeperClient) error,
+) error {
+	client, err := waitHAKeeperReady(cfg)
+	if err != nil {
+		return err
+	}
+	if err := waitFunc(client); err != nil {
+		return err
+	}
+	if err := client.Close(); err != nil {
+		logutil.Error("close hakeeper client failed", zap.Error(err))
+	}
+	return nil
 }
