@@ -159,14 +159,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 		if node.NodeType == plan.Node_TABLE_FUNCTION {
-			childId := node.Children[0]
-			childNode := builder.qry.Nodes[childId]
-			if childNode.NodeType != plan.Node_PROJECT {
-				break
-			}
-			_, err := builder.remapAllColRefs(childId, colRefCnt)
-			if err != nil {
-				return nil, err
+			if len(node.Children) > 0 {
+				childId := node.Children[0]
+				childNode := builder.qry.Nodes[childId]
+				if childNode.NodeType != plan.Node_PROJECT {
+					break
+				}
+				_, err := builder.remapAllColRefs(childId, colRefCnt)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -1526,11 +1528,17 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 
 	for i := 1; i < len(stmt); i++ {
 		rightCtx := NewBindContext(builder, ctx)
+		if tbl, ok := stmt[i].(*tree.TableFunction); ok {
+			tbls := make([]tree.TableExpr, 0, i)
+			for j := 0; j < i; j++ {
+				tbls = append(tbls, stmt[j])
+			}
+			tbl.Tbls = tbls
+		}
 		rightChildID, err := builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return 0, err
 		}
-
 		leftChildID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{leftChildID, rightChildID},
@@ -1716,8 +1724,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
 	case *tree.TableFunction:
-		subCtx := NewBindContext(builder, ctx)
-		return builder.buildTableFunction(tbl, subCtx)
+		return builder.buildTableFunction(tbl, ctx)
 
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx)
@@ -2210,12 +2217,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		node.FilterList = append(node.FilterList, filters...)
 	case plan.Node_TABLE_FUNCTION:
 		node.FilterList = append(node.FilterList, filters...)
-		childId := node.Children[0]
-		childId, err := builder.pushdownFilters(childId, nil)
-		if err != nil {
-			return 0, err
+		if len(node.Children) > 0 {
+			childId := node.Children[0]
+			childId, err := builder.pushdownFilters(childId, nil)
+			if err != nil {
+				return 0, err
+			}
+			node.Children[0] = childId
 		}
-		node.Children[0] = childId
 
 	default:
 		if len(node.Children) > 0 {
@@ -2239,10 +2248,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 }
 
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	var (
+		childId int32 = -1
+		err     error
+	)
+	if tbl.Tbls != nil {
+		childId, err = builder.buildFrom(tbl.Tbls, ctx)
+		if err != nil {
+			return 0, err
+		}
+		// rewrite right join to left join
+		builder.rewriteRightJoinToLeftJoin(childId)
+	}
+
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		return builder.buildUnnest(tbl, ctx)
+		return builder.buildUnnest(tbl, ctx, childId)
 	default:
 		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
 	}

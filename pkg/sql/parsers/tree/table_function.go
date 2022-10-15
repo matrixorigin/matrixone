@@ -17,6 +17,7 @@ package tree
 type TableFunction struct {
 	statementImpl
 	Func *FuncExpr
+	Tbls TableExprs
 }
 
 func (t *TableFunction) Format(ctx *FmtCtx) {

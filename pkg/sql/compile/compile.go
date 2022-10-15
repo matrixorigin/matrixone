@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"runtime"
 	"sync/atomic"
 
@@ -482,13 +480,15 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			pre []*Scope
 			err error
 		)
-		curr := c.anal.curr
-		c.anal.curr = int(n.Children[0])
-		pre, err = c.compilePlanScope(ns[n.Children[0]], ns)
-		if err != nil {
-			return nil, err
+		if len(n.Children) > 0 {
+			curr := c.anal.curr
+			c.anal.curr = int(n.Children[0])
+			pre, err = c.compilePlanScope(ns[n.Children[0]], ns)
+			if err != nil {
+				return nil, err
+			}
+			c.anal.curr = curr
 		}
-		c.anal.curr = curr
 		ss, err := c.compileTableFunction(n, pre)
 		if err != nil {
 			return nil, err
@@ -523,22 +523,18 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
-		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+		return c.compileUnnest(n, ss)
 	default:
 		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
-	externParam := &unnest.ExternalParam{}
-	if err := json.Unmarshal(dt, externParam); err != nil {
-		return nil, err
-	}
+func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, externParam),
+			Arg: constructUnnest(n, c.ctx),
 		})
 	}
 	return ss, nil

@@ -15,14 +15,9 @@
 package plan
 
 import (
-	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 var (
@@ -111,137 +106,15 @@ func _getDefaultColDefs() []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
-	var (
-		err             error
-		externParamData []byte
-		externParam     *unnest.ExternalParam
-		scanNode        *plan.Node
-		childId         int32 = -1
-		exprs           []*plan.Expr
-	)
-	if externParam, err = genTblParam(tbl); err != nil {
-		return 0, err
-	}
-	if externParamData, err = json.Marshal(externParam); err != nil {
-		return 0, err
-	}
-	switch o := tbl.Func.Exprs[0].(type) {
-	case *tree.UnresolvedName:
-		schemaName, tableName, colName := o.GetNames()
-		if len(schemaName) == 0 {
-			cteRef := ctx.findCTE(tableName)
-			if cteRef != nil {
-				subCtx := NewBindContext(builder, ctx)
-				subCtx.maskedCTEs = cteRef.maskedCTEs
-				subCtx.cteName = tableName
-				//reset defaultDatabase
-				if len(cteRef.defaultDatabase) > 0 {
-					subCtx.defaultDatabase = cteRef.defaultDatabase
-				}
-
-				switch stmt := cteRef.ast.Stmt.(type) {
-				case *tree.Select:
-					childId, err = builder.buildSelect(stmt, subCtx, false)
-
-				case *tree.ParenSelect:
-					childId, err = builder.buildSelect(stmt.Select, subCtx, false)
-
-				default:
-					err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-				}
-
-				if err != nil {
-					return 0, err
-				}
-
-				if subCtx.isCorrelated {
-					return 0, moerr.NewNYI("correlated column in CTE")
-				}
-
-				if subCtx.hasSingleRow {
-					ctx.hasSingleRow = true
-				}
-
-				cols := cteRef.ast.Name.Cols
-
-				if len(cols) > len(subCtx.headings) {
-					return 0, moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", tableName, len(subCtx.headings), len(cols))
-				}
-
-				for i, col := range cols {
-					subCtx.headings[i] = string(col)
-				}
-				break
-			}
-			schemaName = ctx.defaultDatabase
-		}
-		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
-		if objRef == nil {
-			return 0, moerr.NewSyntaxError("schema %s not found", schemaName)
-		}
-		if tableDef == nil {
-			return 0, moerr.NewSyntaxError("table %s not found", tableName)
-		}
-		scanNode = &plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			TableDef:    tableDef,
-			ObjRef:      objRef,
-			Cost:        builder.compCtx.Cost(objRef, nil),
-			BindingTags: []int32{builder.genNewTag()},
-		}
-		for i := 0; i < len(tableDef.Cols); i++ {
-			if tableDef.Cols[i].Name == colName {
-				tmp := &plan.Expr{
-					Typ: tableDef.Cols[i].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							ColPos: int32(i),
-							Name:   tableName + "." + tableDef.Cols[i].Name,
-						},
-					},
-				}
-				scanNode.ProjectList = append(scanNode.ProjectList, tmp)
-				break
-			}
-		}
-	case *tree.NumVal:
-		jsonStr := o.String()
-		if len(jsonStr) == 0 {
-			return 0, moerr.NewInvalidInput("unnest param is empty")
-		}
-		scanNode = &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: []byte(jsonStr)}},
-			ProjectList: []*plan.Expr{
-				{
-					Typ:  &plan.Type{Id: int32(types.T_varchar)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-			},
-		}
-	case *tree.FuncExpr:
-		//ctx.binder = NewDefaultBinder(builder, ctx, &plan.Type{Id: int32(types.T_varchar)},[]string{"unnest"})
-		ctx.binder = NewTableBinder(builder, ctx) // TODO: find a better way to build table function
-		expr, err := ctx.binder.BindExpr(tbl.Func.Exprs[0], 0, false)
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, childId int32) (int32, error) {
+	ctx.binder = NewTableBinder(builder, ctx)
+	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
+	for _, v := range tbl.Func.Exprs {
+		curExpr, err := ctx.binder.BindExpr(v, 0, false)
 		if err != nil {
 			return 0, err
 		}
-		exprs = append(exprs, expr)
-		scanNode = &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-			ProjectList: []*plan.Expr{
-				{
-					Typ:  &plan.Type{Id: int32(types.T_varchar)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-			},
-		}
-	default:
-		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
-	}
-	if scanNode != nil {
-		childId = builder.appendNode(scanNode, ctx)
+		exprs = append(exprs, curExpr)
 	}
 	colDefs := _getDefaultColDefs()
 	node := &plan.Node{
@@ -251,45 +124,50 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  "unnest",
-				Param: externParamData,
+				Name: "unnest",
 			},
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs, // now only support one func expr in unnest
 	}
+	if childId == -1 {
+		scanNode := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+		}
+		childId = builder.appendNode(scanNode, ctx)
+	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
 	return nodeID, nil
 }
 
-func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
-	if len(tbl.Func.Exprs) > 3 || len(tbl.Func.Exprs) < 1 {
-		return nil, moerr.NewInvalidInput("the number of unnest param is not valid")
-	}
-	var err error
-	uParam := &unnest.ExternalParam{}
-	switch o := tbl.Func.Exprs[0].(type) {
-	case *tree.UnresolvedName:
-		_, _, uParam.ColName = o.GetNames()
-		uParam.Typ = "col"
-	case *tree.FuncExpr:
-		uParam.Typ = "func"
-	case *tree.NumVal:
-		uParam.Typ = "str"
-	default:
-		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
-	}
-	if len(tbl.Func.Exprs) > 1 {
-		uParam.Path = tbl.Func.Exprs[1].String()
-	} else {
-		uParam.Path = "$"
-	}
-	if len(tbl.Func.Exprs) > 2 {
-		uParam.Outer = strings.ToLower(tbl.Func.Exprs[2].String()) == "true"
-	} else {
-		uParam.Outer = false
-	}
-	return uParam, err
-}
+//func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
+//	if len(tbl.Func.Exprs) > 3 || len(tbl.Func.Exprs) < 1 {
+//		return nil, moerr.NewInvalidInput("the number of unnest param is not valid")
+//	}
+//	var err error
+//	uParam := &unnest.ExternalParam{}
+//	switch o := tbl.Func.Exprs[0].(type) {
+//	case *tree.UnresolvedName:
+//		_, _, uParam.ColName = o.GetNames()
+//		uParam.Typ = "col"
+//	case *tree.FuncExpr:
+//		uParam.Typ = "func"
+//	case *tree.NumVal:
+//		uParam.Typ = "str"
+//	default:
+//		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
+//	}
+//	if len(tbl.Func.Exprs) > 1 {
+//		uParam.Path = tbl.Func.Exprs[1].String()
+//	} else {
+//		uParam.Path = "$"
+//	}
+//	if len(tbl.Func.Exprs) > 2 {
+//		uParam.Outer = strings.ToLower(tbl.Func.Exprs[2].String()) == "true"
+//	} else {
+//		uParam.Outer = false
+//	}
+//	return uParam, err
+//}

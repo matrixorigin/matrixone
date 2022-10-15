@@ -393,7 +393,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -402,7 +402,6 @@ func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalPa
 		Es: &unnest.Param{
 			Attrs:    attrs,
 			Cols:     n.TableDef.Cols,
-			Extern:   param,
 			ExprList: n.TblFuncExprList,
 		},
 	}

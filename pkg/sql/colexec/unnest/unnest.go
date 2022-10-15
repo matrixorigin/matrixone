@@ -16,6 +16,7 @@ package unnest
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -34,13 +35,20 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.colName = "UNNEST_DEFAULT"
-	if len(param.Extern.ColName) != 0 {
-		param.colName = param.Extern.ColName
-	}
-	param.path = param.Extern.Path
-	param.outer = param.Extern.Outer
-	param.typ = param.Extern.Typ
+	//if len(param.Extern.ColName) != 0 {
+	//	param.colName = param.Extern.ColName
+	//}
+	//param.path = param.Extern.Path
+	//param.outer = param.Extern.Outer
+	//param.typ = param.Extern.Typ
 	param.seq = 0
+	if len(param.ExprList) < 2 {
+		param.path = "$"
+		param.outer = false
+	}
+	if len(param.ExprList) < 3 {
+		param.outer = false
+	}
 	var filters []string
 	for i := range param.Attrs {
 		denied := false
@@ -60,14 +68,27 @@ func Prepare(_ *process.Process, arg any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
+	bat := proc.InputBatch()
+	if bat == nil {
+		return true, nil
+	}
+	if len(param.ExprList) == 1 {
+		src, err := colexec.EvalExpr(bat, proc, param.ExprList[0])
+		if err != nil {
+			return false, err
+		}
+		if src.Typ.Oid == types.T_json {
+			fmt.Println("json")
+		}
+		return callByStr(src, param, proc)
+	}
 	switch param.typ {
-	case "str":
-		return callByStr(param, proc)
 	case "col":
 		return callByCol(param, proc)
 	case "func":
 		return callByFunc(param, proc)
 	}
+	fmt.Println(bat)
 	return false, moerr.NewInvalidArg("unnest: invalid type:%s", param.typ)
 }
 
@@ -132,7 +153,7 @@ func callByFunc(param *Param, proc *process.Process) (bool, error) {
 	return false, nil
 }
 
-func callByStr(param *Param, proc *process.Process) (bool, error) {
+func callByStr(vec *vector.Vector, param *Param, proc *process.Process) (bool, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -145,11 +166,8 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 			rbat.Clean(proc.Mp())
 		}
 	}()
-	bat := proc.InputBatch()
-	if bat == nil {
-		return true, nil
-	}
-	json, err = types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
+
+	json, err = types.ParseStringToByteJson(vec.GetString(0))
 	if err != nil {
 		return false, err
 	}
