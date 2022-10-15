@@ -2248,7 +2248,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		cmpBegin = time.Now()
-
+		if strings.Contains(sql,"select a"){
+			fmt.Println("sql:",sql)
+		}
 		if ret, err = cw.Compile(requestCtx, ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}
@@ -2319,6 +2321,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if err = openNewFile(ses.ep, ses.Mrs); err != nil {
 					goto handleFailed
 				}
+			}
+			if strings.Contains(sql, "unnest") {
+				logutil.Infof("doComQuery sql %v ", sql)
 			}
 			if err = runner.Run(0); err != nil {
 				goto handleFailed

@@ -148,7 +148,8 @@ message Product {
 message Unnest{
     repeated string attrs = 1;
     repeated plan.ColDef cols = 2;
-    bytes extern = 3;
+    repeated plan.Expr exprs = 3;
+    string col_name = 4;
 }
 
 message Instruction{

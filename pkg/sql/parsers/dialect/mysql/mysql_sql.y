@@ -3552,10 +3552,24 @@ table_function:
     UNNEST '(' expression_list ')'
     {
        	name := tree.SetUnresolvedName(strings.ToLower($1))
+       	if len($3) < 1 || len($3) > 3 {
+       		yylex.Error(fmt.Sprintf("unnest args length must be 1, 2 or 3, got %d", len($3)))
+       	}
+       	var es tree.Exprs = nil
+       	if len($3) == 1 {
+       	    arg2 := tree.NewNumValWithType(constant.MakeString("$"), "$", false, tree.P_char)
+       	    arg3 := tree.NewNumValWithType(constant.MakeBool(false), "false", false, tree.P_bool)
+       	    es = tree.Exprs{$3[0], arg2, arg3}
+       	}else if len($3) == 2 {
+       	    arg3 := tree.NewNumValWithType(constant.MakeBool(false), "false", false, tree.P_bool)
+	    es = tree.Exprs{$3[0], $3[1], arg3}
+       	}else{
+       	    es = $3
+       	}
         $$ = &tree.TableFunction{
 	    Func: &tree.FuncExpr{
                 Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: $3,
+                Exprs: es,
                 Type: tree.FUNC_TYPE_TABLE,
             },
 	}
@@ -5835,17 +5849,6 @@ function_call_generic:
         }
     }
 
-//function_call_json:
-//    JSON_EXTRACT '(' STRING ',' STRING ')'
-//    {
-//        name := tree.SetUnresolvedName(strings.ToLower($1))
-//        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-//        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-//        $$ = &tree.FuncExpr{
-//            Func: tree.FuncName2ResolvableFunctionReference(name),
-//            Exprs: tree.Exprs{a1, a2},
-//        }
-//    }
 
 trim_direction:
     BOTH

@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1526,12 +1525,14 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 
 	for i := 1; i < len(stmt); i++ {
 		rightCtx := NewBindContext(builder, ctx)
-		if tbl, ok := stmt[i].(*tree.TableFunction); ok {
-			tbls := make([]tree.TableExpr, 0, i)
-			for j := 0; j < i; j++ {
-				tbls = append(tbls, stmt[j])
+		if _, ok := stmt[i].(*tree.TableFunction); ok {
+			return 0, moerr.NewSyntaxError("Every table function must have an alias")
+		}
+		if tbl, ok := stmt[i].(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
+			err = buildTableFunctionStmt(tbl, stmt[:i], leftCtx)
+			if err != nil {
+				return 0, err
 			}
-			tbl.Tbls = tbls
 		}
 		rightChildID, err := builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
@@ -2250,13 +2251,61 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		childId int32 = -1
 		err     error
 	)
-	if tbl.Tbls != nil {
-		childId, err = builder.buildFrom(tbl.Tbls, ctx)
+	if tbl.SelectStmt != nil {
+		childId, err = builder.buildSelect(tbl.SelectStmt, ctx, false)
 		if err != nil {
 			return 0, err
 		}
-		// rewrite right join to left join
-		builder.rewriteRightJoinToLeftJoin(childId)
+		//// rewrite right join to left join
+		//builder.rewriteRightJoinToLeftJoin(childId)
+		//selectList, _, err := ctx.unfoldStar("")
+		//if err != nil {
+		//	return 0, err
+		//}
+		//tag := builder.genNewTag() //TODO: check
+		//projectionBinder := NewProjectionBinder(builder, ctx, nil)
+		//for i, selectExpr := range selectList {
+		//	astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
+		//	if err != nil {
+		//		return 0, err
+		//	}
+		//
+		//	expr, err := projectionBinder.BindExpr(astExpr, 0, false) //TODO: check isRoot
+		//	if err != nil {
+		//		return 0, err
+		//	}
+		//
+		//	builder.nameByColRef[[2]int32{tag, int32(i)}] = tree.String(astExpr, dialect.MYSQL) //TODO: check tag
+		//
+		//	alias := string(selectExpr.As)
+		//	if len(alias) > 0 {
+		//		ctx.aliasMap[alias] = int32(len(ctx.projects))
+		//	}
+		//	ctx.projects = append(ctx.projects, expr)
+		//}
+		//// append PROJECT node
+		//for i, proj := range ctx.projects {
+		//	childId, proj, err = builder.flattenSubqueries(childId, proj, ctx)
+		//	if err != nil {
+		//		return 0, err
+		//	}
+		//
+		//	if proj == nil {
+		//		// TODO: implement MARK join to better support non-scalar subqueries
+		//		return 0, moerr.NewNYI("non-scalar subquery in SELECT clause")
+		//	}
+		//
+		//	ctx.projects[i] = proj
+		//}
+		//
+		//projectNode := &plan.Node{
+		//	NodeType:    plan.Node_PROJECT,
+		//	Children:    []int32{childId},
+		//	ProjectList: ctx.projects,
+		//	BindingTags: []int32{tag}, //TODO: check tag
+		//}
+		//childId = builder.appendNode(projectNode, ctx)
+		//ctx.projects = nil
 	}
 
 	id := tbl.Id()

@@ -224,9 +224,10 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  arg.Es.Attrs,
-				Cols:   arg.Es.Cols,
-				Extern: arg.Es.Extern,
+				Attrs:    arg.Es.Attrs,
+				Cols:     arg.Es.Cols,
+				ExprList: arg.Es.ExprList,
+				ColName:  arg.Es.ColName,
 			},
 		}
 	default:
@@ -403,6 +404,7 @@ func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
 			Attrs:    attrs,
 			Cols:     n.TableDef.Cols,
 			ExprList: n.TblFuncExprList,
+			ColName:  string(n.TableDef.TblFunc.Param),
 		},
 	}
 }

@@ -21,24 +21,14 @@ import (
 type Param struct {
 	Attrs    []string
 	Cols     []*plan.ColDef
-	Extern   *ExternalParam
 	ExprList []*plan.Expr
+	ColName  string
 	filters  []string
-	colName  string
 	seq      int32
-	path     string
-	outer    bool
-	typ      string
 }
 
 type Argument struct {
 	Es *Param
-}
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
-	Typ     string
 }
 
 var (

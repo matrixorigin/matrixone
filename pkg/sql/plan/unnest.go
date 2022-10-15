@@ -17,6 +17,7 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -117,6 +118,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		exprs = append(exprs, curExpr)
 	}
 	colDefs := _getDefaultColDefs()
+	colName := findColName(tbl.Func)
 	node := &plan.Node{
 		NodeType: plan.Node_TABLE_FUNCTION,
 		Cost:     &plan.Cost{},
@@ -124,7 +126,8 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name: "unnest",
+				Name:  "unnest",
+				Param: []byte(colName),
 			},
 			Cols: colDefs,
 		},
@@ -139,35 +142,15 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
+	clearBinding(ctx)
 	return nodeID, nil
 }
 
-//func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
-//	if len(tbl.Func.Exprs) > 3 || len(tbl.Func.Exprs) < 1 {
-//		return nil, moerr.NewInvalidInput("the number of unnest param is not valid")
-//	}
-//	var err error
-//	uParam := &unnest.ExternalParam{}
-//	switch o := tbl.Func.Exprs[0].(type) {
-//	case *tree.UnresolvedName:
-//		_, _, uParam.ColName = o.GetNames()
-//		uParam.Typ = "col"
-//	case *tree.FuncExpr:
-//		uParam.Typ = "func"
-//	case *tree.NumVal:
-//		uParam.Typ = "str"
-//	default:
-//		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
-//	}
-//	if len(tbl.Func.Exprs) > 1 {
-//		uParam.Path = tbl.Func.Exprs[1].String()
-//	} else {
-//		uParam.Path = "$"
-//	}
-//	if len(tbl.Func.Exprs) > 2 {
-//		uParam.Outer = strings.ToLower(tbl.Func.Exprs[2].String()) == "true"
-//	} else {
-//		uParam.Outer = false
-//	}
-//	return uParam, err
-//}
+func findColName(fn *tree.FuncExpr) string {
+	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
+		return ""
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fn.Exprs[0].Format(fmtCtx)
+	return fmtCtx.String()
+}
