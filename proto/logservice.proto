@@ -241,14 +241,16 @@ message TsoResponse {
 //
 
 enum HAKeeperUpdateType {
-  TickUpdate            = 0;
-  CNHeartbeatUpdate     = 1;
-  DNHeartbeatUpdate     = 2;
-  LogHeartbeatUpdate    = 3;
-  GetIDUpdate           = 4;
-  ScheduleCommandUpdate = 5;
-  SetStateUpdate        = 6;
-  InitialClusterUpdate  = 7;
+  TickUpdate              = 0;
+  CNHeartbeatUpdate       = 1;
+  DNHeartbeatUpdate       = 2;
+  LogHeartbeatUpdate      = 3;
+  GetIDUpdate             = 4;
+  ScheduleCommandUpdate   = 5;
+  SetStateUpdate          = 6;
+  InitialClusterUpdate    = 7;
+  SetInitTaskStateUpdate  = 8;
+  TaskTableUserUpdate     = 9;
 }
 
 enum HAKeeperState {
@@ -257,6 +259,20 @@ enum HAKeeperState {
   HAKeeperBootstrapCommandsReceived  = 2;
   HAKeeperBootstrapFailed            = 3;
   HAKeeperRunning                    = 4;
+}
+
+enum TaskInitState {
+  TaskInitNotStart  = 0;
+  TaskInitStarted   = 1;
+  TaskInitFailed    = 2;
+  TaskInitCompleted = 3;
+}
+
+message TaskTableUser {
+  // Username for task table user
+  string Username = 1;
+  // Password for task table user
+  string Password = 2;
 }
 
 // Replica of the shard
@@ -402,12 +418,14 @@ message HAKeeperRSMState {
   uint64 NextID                              = 2;
   uint64 Term                                = 3;
   HAKeeperState State                        = 4;
-  map<string, CommandBatch> ScheduleCommands = 5 [(gogoproto.nullable) = false];
-  map<string, uint64> LogShards = 6;
-  CNState CNState               = 7  [(gogoproto.nullable) = false];
-  DNState DNState               = 8  [(gogoproto.nullable) = false];
-  LogState LogState             = 9  [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 10 [(gogoproto.nullable) = false];
+  TaskInitState TaskInitState                = 5;
+  map<string, CommandBatch> ScheduleCommands = 6 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 7;
+  CNState CNState               = 8  [(gogoproto.nullable) = false];
+  DNState DNState               = 9  [(gogoproto.nullable) = false];
+  LogState LogState             = 10  [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 11 [(gogoproto.nullable) = false];
+  TaskTableUser TaskTableUser   = 12 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica
