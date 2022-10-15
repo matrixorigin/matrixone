@@ -311,8 +311,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err != nil {
 		return err
 	}
+	var metaLoc string
 	for i, block := range blocks {
-		metaLoc := blockio.EncodeSegMetaLoc(id, block.GetExtent(), uint32(batchs[i].Length()))
+		metaLoc, err = blockio.EncodeSegMetaLocWithObject(id, block.GetExtent(), uint32(batchs[i].Length()), blocks)
+		if err != nil {
+			return
+		}
 		err = blockHandles[i].UpdateMetaLoc(metaLoc)
 	}
 	for _, blk := range task.createdBlks {

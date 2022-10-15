@@ -539,7 +539,7 @@ func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs file
 	if err != nil {
 		return nil, err
 	}
-	ioVec, err := reader.Read(extent, idxs)
+	ioVec, err := reader.Read(extent, idxs, nil)
 	if err != nil {
 		return nil, err
 	}
