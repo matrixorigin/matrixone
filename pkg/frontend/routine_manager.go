@@ -101,7 +101,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		panic(err)
+		logutil.Error("failed to handshake with server, quiting routine...")
+		routine.Quit()
+		return
 	}
 
 	rm.setRoutine(rs, routine)
