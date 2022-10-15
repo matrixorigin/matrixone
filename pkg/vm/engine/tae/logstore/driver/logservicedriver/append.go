@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -62,7 +63,7 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
-	go appender.append(d.config.RetryTimeout)
+	go appender.append(d.config.RetryTimeout, d.config.ClientAppendDuration)
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
@@ -72,6 +73,7 @@ func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
 	}
 	client, err = d.clientPool.Get()
 	if err != nil {
+		logutil.Infof("LogService Driver: retry append err is %v", err)
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			client, err = d.clientPool.Get()
 			return err == nil

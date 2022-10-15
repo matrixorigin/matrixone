@@ -25,6 +25,7 @@ type Database interface {
 	DropRelationByName(name string) (Relation, error)
 	TruncateByName(name string) (Relation, error)
 
+	UnsafeGetRelation(id uint64) (Relation, error)
 	GetRelationByName(name string) (Relation, error)
 	RelationCnt() int64
 	Relations() []Relation

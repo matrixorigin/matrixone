@@ -62,7 +62,7 @@ func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 		// AppendFrequency:      time.Millisecond * 5,
 		RetryTimeout:         time.Minute,
 		ClientAppendDuration: time.Second,
-		TruncateDuration:     time.Second,
+		TruncateDuration:     time.Second * 10,
 		GetTruncateDuration:  time.Second,
 		ReadDuration:         time.Second,
 		ClientFactory:        clientFactory,
