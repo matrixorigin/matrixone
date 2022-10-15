@@ -16,15 +16,15 @@ package tables
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -37,26 +37,37 @@ type appendableNode struct {
 	exception *atomic.Value
 }
 
-func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
+func newNode(block *dataBlock) *appendableNode {
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
 	impl.rows = 0
 	impl.prefix = block.meta.MakeKey()
 
-	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
 	// opts.Capacity = int(schema.BlockMaxRows)
 	opts.Allocator = common.MutMemAllocator
-	if impl.data, err = file.LoadBatch(
+	impl.data = impl.initData(
 		schema.AllTypes(),
 		schema.AllNames(),
 		schema.AllNullables(),
-		opts); err != nil {
-		panic(err)
-	}
+		opts)
 	return impl
+}
+
+func (node *appendableNode) initData(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	opts *containers.Options) (bat *containers.Batch) {
+	bat = containers.NewBatch()
+
+	for i := range colNames {
+		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
+		bat.AddVector(colNames[i], vec)
+	}
+	return bat
 }
 
 func (node *appendableNode) Rows() uint32 {
@@ -77,7 +88,11 @@ func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *contai
 	schema := node.block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	data, err = node.block.file.LoadBatch(
+	reader, err := blockio.NewReader(node.block.fs, node.block.meta.GetMetaLoc())
+	if err != nil {
+		return nil, err
+	}
+	data, err = reader.LoadBlkColumns(
 		schema.AllTypes(),
 		schema.AllNames(),
 		schema.AllNullables(),

@@ -16,13 +16,13 @@ package evictable
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type DeltaDataNode struct {
@@ -40,14 +40,14 @@ type DeltaDataNode struct {
 	deltaMetaFactory EvictableNodeFactory
 }
 
-func NewDeltaDataNode(mgr base.INodeManager, deltaDataKey, metaKey string, blk file.Block, deltaloc string, colidx uint16, typ types.Type) (node *DeltaDataNode, err error) {
+func NewDeltaDataNode(mgr base.INodeManager, deltaDataKey, metaKey string, fs *objectio.ObjectFS, deltaloc string, colidx uint16, typ types.Type) (node *DeltaDataNode, err error) {
 	node = &DeltaDataNode{
 		deltaDataKey:     deltaDataKey,
 		metaKey:          metaKey,
 		mgr:              mgr,
 		colidx:           colidx,
 		typ:              typ,
-		deltaMetaFactory: func() (base.INode, error) { return NewDeltaMetaNode(mgr, metaKey, blk, deltaloc), nil },
+		deltaMetaFactory: func() (base.INode, error) { return NewDeltaMetaNode(mgr, metaKey, fs, deltaloc), nil },
 	}
 	// For disk, size is zero, do not cache, read directly when GetData
 	var size uint32 = 0
@@ -128,10 +128,10 @@ func (n *DeltaDataNode) onUnload() {
 	n.Data = nil
 }
 
-func FetchDeltaData(buf *bytes.Buffer, mgr base.INodeManager, blk file.Block, deltaloc string, colidx uint16, typ types.Type) (res containers.Vector, err error) {
+func FetchDeltaData(buf *bytes.Buffer, mgr base.INodeManager, fs *objectio.ObjectFS, deltaloc string, colidx uint16, typ types.Type) (res containers.Vector, err error) {
 	deltaDataKey := EncodeDeltaDataKey(colidx, deltaloc)
 	factory := func() (base.INode, error) {
-		return NewDeltaDataNode(mgr, deltaDataKey, EncodeDeltaMetaKey(deltaloc), blk, deltaloc, colidx, typ)
+		return NewDeltaDataNode(mgr, deltaDataKey, EncodeDeltaMetaKey(deltaloc), fs, deltaloc, colidx, typ)
 	}
 	h, err := PinEvictableNode(mgr, deltaDataKey, factory)
 	if err != nil {
