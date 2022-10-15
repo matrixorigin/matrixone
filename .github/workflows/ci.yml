@@ -150,6 +150,8 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
+          export LC_ALL="C.UTF-8"
+          locale
           sleep 120s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
