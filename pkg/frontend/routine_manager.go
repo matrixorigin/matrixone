@@ -50,23 +50,50 @@ func (rm *RoutineManager) GetSkipCheckUser() bool {
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
 	return rm.pu
 }
 
+func (rm *RoutineManager) getCtx() context.Context {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	return rm.ctx
+}
+
+func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	rm.clients[rs] = r
+}
+
+func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	return rm.clients[rs]
+}
+
+func (rm *RoutineManager) getTlsConfig() *tls.Config {
+	rm.rwlock.RLock()
+	defer rm.rwlock.RUnlock()
+	return rm.tlsConfig
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.MaxBytesInOutbufToFlush), rm.pu.SV)
+	pu := rm.getParameterUnit()
+	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
 	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 
-	routine := NewRoutine(rm.ctx, pro, exe, rm.pu)
+	routine := NewRoutine(rm.getCtx(), pro, exe, pu)
 	routine.SetRoutineMgr(rm)
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.protocol, nil, rm.pu, gSysVariables)
-	ses.SetRequestContext(routine.cancelRoutineCtx)
+	ses := NewSession(routine.GetClientProtocol(), nil, pu, gSysVariables)
+	ses.SetRequestContext(routine.GetCancelRoutineCtx())
 	ses.SetFromRealUser(true)
 	routine.SetSession(ses)
 	pro.SetSession(ses)
@@ -77,40 +104,42 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		panic(err)
 	}
 
-	rm.rwlock.Lock()
-	defer rm.rwlock.Unlock()
-	rm.clients[rs] = routine
+	rm.setRoutine(rs, routine)
 }
 
 /*
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
-	rm.rwlock.Lock()
-	defer rm.rwlock.Unlock()
-	defer delete(rm.clients, rs)
+	var rt *Routine
+	var ok bool
 
-	rt, ok := rm.clients[rs]
-	if !ok {
-		return
+	rm.rwlock.Lock()
+	rt, ok = rm.clients[rs]
+	if ok {
+		delete(rm.clients, rs)
 	}
+	rm.rwlock.Unlock()
+
 	logutil.Infof("will close iosession")
-	rt.Quit()
+	if rt != nil {
+		rt.Quit()
+	}
 }
 
 /*
 KILL statement
 */
 func (rm *RoutineManager) killStatement(id uint64) error {
-	rm.rwlock.Lock()
-	defer rm.rwlock.Unlock()
 	var rt *Routine = nil
+	rm.rwlock.Lock()
 	for _, value := range rm.clients {
 		if uint64(value.getConnID()) == id {
 			rt = value
 			break
 		}
 	}
+	rm.rwlock.Unlock()
 
 	if rt != nil {
 		logutil.Infof("will close the statement %d", id)
@@ -120,21 +149,17 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
-	rm.rwlock.RLock()
-	routine, ok := rm.clients[rs]
-	rm.rwlock.RUnlock()
-	if !ok {
+	routine := rm.getRoutine(rs)
+	if routine == nil {
 		return moerr.NewInternalError("routine does not exist")
 	}
 
-	protocol := routine.protocol.(*MysqlProtocolImpl)
+	protocol := routine.GetClientProtocol().(*MysqlProtocolImpl)
 
 	packet, ok := msg.(*Packet)
 
-	protocol.m.Lock()
-	protocol.sequenceId = uint8(packet.SequenceID + 1)
-	var seq = protocol.sequenceId
-	protocol.m.Unlock()
+	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
+	var seq = protocol.GetSequenceId()
 	if !ok {
 		return moerr.NewInternalError("message is not Packet")
 	}
@@ -143,7 +168,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = protocol.tcpConn.Read(goetty.ReadOptions{})
+		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
 			return moerr.NewInternalError("read msg error")
 		}
@@ -153,8 +178,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return moerr.NewInternalError("message is not Packet")
 		}
 
-		protocol.sequenceId = uint8(packet.SequenceID + 1)
-		seq = protocol.sequenceId
+		protocol.SetSequenceID(uint8(packet.SequenceID + 1))
+		seq = protocol.GetSequenceId()
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -167,8 +192,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-
-		if protocol.capability&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
+		ses := protocol.GetSession()
+		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			isTlsHeader, err := protocol.handleHandshake(payload)
 			if err != nil {
 				return err
@@ -176,9 +201,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			if isTlsHeader {
 				logutil.Infof("upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.tlsConfig)
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				logutil.Infof("get TLS conn ok")
-				newCtx, cancelFun := context.WithTimeout(protocol.ses.requestCtx, 20*time.Second)
+				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
 				if err := tlsConn.HandshakeContext(newCtx); err != nil {
 					cancelFun()
 					return err
@@ -203,13 +228,14 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			protocol.SetEstablished()
 		}
 
-		if protocol.ses != nil && protocol.database != "" {
-			protocol.ses.SetDatabaseName(protocol.database)
+		dbName := protocol.GetDatabaseName()
+		if ses != nil && dbName != "" {
+			ses.SetDatabaseName(dbName)
 		}
 		return nil
 	}
 
-	req := routine.protocol.GetRequest(payload)
+	req := routine.GetClientProtocol().GetRequest(payload)
 	req.seq = seq
 	routine.requestChan <- req
 

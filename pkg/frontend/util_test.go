@@ -458,8 +458,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 		kases := []args{
 			{"set @@x=1", false, 1},
 			{"set @@x=-1", false, -1},
-			{"set @@x=1.0", false, 1.0},
-			{"set @@x=-1.0", false, -1.0},
+			{"set @@x=1.0", false, "1"},
+			{"set @@x=-1.0", false, "-1"},
 			{fmt.Sprintf("set @@x=%d", math.MaxInt64), false, math.MaxInt64},
 			{fmt.Sprintf("set @@x=%d", -math.MaxInt64), false, -math.MaxInt64},
 			{"set @@x=true", false, true},
@@ -468,7 +468,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=off", false, "off"},
 			{"set @@x=abc", false, "abc"},
 			{"set @@x=null", false, nil},
-			{"set @@x=-null", true, nil},
+			{"set @@x=-null", false, nil},
 			{"set @@x=-x", true, nil},
 		}
 

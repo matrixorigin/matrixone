@@ -50,6 +50,11 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 
 func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
 	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
+	defer func() {
+		if !c.teardown {
+			c.logger.Info("MO is working.")
+		}
+	}()
 
 	c.OperatorController.RemoveFinishedOperator(logState, dnState)
 
