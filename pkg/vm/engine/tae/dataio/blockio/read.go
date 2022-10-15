@@ -196,7 +196,7 @@ func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*co
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 
-	name, extent := DecodeDeltaLoc(deltaloc)
+	name, extent, _ := DecodeMetaLoc(deltaloc)
 	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
 		return nil, err
