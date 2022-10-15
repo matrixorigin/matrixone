@@ -17,9 +17,12 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -204,6 +207,54 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 			}, nil
 		}
 	}
+}
+
+// initUser for initialization or something special
+type initUser struct {
+	account  *TenantInfo
+	password []byte
+}
+
+var (
+	specialUser atomic.Value
+)
+
+// SetSpecialUser saves the user for initialization
+// !!!NOTE: userName must not contain Colon ':'
+func SetSpecialUser(userName string, password []byte) {
+	acc := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          userName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        math.MaxUint32,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	user := &initUser{
+		account:  acc,
+		password: password,
+	}
+
+	specialUser.Store(user)
+}
+
+// isSpecialUser checks the user is the one for initialization
+func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
+	user := getSpecialUser()
+	if user != nil && user.account.GetUser() == userName {
+		return true, user.password, user.account
+	}
+	return false, nil, nil
+}
+
+// getSpecialUser loads the user for initialization
+func getSpecialUser() *initUser {
+	value := specialUser.Load()
+	if value == nil {
+		return nil
+	}
+	return value.(*initUser)
 }
 
 const (

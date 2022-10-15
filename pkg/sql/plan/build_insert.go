@@ -213,11 +213,26 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 	return moerr.NewTruncatedValueForField(id.String(), str, col.Name, rowIdx+1)
 }
 
+func SetPlanLoadTag(pn *Plan) {
+	pn2, ok := pn.Plan.(*plan.Plan_Query)
+	if !ok {
+		return
+	}
+	nodes := pn2.Query.Nodes
+	for i := 0; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_EXTERNAL_SCAN {
+			pn2.Query.LoadTag = true
+			return
+		}
+	}
+}
+
 func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	pn, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Rows)
 	if err != nil {
 		return nil, err
 	}
+	SetPlanLoadTag(pn)
 	cols := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
 	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {
