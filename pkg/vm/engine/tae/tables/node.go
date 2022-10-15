@@ -47,9 +47,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	// XXX What is the rule of using these Allocators?   It all seems
-	// very random.
+	// opts.Capacity = int(schema.BlockMaxRows)
 	opts.Allocator = common.MutMemAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),

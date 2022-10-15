@@ -65,7 +65,7 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 func consumerLogTail(idx int, ctx context.Context, db *DB,
 	mvcc MVCC, logTail *api.SyncLogTailResp) error {
 	if err := consumerCheckPoint(logTail.CkpLocation); err != nil {
-		return nil
+		return err
 	}
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err := consumerEntry(idx, ctx, db, mvcc, logTail.Commands[i]); err != nil {

@@ -63,8 +63,10 @@ PREPARE s1 FROM 'SELECT * FROM test_table WHERE fl=?';
 PREPARE s2 FROM 'SELECT * FROM test_table WHERE dou=?';
 EXECUTE s1 USING @fl_hit;
 pk    fl    dou
+0    1.2345678    1.22334455667789
 EXECUTE s1 USING @fl_not_hit;
 pk    fl    dou
+0    1.2345678    1.22334455667789
 EXECUTE s1 USING @dou_hit;
 pk    fl    dou
 EXECUTE s1 USING @dou_not_hit;

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (s *service) initDistributedTAE(
@@ -48,22 +47,17 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	txnOperator, err := pu.TxnClient.New()
-	if err != nil {
-		return err
-	}
-
 	// Should be no fixed or some size?
 	mp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
-	proc := process.New(ctx, mp, pu.TxnClient, txnOperator, pu.FileService)
 
 	// engine
 	pu.StorageEngine = disttae.New(
-		proc,
 		ctx,
+		mp,
+		s.fileService,
 		client,
 		hakeeper,
 		memoryengine.GetClusterDetailsFromHAKeeper(
