@@ -141,8 +141,8 @@ func newDNService(
 	}, nil
 }
 
-// buildDnConfig builds configuration for a dn service.
-func buildDnConfig(
+// buildDNConfig builds configuration for a dn service.
+func buildDNConfig(
 	index int, opt Options, address serviceAddresses,
 ) *dnservice.Config {
 	cfg := &dnservice.Config{
@@ -163,10 +163,10 @@ func buildDnConfig(
 	return cfg
 }
 
-// buildDnOptions builds options for a dn service.
+// buildDNOptions builds options for a dn service.
 //
 // NB: We need the filled version of dnservice.Config.
-func buildDnOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
+func buildDNOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
 	// factory to construct client for hakeeper
 	hakeeperClientFactory := func() (logservice.DNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeout(
