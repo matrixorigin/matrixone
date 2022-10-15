@@ -331,16 +331,8 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsTableFunctionValueScan(n) {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-			bat.Vecs[0].Col = make([]int64, 1)
-		}
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
 		bat.InitZsOne(1)
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
@@ -480,15 +472,14 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			pre []*Scope
 			err error
 		)
-		if len(n.Children) > 0 {
-			curr := c.anal.curr
-			c.anal.curr = int(n.Children[0])
-			pre, err = c.compilePlanScope(ns[n.Children[0]], ns)
-			if err != nil {
-				return nil, err
-			}
-			c.anal.curr = curr
+		curr := c.anal.curr
+		c.anal.curr = int(n.Children[0])
+		pre, err = c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
 		}
+		c.anal.curr = curr
+		
 		ss, err := c.compileTableFunction(n, pre)
 		if err != nil {
 			return nil, err

@@ -568,8 +568,3 @@ func isConstant(e *plan.Expr) bool {
 		return false
 	}
 }
-
-func IsTableFunctionValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
-	// node must be a value scan
-	return node.TableDef != nil && node.TableDef.TblFunc != nil && len(node.TableDef.TblFunc.Param) > 0
-}
