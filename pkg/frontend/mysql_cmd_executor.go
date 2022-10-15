@@ -1781,7 +1781,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
-	cwft.proc.TxnOperator = txnHandler.GetTxn()
+	if cwft.plan.GetQuery().GetLoadTag() {
+		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
+	} else {
+		cwft.proc.TxnOperator = txnHandler.GetTxn()
+	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
@@ -1809,6 +1813,10 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
+}
+
+func (cwft *TxnComputationWrapper) GetLoadTag() bool {
+	return cwft.plan.GetQuery().GetLoadTag()
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
@@ -2141,6 +2149,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
+		case *tree.Load:
+			fromLoadData = true
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
@@ -2298,6 +2308,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
+		fromLoadData = cw.GetLoadTag()
 
 		runner = ret.(ComputationRunner)
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
@@ -2544,40 +2555,40 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
-			switch stmt.(type) {
-			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-				*tree.CreateView, *tree.DropView, *tree.Load,
-				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
-				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
-				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
-				*tree.Deallocate, *tree.Use,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+		}
+		switch stmt.(type) {
+		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+			*tree.CreateView, *tree.DropView, *tree.Load,
+			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
+			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
+			*tree.Deallocate, *tree.Use,
+			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
+				trace.EndStatement(requestCtx, err2)
+				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+		case *tree.PrepareStmt, *tree.PrepareString:
+			if ses.GetCmd() == int(COM_STMT_PREPARE) {
+				if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(prepareStmt); err2 != nil {
+					trace.EndStatement(requestCtx, err2)
+					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+					return retErr
+				}
+			} else {
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
 					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
-				}
-
-			case *tree.PrepareStmt, *tree.PrepareString:
-				if ses.GetCmd() == int(COM_STMT_PREPARE) {
-					if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(prepareStmt); err2 != nil {
-						trace.EndStatement(requestCtx, err2)
-						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
-						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-						return retErr
-					}
-				} else {
-					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-					if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
-						trace.EndStatement(requestCtx, err2)
-						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
-						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-						return retErr
-					}
 				}
 			}
 		}
