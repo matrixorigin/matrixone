@@ -41,6 +41,7 @@ type Block interface {
 	GetDelta() objectio.BlockObject
 	GetDeltaFormKey(location string) objectio.BlockObject
 	UpdateName(name string)
+	GetFs() *objectio.ObjectFS
 	Destroy() error
 }
 

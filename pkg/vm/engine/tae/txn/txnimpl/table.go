@@ -229,8 +229,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 	}
 	var factory catalog.BlockDataFactory
 	if tbl.store.dataFactory != nil {
-		segData := seg.GetSegmentData()
-		factory = tbl.store.dataFactory.MakeBlockFactory(segData.GetSegmentFile())
+		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
 	meta, err := seg.CreateBlock(tbl.store.txn, state, factory)
 	if err != nil {

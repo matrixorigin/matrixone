@@ -17,6 +17,8 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,13 +70,15 @@ type dataBlock struct {
 	appendFrozen bool
 }
 
-func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
+func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	schema := meta.GetSchema()
-	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
-	if err != nil {
-		panic(err)
+	id := &common.ID{
+		TableID:   meta.GetSegment().GetTable().GetID(),
+		SegmentID: meta.GetSegment().GetID(),
+		BlockID:   meta.GetID(),
 	}
+	blockFile := blockio.NewBlock(id, fs, colCnt)
 	colObjects := make(map[int]file.ColumnBlock)
 	for i := 0; i < colCnt; i++ {
 		if colBlk, err := blockFile.OpenColumn(i); err != nil {

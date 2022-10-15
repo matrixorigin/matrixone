@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -27,17 +28,20 @@ type DataFactory struct {
 	appendBufMgr base.INodeManager
 	scheduler    tasks.TaskScheduler
 	dir          string
+	fs           *objectio.ObjectFS
 }
 
 func NewDataFactory(fileFactory file.SegmentFactory,
 	appendBufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler,
-	dir string) *DataFactory {
+	dir string,
+	fs *objectio.ObjectFS) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
 		scheduler:    scheduler,
 		dir:          dir,
+		fs:           fs,
 	}
 }
 
@@ -53,8 +57,8 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 	}
 }
 
-func (factory *DataFactory) MakeBlockFactory(segFile file.Segment) catalog.BlockDataFactory {
+func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
-		return newBlock(meta, segFile, factory.appendBufMgr, factory.scheduler)
+		return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
 	}
 }

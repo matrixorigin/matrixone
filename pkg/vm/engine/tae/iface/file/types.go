@@ -34,7 +34,7 @@ type Base interface {
 }
 
 type SegmentFactory interface {
-	Build(dir string, id, tableId uint64, fs *objectio.ObjectFS) Segment
+	Build(dir string, id, tableId uint64, fs *objectio.ObjectFS)
 	EncodeName(id uint64) string
 	DecodeName(name string) (id uint64, err error)
 }

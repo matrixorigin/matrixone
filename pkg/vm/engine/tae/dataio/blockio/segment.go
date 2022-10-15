@@ -15,17 +15,11 @@
 package blockio
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"os"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"path"
 	"strings"
-	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type ObjectFactory struct {
@@ -56,78 +50,6 @@ func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
 	return id.SegmentID, err
 }
 
-func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) file.Segment {
-	return openSegment(dir, id, tid, fs)
-}
-
-type segmentFile struct {
-	sync.RWMutex
-	common.RefHelper
-	id     *common.ID
-	blocks map[uint64]*blockFile
-	name   string
-	fs     *objectio.ObjectFS
-}
-
-func (sf *segmentFile) GetFs() *objectio.ObjectFS {
-	return sf.fs
-}
-
-func openSegment(name string, id, tid uint64, fs *objectio.ObjectFS) *segmentFile {
-	sf := &segmentFile{
-		blocks: make(map[uint64]*blockFile),
-		name:   name,
-	}
-	sf.fs = fs
-	sf.id = &common.ID{
-		TableID:   tid,
-		SegmentID: id,
-	}
-	sf.Ref()
-	sf.OnZeroCB = sf.close
-	return sf
-}
-
-func (sf *segmentFile) Name() string { return sf.name }
-
-func (sf *segmentFile) Fingerprint() *common.ID { return sf.id }
-func (sf *segmentFile) Close() error            { return nil }
-
-func (sf *segmentFile) close() {
-	sf.Destroy()
-}
-func (sf *segmentFile) Destroy() {
-	logutil.Infof("Destroying Driver %d", sf.id.SegmentID)
-	sf.RLock()
-	blocks := sf.blocks
-	sf.RUnlock()
-	for _, block := range blocks {
-		if err := block.Destroy(); err != nil {
-			panic(any(err))
-		}
-	}
-	name := path.Join(sf.fs.Dir, EncodeSegName(sf.id))
-	os.Remove(name)
-	sf.fs = nil
-}
-
-func (sf *segmentFile) OpenBlock(id uint64, colCnt int) (block file.Block, err error) {
-	sf.Lock()
-	defer sf.Unlock()
-	bf := sf.blocks[id]
-	if bf == nil {
-		bf = newBlock(id, sf, colCnt)
-		sf.blocks[id] = bf
-	}
-	block = bf
+func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) {
 	return
-}
-
-func (sf *segmentFile) String() string {
-	s := fmt.Sprintf("SegmentFile[%d][\"%s\"][BCnt=%d]", sf.id, sf.name, len(sf.blocks))
-	return s
-}
-
-func (sf *segmentFile) Sync() error {
-	return nil
 }

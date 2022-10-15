@@ -32,25 +32,20 @@ type blockFile struct {
 	common.RefHelper
 	sync.RWMutex
 	name     string
-	seg      *segmentFile
 	id       *common.ID
 	metaKey  objectio.Extent
 	deltaKey objectio.Extent
 	columns  []*columnBlock
 	writer   *Writer
 	reader   *Reader
+	fs       *objectio.ObjectFS
 }
 
-func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
-	blockID := &common.ID{
-		TableID:   seg.id.TableID,
-		SegmentID: seg.id.SegmentID,
-		BlockID:   id,
-	}
-	name := EncodeBlkName(blockID, types.TS{})
+func NewBlock(id *common.ID, fs *objectio.ObjectFS, colCnt int) *blockFile {
+	name := EncodeBlkName(id, types.TS{})
 	bf := &blockFile{
-		seg:     seg,
-		id:      blockID,
+		fs:      fs,
+		id:      id,
 		columns: make([]*columnBlock, colCnt),
 		name:    name,
 	}
@@ -64,15 +59,15 @@ func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
 	if bf.writer == nil {
-		bf.writer = NewWriter(bf.seg.fs, bf.name)
+		bf.writer = NewWriter(bf.fs, bf.name)
 	}
 	block, err := bf.writer.WriteBlock(bat)
 	return block, err
 }
 
 func (bf *blockFile) UpdateName(name string) {
-	bf.writer = NewWriter(bf.seg.fs, name)
-	bf.reader = NewReader(bf.seg.fs, bf, name)
+	bf.writer = NewWriter(bf.fs, name)
+	bf.reader = NewReader(bf.fs, bf, name)
 }
 func (bf *blockFile) GetWriter() objectio.Writer {
 	return bf.writer.writer
@@ -128,7 +123,7 @@ func (bf *blockFile) GetMeta() objectio.BlockObject {
 		panic(any("block meta key err"))
 	}
 	if bf.reader == nil {
-		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
+		bf.reader = NewReader(bf.fs, bf, bf.name)
 	}
 	block, err := bf.reader.ReadMeta(metaKey)
 	if err != nil {
@@ -140,7 +135,7 @@ func (bf *blockFile) GetMeta() objectio.BlockObject {
 func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 	name, extent, _ := DecodeMetaLoc(metaLoc)
 	if bf.reader == nil {
-		bf.reader = NewReader(bf.seg.fs, bf, name)
+		bf.reader = NewReader(bf.fs, bf, name)
 	}
 	block, err := bf.reader.ReadMeta(extent)
 	if err != nil {
@@ -160,7 +155,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 		panic(any("block meta key err"))
 	}
 	if bf.reader == nil {
-		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
+		bf.reader = NewReader(bf.fs, bf, bf.name)
 	}
 	block, err := bf.reader.ReadMeta(metaKey)
 	if err != nil {
@@ -172,7 +167,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
 	name, extent := DecodeDeltaLoc(metaLoc)
 	if bf.reader == nil {
-		bf.reader = NewReader(bf.seg.fs, bf, name)
+		bf.reader = NewReader(bf.fs, bf, name)
 	}
 	block, err := bf.reader.ReadMeta(extent)
 	if err != nil {
@@ -255,4 +250,8 @@ func (bf *blockFile) LoadBatch(
 
 func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
 	return bf.reader.LoadDeletes(bf.id)
+}
+
+func (bf *blockFile) GetFs() *objectio.ObjectFS {
+	return bf.fs
 }
