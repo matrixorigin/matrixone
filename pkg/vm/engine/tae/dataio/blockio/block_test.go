@@ -44,10 +44,11 @@ func TestBlock1(t *testing.T) {
 	newbat := mobat.New(true, data.Attrs)
 	newbat.Vecs = containers.CopyToMoVecs(data.Vecs)
 	var block file.Block
-	id := common.NextGlobalSeqNum()
 	SegmentFactory := NewObjectFactory(dir)
-	seg := SegmentFactory.Build(dir, id, 0, SegmentFactory.(*ObjectFactory).Fs).(*segmentFile)
-	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt)
+	id := &common.ID{
+		BlockID: common.NextGlobalSeqNum(),
+	}
+	block = NewBlock(id, SegmentFactory.(*ObjectFactory).Fs, colCnt)
 	var ts types.TS
 	_, err := block.WriteBatch(data, ts)
 	assert.Nil(t, err)

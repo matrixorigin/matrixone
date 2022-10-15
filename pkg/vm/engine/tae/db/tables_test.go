@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestTables1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
-	dataFactory := tables.NewDataFactory(db.FileFactory, db.MTBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(db.FileFactory, db.MTBufMgr, db.Scheduler, db.Dir, db.FileFactory.(*blockio.ObjectFactory).Fs)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
