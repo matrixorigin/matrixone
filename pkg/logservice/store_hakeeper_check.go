@@ -17,8 +17,9 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -137,6 +138,10 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
+		if state.TaskState == pb.TaskInitNotStart {
+			// TODO: generate task table user here
+			l.setTaskTableUser(pb.TaskTableUser{})
+		}
 		l.healthCheck(term, state)
 		l.taskSchedule(state)
 	default:
@@ -273,4 +278,23 @@ func (l *store) getScheduleCommand(check bool,
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
+}
+
+func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
+	cmd := hakeeper.GetTaskTableUserCmd(user)
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.logger.Error("failed to propose task user info", zap.Error(err))
+		return err
+	}
+	if result.Value == uint64(pb.TaskInitFailed) {
+		panic("failed to set task user")
+	}
+	if result.Value != uint64(pb.TaskInitNotStart) {
+		l.logger.Error("task user info already set")
+	}
+	return nil
 }
