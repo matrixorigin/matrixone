@@ -1,8 +1,8 @@
+-- cases for moadmin
 drop role if exists rolex;
 create role rolex;
 drop user if exists userx;
 create user userx identified by '111';
--- TODO: add cases for accountadmin
 grant moadmin to root,dump;
 grant moadmin to userx;
 grant moadmin to rolex;

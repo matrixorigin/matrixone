@@ -1,0 +1,53 @@
+drop table if exists t1;
+create table t1(a uuid);
+desc t1;
+Field    Type    Null    Key    Default    Comment
+a    UUID    YES        NULL    
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` UUID DEFAULT NULL\n)
+drop table t1;
+drop table if exists t1;
+create table t1 (a int default uuid());
+[unknown result because it is related to issue#5414]
+drop table t1
+drop table if exists t2;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
+drop table if exists t2;";
+create table t2(a uuid primary key);
+desc t2;
+[unknown result because it is related to issue#5241]
+show create table t2;
+Table    Create Table
+t2    CREATE TABLE `t2` (\n`a` UUID DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+drop table t2;
+drop table if exists t3;
+create table t3(a uuid primary key );
+insert into t3 values (uuid());
+select length(cast(a as varchar)) from t3;
+length(cast(a as varchar))
+36
+drop table t3;
+drop table if exists t4;
+create table t4(a uuid default uuid());
+desc t4;
+[unknown result because it is related to issue#5400]
+show create table t4;
+Table    Create Table
+t4    CREATE TABLE `t4` (\n`a` UUID DEFAULT uuid()\n)
+insert into t4 values ();
+insert into t4 values (uuid());
+select length(cast(a as varchar)) from t4;
+length(cast(a as varchar))
+36
+36
+drop table t4;
+select length(cast(uuid() as varchar));
+length(cast(uuid() as varchar))
+36
+select length(cast(uuid() as char));
+length(cast(uuid() as char))
+36
+select length(cast(uuid() as text));
+length(cast(uuid() as text))
+36
