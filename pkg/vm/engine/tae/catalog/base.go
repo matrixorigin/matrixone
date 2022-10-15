@@ -48,6 +48,8 @@ type BaseEntry interface {
 	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
+	HasDropCommitted() bool
+	HasDropCommittedLocked() bool
 
 	WriteOneNodeTo(w io.Writer) (n int64, err error)
 	ReadOneNodeFrom(r io.Reader) (n int64, err error)

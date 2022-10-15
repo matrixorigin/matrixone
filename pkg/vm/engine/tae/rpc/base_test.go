@@ -14,7 +14,27 @@
 
 package rpc
 
-/*
+import (
+	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"testing"
+	"time"
+)
+
 const ModuleName = "TAEHANDLE"
 
 type mockHandle struct {
@@ -192,6 +212,8 @@ type Entry struct {
 
 type column struct {
 	databaseId uint64
+	accountId  uint32
+	tableId    uint64
 	// column name
 	name            string
 	tableName       string
@@ -206,13 +228,29 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+	hasUpdate       int8
+	updateExpr      []byte
 }
 
-func genColumns(
-	tableName,
-	databaseName string,
-	databaseId uint64,
-	defs []engine.TableDef) ([]column, error) {
+func genColumns(accountId uint32, tableName, databaseName string,
+	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -220,13 +258,15 @@ func genColumns(
 		if !ok {
 			continue
 		}
-		typ, err := types.Encode(attrDef.Attr.Type)
+		typ, err := types.Encode(&attrDef.Attr.Type)
 		if err != nil {
 			return nil, err
 		}
 		col := column{
 			typ:          typ,
 			typLen:       int32(len(typ)),
+			accountId:    accountId,
+			tableId:      tableId,
 			databaseId:   databaseId,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
@@ -234,6 +274,7 @@ func genColumns(
 			num:          int32(num),
 			comment:      attrDef.Attr.Comment,
 		}
+		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)
 			if err != nil {
@@ -242,7 +283,16 @@ func genColumns(
 			if len(defaultExpr) > 0 {
 				col.hasDef = 1
 				col.defaultExpr = defaultExpr
-
+			}
+		}
+		if attrDef.Attr.OnUpdate != nil {
+			expr, err := types.Encode(attrDef.Attr.OnUpdate)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) > 0 {
+				col.hasUpdate = 1
+				col.updateExpr = expr
 			}
 		}
 		if attrDef.Attr.IsHidden {
@@ -350,6 +400,7 @@ func genCreateColumnTuple(
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -374,8 +425,7 @@ func genCreateColumnTuple(
 
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname_id
-		//TODO::rel id get from col
-		if err := bat.Vecs[idx].Append(uint64(0), false, m); err != nil {
+		if err := bat.Vecs[idx].Append(col.tableId, false, m); err != nil {
 			return nil, err
 		}
 
@@ -450,6 +500,18 @@ func genCreateColumnTuple(
 		if err := bat.Vecs[idx].Append(col.isHidden, false, m); err != nil {
 			return nil, err
 		}
+
+		idx = catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_has_update
+		if err := bat.Vecs[idx].Append(col.hasUpdate, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
+		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }
@@ -493,13 +555,14 @@ func makeCreateTableEntries(
 	sql string,
 	ac AccessInfo,
 	name string,
+	tableId uint64,
 	dbId uint64,
 	dbName string,
 	m *mpool.MPool,
 	defs []engine.TableDef,
 ) ([]*api.Entry, error) {
 	comment := getTableComment(defs)
-	cols, err := genColumns(name, dbName, dbId, defs)
+	cols, err := genColumns(ac.accountId, name, dbName, tableId, dbId, defs)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +571,7 @@ func makeCreateTableEntries(
 	{
 		bat, err := genCreateTableTuple(
 			sql, ac.accountId, ac.userId, ac.roleId,
-			name, dbId, dbName, comment, m)
+			name, tableId, dbId, dbName, comment, m)
 		if err != nil {
 			return nil, err
 		}
@@ -542,16 +605,18 @@ func genCreateTableTuple(
 	userId,
 	roleId uint32,
 	name string,
+	tableId uint64,
 	databaseId uint64,
 	databaseName string,
 	comment string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(uint64(0), false, m); err != nil {
+		if err := bat.Vecs[idx].Append(tableId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
@@ -614,6 +679,12 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VIEWDEF_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // viewdef
+		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }
@@ -651,6 +722,5 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 	}
 	return rbat, nil
 }
-*/
 
 //gen LogTail

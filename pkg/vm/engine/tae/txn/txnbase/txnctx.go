@@ -277,6 +277,3 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 func (ctx *TxnCtx) ToUnknownLocked() {
 	ctx.State = txnif.TxnStateUnknown
 }
-
-// MockSetCommitTSLocked is for testing
-func (ctx *TxnCtx) MockSetCommitTSLocked(ts types.TS) { ctx.CommitTS = ts }

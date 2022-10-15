@@ -30,7 +30,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	}
 
 	if opts.Username != nil {
-		sess.protocol.SetUserName(*opts.Username)
+		sess.GetMysqlProtocol().SetUserName(*opts.Username)
 	}
 
 	if opts.IsInternal != nil {
