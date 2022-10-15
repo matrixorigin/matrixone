@@ -162,6 +162,7 @@ enum MethodType {
   GET_CLUSTER_DETAILS = 11;
   GET_SHARD_INFO = 12;
   CN_ALLOCATE_ID = 13;
+  GET_CLUSTER_STATE = 14;
 };
 
 enum RecordType {
@@ -224,6 +225,7 @@ message Response {
   ClusterDetails ClusterDetails  = 9;
   ShardInfoQueryResult ShardInfo = 10;
   AllocateIDResponse AllocateID  = 11;
+  CheckerState CheckerState      = 12;
 };
 
 message LogRecordResponse {

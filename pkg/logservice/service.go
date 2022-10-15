@@ -228,6 +228,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
 		return s.handleGetClusterDetails(ctx, req), pb.LogRecordResponse{}
+	case pb.GET_CLUSTER_STATE:
+		return s.handleGetCheckerState(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_SHARD_INFO:
 		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
 	default:
@@ -255,6 +257,16 @@ func (s *Service) handleGetClusterDetails(ctx context.Context, req pb.Request) p
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.ClusterDetails = &v
+	}
+	return resp
+}
+
+func (s *Service) handleGetCheckerState(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if v, err := s.store.getCheckerState(); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.CheckerState = v
 	}
 	return resp
 }
