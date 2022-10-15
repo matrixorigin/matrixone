@@ -55,8 +55,11 @@ var (
 	SQLTypeDelete SQLType = "update"
 	SQLTypeOther  SQLType = "other"
 
-	SQLTypeCommit   SQLType = "commit"
-	SQLTypeRollback SQLType = "rollback"
+	SQLTypeBegin        SQLType = "begin"
+	SQLTypeCommit       SQLType = "commit"
+	SQLTypeRollback     SQLType = "rollback"
+	SQLTypeAutoCommit   SQLType = "auto_commit"
+	SQLTypeAutoRollback SQLType = "auto_rollback"
 )
 
 func StatementCounter(tenant string, t SQLType) Counter {

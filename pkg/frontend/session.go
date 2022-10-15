@@ -36,6 +36,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -404,6 +406,17 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
 }
 
+// GetTenantName return tenant name according to GetTenantInfo and stmt.
+//
+// With stmt = nil, should be only called in TxnBegin, TxnCommit, TxnRollback
+func (ses *Session) GetTenantName(stmt tree.Statement) string {
+	tenant := sysAccountName
+	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
+		tenant = ses.GetTenantInfo().GetTenant()
+	}
+	return tenant
+}
+
 func (ses *Session) GetUUID() []byte {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -731,6 +744,9 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		if err != nil {
+			incTransactionErrorsCounter(ses.GetTenantName(stmt), metric.SQLTypeAutoCommit)
+		}
 	}
 	return err
 }
@@ -750,9 +766,14 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
+		tenant := ses.GetTenantName(stmt)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
+		}
 	}
 	return err
 }
@@ -769,11 +790,15 @@ func (ses *Session) TxnBegin() error {
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
+		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeBegin)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
+	if err != nil {
+		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeBegin)
+	}
 	return err
 }
 
@@ -784,6 +809,9 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
+	if err != nil {
+		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeCommit)
+	}
 	return err
 }
 
@@ -793,6 +821,9 @@ func (ses *Session) TxnRollback() error {
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
+	if err != nil {
+		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeRollback)
+	}
 	return err
 }
 

@@ -2065,10 +2065,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-		tenant := sysAccountName
+		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			tenant = ses.GetTenantInfo().GetTenant()
 			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
 			if err != nil {
 				return err
@@ -2106,13 +2105,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
-				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
-				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 				goto handleFailed
 			}
 		}
@@ -2550,7 +2547,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 				trace.EndStatement(requestCtx, txnErr)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
@@ -2603,7 +2599,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
