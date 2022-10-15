@@ -60,9 +60,8 @@ func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 
 func TestInitSchemaByInnerExecutor(t *testing.T) {
 	type args struct {
-		ctx  context.Context
-		ch   chan string
-		mode string
+		ctx context.Context
+		ch  chan string
 	}
 	tests := []struct {
 		name string
@@ -71,17 +70,15 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		{
 			name: "dummy",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 		{
 			name: "dummyS3",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 	}
@@ -93,30 +90,30 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1 + len(initDDLs))
-			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
+			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch))
 			require.Equal(t, nil, err)
 			go func() {
-			loop:
-				for {
-					sql, ok := <-tt.args.ch
-					wg.Done()
-					if ok {
-						t.Logf("exec sql: %s", sql)
-						if sql == "create database if not exists system" {
-							continue
-						}
-						idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-						require.Equal(t, 0, idx)
-					} else {
-						t.Log("exec sql Done.")
-						break loop
-					}
-				}
+				wg.Wait()
+				wg.Add(1)
+				close(tt.args.ch)
 			}()
-			wg.Wait()
-			wg.Add(1)
-			close(tt.args.ch)
-			wg.Wait()
+		loop:
+			for {
+				sql, ok := <-tt.args.ch
+				wg.Done()
+				if ok {
+					t.Logf("exec sql: %s", sql)
+					if sql == "create database if not exists system" {
+						continue
+					}
+					idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+					require.Equal(t, 0, idx)
+				} else {
+					t.Log("exec sql Done.")
+					wg.Wait()
+					break loop
+				}
+			}
 		})
 	}
 }

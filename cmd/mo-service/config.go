@@ -15,6 +15,8 @@
 package main
 
 import (
+	"hash/fnv"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -231,4 +233,26 @@ func (c *Config) resolveGossipSeedAddresses() error {
 	}
 	c.LogService.GossipSeedAddresses = result
 	return nil
+}
+
+func (c *Config) hashNodeID() uint16 {
+	uuid := ""
+	switch c.ServiceType {
+	case cnServiceType:
+		uuid = c.CN.UUID
+	case dnServiceType:
+		uuid = c.DN.UUID
+	case logServiceType:
+		uuid = c.LogService.UUID
+	}
+	if uuid == "" {
+		return 0
+	}
+
+	h := fnv.New32()
+	if _, err := h.Write([]byte(uuid)); err != nil {
+		panic(err)
+	}
+	v := h.Sum32()
+	return uint16(v % math.MaxUint16)
 }

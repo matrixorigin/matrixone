@@ -41,7 +41,7 @@ func main() {
 	buf := bs.Bytes()
 
 	for i := 0; i < 5000; i++ {
-		tid := uint64(i)
+		tid := string(common.NewTxnIDAllocator().Alloc())
 		e1 := entry.GetBase()
 		uncommitInfo := &entry.Info{
 			Group:     10,
@@ -49,9 +49,12 @@ func main() {
 		}
 		e1.SetType(entry.ETUncommitted)
 		e1.SetInfo(uncommitInfo)
-		n := common.GPool.Alloc(common.K * 100)
-		copy(n.GetBuf(), buf)
-		err := e1.UnmarshalFromNode(n, true)
+		n, err := common.LogAllocator.Alloc(common.K * 100)
+		if err != nil {
+			panic(err)
+		}
+		copy(n, buf)
+		err = e1.UnmarshalFromNode(n, true)
 		if err != nil {
 			panic(err)
 		}
@@ -67,8 +70,11 @@ func main() {
 		e2 := entry.GetBase()
 		e2.SetType(entry.ETTxn)
 		e2.SetInfo(txnInfo)
-		n = common.GPool.Alloc(common.K * 100)
-		copy(n.GetBuf(), buf)
+		n, err = common.LogAllocator.Alloc(common.K * 100)
+		if err != nil {
+			panic(err)
+		}
+		copy(n, buf)
 		err = e2.UnmarshalFromNode(n, true)
 		if err != nil {
 			panic(err)

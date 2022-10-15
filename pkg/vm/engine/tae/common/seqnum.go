@@ -16,22 +16,24 @@ package common
 
 import (
 	"sync/atomic"
+
+	"github.com/google/uuid"
 )
 
 var (
-	GlobalSeqNum uint64 = 0
+	GlobalSeqNum atomic.Uint64
 )
 
 func NextGlobalSeqNum() uint64 {
-	return atomic.AddUint64(&GlobalSeqNum, uint64(1))
+	return GlobalSeqNum.Add(1)
 }
 
 func GetGlobalSeqNum() uint64 {
-	return atomic.LoadUint64(&GlobalSeqNum)
+	return GlobalSeqNum.Load()
 }
 
 type IdAlloctor struct {
-	id uint64
+	id atomic.Uint64
 }
 
 func NewIdAlloctor(from uint64) *IdAlloctor {
@@ -39,19 +41,31 @@ func NewIdAlloctor(from uint64) *IdAlloctor {
 		panic("should not be 0")
 	}
 
-	return &IdAlloctor{
-		id: from - 1,
-	}
+	alloc := &IdAlloctor{}
+	alloc.id.Store(from - 1)
+	return alloc
 }
 
 func (alloc *IdAlloctor) Alloc() uint64 {
-	return atomic.AddUint64(&alloc.id, uint64(1))
+	return alloc.id.Add(1)
 }
 
 func (alloc *IdAlloctor) Get() uint64 {
-	return atomic.LoadUint64(&alloc.id)
+	return alloc.id.Load()
 }
 
 func (alloc *IdAlloctor) SetStart(start uint64) {
-	alloc.id = start
+	alloc.id.Store(start)
+}
+
+type TxnIDAllocator struct {
+}
+
+func NewTxnIDAllocator() *TxnIDAllocator {
+	return &TxnIDAllocator{}
+}
+
+func (alloc *TxnIDAllocator) Alloc() []byte {
+	ts := uuid.New()
+	return ts[:]
 }

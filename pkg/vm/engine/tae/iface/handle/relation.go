@@ -25,7 +25,6 @@ type Relation interface {
 	io.Closer
 	ID() uint64
 	Rows() int64
-	Size(attr string) int64
 	String() string
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
@@ -34,7 +33,6 @@ type Relation interface {
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
-	UpdateByPhyAddrKey(key any, col int, v any) error
 	GetValueByPhyAddrKey(key any, col int) (any, error)
 
 	DeleteByPhyAddrKeys(keys containers.Vector) error
@@ -47,11 +45,11 @@ type Relation interface {
 	UpdateByFilter(filter *Filter, col uint16, v any) error
 	DeleteByFilter(filter *Filter) error
 
-	BatchDedup(cols ...containers.Vector) error
+	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
 
 	GetMeta() any
-	CreateSegment() (Segment, error)
+	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
 

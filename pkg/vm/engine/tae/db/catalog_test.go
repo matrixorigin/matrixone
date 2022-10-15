@@ -39,8 +39,8 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := createRelationNoCommit(t, db, defaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	seg, _ := rel.CreateSegment()
-	blk, err := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
@@ -53,7 +53,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	blk2, err := sseg.CreateBlock()
+	blk2, err := sseg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.Nil(t, txn.Commit())
@@ -149,8 +149,8 @@ func TestLogBlock(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
-	blk, _ := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, _ := seg.CreateBlock(false)
 	meta := blk.GetMeta().(*catalog.BlockEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
@@ -170,7 +170,6 @@ func TestLogBlock(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Block.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Block.ID)
-	assert.Equal(t, meta.GetCurrOp(), entryCmd.Block.GetCurrOp())
 	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Block.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Block.GetDeleteAt()))
 }
@@ -183,7 +182,7 @@ func TestLogSegment(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
+	seg, _ := rel.CreateSegment(false)
 	meta := seg.GetMeta().(*catalog.SegmentEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
@@ -203,7 +202,6 @@ func TestLogSegment(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Segment.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Segment.ID)
-	assert.Equal(t, meta.GetCurrOp(), entryCmd.Segment.GetCurrOp())
 	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Segment.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Segment.GetDeleteAt()))
 }
@@ -235,7 +233,6 @@ func TestLogTable(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.Table.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.Table.ID)
-	assert.Equal(t, meta.GetCurrOp(), entryCmd.Table.GetCurrOp())
 	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Table.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Table.GetDeleteAt()))
 	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
@@ -270,7 +267,6 @@ func TestLogDatabase(t *testing.T) {
 	t.Log(meta.StringLocked())
 	t.Log(entryCmd.DB.StringLocked())
 	assert.Equal(t, meta.ID, entryCmd.DB.ID)
-	assert.Equal(t, meta.GetCurrOp(), entryCmd.DB.GetCurrOp())
 	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.DB.GetCreatedAt()))
 	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.DB.GetDeleteAt()))
 	assert.Equal(t, meta.GetName(), entryCmd.DB.GetName())
@@ -296,11 +292,11 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 30; i++ {
-			blk, err := seg.CreateBlock()
+			blk, err := seg.CreateBlock(false)
 			if i == 2 {
 				id = blk.Fingerprint()
 			}
@@ -361,11 +357,11 @@ func TestCheckpointCatalog(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 4; i++ {
-			blk, err := seg.CreateBlock()
+			blk, err := seg.CreateBlock(false)
 			if i == 2 {
 				id = blk.Fingerprint()
 			}
@@ -441,7 +437,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	blk, err := seg.GetBlockEntryByID(blockEntry.ID)
 	t.Log(blk.String())
 	assert.Nil(t, err)
-	assert.True(t, blk.HasDropped())
+	assert.True(t, blk.HasDropCommitted())
 	assert.True(t, blk.GetDeleteAt().Greater(endTs))
 	assert.True(t, blk.GetCreatedAt().Greater(startTs))
 	assert.Equal(t, blk.GetCreatedAt(), blockEntry.GetCreatedAt())
@@ -467,7 +463,6 @@ func TestCheckpointCatalog(t *testing.T) {
 			assert.Equal(t, blk1.ID, blk2.ID)
 			assert.Equal(t, blk1.GetCreatedAt(), blk2.GetCreatedAt())
 			assert.Equal(t, blk1.GetDeleteAt(), blk2.GetDeleteAt())
-			assert.Equal(t, blk1.GetCurrOp(), blk2.GetCurrOp())
 		}
 	}
 	replayEntry.PrintItems()

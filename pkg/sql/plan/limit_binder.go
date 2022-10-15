@@ -21,8 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewLimitBinder() *LimitBinder {
-	return &LimitBinder{}
+func NewLimitBinder(builder *QueryBuilder, ctx *BindContext) *LimitBinder {
+	lb := &LimitBinder{}
+	lb.builder = builder
+	lb.ctx = ctx
+	lb.impl = lb
+	return lb
 }
 
 func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {

@@ -433,7 +433,7 @@ insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:0
 
 
 #skip_if_hypergraph  # Different warnings.
--- @bvt:issue#3291
+
 SELECT CAST(col_char AS DATETIME) FROM t;
 #echo
 #skip_if_hypergraph  # Different warnings.
@@ -443,7 +443,7 @@ SELECT col_char <> col_datetime FROM t;
 #skip_if_hypergraph  # Different warnings.
 SELECT CAST(col_char AS DATE) FROM t;
 
--- @bvt:issue
+
 #echo
 #skip_if_hypergraph  # Different warnings.
 -- @bvt:issue#3253

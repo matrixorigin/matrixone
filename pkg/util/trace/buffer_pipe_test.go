@@ -17,9 +17,7 @@ package trace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"io"
 	"os"
 	"reflect"
@@ -28,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/stretchr/testify/require"
 
@@ -62,12 +61,14 @@ func init() {
 		WithMOVersion("v0.test.0"),
 		WithNode("node_uuid", NodeTypeStandalone),
 		WithBatchProcessMode(InternalExecutor),
-		WithFSWriterFactory(func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+		WithFSWriterFactory(func(ctx context.Context, _ string, _ batchpipe.HasName, _ ...export.FSWriterOption) io.StringWriter {
 			return os.Stdout
 		}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
+		WithExportInterval(15),
+		WithLongQueryTime(0),
 		DebugMode(true),
 	); err != nil {
 		panic(err)
@@ -337,7 +338,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000001\"}")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"NO ExecPlan Serialize function\",\"steps\":null,\"success\":false,\"uuid\":\"00000000-0000-0000-0000-000000000001\"}")`,
 		},
 		{
 			name:   "multi_statement",
@@ -378,8 +379,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000001\"}")` +
-				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:01.000001", 1000000000, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000002\"}")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"NO ExecPlan Serialize function\",\"steps\":null,\"success\":false,\"uuid\":\"00000000-0000-0000-0000-000000000001\"}")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:01.000001", 1000000000, "Running", "", "{\"code\":200,\"message\":\"NO ExecPlan Serialize function\",\"steps\":null,\"success\":false,\"uuid\":\"00000000-0000-0000-0000-000000000002\"}")`,
 		},
 		{
 			name:   "single_zap",
@@ -966,7 +967,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
 `,
 		},
 		{
@@ -1006,8 +1007,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000002""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000002""}",0,0
 `,
 		},
 		{
@@ -1039,7 +1040,7 @@ func Test_genCsvData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)
@@ -1047,18 +1048,7 @@ func Test_genCsvData(t *testing.T) {
 	}
 }
 
-var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
-	if plan == nil {
-		return []byte(`{"code":200,"message":"no exec plan"}`)
-	}
-	json, err := json.Marshal(plan)
-	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
-	}
-	return json
-}
-
-func Test_genCsvData_LongQueryTIme(t *testing.T) {
+func Test_genCsvData_LongQueryTime(t *testing.T) {
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
 	type args struct {
@@ -1126,9 +1116,9 @@ func Test_genCsvData_LongQueryTIme(t *testing.T) {
 				buf:    buf,
 				queryT: int64(time.Second),
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
-00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}"
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}"
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}",0,0
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}",1,1
 `,
 		},
 	}
@@ -1137,7 +1127,7 @@ func Test_genCsvData_LongQueryTIme(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(CSVRequest)
+			req, ok := got.(*CSVRequest)
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)

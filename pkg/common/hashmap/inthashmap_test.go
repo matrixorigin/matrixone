@@ -17,19 +17,15 @@ package hashmap
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIntHashMap_Iterator(t *testing.T) {
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(false, 0, 0, m)
 		require.NoError(t, err)
 		rowCount := 10
@@ -51,12 +47,10 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -74,12 +68,10 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -96,12 +88,10 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -118,12 +108,10 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(true, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -140,12 +128,10 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 	{
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
-		m := mheap.New(gm)
+		m := mpool.MustNewZero()
 		mp, err := NewIntHashMap(false, 0, 0, m)
 		require.NoError(t, err)
 		ts := []types.Type{
@@ -162,6 +148,6 @@ func TestIntHashMap_Iterator(t *testing.T) {
 			vec.Free(m)
 		}
 		mp.Free()
-		require.Equal(t, int64(0), m.Size())
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
 	}
 }

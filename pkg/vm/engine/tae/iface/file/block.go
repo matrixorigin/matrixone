@@ -34,9 +34,15 @@ type Block interface {
 	OpenColumn(colIdx int) (ColumnBlock, error)
 	WriteBatch(bat *containers.Batch, ts types.TS) (objectio.BlockObject, error)
 	GetWriter() objectio.Writer
+	FreeWriter()
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	GetMeta() objectio.BlockObject
 	GetMetaFormKey(location string) objectio.BlockObject
+	GetDelta() objectio.BlockObject
+	GetDeltaFormKey(location string) objectio.BlockObject
+	GetObjectBlocks() []objectio.BlockObject
+	FreeObjectBlocks()
+	UpdateName(name string)
 	Destroy() error
 }
 

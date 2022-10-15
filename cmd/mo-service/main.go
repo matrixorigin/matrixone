@@ -79,12 +79,14 @@ func main() {
 	}
 
 	waitSignalToStop(stopper)
+	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-	<-sigchan
+	sig := <-sigchan
+	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
 }
 
@@ -113,7 +115,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs)
+		return startCNService(cfg, stopper, fs, ts)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
@@ -127,13 +129,18 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
+			taskService,
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -162,12 +169,15 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
 			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
+			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
 		if err != nil {
 			panic(err)
 		}
@@ -268,7 +278,9 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory),
+			metric.WithExportInterval(SV.MetricExportInterval),
+			metric.WithMultiTable(SV.MetricMultiTable))
 	}
 	return nil
 }

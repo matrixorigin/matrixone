@@ -20,6 +20,17 @@ import (
 )
 
 const (
+	Row_ID           = "__mo_rowid"
+	PrefixPriColName = "__mo_cpkey_"
+)
+
+const (
+	System_User    = uint32(0)
+	System_Role    = uint32(0)
+	System_Account = uint32(0)
+)
+
+const (
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
 	MO_DATABASE = "mo_database"
@@ -48,6 +59,7 @@ const (
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_AccID       = "account_id"
 	SystemRelAttr_Partition   = "partitioned"
+	SystemRelAttr_ViewDef     = "viewdef"
 
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
@@ -68,6 +80,15 @@ const (
 	SystemColAttr_IsAutoIncrement = "att_is_auto_increment"
 	SystemColAttr_Comment         = "att_comment"
 	SystemColAttr_IsHidden        = "att_is_hidden"
+	SystemColAttr_HasUpdate       = "attr_has_update"
+	SystemColAttr_Update          = "attr_update"
+
+	BlockMeta_ID         = "block_id"
+	BlockMeta_EntryState = "entry_state"
+	BlockMeta_CreateAt   = "create_at"
+	BlockMeta_DeleteAt   = "delete_at"
+	BlockMeta_MetaLoc    = "meta_loc"
+	BlockMeta_DeltaLoc   = "delta_loc"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -94,11 +115,111 @@ const (
 
 // column's index in catalog table
 const (
-	MO_DATABASE_DAT_ID_IDX   = 0
-	MO_DATABASE_DAT_NAME_IDX = 1
-	MO_TABLES_REL_ID_IDX     = 0
-	MO_TABLES_REL_NAME_IDX   = 1
+	MO_DATABASE_DAT_ID_IDX           = 0
+	MO_DATABASE_DAT_NAME_IDX         = 1
+	MO_DATABASE_DAT_CATALOG_NAME_IDX = 2
+	MO_DATABASE_CREATESQL_IDX        = 3
+	MO_DATABASE_OWNER_IDX            = 4
+	MO_DATABASE_CREATOR_IDX          = 5
+	MO_DATABASE_CREATED_TIME_IDX     = 6
+	MO_DATABASE_ACCOUNT_ID_IDX       = 7
+
+	MO_TABLES_REL_ID_IDX         = 0
+	MO_TABLES_REL_NAME_IDX       = 1
+	MO_TABLES_RELDATABASE_IDX    = 2
+	MO_TABLES_RELDATABASE_ID_IDX = 3
+	MO_TABLES_RELPERSISTENCE_IDX = 4
+	MO_TABLES_RELKIND_IDX        = 5
+	MO_TABLES_REL_COMMENT_IDX    = 6
+	MO_TABLES_REL_CREATESQL_IDX  = 7
+	MO_TABLES_CREATED_TIME_IDX   = 8
+	MO_TABLES_CREATOR_IDX        = 9
+	MO_TABLES_OWNER_IDX          = 10
+	MO_TABLES_ACCOUNT_ID_IDX     = 11
+	MO_TABLES_PARTITIONED_IDX    = 12
+	MO_TABLES_VIEWDEF_IDX        = 13
+
+	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
+	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
+	MO_COLUMNS_ATT_DATABASE_ID_IDX       = 2
+	MO_COLUMNS_ATT_DATABASE_IDX          = 3
+	MO_COLUMNS_ATT_RELNAME_ID_IDX        = 4
+	MO_COLUMNS_ATT_RELNAME_IDX           = 5
+	MO_COLUMNS_ATTNAME_IDX               = 6
+	MO_COLUMNS_ATTTYP_IDX                = 7
+	MO_COLUMNS_ATTNUM_IDX                = 8
+	MO_COLUMNS_ATT_LENGTH_IDX            = 9
+	MO_COLUMNS_ATTNOTNULL_IDX            = 10
+	MO_COLUMNS_ATTHASDEF_IDX             = 11
+	MO_COLUMNS_ATT_DEFAULT_IDX           = 12
+	MO_COLUMNS_ATTISDROPPED_IDX          = 13
+	MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX   = 14
+	MO_COLUMNS_ATT_IS_UNSIGNED_IDX       = 15
+	MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX = 16
+	MO_COLUMNS_ATT_COMMENT_IDX           = 17
+	MO_COLUMNS_ATT_IS_HIDDEN_IDX         = 18
+	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
+	MO_COLUMNS_ATT_UPDATE_IDX            = 20
+
+	BLOCKMETA_ID_IDX         = 0
+	BLOCKMETA_ENTRYSTATE_IDX = 1
+	BLOCKMETA_CREATEAT_IDX   = 2
+	BLOCKMETA_DELETEAT_IDX   = 3
+	BLOCKMETA_METALOC_IDX    = 4
+	BLOCKMETA_DELTALOC_IDX   = 5
 )
+
+type BlockInfo struct {
+	BlockID    uint64
+	EntryState bool
+	CreateAt   types.TS
+	DeleteAt   types.TS
+	MetaLoc    string
+	DeltaLoc   string
+}
+
+// used for memengine and tae
+// tae and memengine do not make the catalog into a table
+// for its convenience, a conversion interface is provided to ensure easy use.
+type CreateDatabase struct {
+	DatabaseId  uint64
+	Name        string
+	CreateSql   string
+	Owner       uint32
+	Creator     uint32
+	AccountId   uint32
+	CreatedTime types.Timestamp
+}
+
+type DropDatabase struct {
+	Id   uint64
+	Name string
+}
+
+type CreateTable struct {
+	TableId      uint64
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Comment      string
+	Partition    string
+	RelKind      string
+	Viewdef      string
+	Defs         []engine.TableDef
+}
+
+type DropOrTruncateTable struct {
+	IsDrop       bool // true for Drop and false for Truncate
+	Id           uint64
+	NewId        uint64
+	Name         string
+	DatabaseId   uint64
+	DatabaseName string
+}
 
 var (
 	MoDatabaseSchema = []string{
@@ -125,6 +246,7 @@ var (
 		SystemRelAttr_Owner,
 		SystemRelAttr_AccID,
 		SystemRelAttr_Partition,
+		SystemRelAttr_ViewDef,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -146,6 +268,16 @@ var (
 		SystemColAttr_IsAutoIncrement,
 		SystemColAttr_Comment,
 		SystemColAttr_IsHidden,
+		SystemColAttr_HasUpdate,
+		SystemColAttr_Update,
+	}
+	MoTableMetaSchema = []string{
+		BlockMeta_ID,
+		BlockMeta_EntryState,
+		BlockMeta_CreateAt,
+		BlockMeta_DeleteAt,
+		BlockMeta_MetaLoc,
+		BlockMeta_DeltaLoc,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
@@ -171,6 +303,7 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),    // owner
 		types.New(types.T_uint32, 0, 0, 0),    // account_id
 		types.New(types.T_blob, 0, 0, 0),      // partition
+		types.New(types.T_blob, 0, 0, 0),      // viewdef
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name
@@ -180,7 +313,7 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),     // att_relname_id
 		types.New(types.T_varchar, 256, 0, 0),  // att_relname
 		types.New(types.T_varchar, 256, 0, 0),  // attname
-		types.New(types.T_int32, 0, 0, 0),      // atttyp
+		types.New(types.T_varchar, 256, 0, 0),  // atttyp
 		types.New(types.T_int32, 0, 0, 0),      // attnum
 		types.New(types.T_int32, 0, 0, 0),      // att_length
 		types.New(types.T_int8, 0, 0, 0),       // attnotnull
@@ -192,7 +325,16 @@ var (
 		types.New(types.T_int8, 0, 0, 0),       // att_is_auto_increment
 		types.New(types.T_varchar, 1024, 0, 0), // att_comment
 		types.New(types.T_int8, 0, 0, 0),       // att_is_hidden
-
+		types.New(types.T_int8, 0, 0, 0),       // att_has_update
+		types.New(types.T_varchar, 1024, 0, 0), // att_update
+	}
+	MoTableMetaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),  // block_id
+		types.New(types.T_bool, 0, 0, 0),    // entry_state, true for appendable
+		types.New(types.T_TS, 0, 0, 0),      // create_at
+		types.New(types.T_TS, 0, 0, 0),      // delete_at
+		types.New(types.T_varchar, 0, 0, 0), // meta_loc
+		types.New(types.T_varchar, 0, 0, 0), // delta_loc
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
@@ -200,4 +342,6 @@ var (
 	MoTablesTableDefs = []engine.TableDef{}
 	// used by memengine or tae
 	MoColumnsTableDefs = []engine.TableDef{}
+	// used by memengine or tae or cn
+	MoTableMetaDefs = []engine.TableDef{}
 )

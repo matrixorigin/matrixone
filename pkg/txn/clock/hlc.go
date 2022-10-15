@@ -16,11 +16,11 @@ package clock
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -58,6 +58,7 @@ func SkipClockUncertainityPeriodOnRestart(ctx context.Context, clock Clock) {
 // Logical Physical Clocks and Consistent Snapshots in Globally Distributed
 // Databases
 type HLCClock struct {
+	nodeID        uint16
 	maxOffset     time.Duration
 	physicalClock func() int64
 
@@ -135,7 +136,7 @@ func (c *HLCClock) MaxOffset() time.Duration {
 // current time in hlc.
 func (c *HLCClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	now := c.now()
-	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
+	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset), NodeID: now.NodeID}
 }
 
 // Update is called whenever messages are received from other nodes. HLC
@@ -207,13 +208,13 @@ func (c *HLCClock) handleClockJump(oldPts int64, newPts int64) {
 	jump := int64(0)
 	if oldPts > newPts {
 		jump = oldPts - newPts
-		log.Printf("clock backward jump observed, %d microseconds", toMicrosecond(jump))
+		logutil.Infof("clock backward jump observed, %d microseconds", toMicrosecond(jump))
 	} else {
 		jump = newPts - oldPts
 	}
 
 	if jump > int64(c.maxClockForwardOffset()+c.clockOffsetMonitoringInterval()) {
-		log.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
+		logutil.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
 	}
 }
 
@@ -228,7 +229,7 @@ func (c *HLCClock) now() timestamp.Timestamp {
 	} else {
 		c.mu.ts = timestamp.Timestamp{PhysicalTime: newPts}
 	}
-
+	c.mu.ts.NodeID = uint32(c.nodeID)
 	return c.mu.ts
 }
 
@@ -253,4 +254,8 @@ func (c *HLCClock) update(m timestamp.Timestamp) {
 		c.mu.ts.PhysicalTime = m.PhysicalTime
 		c.mu.ts.LogicalTime = m.LogicalTime
 	}
+}
+
+func (c *HLCClock) SetNodeID(id uint16) {
+	c.nodeID = id
 }

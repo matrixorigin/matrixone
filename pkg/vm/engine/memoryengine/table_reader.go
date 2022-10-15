@@ -18,12 +18,13 @@ import (
 	"context"
 	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type TableReader struct {
@@ -52,11 +53,25 @@ func (t *Table) NewReader(
 
 	var shards []Shard
 	if len(shardIDs) == 0 {
-		// all
-		var err error
-		shards, err = t.engine.allShards()
-		if err != nil {
-			return nil, err
+		switch t.id {
+
+		case catalog.MO_DATABASE_ID,
+			catalog.MO_TABLES_ID,
+			catalog.MO_COLUMNS_ID:
+			// sys table
+			var err error
+			shards, err = t.engine.anyShard()
+			if err != nil {
+				return nil, err
+			}
+
+		default:
+			// all
+			var err error
+			shards, err = t.engine.allShards()
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	} else {
@@ -88,8 +103,8 @@ func (t *Table) NewReader(
 
 	resps, err := DoTxnRequest[NewTableIterResp](
 		ctx,
-		t.engine,
-		t.txnOperator.Read,
+		t.txnOperator,
+		true,
 		theseShards(shards),
 		OpNewTableIter,
 		NewTableIterReq{
@@ -132,7 +147,7 @@ func (t *Table) NewReader(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) (*batch.Batch, error) {
+func (t *TableReader) Read(colNames []string, plan *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
 	}
@@ -145,8 +160,8 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 
 		resps, err := DoTxnRequest[ReadResp](
 			t.ctx,
-			t.engine,
-			t.txnOperator.Read,
+			t.txnOperator,
+			true,
 			thisShard(t.iterInfos[0].Shard),
 			OpRead,
 			ReadReq{
@@ -178,8 +193,8 @@ func (t *TableReader) Close() error {
 	for _, info := range t.iterInfos {
 		_, err := DoTxnRequest[CloseTableIterResp](
 			t.ctx,
-			t.engine,
-			t.txnOperator.Read,
+			t.txnOperator,
+			true,
 			thisShard(info.Shard),
 			OpCloseTableIter,
 			CloseTableIterReq{
@@ -191,7 +206,7 @@ func (t *TableReader) Close() error {
 	return nil
 }
 
-func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
+func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
 	clusterDetails, err := t.engine.getClusterDetails()
 	if err != nil {

@@ -27,10 +27,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -150,6 +153,7 @@ func newS3FS(
 
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(sharedConfigProfile),
+		config.WithLogger(logutil.GetS3Logger()),
 	)
 	if err != nil {
 		return nil, err
@@ -256,14 +260,17 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 			Key:    ptrTo(key),
 		},
 	)
-	err = s.mapError(err)
-	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		// key not exists
-		err = nil
-	}
 	if err != nil {
-		// other error
-		return err
+		var httpError *http.ResponseError
+		if errors.As(err, &httpError) {
+			if httpError.Response.StatusCode == 404 {
+				// key not exists, ok
+				err = nil
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if output != nil {
 		// key existed
@@ -360,42 +367,44 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 	if readToEnd {
 		rang := fmt.Sprintf("bytes=%d-", min)
+		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path.File)),
+				Key:    ptrTo(key),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(output.Body)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 
 	} else {
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
+		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path.File)),
+				Key:    ptrTo(key),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
@@ -459,8 +468,64 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
-func (s *S3FS) Delete(ctx context.Context, filePath string) error {
+func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if len(filePaths) == 0 {
+		return nil
+	}
+	if len(filePaths) == 1 {
+		return s.deleteSingle(ctx, filePaths[0])
+	}
 
+	objs := make([]types.ObjectIdentifier, 0, 1000)
+	for _, filePath := range filePaths {
+		path, err := ParsePathAtService(filePath, s.name)
+		if err != nil {
+			return err
+		}
+		objs = append(objs, types.ObjectIdentifier{Key: ptrTo(s.pathToKey(path.File))})
+		if len(objs) == 1000 {
+			if err := s.deleteMultiObj(ctx, objs); err != nil {
+				return err
+			}
+			objs = objs[:0]
+		}
+	}
+	if err := s.deleteMultiObj(ctx, objs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *S3FS) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
+	output, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: ptrTo(s.bucket),
+		Delete: &types.Delete{
+			Objects: objs,
+			// In quiet mode the response includes only keys where the delete action encountered an error.
+			Quiet: true,
+		},
+	})
+	// delete api failed
+	if err != nil {
+		return err
+	}
+	// delete api success, but with delete file failed.
+	message := strings.Builder{}
+	if len(output.Errors) > 0 {
+		for _, Error := range output.Errors {
+			if *Error.Code == (*types.NoSuchKey)(nil).ErrorCode() {
+				continue
+			}
+			message.WriteString(fmt.Sprintf("%s: %s, %s;", *Error.Key, *Error.Code, *Error.Message))
+		}
+	}
+	if message.Len() > 0 {
+		return moerr.NewInternalError("S3 Delete failed: %s", message.String())
+	}
+	return nil
+}
+
+func (s *S3FS) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
@@ -489,14 +554,14 @@ func (s *S3FS) keyToPath(key string) string {
 	return path
 }
 
-func (s *S3FS) mapError(err error) error {
+func (s *S3FS) mapError(err error, path string) error {
 	if err == nil {
 		return nil
 	}
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFound("")
+			return moerr.NewFileNotFound(path)
 		}
 	}
 	return err

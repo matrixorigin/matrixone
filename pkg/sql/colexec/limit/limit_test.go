@@ -18,12 +18,10 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -45,11 +43,9 @@ var (
 )
 
 func init() {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
 	tcs = []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},
@@ -59,7 +55,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},
@@ -69,7 +65,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},
@@ -113,17 +109,15 @@ func TestLimit(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		hm := host.New(1 << 30)
-		gm := guest.New(1<<30, hm)
 		tcs = []limitTestCase{
 			{
-				proc: testutil.NewProcessWithMheap(mheap.New(gm)),
+				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 				types: []types.Type{
 					{Oid: types.T_int8},
 				},

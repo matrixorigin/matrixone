@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -129,6 +130,10 @@ func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err err
 
 func (db *txnDatabase) GetRelationByName(name string) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().GetRelationByName(db.txnDB.entry.ID, name)
+}
+
+func (db *txnDatabase) UnsafeGetRelation(id uint64) (rel handle.Relation, err error) {
+	return db.Txn.GetStore().UnsafeGetRelation(db.txnDB.entry.ID, id)
 }
 
 func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) {

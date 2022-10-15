@@ -16,11 +16,12 @@ package db
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -39,6 +40,12 @@ const (
 	defaultTestDB = "db"
 )
 
+func init() {
+	// workaround sca check
+	_ = tryAppendClosure
+	_ = dropDB
+}
+
 type testEngine struct {
 	*DB
 	t        *testing.T
@@ -55,7 +62,8 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 }
 
 func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
-func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
+
+func (e *testEngine) bindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
 	_ = e.DB.Close()

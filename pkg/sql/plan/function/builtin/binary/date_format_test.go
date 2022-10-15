@@ -17,6 +17,7 @@ package binary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -536,6 +537,7 @@ func TestDateFormat(t *testing.T) {
 
 // Single row constant input parameter test date_format function
 func TestDateFormatWithScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
 	// Construct vector parameter of date_format() function
 	makeDateFormatVectors := func(date string, format string) []*vector.Vector {
 		vec := make([]*vector.Vector, 2)
@@ -545,8 +547,8 @@ func TestDateFormatWithScalar(t *testing.T) {
 			panic(err)
 		}
 
-		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime)
-		vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, format)
+		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime, mp)
+		vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, format, mp)
 		return vec
 	}
 

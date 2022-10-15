@@ -16,6 +16,8 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -26,6 +28,7 @@ import (
 
 var (
 	_ engine.Engine = (*txnEngine)(nil)
+	_ Engine        = (*txnEngine)(nil)
 )
 
 func NewEngine(impl *db.DB) *txnEngine {
@@ -56,9 +59,29 @@ func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOpe
 	return
 }
 
+func (e *txnEngine) DropDatabase(ctx context.Context, name string, txnHandle Txn) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	txnBindAccessInfoFromCtx(txn, ctx)
+	_, err = txn.DropDatabase(name)
+	return
+}
+
 func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
+		panic(err)
+	}
+	txnBindAccessInfoFromCtx(txn, ctx)
+	_, err = txn.CreateDatabase(name)
+	return
+}
+
+func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle Txn) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
@@ -71,6 +94,17 @@ func (e *txnEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([]
 	var txn txnif.AsyncTxn
 
 	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
+		panic(err)
+	}
+	txnBindAccessInfoFromCtx(txn, ctx)
+	return txn.DatabaseNames(), nil
+}
+
+func (e *txnEngine) DatabaseNames(ctx context.Context, txnHandle Txn) ([]string, error) {
+	var err error
+	var txn txnif.AsyncTxn
+
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
@@ -93,6 +127,26 @@ func (e *txnEngine) Database(ctx context.Context, name string, txnOp client.TxnO
 	return db, nil
 }
 
+func (e *txnEngine) GetDatabase(ctx context.Context, name string, txnHandle Txn) (Database, error) {
+	var err error
+	var txn txnif.AsyncTxn
+
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	txnBindAccessInfoFromCtx(txn, ctx)
+	h, err := txn.GetDatabase(name)
+	if err != nil {
+		return nil, err
+	}
+	db := newDatabase(h)
+	return db, nil
+}
+
+func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
+	return e.impl
+}
+
 func (e *txnEngine) Nodes() (engine.Nodes, error) {
 	return nil, nil
 }
@@ -101,7 +155,23 @@ func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
 	return e.impl.StartTxn(info)
 }
 
+func (e *txnEngine) GetTxnByID(id []byte) (txn Txn, err error) {
+	return e.impl.GetTxn(string(id))
+}
+
+func (e *txnEngine) GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error) {
+	return e.impl.GetOrCreateTxnWithMeta(info, id, ts)
+}
+
 func (e *txnEngine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute
 	return
+}
+
+func (e *txnEngine) Close() (err error) {
+	return e.impl.Close()
+}
+
+func (e *txnEngine) Destroy() (err error) {
+	panic(moerr.NewNYI("Pls implement me!"))
 }

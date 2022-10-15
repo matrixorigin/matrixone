@@ -15,13 +15,19 @@
 package options
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
 const (
-	DefaultTxnCacheSize   = 256 * common.M
+	// Temp unlimit the txn cache size.
+	// In v0.6, we will limit the cache to a reasonable value
+	DefaultTxnCacheSize   = mpool.TB
 	DefaultIndexCacheSize = 128 * common.M
 	DefaultMTCacheSize    = 4 * common.G
 
@@ -30,15 +36,24 @@ const (
 
 	DefaultScannerInterval    = int64(5000)          // millisecond
 	DefaultExecutionInterval  = int64(2000)          // millisecond
-	DefaultFlushInterval      = int64(3 * 60 * 1000) // millisecond
+	DefaultFlushInterval      = int64(1 * 60 * 1000) // millisecond
 	DefaultExecutionLevels    = int16(30)
-	DefaultCatalogCkpInterval = int64(60000) // millisecond
+	DefaultCatalogCkpInterval = int64(30000) // millisecond
 	DefaultCatalogUnCkpLimit  = int64(10)
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 1024
+
+	DefaultLogstoreType = LogstoreBatchStore
+)
+
+type LogstoreType string
+
+const (
+	LogstoreBatchStore LogstoreType = "batchstore"
+	LogstoreLogservice LogstoreType = "logservice"
 )
 
 type Options struct {
@@ -46,7 +61,12 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
-	Catalog       *catalog.Catalog
-	Clock         clock.Clock
 	LogtailCfg    *LogtailCfg
+	Catalog       *catalog.Catalog
+
+	Clock     clock.Clock
+	Fs        fileservice.FileService
+	Lc        logservicedriver.LogServiceClientFactory
+	Shard     metadata.DNShard
+	LogStoreT LogstoreType
 }

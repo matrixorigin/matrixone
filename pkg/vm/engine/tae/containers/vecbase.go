@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -36,7 +37,7 @@ func newVecBase[T any](derived *vector[T]) *vecBase[T] {
 }
 
 func (base *vecBase[T]) Window(offset, length int) Vector               { panic("not supported") }
-func (base *vecBase[T]) CloneWindow(_, _ int, _ ...MemAllocator) Vector { panic("not supported") }
+func (base *vecBase[T]) CloneWindow(_, _ int, _ ...*mpool.MPool) Vector { panic("not supported") }
 func (base *vecBase[T]) ResetWithData(_ *Bytes, _ *roaring64.Bitmap)    { panic("not supported") }
 func (base *vecBase[T]) Reset()                                         { panic("not supported") }
 func (base *vecBase[T]) Equals(o Vector) bool                           { panic("not supported") }
@@ -50,9 +51,8 @@ func (base *vecBase[T]) Data() []byte                                   { return
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
 }
-func (base *vecBase[T]) Bytes() *Bytes         { return base.derived.stlvec.Bytes() }
-func (base *vecBase[T]) Get(i int) (v any)     { return base.derived.stlvec.Get(i) }
-func (base *vecBase[T]) GetCopy(i int) (v any) { return base.derived.stlvec.GetCopy(i) }
+func (base *vecBase[T]) Bytes() *Bytes     { return base.derived.stlvec.Bytes() }
+func (base *vecBase[T]) Get(i int) (v any) { return base.derived.stlvec.Get(i) }
 
 func (base *vecBase[T]) tryCOW() {
 	if base.derived.roStorage != nil {
@@ -92,11 +92,10 @@ func (base *vecBase[T]) Extend(o Vector) {
 }
 
 func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
-	var v T
-	if _, ok := any(v).([]byte); ok {
+	if base.derived.typ.IsVarlen() {
 		bs := src.Bytes()
 		for i := srcOff; i < srcOff+srcLen; i++ {
-			base.derived.stlvec.Append(any(bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]).(T))
+			base.derived.stlvec.Append(any(bs.GetVarValueAt(i)).(T))
 		}
 		return
 	}
@@ -115,17 +114,17 @@ func (base *vecBase[T]) Length() int   { return base.derived.stlvec.Length() }
 func (base *vecBase[T]) Capacity() int { return base.derived.stlvec.Capacity() }
 func (base *vecBase[T]) Allocated() int {
 	if base.derived.roStorage != nil {
-		return base.derived.roStorage.Size()
+		return len(base.derived.roStorage)
 	}
 	return base.derived.stlvec.Allocated()
 }
 
-func (base *vecBase[T]) GetAllocator() MemAllocator { return base.derived.stlvec.GetAllocator() }
+func (base *vecBase[T]) GetAllocator() *mpool.MPool { return base.derived.stlvec.GetAllocator() }
 func (base *vecBase[T]) GetType() types.Type        { return base.derived.typ }
 func (base *vecBase[T]) String() string {
 	s := base.derived.stlvec.String()
 	if base.derived.roStorage != nil {
-		s = fmt.Sprintf("%s;[RoAlloc=%d]", s, base.derived.roStorage.Size())
+		s = fmt.Sprintf("%s;[RoAlloc=%d]", s, len(base.derived.roStorage))
 	}
 	return s
 }

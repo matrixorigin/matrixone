@@ -20,14 +20,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
@@ -46,20 +45,6 @@ func New(
 		}, math.MaxInt)
 	}
 
-	storage, err := memorystorage.NewMemoryStorage(
-		testutil.NewMheap(),
-		memorystorage.SnapshotIsolation,
-		ck,
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	client = memorystorage.NewStorageTxnClient(
-		ck,
-		storage,
-	)
-
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,
 		ReplicaID: 2,
@@ -67,16 +52,34 @@ func New(
 	shards := []logservicepb.DNShardInfo{
 		shard,
 	}
+	dnAddr := "1"
 	dnStore := logservicepb.DNStore{
 		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
+		ServiceAddress: dnAddr,
 		Shards:         shards,
 	}
+
+	storage, err := memorystorage.NewMemoryStorage(
+		mpool.MustNewZero(),
+		memorystorage.SnapshotIsolation,
+		ck,
+		memoryengine.RandomIDGenerator,
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	client = memorystorage.NewStorageTxnClient(
+		ck,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
+	)
 
 	e := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(
-			testutil.NewMheap(),
+			mpool.MustNewZero(),
 		),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
@@ -85,6 +88,7 @@ func New(
 				},
 			}, nil
 		},
+		memoryengine.RandomIDGenerator,
 	)
 
 	txnOp, err := client.New()
@@ -103,17 +107,17 @@ func New(
 		panic(err)
 	}
 
-	memEngine.CreateR(db)
-	memEngine.CreateS(db)
-	memEngine.CreateT(db)
-	memEngine.CreateT1(db)
-	memEngine.CreatePart(db)
-	memEngine.CreateDate(db)
-	memEngine.CreateSupplier(db)
-	memEngine.CreateCustomer(db)
-	memEngine.CreateLineorder(db)
+	CreateR(db)
+	CreateS(db)
+	CreateT(db)
+	CreateT1(db)
+	CreatePart(db)
+	CreateDate(db)
+	CreateSupplier(db)
+	CreateCustomer(db)
+	CreateLineorder(db)
 
-	if err := txnOp.Commit(ctx); err != nil {
+	if err = txnOp.Commit(ctx); err != nil {
 		panic(err)
 	}
 

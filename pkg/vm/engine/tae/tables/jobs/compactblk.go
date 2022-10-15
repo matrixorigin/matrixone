@@ -16,14 +16,16 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -56,13 +58,13 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 		meta:      meta,
 		scheduler: scheduler,
 	}
-	dbName := meta.GetSegment().GetTable().GetDB().GetName()
-	database, err := txn.GetDatabase(dbName)
+	dbId := meta.GetSegment().GetTable().GetDB().GetID()
+	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	relName := meta.GetSchema().Name
-	rel, err := database.GetRelationByName(relName)
+	tableId := meta.GetSegment().GetTable().GetID()
+	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return
 	}
@@ -108,16 +110,6 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			return preparer, err
 		}
 	}
-	// Prepare PhyAddr column data
-	phyAddrVec, err := model.PreparePhyAddrData(
-		catalog.PhyAddrColumnType,
-		blkKey,
-		0,
-		uint32(preparer.Columns.Length()))
-	if err != nil {
-		return
-	}
-	preparer.Columns.AddVector(catalog.PhyAddrColumnName, phyAddrVec)
 	return
 }
 
@@ -161,10 +153,14 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
+	metaLoc, err := blockio.EncodeBlkMetaLocWithObject(ioTask.file.Fingerprint(),
 		ioTask.file.GetMeta().GetExtent(),
-		uint32(preparer.Columns.Length()))
-	logutil.Infof("node: %v", metaLoc)
+		uint32(preparer.Columns.Length()),
+		ioTask.file.GetObjectBlocks())
+	ioTask.file.FreeObjectBlocks()
+	if err != nil {
+		return err
+	}
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
@@ -173,6 +169,67 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
+	// write ablock
+	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
+	if aBlkMeta.IsAppendable() {
+		var data *containers.Batch
+		var deletes *containers.Batch
+		aBlkData := aBlkMeta.GetBlockData()
+		aBlockFile := aBlkData.GetBlockFile()
+		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
+		if err != nil {
+			return
+		}
+		defer data.Close()
+		deletes, err = aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+		if err != nil {
+			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
+		}
+		ablockTask := NewFlushABlkTask(
+			tasks.WaitableCtx,
+			aBlockFile,
+			task.txn.GetStartTS(),
+			aBlkMeta,
+			data,
+			deletes,
+		)
+		if err = task.scheduler.Schedule(ablockTask); err != nil {
+			return
+		}
+		if err = ablockTask.WaitDone(); err != nil {
+			return
+		}
+		var metaLocABlk string
+		metaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(aBlockFile.Fingerprint(),
+			ablockTask.file.GetMeta().GetExtent(),
+			uint32(data.Length()),
+			aBlockFile.GetObjectBlocks())
+		if err != nil {
+			return
+		}
+		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
+			return err
+		}
+		if deletes != nil {
+			var deltaLocABlk string
+			deltaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(aBlockFile.Fingerprint(),
+				ablockTask.file.GetDelta().GetExtent(),
+				0,
+				aBlockFile.GetObjectBlocks())
+			if err != nil {
+				return
+			}
+			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+				return err
+			}
+		}
+		if err = aBlkData.ReplayIndex(); err != nil {
+			return err
+		}
+	}
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return

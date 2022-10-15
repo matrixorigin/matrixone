@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -40,16 +39,17 @@ type BaseEntry interface {
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index
-	GetCurrOp() OpT
 	GetLogIndex() *wal.Index
 
-	GetNodeLocked() txnbase.MVCCNode
+	GetLatestNodeLocked() txnif.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool
 	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
+	HasDropCommitted() bool
+	HasDropCommittedLocked() bool
 
 	WriteOneNodeTo(w io.Writer) (n int64, err error)
 	ReadOneNodeFrom(r io.Reader) (n int64, err error)

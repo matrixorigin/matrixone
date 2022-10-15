@@ -86,7 +86,7 @@ func (c *AppendCmd) VerboseString() string {
 	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToVerboseString("\t\t"))
 	return s
 }
-func (c *AppendCmd) Close()         {}
+func (c *AppendCmd) Close()         { c.ComposedCmd.Close() }
 func (c *AppendCmd) GetType() int16 { return CmdAppend }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
@@ -111,10 +111,10 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	if err = binary.Write(w, binary.BigEndian, c.Node.GetTxn().GetCommitTS()); err != nil {
+	if err = binary.Write(w, binary.BigEndian, c.Node.GetTxn().GetPrepareTS()); err != nil {
 		return
 	}
-	n += 8
+	n += 16
 	return
 }
 
@@ -145,6 +145,7 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &c.Ts); err != nil {
 		return
 	}
+	n += 16
 	return
 }
 

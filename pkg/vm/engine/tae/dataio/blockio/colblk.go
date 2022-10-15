@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -47,7 +48,7 @@ func newColumnBlock(block *blockFile, col int) *columnBlock {
 }
 
 func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
-	if cb.block.metaKey.End() > 0 {
+	if cb.block.getMetaKey().End() > 0 {
 		object, err := cb.block.GetMeta().GetColumn(cb.id.Idx)
 		if err != nil {
 			panic(any(err))
@@ -74,7 +75,7 @@ func (cb *columnBlock) GetData(
 	_ *bytes.Buffer,
 ) (vec containers.Vector, err error) {
 	var fsVector *fileservice.IOVector
-	fsVector, err = cb.GetDataObject(metaLoc).GetData()
+	fsVector, err = cb.GetDataObject(metaLoc).GetData(nil)
 	if err != nil {
 		return
 	}
@@ -82,7 +83,7 @@ func (cb *columnBlock) GetData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(typ)
 	vector.Read(srcBuf)
-	vec = containers.MOToVectorTmp(vector, NullAbility)
+	vec = containers.NewVectorWithSharedMemory(vector, NullAbility)
 	return
 }
 

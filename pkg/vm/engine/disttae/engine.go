@@ -15,34 +15,49 @@
 package disttae
 
 import (
+	"bytes"
+	"container/heap"
 	"context"
+	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	m *mheap.Mheap,
 	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	cli client.TxnClient,
+	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
-		return nil
+		panic(err)
+	}
+	db := newDB(cli, cluster.DNStores)
+	if err := db.init(ctx, mp); err != nil {
+		panic(err)
 	}
 	return &Engine{
-		m:                 m,
+		db:                db,
+		mp:                mp,
+		fs:                fs,
 		cli:               cli,
+		idGen:             idGen,
+		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
-		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -54,15 +69,22 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
+	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(accountId, userId, roleId, name, e.m)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	databaseId, err := txn.idGen.AllocateID(ctx)
 	if err != nil {
 		return err
 	}
-	defer bat.Clean(e.m)
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
+		name, databaseId, e.mp)
+	if err != nil {
+		return err
+	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -74,17 +96,32 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil {
 		return nil, moerr.NewTxnClosed()
 	}
+	key := genDatabaseKey(ctx, name)
+	if db, ok := txn.databaseMap.Load(key); ok {
+		return db.(*database), nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		txn.databaseMap.Store(key, db)
+		return db, nil
+	}
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return &database{
-		m:            e.m,
+	db := &database{
 		txn:          txn,
 		db:           e.db,
 		databaseId:   id,
 		databaseName: name,
-	}, nil
+	}
+	txn.databaseMap.Store(key, db)
+	return db, nil
 }
 
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
@@ -100,18 +137,19 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
+	key := genDatabaseKey(ctx, name)
+	txn.databaseMap.Delete(key)
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, e.m)
+	bat, err := genDropDatabaseTuple(id, name, e.mp)
 	if err != nil {
 		return err
 	}
-	defer bat.Clean(e.m)
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -128,29 +166,40 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
+	proc := process.New(
+		ctx,
+		e.mp,
+		e.cli,
+		op,
+		e.fs,
+	)
 	txn := &Transaction{
-		db:       e.db,
-		readOnly: false,
-		meta:     op.Txn(),
-		dnStores: cluster.DNStores,
-		fileMap:  make(map[string]uint64),
+		proc:           proc,
+		db:             e.db,
+		readOnly:       true,
+		meta:           op.Txn(),
+		idGen:          e.idGen,
+		rowId:          [2]uint64{math.MaxUint64, 0},
+		dnStores:       cluster.DNStores,
+		fileMap:        make(map[string]uint64),
+		tableMap:       new(sync.Map),
+		databaseMap:    new(sync.Map),
+		createTableMap: make(map[uint64]uint8),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
-	if len(txn.dnStores) > 0 {
-		// update catalog's cache
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
+	// update catalog's cache
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+		return err
+	}
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+		return err
+	}
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+		return err
 	}
 	return nil
 }
@@ -161,42 +210,53 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
+	if txn.readOnly {
+		return nil
+	}
 	if e.hasConflict(txn) {
-		return moerr.NewTxnWriteConflict("")
+		return moerr.NewTxnWriteConflict("write conflict")
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
+	if err == nil {
+		for _, name := range txn.deleteMetaTables {
+			txn.db.delMetaTable(name)
+		}
+	}
 	return err
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return nil // compatible with existing logic
+		//	return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	return nil
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
+	return nil, nil
+	/*
+		clusterDetails, err := e.getClusterDetails()
+		if err != nil {
+			return nil, err
+		}
 
-	var nodes engine.Nodes
-	for _, store := range clusterDetails.CNStores {
-		nodes = append(nodes, engine.Node{
-			Mcpu: 1,
-			Id:   store.UUID,
-			Addr: store.ServiceAddress,
-		})
-	}
-
-	return nodes, nil
+		var nodes engine.Nodes
+		for _, store := range clusterDetails.CNStores {
+			nodes = append(nodes, engine.Node{
+				Mcpu: 10, // TODO
+				Id:   store.UUID,
+				Addr: store.ServiceAddress,
+			})
+		}
+		return nodes, nil
+	*/
 }
 
 func (e *Engine) Hints() (h engine.Hints) {
@@ -207,6 +267,7 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
+	heap.Push(e.txnHeap, txn)
 	e.txns[string(op.Txn().ID)] = txn
 }
 
@@ -219,10 +280,24 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.m)
+			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
 	e.Lock()
 	defer e.Unlock()
+	for i, tmp := range *e.txnHeap {
+		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
+			heap.Remove(e.txnHeap, i)
+			break
+		}
+	}
 	delete(e.txns, string(txn.meta.ID))
 }
+
+/*
+func (e *Engine) minActiveTimestamp() timestamp.Timestamp {
+	e.RLock()
+	defer e.RUnlock()
+	return (*e.txnHeap)[0].meta.SnapshotTS
+}
+*/

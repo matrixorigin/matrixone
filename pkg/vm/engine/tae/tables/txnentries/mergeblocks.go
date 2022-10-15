@@ -42,9 +42,10 @@ type mergeBlocksEntry struct {
 	fromAddr    []uint32
 	toAddr      []uint32
 	scheduler   tasks.TaskScheduler
+	skippedBlks []int
 }
 
-func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler, deletes []*roaring.Bitmap) *mergeBlocksEntry {
+func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler, deletes []*roaring.Bitmap, skipBlks []int) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,
 		relation:    relation,
@@ -57,6 +58,7 @@ func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSe
 		toAddr:      toAddr,
 		scheduler:   scheduler,
 		deletes:     deletes,
+		skippedBlks: skipBlks,
 	}
 }
 
@@ -116,6 +118,8 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 	return
 }
 
+func (entry *mergeBlocksEntry) Set1PC()     {}
+func (entry *mergeBlocksEntry) Is1PC() bool { return false }
 func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPos int, toOffset uint32) {
 	totalFromOffset := entry.fromAddr[fromPos] + fromOffset
 	totalToOffset := entry.mapping[totalFromOffset]
@@ -144,8 +148,13 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 	return
 }
 
-func (entry *mergeBlocksEntry) Prepare2PCPrepare() (err error) {
-	return
+func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
+	for _, offset := range entry.skippedBlks {
+		if offset == fromPos {
+			return true
+		}
+	}
+	return false
 }
 
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
@@ -163,7 +172,12 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		blks[i] = blk
 	}
 	var view *model.BlockView
+	skippedCnt := 0
 	for fromPos, dropped := range entry.droppedBlks {
+		if entry.isSkipped(fromPos) {
+			skippedCnt++
+			continue
+		}
 		dataBlock := dropped.GetBlockData()
 		view, err = dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
 		if err != nil {
@@ -174,23 +188,21 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		}
 		deletes := view.DeleteMask
 		for colIdx, column := range view.Columns {
-			column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
-				column.UpdateMask,
-				column.UpdateVals,
+			view.DeleteMask = compute.ShuffleByDeletes(
 				deletes, entry.deletes[fromPos])
 			for row, v := range column.UpdateVals {
-				toPos, toRow := entry.resolveAddr(fromPos, row)
+				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
 				if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
 					return
 				}
 			}
 		}
-		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, entry.deletes[fromPos])
+		view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
 		if view.DeleteMask != nil {
 			it := view.DeleteMask.Iterator()
 			for it.HasNext() {
 				row := it.Next()
-				toPos, toRow := entry.resolveAddr(fromPos, row)
+				toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
 				if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
 					return
 				}

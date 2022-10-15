@@ -52,7 +52,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.createEntry = e
 	return nil
 }
@@ -62,7 +62,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.dropEntry = e
 	return nil
 }
@@ -98,7 +98,7 @@ func (db *txnDB) Close() error {
 	return err
 }
 
-func (db *txnDB) BatchDedup(id uint64, pks ...containers.Vector) (err error) {
+func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -107,7 +107,7 @@ func (db *txnDB) BatchDedup(id uint64, pks ...containers.Vector) (err error) {
 		return moerr.NewNotFound()
 	}
 
-	return table.DoBatchDedup(pks...)
+	return table.DoBatchDedup(pk)
 }
 
 func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
@@ -156,17 +156,6 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 	return table.GetValue(id, row, colIdx)
 }
 
-func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	table, err := db.getOrSetTable(id.TableID)
-	if err != nil {
-		return err
-	}
-	if table.IsDeleted() {
-		return moerr.NewNotFound()
-	}
-	return table.Update(id, row, colIdx, v)
-}
-
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
@@ -202,6 +191,19 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 	return
 }
 
+func (db *txnDB) UnsafeGetRelation(id uint64) (relation handle.Relation, err error) {
+	meta, err := db.entry.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
+	return
+}
+
 func (db *txnDB) GetRelationByName(name string) (relation handle.Relation, err error) {
 	meta, err := db.entry.GetTableEntry(name, db.store.txn)
 	if err != nil {
@@ -223,12 +225,12 @@ func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	return table.GetSegment(id.SegmentID)
 }
 
-func (db *txnDB) CreateSegment(tid uint64) (seg handle.Segment, err error) {
+func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateSegment()
+	return table.CreateSegment(is1PC)
 }
 
 func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
@@ -281,12 +283,12 @@ func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return table.GetBlock(id)
 }
 
-func (db *txnDB) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
+func (db *txnDB) CreateBlock(tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateBlock(sid)
+	return table.CreateBlock(sid, is1PC)
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
@@ -345,10 +347,27 @@ func (db *txnDB) WaitPrepared() (err error) {
 	}
 	return
 }
-
+func (db *txnDB) Apply1PCCommit() (err error) {
+	if db.createEntry != nil && db.createEntry.Is1PC() {
+		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+			return
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.Apply1PCCommit(); err != nil {
+			break
+		}
+	}
+	if db.dropEntry != nil && db.dropEntry.Is1PC() {
+		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+			return
+		}
+	}
+	return
+}
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
-	if db.createEntry != nil {
+	if db.createEntry != nil && !db.createEntry.Is1PC() {
 		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
@@ -358,12 +377,12 @@ func (db *txnDB) ApplyCommit() (err error) {
 			break
 		}
 	}
-	if db.dropEntry != nil {
+	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
 		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%d ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -407,7 +426,7 @@ func (db *txnDB) PrepareCommit() (err error) {
 		}
 	}
 
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
 	return
 }

@@ -15,9 +15,12 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -31,7 +34,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return moerr.NewDBAlreadyExists(dbName)
 	}
-	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
+		dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -53,6 +57,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -80,10 +85,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(tblName)
 	}
-	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
-	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
+	// build index table
+	for _, def := range qry.IndexTables {
+		planCols = def.GetCols()
+		exeCols = planColsToExeCols(planCols)
+		planDefs = def.GetDefs()
+		exeDefs, err = planDefsToExeDefs(planDefs)
+		if err != nil {
+			return err
+		}
+		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(tblName)
+		}
+		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+	}
+
+	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -107,6 +132,11 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
+	}
+	for _, name := range qry.IndexTableNames {
+		if err := dbSource.Delete(c.ctx, name); err != nil {
+			return err
+		}
 	}
 	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
 }
@@ -147,6 +177,12 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
+		case *plan.TableDef_DefType_ComputeIndex:
+			computeIndexDef := &engine.ComputeIndexDef{}
+			computeIndexDef.Names = defVal.ComputeIndex.Names
+			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
+			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
+			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil

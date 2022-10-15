@@ -15,13 +15,11 @@
 package plan
 
 import (
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
@@ -74,6 +72,9 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 		return nil, moerr.NewInvalidInput("cannot delete from view")
 	}
 
+	computeIndexInfos := BuildComputeIndexInfos(ctx, objRef.DbName, tableDef.Defs)
+	tableDef.ComputeIndexInfos = computeIndexInfos
+
 	// optimize to truncate,
 	if stmt.Where == nil && stmt.Limit == nil {
 		return buildDelete2Truncate(objRef, tableDef)
@@ -81,7 +82,8 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 	// find out use keys to delete
 	var useProjectExprs tree.SelectExprs = nil
-	useProjectExprs, useKey, isHideKey, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
+
+	useProjectExprs, useKey, isHideKey, attrs, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -106,11 +108,13 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 
 	// build delete node
 	d := &plan.DeleteTableCtx{
-		DbName:       objRef.SchemaName,
-		TblName:      tableDef.Name,
-		UseDeleteKey: useKey.Name,
-		IsHideKey:    isHideKey,
-		CanTruncate:  false,
+		DbName:            objRef.SchemaName,
+		TblName:           tableDef.Name,
+		UseDeleteKey:      useKey.Name,
+		IsHideKey:         isHideKey,
+		CanTruncate:       false,
+		ComputeIndexInfos: tableDef.ComputeIndexInfos,
+		IndexAttrs:        attrs,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -129,9 +133,10 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
 	// build delete node
 	d := &plan.DeleteTableCtx{
-		DbName:      objRef.SchemaName,
-		TblName:     tblDef.Name,
-		CanTruncate: true,
+		DbName:            objRef.SchemaName,
+		TblName:           tblDef.Name,
+		CanTruncate:       true,
+		ComputeIndexInfos: tblDef.ComputeIndexInfos,
 	}
 	node := &Node{
 		NodeType:        plan.Node_DELETE,
@@ -189,9 +194,12 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 	var err error
 	isHideKeyArr := make([]bool, tableCount)
 	useKeys := make([]*ColDef, tableCount)
+	colIndex := make([]int32, tableCount)
+	attrsArr := make([][]string, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
-		useProjectExprs, useKeys[i], isHideKeyArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
+		colIndex[i] = int32(len(useProjectExprs))
+		useProjectExprs, useKeys[i], isHideKeyArr[i], attrsArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -223,6 +231,8 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			UseDeleteKey: useKeys[i].Name,
 			IsHideKey:    isHideKeyArr[i],
 			CanTruncate:  false,
+			ColIndex:     colIndex[i],
+			IndexAttrs:   attrsArr[i],
 		}
 	}
 	node := &Node{
@@ -247,55 +257,40 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 	return tbs
 }
 
-func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, error) {
-	var useKey *ColDef = nil
+func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, []string, error) {
+	var useKey *ColDef
 	isHideKey := false
-	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	for _, key := range priKeys {
-		if key.IsCPkey {
-			break
-		}
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
-		if isContainNameInFilter(stmt, key.Name) {
-			ps = append(ps, tree.SelectExpr{Expr: e})
-			useKey = key
-			break
-		}
-	}
-	if useKey == nil {
-		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
-		if hideKey == nil {
-			return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
-		}
-		useKey = hideKey
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], hideKey.Name)
-		ps = append(ps, tree.SelectExpr{Expr: e})
-		isHideKey = true
-	}
-	return ps, useKey, isHideKey, nil
-}
+	tblName := tf.baseNameMap[tableDef.Name]
 
-// isContainNameInFilter is to find out if contain primary key in expr.
-// it works any way. Chose other way to delete when it is not accurate judgment
-func isContainNameInFilter(stmt *tree.Delete, name string) bool {
-	if stmt.TableRefs != nil {
-		for _, e := range stmt.TableRefs {
-			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
-				return true
+	// we will allways return hideKey now
+	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
+	if hideKey == nil {
+		return nil, nil, false, nil, moerr.NewInvalidState("cannot find hide key")
+	}
+	e := tree.SetUnresolvedName(tblName, hideKey.Name)
+	ps = append(ps, tree.SelectExpr{Expr: e})
+	useKey = hideKey
+	isHideKey = true
+
+	// make true we can get all the index col data before update, so we can delete index info.
+	indexColNameMap := make(map[string]bool)
+	for _, info := range tableDef.ComputeIndexInfos {
+		if info.Cols[0].IsCPkey {
+			colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
+			for _, colName := range colNames {
+				indexColNameMap[colName] = true
 			}
+		} else {
+			indexColNameMap[info.Cols[0].Name] = true
 		}
 	}
-	if stmt.OrderBy != nil {
-		for _, e := range stmt.OrderBy {
-			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
-				return true
-			}
-		}
+	indexAttrs := make([]string, 0)
+
+	for indexColName := range indexColNameMap {
+		indexAttrs = append(indexAttrs, indexColName)
+		e, _ := tree.NewUnresolvedName(tf.baseNameMap[tableDef.Name], indexColName)
+		ps = append(ps, tree.SelectExpr{Expr: e})
 	}
-	if stmt.Where != nil {
-		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
-			return true
-		}
-	}
-	return false
+	return ps, useKey, isHideKey, indexAttrs, nil
+
 }

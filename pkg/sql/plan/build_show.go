@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -43,7 +44,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", stmt.Name)
 	sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
-	// log.Println(sqlStr)
+	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
@@ -71,7 +72,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// 	WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
 	// `
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
-	// log.Println(sql)
+	// logutil.Info(sql)
 
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tblName)
 	rowCount := 0
@@ -80,7 +81,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	for _, col := range tableDef.Cols {
 
 		colName := col.Name
-		if colName == "PADDR" {
+		if colName == catalog.Row_ID {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -199,7 +200,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
-	// log.Println(sqlStr)
+	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -310,6 +311,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	dbName := stmt.DbName
 	if stmt.DbName == "" {
 		dbName = ctx.DefaultDatabase()
+		stmt.DbName = dbName
 		if dbName == "" {
 			return nil, moerr.NewNoDB()
 		}
@@ -452,7 +454,7 @@ func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefini
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
-	// log.Println(sql)
+	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
@@ -485,7 +487,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 	}
 	// set show statement's like clause to new statement
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = whereExpr
-	// log.Println(tree.String(newStmt, dialect.MYSQL))
+	// logutil.Info(tree.String(newStmt, dialect.MYSQL))
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 

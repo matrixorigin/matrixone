@@ -371,6 +371,12 @@ func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
 	return newDBCmd(id, cmdType, e), nil
 }
 
+func (e *DBEntry) Set1PC() {
+	e.GetLatestNodeLocked().Set1PC()
+}
+func (e *DBEntry) Is1PC() bool {
+	return e.GetLatestNodeLocked().Is1PC()
+}
 func (e *DBEntry) GetCatalog() *Catalog { return e.catalog }
 
 func (e *DBEntry) RecurLoop(processor Processor) (err error) {
@@ -467,18 +473,7 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 	}
 }
 
-func (e *DBEntry) CloneCreateEntry() *DBEntry {
-	return &DBEntry{
-		acInfo:      e.acInfo,
-		DBBaseEntry: e.DBBaseEntry.CloneCreateEntry().(*DBBaseEntry),
-		name:        e.name,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
-	e.RLock()
-	defer e.RUnlock()
-	dropped := e.IsDroppedCommitted()
-	return !dropped
+	return !e.HasDropCommitted()
 }

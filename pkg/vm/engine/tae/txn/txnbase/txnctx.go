@@ -31,35 +31,45 @@ func IDToIDCtx(id uint64) []byte {
 	return ctx
 }
 
-func IDCtxToID(buf []byte) uint64 {
-	return binary.BigEndian.Uint64(buf)
+func IDCtxToID(buf []byte) string {
+	return string(buf)
 }
 
 type TxnCtx struct {
 	sync.RWMutex
+	sync.WaitGroup
 	DoneCond                     sync.Cond
-	ID                           uint64
+	ID                           string
 	IDCtx                        []byte
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	Kind2PC                      bool
+	Participants                 []uint64
+
+	// Memo is not thread-safe
+	// It will be readonly when txn state is not txnif.TxnStateActive
+	Memo *txnif.TxnMemo
 }
 
-func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
+func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 	ctx := &TxnCtx{
-		ID:        id,
-		IDCtx:     IDToIDCtx(id),
+		ID:        string(id),
+		IDCtx:     id,
 		StartTS:   start,
 		PrepareTS: txnif.UncommitTS,
 		CommitTS:  txnif.UncommitTS,
 		Info:      info,
+		Memo:      txnif.NewTxnMemo(),
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
 }
 
-func (ctx *TxnCtx) Is2PC() bool { return ctx.Kind2PC }
+func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
+	return ctx.Memo
+}
+
+func (ctx *TxnCtx) Is2PC() bool { return len(ctx.Participants) > 1 }
 
 func (ctx *TxnCtx) GetCtx() []byte {
 	return ctx.IDCtx
@@ -68,7 +78,13 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("ctx[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf(
+		"ctx[%X][%s->%s][%s]",
+		ctx.ID,
+		ctx.StartTS.ToString(),
+		ctx.CommitTS.ToString(),
+		txnif.TxnStrState(ctx.State),
+	)
 	return repr
 }
 
@@ -81,7 +97,7 @@ func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 }
 
 func (ctx *TxnCtx) String() string       { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() uint64        { return ctx.ID }
+func (ctx *TxnCtx) GetID() string        { return ctx.ID }
 func (ctx *TxnCtx) GetInfo() []byte      { return ctx.Info }
 func (ctx *TxnCtx) GetStartTS() types.TS { return ctx.StartTS }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
@@ -89,6 +105,27 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	defer ctx.RUnlock()
 	return ctx.CommitTS
 }
+
+func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	ctx.CommitTS = cts
+	return
+}
+
+func (ctx *TxnCtx) GetParticipants() []uint64 {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.Participants
+}
+
+func (ctx *TxnCtx) SetParticipants(ids []uint64) (err error) {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	ctx.Participants = ids
+	return
+}
+
 func (ctx *TxnCtx) GetPrepareTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
@@ -107,7 +144,10 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 	ctx.DoneCond.L.Lock()
 	defer ctx.DoneCond.L.Unlock()
 	state := ctx.State
-	if state != txnif.TxnStatePreparing {
+	//if state != txnif.TxnStatePreparing {
+	if state == txnif.TxnStateActive ||
+		state == txnif.TxnStateRollbacked ||
+		state == txnif.TxnStateCommitted {
 		return state
 	}
 	ctx.DoneCond.Wait()
@@ -124,7 +164,12 @@ func (ctx *TxnCtx) GetTxnState(waitIfCommitting bool) (state txnif.TxnState) {
 	// Quick get the current txn state
 	// If waitIfCommitting is false, return the state
 	// If state is not txnif.TxnStatePreparing, return the state
-	if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
+
+	//if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
+	if state = ctx.getTxnState(); !waitIfCommitting ||
+		state == txnif.TxnStateActive ||
+		state == txnif.TxnStateCommitted ||
+		state == txnif.TxnStateRollbacked {
 		return state
 	}
 
@@ -188,8 +233,17 @@ func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 }
 
 func (ctx *TxnCtx) ToCommittedLocked() error {
+	if ctx.Is2PC() {
+		if ctx.State != txnif.TxnStateCommittingFinished &&
+			ctx.State != txnif.TxnStatePrepared {
+			return moerr.NewTAECommit("ToCommittedLocked: 2PC txn's state " +
+				"is not Prepared or CommittingFinished")
+		}
+		ctx.State = txnif.TxnStateCommitted
+		return nil
+	}
 	if ctx.State != txnif.TxnStatePreparing {
-		return moerr.NewTAECommit("ToCommittedLocked: state is not preparing")
+		return moerr.NewTAECommit("ToCommittedLocked: 1PC txn's state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -215,6 +269,14 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 }
 
 func (ctx *TxnCtx) ToRollbackedLocked() error {
+	if ctx.Is2PC() {
+		if ctx.State != txnif.TxnStatePrepared &&
+			ctx.State != txnif.TxnStateRollbacking {
+			return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
+		}
+		ctx.State = txnif.TxnStateRollbacked
+		return nil
+	}
 	if ctx.State != txnif.TxnStateRollbacking {
 		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
 	}
@@ -225,6 +287,3 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 func (ctx *TxnCtx) ToUnknownLocked() {
 	ctx.State = txnif.TxnStateUnknown
 }
-
-// MockSetCommitTSLocked is for testing
-func (ctx *TxnCtx) MockSetCommitTSLocked(ts types.TS) { ctx.CommitTS = ts }

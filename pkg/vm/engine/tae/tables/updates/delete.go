@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -37,19 +36,14 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(va, vb txnbase.MVCCNode) int {
+func compareDeleteNode(va, vb txnif.MVCCNode) int {
 	a := va.(*DeleteNode)
 	b := vb.(*DeleteNode)
-	a.RLock()
-	defer a.RUnlock()
-	b.RLock()
-	defer b.RUnlock()
 	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
-	*sync.RWMutex
-	*common.GenericDLNode[txnbase.MVCCNode]
+	*common.GenericDLNode[txnif.MVCCNode]
 	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
 	logIndexes []*wal.Index
@@ -57,47 +51,46 @@ type DeleteNode struct {
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
+	viewNodes  map[uint32]*common.GenericDLNode[txnif.MVCCNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
 		logIndexes:  make([]*wal.Index, 0),
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
-func NewEmptyDeleteNode() txnbase.MVCCNode {
+func NewEmptyDeleteNode() txnif.MVCCNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
 func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
 
-func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
-func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
-func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }
+func (node *DeleteNode) CloneAll() txnif.MVCCNode  { panic("todo") }
+func (node *DeleteNode) CloneData() txnif.MVCCNode { panic("todo") }
+func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) OnReplayCommit(ts types.TS) {
-	node.TxnMVCCNode.OnReplayCommit(ts)
-}
+
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -160,6 +153,9 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 
 func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	node.mask.AddRange(uint64(start), uint64(end+1))
+	for i := start; i < end+1; i++ {
+		node.chain.InsertInDeleteView(i, node)
+	}
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
@@ -175,25 +171,21 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 }
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
-	node.Lock()
-	var ts types.TS
-	ts, err = node.TxnMVCCNode.ApplyCommit(index)
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
+	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
 	}
-	if node.chain.mvcc != nil {
-		node.chain.mvcc.SetMaxVisible(ts)
-	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	node.Unlock()
 	return node.OnApply()
 }
 
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
-	node.Lock()
-	defer node.Unlock()
-	err = node.TxnMVCCNode.ApplyRollback(index)
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
+	_, err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 
@@ -289,10 +281,13 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 
+func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
+func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
+	node.chain.DeleteInDeleteView(node)
 	return
 }
 

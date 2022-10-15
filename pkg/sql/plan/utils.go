@@ -115,107 +115,6 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func DeepCopyExpr(expr *Expr) *Expr {
-	if expr == nil {
-		return nil
-	}
-	newExpr := &Expr{
-		Typ: &plan.Type{
-			Id:        expr.Typ.GetId(),
-			Nullable:  expr.Typ.GetNullable(),
-			Width:     expr.Typ.GetWidth(),
-			Precision: expr.Typ.GetPrecision(),
-			Size:      expr.Typ.GetSize(),
-			Scale:     expr.Typ.GetScale(),
-		},
-	}
-
-	switch item := expr.Expr.(type) {
-	case *plan.Expr_C:
-		newExpr.Expr = &plan.Expr_C{
-			C: &plan.Const{
-				Isnull: item.C.GetIsnull(),
-				Value:  item.C.GetValue(),
-			},
-		}
-
-	case *plan.Expr_P:
-		newExpr.Expr = &plan.Expr_P{
-			P: &plan.ParamRef{
-				Pos: item.P.GetPos(),
-			},
-		}
-
-	case *plan.Expr_V:
-		newExpr.Expr = &plan.Expr_V{
-			V: &plan.VarRef{
-				Name: item.V.GetName(),
-			},
-		}
-
-	case *plan.Expr_Col:
-		newExpr.Expr = &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: item.Col.GetRelPos(),
-				ColPos: item.Col.GetColPos(),
-			},
-		}
-
-	case *plan.Expr_F:
-		newArgs := make([]*Expr, len(item.F.Args))
-		for idx, arg := range item.F.Args {
-			newArgs[idx] = DeepCopyExpr(arg)
-		}
-		newExpr.Expr = &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Server:     item.F.Func.GetServer(),
-					Db:         item.F.Func.GetDb(),
-					Schema:     item.F.Func.GetSchema(),
-					Obj:        item.F.Func.GetObj(),
-					ServerName: item.F.Func.GetServerName(),
-					DbName:     item.F.Func.GetDbName(),
-					SchemaName: item.F.Func.GetSchemaName(),
-					ObjName:    item.F.Func.GetObjName(),
-				},
-				Args: newArgs,
-			},
-		}
-
-	case *plan.Expr_Sub:
-		newExpr.Expr = &plan.Expr_Sub{
-			Sub: &plan.SubqueryRef{
-				NodeId: item.Sub.GetNodeId(),
-			},
-		}
-
-	case *plan.Expr_Corr:
-		newExpr.Expr = &plan.Expr_Corr{
-			Corr: &plan.CorrColRef{
-				ColPos: item.Corr.GetColPos(),
-				RelPos: item.Corr.GetRelPos(),
-				Depth:  item.Corr.GetDepth(),
-			},
-		}
-
-	case *plan.Expr_T:
-		newExpr.Expr = &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:        item.T.Typ.GetId(),
-					Nullable:  item.T.Typ.GetNullable(),
-					Width:     item.T.Typ.GetWidth(),
-					Precision: item.T.Typ.GetPrecision(),
-					Size:      item.T.Typ.GetSize(),
-					Scale:     item.T.Typ.GetScale(),
-				},
-			},
-		}
-	}
-
-	return newExpr
-}
-
 func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -265,6 +164,20 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 		if colRef.RelPos == tag {
 			expr = DeepCopyExpr(projects[colRef.ColPos])
 		}
+	}
+
+	return expr
+}
+
+func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefsForSet(arg, projects)
+		}
+
+	case *plan.Expr_Col:
+		expr = DeepCopyExpr(projects[exprImpl.Col.ColPos])
 	}
 
 	return expr
@@ -580,6 +493,9 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	if !isConstant(e) {
 		return e, nil
 	}
+	// XXX MPOOL
+	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
+	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
 	vec, err := colexec.EvalExpr(bat, nil, e)
 	if err != nil {
 		return nil, err
@@ -651,4 +567,9 @@ func isConstant(e *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func IsTableFunctionValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
+	// node must be a value scan
+	return node.TableDef != nil && node.TableDef.TblFunc != nil && len(node.TableDef.TblFunc.Param) > 0
 }

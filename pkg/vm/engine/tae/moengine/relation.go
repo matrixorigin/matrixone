@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,7 +39,7 @@ func (*baseRelation) CardinalNumber(string) int64 {
 	return 0
 }
 
-func (*baseRelation) Ranges(_ context.Context) ([][]byte, error) {
+func (*baseRelation) Ranges(_ context.Context, _ *plan.Expr) ([][]byte, error) {
 	return nil, nil
 }
 
@@ -101,7 +100,7 @@ func (rel *baseRelation) Update(_ context.Context, _ *batch.Batch) error {
 	return nil
 }
 
-func (rel *baseRelation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
+func (rel *baseRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error {
 	return nil
 }
 
@@ -122,4 +121,8 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 
 func (rel *baseRelation) GetTableID(_ context.Context) string {
 	return fmt.Sprintf("%d", rel.handle.ID())
+}
+
+func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
+	return rel.handle.ID()
 }

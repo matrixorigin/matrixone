@@ -15,8 +15,9 @@
 package service
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"go.uber.org/zap/zapcore"
 
@@ -57,6 +58,9 @@ const (
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
+
+	// default task configuration
+	defaultFetchInterval = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
@@ -93,7 +97,8 @@ type Options struct {
 	}
 
 	task struct {
-		taskStorage taskservice.TaskStorage
+		taskStorage   taskservice.TaskStorage
+		FetchInterval time.Duration
 	}
 }
 
@@ -168,6 +173,9 @@ func (opt *Options) validate() {
 	if opt.task.taskStorage == nil {
 		opt.task.taskStorage = taskservice.NewMemTaskStorage()
 	}
+	if opt.task.FetchInterval == 0 {
+		opt.task.FetchInterval = defaultFetchInterval
+	}
 }
 
 // BuildHAKeeperConfig returns hakeeper.Config
@@ -228,8 +236,8 @@ func (opt Options) WithRootDataDir(root string) Options {
 	return opt
 }
 
-// WithDnStorage sets dn transaction storage.
-func (opt Options) WithDnTxnStorage(s string) Options {
+// WithDNStorage sets dn transaction storage.
+func (opt Options) WithDNTxnStorage(s string) Options {
 	opt.dn.txnStorageBackend = s
 	return opt
 }
@@ -290,6 +298,11 @@ func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
 	opt.task.taskStorage = storage
 	return opt
+}
+
+// GetTxnStorageBackend returns the txn storage backend
+func (opt Options) GetTxnStorageBackend() string {
+	return opt.dn.txnStorageBackend
 }
 
 // gossipSeedNum calculates the count of gossip seed.

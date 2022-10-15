@@ -141,18 +141,18 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	for appended < node.RowsWithoutDeletes() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
-			segH, err := seg.table.CreateSegment()
+			segH, err := seg.table.CreateSegment(true)
 			if err != nil {
 				return err
 			}
-			blk, err := segH.CreateBlock()
+			blk, err := segH.CreateBlock(true)
 			if err != nil {
 				return err
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 			id := appender.GetID()
-			blk, err := seg.table.CreateBlock(id.SegmentID)
+			blk, err := seg.table.CreateBlock(id.SegmentID, true)
 			if err != nil {
 				return err
 			}
@@ -178,7 +178,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)
-		seg.table.store.dirtyMemo.recordBlk(*id)
+		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
 		appended += toAppend
@@ -218,20 +218,13 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		if seg.table.schema.IsSinglePK() {
+		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
 				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
 				seg.rows,
 				false); err != nil {
-				break
-			}
-		} else if seg.table.schema.IsCompoundPK() {
-			cols := seg.table.GetSortColumns(data)
-			key := model.EncodeCompoundColumn(cols...)
-			defer key.Close()
-			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}
 		}
@@ -247,7 +240,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	return err
 }
 
-func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
+func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
 		v := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 		if err = seg.index.Delete(v); err != nil {
@@ -255,30 +248,6 @@ func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (er
 		}
 	}
 	return
-}
-
-func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (err error) {
-	var buf bytes.Buffer
-	vs := make([]any, seg.table.schema.GetSortKeyCnt())
-	for i := from; i <= to; i++ {
-		buf.Reset()
-		for j := range vs {
-			v := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
-			vs[j] = v
-		}
-		key := model.EncodeTypedVals(&buf, vs...)
-		if err = seg.index.Delete(key); err != nil {
-			break
-		}
-	}
-	return
-}
-
-func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
-	if seg.table.schema.IsSinglePK() {
-		return seg.DeleteSingleIndex(from, to, node)
-	}
-	return seg.DeleteCompoundIndex(from, to, node)
 }
 
 func (seg *localSegment) RangeDelete(start, end uint32) error {
@@ -362,35 +331,6 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 	return n.IsRowDeleted(noffset)
 }
 
-func (seg *localSegment) Update(row uint32, col uint16, value any) error {
-	if seg.table.entry.GetSchema().PhyAddrKey.Idx == int(col) {
-		return moerr.NewTAEError("update physical addr key")
-	}
-	npos, noffset := seg.GetLocalPhysicalAxis(row)
-	n := seg.nodes[npos]
-	window, err := n.Window(uint32(noffset), uint32(noffset)+1)
-	if err != nil {
-		return err
-	}
-	defer window.Close()
-	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
-		return err
-	}
-	if err = seg.DeleteFromIndex(row, row, n); err != nil {
-		return err
-	}
-
-	orig := window.Vecs[col]
-	defer orig.Close()
-	vec := containers.MakeVector(orig.GetType(), orig.Nullable())
-	defer vec.Close()
-	vec.Append(value)
-	window.Vecs[col] = vec
-
-	err = seg.Append(window)
-	return err
-}
-
 func (seg *localSegment) Rows() uint32 {
 	cnt := len(seg.nodes)
 	if cnt == 0 {
@@ -405,14 +345,10 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
-	if seg.table.schema.IsSinglePK() {
-		if v, ok := filter.Val.([]byte); ok {
-			offset, err = seg.index.Search(string(v))
-		} else {
-			offset, err = seg.index.Search(filter.Val)
-		}
-	} else if seg.table.schema.IsCompoundPK() {
-		offset, err = seg.index.Search(string(filter.Val.([]byte)))
+	if v, ok := filter.Val.([]byte); ok {
+		offset, err = seg.index.Search(string(v))
+	} else {
+		offset, err = seg.index.Search(filter.Val)
 	}
 	return
 }

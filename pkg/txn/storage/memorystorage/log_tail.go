@@ -15,8 +15,10 @@
 package memorystorage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +33,7 @@ import (
 
 type LogTailEntry = apipb.Entry
 
-func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
 	tableID := ID(req.Table.TbId)
 
 	// tx
@@ -76,13 +78,12 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	insertNames := make([]string, 0, len(attrs))
 	deleteNames := make([]string, 0, len(attrs))
 	for _, attr := range attrs {
-		if attr.Value.IsRowId {
-			continue // will add row id to the first col of batch
-		}
 		attrsMap[attr.Value.Name] = attr.Value
-		insertNames = append(insertNames, attr.Value.Name)
-		if attr.Value.Primary {
-			deleteNames = append(deleteNames, attr.Value.Name)
+		if !attr.Value.IsRowId {
+			insertNames = append(insertNames, attr.Value.Name)
+			if attr.Value.Primary {
+				deleteNames = append(deleteNames, attr.Value.Name)
+			}
 		}
 	}
 	sort.Slice(insertNames, func(i, j int) bool {
@@ -109,29 +110,48 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		deleteBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
 	}
 
-	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time) error {
+	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time, readTime Time) error {
+		// use a tx on read time to read deleted data
+		tx := tx.Copy()
+		tx.Time = readTime
+		tx.Time.Statement++
+		// check type
+		for _, name := range batch.Attrs[len(prependCols):] {
+			attr, ok := attrsMap[name]
+			if !ok {
+				panic(fmt.Sprintf("no such attr: %s", name))
+			}
+			value, err := row.AttrByName(m, tx, name)
+			if err != nil {
+				return err
+			}
+			if !memtable.TypeMatch(value.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%v should be %v, but got %T", name, attr.Type, value.Value))
+			}
+		}
 		// row id
-		rowID, err := row.AttrByName(tx, rowIDColumnName)
+		rowID, err := row.AttrByName(m, tx, rowIDColumnName)
 		if err != nil {
 			return err
 		}
 		if rowID.IsNull {
 			panic("no row id")
 		}
-		vectorAppend(batch.Vecs[0], rowID, m.mheap)
+
+		rowID.AppendVector(batch.Vecs[0], m.mheap)
 		// commit time
-		vectorAppend(batch.Vecs[1], Nullable{Value: commitTime.ToTxnTS()}, m.mheap)
+		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)
 		// attributes
-		if err := appendNamedRow(tx, m, startOffset, batch, row); err != nil {
+		if err := appendNamedRowToBatch(tx, m, startOffset, batch, row); err != nil {
 			return err
 		}
 		return nil
 	}
-	appendInsert := func(row NamedRow, commitTime Time) error {
-		return appendRow(insertBatch, row, commitTime)
+	appendInsert := func(row NamedRow, commitTime Time, readTime Time) error {
+		return appendRow(insertBatch, row, commitTime, readTime)
 	}
-	appendDelete := func(row NamedRow, commitTime Time) error {
-		return appendRow(deleteBatch, row, commitTime)
+	appendDelete := func(row NamedRow, commitTime Time, readTime Time) error {
+		return appendRow(deleteBatch, row, commitTime, readTime)
 	}
 
 	if tableID == ID(catalog.MO_DATABASE_ID) {
@@ -172,58 +192,37 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 
 	} else {
 		// non-system table data
-		iter := m.data.NewPhysicalIter()
+		iter := m.data.NewDiffIter(fromTime, toTime)
 		defer iter.Close()
 
-		handleRow := func(
-			physicalRow *memtable.PhysicalRow[DataKey, DataValue],
-		) error {
-			for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
-				value := physicalRow.Versions[i]
-
-				if value.LockTx != nil &&
-					value.LockTx.State.Load() == memtable.Committed &&
-					(fromTime == nil || value.LockTime.After(*fromTime)) &&
-					(toTime == nil || value.LockTime.Before(*toTime)) {
-					// committed delete
-					if err := appendDelete(&NamedDataRow{
-						Value:    value.Value,
-						AttrsMap: attrsMap,
-					}, value.LockTime); err != nil {
-						return err
-					}
-					break
-
-				} else if value.BornTx.State.Load() == memtable.Committed &&
-					(fromTime == nil || value.BornTime.After(*fromTime)) &&
-					(toTime == nil || value.BornTime.Before(*toTime)) {
-					// committed insert
-					if err := appendInsert(&NamedDataRow{
-						Value:    value.Value,
-						AttrsMap: attrsMap,
-					}, value.BornTime); err != nil {
-						return err
-					}
-					break
-				}
-
-			}
-			return nil
-		}
-
-		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
-			Key: DataKey{
-				tableID:    tableID,
-				primaryKey: Tuple{},
-			},
+		tableKey := DataKey{
+			tableID:    tableID,
+			primaryKey: Tuple{},
 		}
 		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-			physicalRow := iter.Item()
-			if physicalRow.Key.tableID != tableID {
+			key, value, bornTime, lockTime, err := iter.Read()
+			if err != nil {
+				return err
+			}
+			if key.tableID != tableID {
 				break
 			}
-			if err := handleRow(physicalRow); err != nil {
-				return err
+			if lockTime != nil {
+				// delete
+				if err := appendDelete(&NamedDataRow{
+					Value:    value,
+					AttrsMap: attrsMap,
+				}, *lockTime, bornTime); err != nil {
+					return err
+				}
+			} else {
+				// insert
+				if err := appendInsert(&NamedDataRow{
+					Value:    value,
+					AttrsMap: attrsMap,
+				}, bornTime, bornTime); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -238,9 +237,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 	if deleteBatch.Length() > 0 {
@@ -248,9 +247,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 
@@ -265,54 +264,35 @@ func logTailHandleSystemTable[
 	table *memtable.Table[K, V, R],
 	fromTime *Time,
 	toTime *Time,
-	appendInsert func(row NamedRow, commitTime Time) error,
-	appendDelete func(row NamedRow, commitTime Time) error,
+	appendInsert func(row NamedRow, commitTime Time, readTime Time) error,
+	appendDelete func(row NamedRow, commitTime Time, readTime Time) error,
 ) error {
 
-	handleRow := func(
-		physicalRow *memtable.PhysicalRow[K, V],
-	) error {
-		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
-			value := physicalRow.Versions[i]
-
-			if value.LockTx != nil &&
-				value.LockTx.State.Load() == memtable.Committed &&
-				(fromTime == nil || value.LockTime.After(*fromTime)) &&
-				(toTime == nil || value.LockTime.Before(*toTime)) {
-				// committed delete
-				if err := appendDelete(value.Value, value.LockTime); err != nil {
-					return err
-				}
-				break
-
-			} else if value.BornTx.State.Load() == memtable.Committed &&
-				(fromTime == nil || value.BornTime.After(*fromTime)) &&
-				(toTime == nil || value.BornTime.Before(*toTime)) {
-				// committed insert
-				if err := appendInsert(value.Value, value.BornTime); err != nil {
-					return err
-				}
-				break
-			}
-
-		}
-		return nil
-	}
-
-	iter := table.NewPhysicalIter()
+	iter := table.NewDiffIter(fromTime, toTime)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
-		physicalRow := iter.Item()
-		if err := handleRow(physicalRow); err != nil {
+		_, value, bornTime, lockTime, err := iter.Read()
+		if err != nil {
 			return err
+		}
+		if lockTime != nil {
+			// delete
+			if err := appendDelete(value, *lockTime, bornTime); err != nil {
+				return err
+			}
+		} else {
+			// insert
+			if err := appendInsert(value, bornTime, bornTime); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func (c *CatalogHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
-	return c.upstream.HandleGetLogTail(meta, req, resp)
+func (c *CatalogHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+	return c.upstream.HandleGetLogTail(ctx, meta, req, resp)
 }
 
 func toPBBatch(bat *batch.Batch) (ret *apipb.Batch) {

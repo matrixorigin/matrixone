@@ -48,7 +48,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32)
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapId]
 		} else {
-			return moerr.NewParseError("can't find column in context's map %v", colMap)
+			return moerr.NewParseError("can't find column %v in context's map %v", mapId, colMap)
 		}
 
 	case *plan.Expr_F:
@@ -80,7 +80,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -95,6 +95,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Defs:          node.TableDef.Defs,
 			Name2ColIndex: node.TableDef.Name2ColIndex,
 			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -156,6 +157,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
+		}
+		if node.NodeType == plan.Node_TABLE_FUNCTION {
+			childId := node.Children[0]
+			childNode := builder.qry.Nodes[childId]
+			if childNode.NodeType != plan.Node_PROJECT {
+				break
+			}
+			_, err := builder.remapAllColRefs(childId, colRefCnt)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -612,10 +624,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
-		})
+		if !IsTableFunctionValueScan(node) {
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ:  &plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
+			})
+		}
 
 	default:
 		return nil, moerr.NewInternalError("unsupport node type")
@@ -883,15 +897,21 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -908,7 +928,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -1036,7 +1056,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
-
 	// unfold stars and generate headings
 	var selectList tree.SelectExprs
 	for _, selectExpr := range clause.Exprs {
@@ -1213,15 +1232,21 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -1232,7 +1257,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if astLimit != nil {
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -1690,6 +1715,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
+	case *tree.TableFunction:
+		return builder.buildTableFunction(tbl, ctx)
 
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx)
@@ -1737,7 +1764,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_TABLE_FUNCTION {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -1746,6 +1773,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
+			if node.NodeType == plan.Node_TABLE_FUNCTION {
+				return moerr.NewSyntaxError("Every table function must have an alias")
+			}
+
 			table = node.TableDef.Name
 		}
 
@@ -2119,6 +2150,36 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[1] = childID
 
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		leftChild := builder.qry.Nodes[node.Children[0]]
+		rightChild := builder.qry.Nodes[node.Children[1]]
+		var canPushDownRight []*plan.Expr
+
+		for _, filter := range filters {
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], canPushDownRight)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[1]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[1] = childID
+
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
@@ -2146,6 +2207,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
+	case plan.Node_TABLE_FUNCTION:
+		node.FilterList = append(node.FilterList, filters...)
+		childId := node.Children[0]
+		childId, err := builder.pushdownFilters(childId, nil)
+		if err != nil {
+			return 0, err
+		}
+		node.Children[0] = childId
 
 	default:
 		if len(node.Children) > 0 {
@@ -2166,4 +2235,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	}
 
 	return nodeID, cantPushdown
+}
+
+func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	id := tbl.Id()
+	switch id {
+	case "unnest":
+		return builder.buildUnnest(tbl, ctx)
+	default:
+		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
+	}
 }

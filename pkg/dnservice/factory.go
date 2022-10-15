@@ -18,15 +18,14 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"go.uber.org/zap"
 )
 
@@ -42,17 +41,15 @@ const (
 
 var (
 	supportTxnStorageBackends = map[string]struct{}{
-		memStorageBackend: {},
-		taeStorageBackend: {},
+		memKVStorageBackend: {},
+		memStorageBackend:   {},
+		taeStorageBackend:   {},
 	}
 )
 
 func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, error) {
-	logClient, err := s.createLogServiceClient(shard)
-	if err != nil {
-		return nil, err
-	}
-	closeLogClient := func() {
+	factory := s.createLogServiceClientFactroy(shard)
+	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
 			s.logger.Error("close log client failed",
 				zap.Error(err))
@@ -61,20 +58,27 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 
 	switch s.cfg.Txn.Storage.Backend {
 	case memStorageBackend:
-		ts, err := s.newMemTxnStorage(shard, logClient)
+		logClient, err := factory()
 		if err != nil {
-			closeLogClient()
+			return nil, err
+		}
+		ts, err := s.newMemTxnStorage(shard, logClient, s.hakeeperClient)
+		if err != nil {
+			closeLogClientFn(logClient)
 			return nil, err
 		}
 		return ts, nil
 
 	case memKVStorageBackend:
+		logClient, err := factory()
+		if err != nil {
+			return nil, err
+		}
 		return s.newMemKVStorage(shard, logClient)
 
 	case taeStorageBackend:
-		ts, err := s.newTAEStorage(shard, logClient)
+		ts, err := s.newTAEStorage(shard, factory)
 		if err != nil {
-			closeLogClient()
 			return nil, err
 		}
 		return ts, nil
@@ -90,6 +94,12 @@ func (s *store) createLogServiceClient(shard metadata.DNShard) (logservice.Clien
 	return s.newLogServiceClient(shard)
 }
 
+func (s *store) createLogServiceClientFactroy(shard metadata.DNShard) logservice.ClientFactory {
+	return func() (logservice.Client, error) {
+		return s.createLogServiceClient(shard)
+	}
+}
+
 func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
@@ -101,16 +111,28 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 	})
 }
 
-func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	return memorystorage.NewMemoryStorage(mheap.New(gm), memorystorage.SnapshotIsolation, s.clock)
+func (s *store) newMemTxnStorage(
+	shard metadata.DNShard,
+	logClient logservice.Client,
+	hakeeper logservice.DNHAKeeperClient,
+) (storage.TxnStorage, error) {
+	// should it be no fixed or a certain size?
+	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
+	if err != nil {
+		return nil, err
+	}
+	return memorystorage.NewMemoryStorage(
+		mp,
+		memorystorage.SnapshotIsolation,
+		s.clock,
+		memoryengine.NewHakeeperIDGenerator(hakeeper),
+	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 
-func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.fileService, s.clock)
+func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock)
 }

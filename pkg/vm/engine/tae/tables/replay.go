@@ -52,6 +52,16 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 	}
 	return blk.replayImmutIndex()
 }
+func (blk *dataBlock) ReplayImmutIndex() (err error) {
+	blk.mvcc.Lock()
+	defer blk.mvcc.Unlock()
+	for _, index := range blk.indexes {
+		if err = index.Destroy(); err != nil {
+			return
+		}
+	}
+	return blk.replayImmutIndex()
+}
 
 // replayMutIndex load column data to memory to construct index
 func (blk *dataBlock) replayMutIndex() error {
@@ -61,7 +71,7 @@ func (blk *dataBlock) replayMutIndex() error {
 			continue
 		}
 		keysCtx := new(index.KeysCtx)
-		vec, err := blk.node.GetColumnDataCopy(0, blk.node.rows, colDef.Idx, nil)
+		vec, err := blk.node.GetColumnData(0, blk.node.rows, colDef.Idx, nil)
 		if err != nil {
 			return err
 		}
@@ -69,8 +79,7 @@ func (blk *dataBlock) replayMutIndex() error {
 		keysCtx.Keys = vec
 		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
-		var zeroV types.TS
-		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0)
 	}
 	return nil
 }
@@ -98,12 +107,6 @@ func (blk *dataBlock) replayImmutIndex() error {
 func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	blk.mvcc.OnReplayDeleteNode(node)
 	err = node.OnApply()
-	return
-}
-
-func (blk *dataBlock) OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error) {
-	chain := blk.mvcc.GetColumnChain(colIdx)
-	chain.OnReplayUpdateNode(node)
 	return
 }
 

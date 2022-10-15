@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 // CNService describes expected behavior for dn service.
@@ -37,6 +38,10 @@ type CNService interface {
 
 	// ID returns uuid of store
 	ID() string
+	// SQLAddress returns the sql listen address
+	SQLAddress() string
+	//GetTaskRunner returns the taskRunner.
+	GetTaskRunner() taskservice.TaskRunner
 }
 
 // cnService wraps cnservice.Service.
@@ -45,8 +50,8 @@ type CNService interface {
 type cnService struct {
 	sync.Mutex
 	status ServiceStatus
-	uuid   string
 	svc    cnservice.Service
+	cfg    *cnservice.Config
 }
 
 func (c *cnService) Start() error {
@@ -90,7 +95,15 @@ func (c *cnService) ID() string {
 	c.Lock()
 	defer c.Unlock()
 
-	return c.uuid
+	return c.cfg.UUID
+}
+
+func (c *cnService) SQLAddress() string {
+	return fmt.Sprintf("127.0.0.1:%d", c.cfg.Frontend.Port)
+}
+
+func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
+	return c.svc.GetTaskRunner()
 }
 
 // cnOptions is options for a cn service.
@@ -101,17 +114,18 @@ func newCNService(
 	cfg *cnservice.Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	taskStorage taskservice.TaskStorage,
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, options...)
+	srv, err := cnservice.NewService(cfg, ctx, fileService, taskservice.NewTaskService(taskStorage, nil), options...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &cnService{
 		status: ServiceInitialized,
-		uuid:   cfg.UUID,
 		svc:    srv,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -134,6 +148,8 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
+
+	cfg.TaskRunner.FetchInterval.Duration = opt.task.FetchInterval
 
 	cfg.Engine.Type = cnservice.EngineMemory
 

@@ -20,6 +20,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
+	_, scale, err := types.ParseStringToDecimal128WithoutTable(v)
+	if err != nil {
+		return nil, err
+	}
+	typ := &plan.Type{
+		Id:        int32(types.T_decimal128),
+		Width:     34,
+		Scale:     scale,
+		Precision: 34,
+		Nullable:  false,
+	}
+	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v), typ)
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
@@ -63,6 +78,8 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	}}
 }
 
+var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Int64ConstExpr(v),
@@ -103,6 +120,8 @@ func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
 	}}
 }
 
+var MakePlan2Float64ConstExprWithType = makePlan2Float64ConstExprWithType
+
 func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Float64ConstExpr(v),
@@ -122,6 +141,8 @@ func makePlan2StringConstExpr(v string) *plan.Expr_C {
 		},
 	}}
 }
+
+var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
 
 func makePlan2StringConstExprWithType(v string) *plan.Expr {
 	return &plan.Expr{
@@ -189,6 +210,8 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	return typ
 }
 
+var MakePlan2Type = makePlan2Type
+
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
 		Id:        int32(typ.Oid),
@@ -208,6 +231,8 @@ func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 		Precision: typ.Precision,
 	}
 }
+
+var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	var size int32 = 0

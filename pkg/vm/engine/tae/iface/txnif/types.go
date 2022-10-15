@@ -18,6 +18,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,11 +42,12 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	Is2PC() bool
-	GetID() uint64
+	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
 	GetPrepareTS() types.TS
+	GetParticipants() []uint64
 	GetInfo() []byte
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -52,6 +56,7 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+	GetMemo() *TxnMemo
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -66,6 +71,7 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
+	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {
@@ -81,15 +87,18 @@ type TxnChanger interface {
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() error
+	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
 	Rollback() error
+	SetCommitTS(cts types.TS) error
+	SetParticipants(ids []uint64) error
 	SetError(error)
 }
 
 type TxnWriter interface {
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 }
 
 type TxnAsyncer interface {
@@ -98,7 +107,6 @@ type TxnAsyncer interface {
 }
 
 type TxnTest interface {
-	MockSetCommitTSLocked(ts types.TS)
 	MockIncWriteCnt() int
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
@@ -106,7 +114,13 @@ type TxnTest interface {
 	SetApplyRollbackFn(func(AsyncTxn) error)
 }
 
+type TxnUnsafe interface {
+	UnsafeGetDatabase(id uint64) (h handle.Database, err error)
+	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
+}
+
 type AsyncTxn interface {
+	TxnUnsafe
 	TxnTest
 	Txn2PC
 	TxnHandle
@@ -116,36 +130,10 @@ type AsyncTxn interface {
 	TxnChanger
 }
 
-type SyncTxn interface {
-	TxnReader
-	TxnWriter
-	TxnChanger
-}
-
-type UpdateChain interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-	GetID() *common.ID
-
-	// DeleteNode(*common.DLNode)
-	// DeleteNodeLocked(*common.DLNode)
-
-	AddNode(txn AsyncTxn) UpdateNode
-	AddNodeLocked(txn AsyncTxn) UpdateNode
-	PrepareUpdate(uint32, UpdateNode) error
-
-	GetValueLocked(row uint32, ts types.TS) (any, error)
-	TryUpdateNodeLocked(row uint32, v any, n UpdateNode) error
-	// CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
-	// CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
-}
-
 type DeleteChain interface {
 	sync.Locker
 	RLock()
 	RUnlock()
-	// GetID() *common.ID
 	RemoveNodeLocked(DeleteNode)
 
 	AddNodeLocked(txn AsyncTxn, deleteType handle.DeleteType) DeleteNode
@@ -155,14 +143,49 @@ type DeleteChain interface {
 	DepthLocked() int
 	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
+type MVCCNode interface {
+	String() string
 
+	IsVisible(ts types.TS) (visible bool)
+	CheckConflict(ts types.TS) error
+	Update(o MVCCNode)
+
+	PreparedIn(minTS, maxTS types.TS) (in, before bool)
+	CommittedIn(minTS, maxTS types.TS) (in, before bool)
+	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
+	IsSameTxn(ts types.TS) bool
+	IsActive() bool
+	IsCommitting() bool
+	IsCommitted() bool
+	IsAborted() bool
+	Set1PC()
+	Is1PC() bool
+
+	GetEnd() types.TS
+	GetStart() types.TS
+	GetPrepare() types.TS
+	GetTxn() TxnReader
+	SetLogIndex(idx *wal.Index)
+	GetLogIndex() *wal.Index
+
+	ApplyCommit(index *wal.Index) (err error)
+	ApplyRollback(index *wal.Index) (err error)
+	PrepareCommit() (err error)
+
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+	CloneData() MVCCNode
+	CloneAll() MVCCNode
+}
 type AppendNode interface {
+	MVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
+	MVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -173,33 +196,21 @@ type DeleteNode interface {
 	OnApply() error
 }
 
-type UpdateNode interface {
-	TxnEntry
-	GetID() *common.ID
-	String() string
-	GetChain() UpdateChain
-	// GetDLNode() *common.DLNode
-	GetMask() *roaring.Bitmap
-	GetValues() map[uint32]interface{}
-
-	UpdateLocked(row uint32, v any) error
-}
-
 type TxnStore interface {
-	Txn2PC
 	io.Closer
+	Txn2PC
+	TxnUnsafe
 	WaitPrepared() error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
+	BatchDedup(dbId, id uint64, pk containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 
 	Append(dbId, id uint64, data *containers.Batch) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
-	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
 
@@ -213,9 +224,9 @@ type TxnStore interface {
 	DatabaseNames() []string
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
-	CreateSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64) (handle.Block, error)
+	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
@@ -226,33 +237,20 @@ type TxnStore interface {
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
-
-	HasTableDataChanges(tableID uint64) bool
-	HasCatalogChanges() bool
-	GetTableDirtyPoints(tableID uint64) DirtySet
-}
-
-type DirtySet = map[DirtyPoint]struct{}
-
-// not use common id to save space, less hash cost
-type DirtyPoint struct {
-	SegID, BlkID uint64
 }
 
 type TxnEntryType int16
 
 type TxnEntry interface {
-	sync.Locker
-	RLock()
-	RUnlock()
 	PrepareCommit() error
-	// TODO: remove all Prepare2PCPrepare
-	// Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
 	MakeCommand(uint32) (TxnCmd, error)
+	Is1PC() bool
+	Set1PC()
 }

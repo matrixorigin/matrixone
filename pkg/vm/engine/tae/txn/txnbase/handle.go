@@ -47,6 +47,7 @@ func (db *TxnDatabase) Close() error                                            
 func (db *TxnDatabase) CreateRelation(def any) (rel handle.Relation, err error)         { return }
 func (db *TxnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) { return }
 func (db *TxnDatabase) GetRelationByName(name string) (rel handle.Relation, err error)  { return }
+func (db *TxnDatabase) UnsafeGetRelation(id uint64) (rel handle.Relation, err error)    { return }
 func (db *TxnDatabase) RelationCnt() int64                                              { return 0 }
 func (db *TxnDatabase) Relations() (rels []handle.Relation)                             { return }
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
@@ -62,16 +63,15 @@ func (rel *TxnRelation) GetCardinality(attr string) int64                       
 func (rel *TxnRelation) Schema() any                                                 { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                             { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                 { return nil }
-func (rel *TxnRelation) BatchDedup(cols ...containers.Vector) error                  { return nil }
+func (rel *TxnRelation) BatchDedup(col containers.Vector) error                      { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error                         { return nil }
 func (rel *TxnRelation) GetMeta() any                                                { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
 func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }
-func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)          { return }
 func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }
-func (rel *TxnRelation) UpdateByPhyAddrKey(any, int, any) (err error)                { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)          { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                          { return }
 func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)           { return }

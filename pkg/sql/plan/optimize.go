@@ -26,7 +26,7 @@ var defaultRules = []Rule{}
 func init() {
 	defaultRules = []Rule{
 		rule.NewConstantFold(),
-		rule.NewPredicatePushdown(),
+		// rule.NewPredicatePushdown(),
 	}
 }
 

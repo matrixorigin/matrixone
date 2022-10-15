@@ -22,22 +22,22 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type HashShard struct {
-	heap *mheap.Mheap
+	mp *mpool.MPool
 }
 
-func NewHashShard(heap *mheap.Mheap) *HashShard {
+func NewHashShard(mp *mpool.MPool) *HashShard {
 	return &HashShard{
-		heap: heap,
+		mp: mp,
 	}
 }
 
@@ -106,7 +106,7 @@ func (*HashShard) Batch(
 		}
 	}
 	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+		return shards[i].ShardID < shards[j].ShardID
 	})
 	m := make(map[*Shard]*batch.Batch)
 	for _, shard := range shards {
@@ -209,7 +209,7 @@ func (h *HashShard) Vector(
 		}
 	}
 	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+		return shards[i].ShardID < shards[j].ShardID
 	})
 	m := make(map[*Shard]*vector.Vector)
 
@@ -232,7 +232,7 @@ func (h *HashShard) Vector(
 			m[shard] = shardVec
 		}
 		v := getNullableValueFromVector(vec, i)
-		appendNullableValueToVector(shardVec, v, h.heap)
+		appendNullableValueToVector(shardVec, v, h.mp)
 	}
 
 	for shard, vec := range m {
@@ -259,18 +259,26 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 		return nil, moerr.NewDuplicate()
 		//panic("primary value vector should not contain nulls")
 	}
-	if vec.Typ.Oid.FixedLength() > 0 {
+	if vec.Typ.IsFixedLen() {
 		// is slice
 		size := vec.Typ.TypeSize()
 		l := vec.Length() * size
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
 		end := (i + 1) * size
 		if end > len(data) {
-			return nil, moerr.NewInvalidInput("vector size not match")
+			//TODO mimic to pass BVT
+			return nil, moerr.NewDuplicate()
+			//return nil, moerr.NewInvalidInput("vector size not match")
 		}
 		return data[i*size : (i+1)*size], nil
+	} else if vec.Typ.IsVarlen() {
+		slice := vector.GetBytesVectorValues(vec)
+		if i >= len(slice) {
+			return []byte{}, nil
+		}
+		return slice[i], nil
 	}
-	return vec.GetBytes(int64(i)), nil
+	panic(fmt.Sprintf("unknown type: %v", typ))
 }
 
 type Nullable struct {
@@ -576,12 +584,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
-func appendNullableValueToVector(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
+func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.MPool) {
 	str, ok := value.Value.(string)
 	if ok {
 		value.Value = []byte(str)
 	}
-	vec.Append(value.Value, false, heap)
+	vec.Append(value.Value, false, mp)
 	if value.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

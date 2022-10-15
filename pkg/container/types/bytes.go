@@ -17,7 +17,7 @@ package types
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 const (
@@ -31,29 +31,29 @@ func (v *Varlena) unsafePtr() unsafe.Pointer {
 	return unsafe.Pointer(&v[0])
 }
 
-func (v *Varlena) byteSlice() []byte {
+func (v *Varlena) ByteSlice() []byte {
 	svlen := (*v)[0]
 	ptr := unsafe.Add(unsafe.Pointer(&v[0]), 1)
 	return unsafe.Slice((*byte)(ptr), svlen)
 }
 
-func (v *Varlena) u32Slice() []uint32 {
+func (v *Varlena) U32Slice() []uint32 {
 	ptr := (*uint32)(v.unsafePtr())
 	return unsafe.Slice(ptr, 6)
 }
 
-func (v *Varlena) offsetLen() (uint32, uint32) {
-	s := v.u32Slice()
+func (v *Varlena) OffsetLen() (uint32, uint32) {
+	s := v.U32Slice()
 	return s[1], s[2]
 }
-func (v *Varlena) setOffsetLen(voff, vlen uint32) {
-	s := v.u32Slice()
+func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
+	s := v.U32Slice()
 	s[0] = VarlenaBigHdr
 	s[1] = voff
 	s[2] = vlen
 }
 
-func BuildVarlena(bs []byte, area []byte, m *mheap.Mheap) (Varlena, []byte, error) {
+func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
 	vlen := len(bs)
@@ -66,12 +66,12 @@ func BuildVarlena(bs []byte, area []byte, m *mheap.Mheap) (Varlena, []byte, erro
 		if voff+vlen < cap(area) || m == nil {
 			area = append(area, bs...)
 		} else {
-			area, err = mheap.Grow2(m, area, bs, int64(voff+vlen))
+			area, err = m.Grow2(area, bs, voff+vlen)
 			if err != nil {
 				return v, nil, err
 			}
 		}
-		v.setOffsetLen(uint32(voff), uint32(vlen))
+		v.SetOffsetLen(uint32(voff), uint32(vlen))
 		return v, area, nil
 	}
 }
@@ -89,9 +89,9 @@ func (v *Varlena) IsSmall() bool {
 func (v *Varlena) GetByteSlice(area []byte) []byte {
 	svlen := (*v)[0]
 	if svlen <= VarlenaInlineSize {
-		return v.byteSlice()
+		return v.ByteSlice()
 	}
-	voff, vlen := v.offsetLen()
+	voff, vlen := v.OffsetLen()
 	return area[voff : voff+vlen]
 }
 

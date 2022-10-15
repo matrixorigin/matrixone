@@ -40,7 +40,7 @@ type vFile struct {
 	*os.File
 	*vInfo
 	version    int
-	committed  int32
+	committed  atomic.Int32
 	size       int //update when write
 	wg         sync.WaitGroup
 	commitCond sync.Cond
@@ -102,7 +102,7 @@ func (vf *vFile) GetState() *vFileState {
 }
 
 func (vf *vFile) HasCommitted() bool {
-	return atomic.LoadInt32(&vf.committed) == int32(1)
+	return vf.committed.Load() == int32(1)
 }
 
 func (vf *vFile) PrepareWrite(size int) {
@@ -135,11 +135,11 @@ func (vf *vFile) Commit() {
 	vf.buf = nil
 	vf.Unlock()
 	vf.commitCond.L.Lock()
-	atomic.StoreInt32(&vf.committed, int32(1))
+	vf.committed.Store(1)
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
-	// fmt.Printf("sync-%s\n", vf.String())
+	// logutil.Infof("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
@@ -155,23 +155,23 @@ func (vf *vFile) Sync() error {
 	buf := vf.buf.Bytes()
 	n, err := vf.File.WriteAt(buf[:targetpos], int64(vf.syncpos))
 	if n != targetpos {
-		panic("logic err")
+		panic(fmt.Sprintf("logic err, expect %d, write %d err is %v", targetpos, n, err))
 	}
 	if err != nil {
 		return err
 	}
-	// fmt.Printf("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
+	// logutil.Infof("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
 	// buf := make([]byte, 10)
 	// _, err = vf.ReadAt(buf, int64(vf.syncpos))
-	// fmt.Printf("%p|read at %v, buf is %v, n=%d, err is %v\n", vf, vf.syncpos, buf, n, err)
+	// logutil.Infof("%p|read at %v, buf is %v, n=%d, err is %v\n", vf, vf.syncpos, buf, n, err)
 	vf.syncpos += targetpos
-	// fmt.Printf("syncpos is %v\n", vf.syncpos)
+	// logutil.Infof("syncpos is %v\n", vf.syncpos)
 	if vf.syncpos != targetSize {
 		panic(fmt.Sprintf("%p|logic error, sync %v, size %v", vf, vf.syncpos, targetSize))
 	}
 	vf.bufpos = 0
 	vf.buf.Reset()
-	// fmt.Printf("199bufpos is %v\n",vf.bufpos)
+	// logutil.Infof("199bufpos is %v\n",vf.bufpos)
 	err = vf.File.Sync()
 	if err != nil {
 		return err
@@ -181,11 +181,11 @@ func (vf *vFile) Sync() error {
 }
 
 func (vf *vFile) WaitCommitted() {
-	if atomic.LoadInt32(&vf.committed) == int32(1) {
+	if vf.committed.Load() == int32(1) {
 		return
 	}
 	vf.commitCond.L.Lock()
-	if atomic.LoadInt32(&vf.committed) != int32(1) {
+	if vf.committed.Load() != int32(1) {
 		vf.commitCond.Wait()
 	}
 	vf.commitCond.L.Unlock()
@@ -297,5 +297,5 @@ func (vf *vFile) readEntryAt(offset int) (*entry.Entry, error) {
 	return e, err
 }
 func (vf *vFile) OnReplayCommitted() {
-	vf.committed = 1
+	vf.committed.Store(1)
 }

@@ -17,6 +17,9 @@ package memtable
 import (
 	"bytes"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type Nullable struct {
@@ -37,4 +40,17 @@ func (n Nullable) Equal(n2 Nullable) bool {
 		panic(fmt.Sprintf("type not the same: %T %T", n.Value, n2.Value))
 	}
 	return n.Value == n2.Value
+}
+
+func (n Nullable) AppendVector(
+	vec *vector.Vector, mp *mpool.MPool) {
+	value := n.Value
+	str, ok := value.(string)
+	if ok {
+		value = []byte(str)
+	}
+	vec.Append(value, false, mp)
+	if n.IsNull {
+		vec.GetNulls().Set(uint64(vec.Length() - 1))
+	}
 }

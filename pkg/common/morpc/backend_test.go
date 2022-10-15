@@ -57,6 +57,29 @@ func TestSend(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestSendWithPayloadCannotTimeout(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			b.conn.RawConn().SetWriteDeadline(time.Now().Add(time.Millisecond))
+			time.Sleep(time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+			req := newTestMessage(1)
+			req.payload = []byte("hello")
+			f, err := b.Send(ctx, req)
+			assert.NoError(t, err)
+			defer f.Close()
+
+			resp, err := f.Get()
+			assert.NoError(t, err)
+			assert.Equal(t, req, resp)
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func TestCloseWhileContinueSending(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	testBackendSend(t,

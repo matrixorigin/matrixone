@@ -19,7 +19,10 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -27,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -50,14 +53,14 @@ type DB struct {
 	TxnBufMgr   base.INodeManager
 
 	TxnMgr     *txnbase.TxnManager
-	LogtailMgr *LogtailMgr
+	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
 	CKPDriver checkpoint.Driver
 
 	Scheduler tasks.TaskScheduler
 
-	TimedScanner wb.IHeartbeater
+	HeartBeatJobs *stopper.Stopper
 
 	FileFactory file.SegmentFactory
 
@@ -83,10 +86,17 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	return
 }
 
-func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
+func (db *DB) GetOrCreateTxnWithMeta(
+	info []byte,
+	id []byte,
+	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
+}
+
+func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = moerr.NewNotFound()
+		err = moerr.NewTxnNotFound()
 	}
 	return
 }
@@ -101,8 +111,7 @@ func (db *DB) Replay(dataFactory *tables.DataFactory) {
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
-	// TODO: init txn id
-	err := db.TxnMgr.Init(0, replayer.GetMaxTS())
+	err := db.TxnMgr.Init(replayer.GetMaxTS())
 	if err != nil {
 		panic(err)
 	}
@@ -125,9 +134,10 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	defer db.PrintStats()
+	// XXX PRINT
+	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.TimedScanner.Stop()
+	db.HeartBeatJobs.Stop()
 	db.CKPDriver.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()

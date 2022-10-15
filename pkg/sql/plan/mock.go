@@ -217,6 +217,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		cols: []col{
 			{"reldatabase", types.T_varchar, false, 50, 0},
 			{"relname", types.T_varchar, false, 50, 0},
+			{"relkind", types.T_varchar, false, 50, 0},
 		},
 	}
 	moSchema["mo_columns"] = &Schema{
@@ -374,7 +375,7 @@ func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
 	query, err := BuildPlan(ctx, stmt)
 	if err != nil {
-		// fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+		// logutil.Infof("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err
 	}
 	return query.GetQuery(), nil

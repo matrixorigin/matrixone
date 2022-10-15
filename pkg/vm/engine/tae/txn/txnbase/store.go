@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
@@ -33,7 +34,6 @@ func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error
 func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
 func (store *NoopTxnStore) PrePrepare() error                                    { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
-func (store *NoopTxnStore) Prepare2PCPrepare() error                             { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }
 func (store *NoopTxnStore) PreApplyCommit() error                                { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
@@ -50,20 +50,28 @@ func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel han
 func (store *NoopTxnStore) GetRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error) { return }
-func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)   { return }
-func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)    { return }
-func (store *NoopTxnStore) DatabaseNames() (names []string)                            { return }
+func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error)  { return }
+func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
+func (store *NoopTxnStore) UnsafeGetDatabase(id uint64) (db handle.Database, err error) { return }
+func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err error) {
+	return
+}
+func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error) { return }
+func (store *NoopTxnStore) DatabaseNames() (names []string)                         { return }
 func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
 	return
 }
 
-func (store *NoopTxnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) { return }
+func (store *NoopTxnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
+	return
+}
 func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64) (blk handle.Block, err error)  { return }
+func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64, bool) (blk handle.Block, err error) {
+	return
+}
 func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
 	return
 }
@@ -72,7 +80,7 @@ func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un string) 
 func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un string) (err error) { return }
 func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)           { return }
 func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)         { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err error)      { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error)         { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
@@ -91,10 +99,15 @@ func (store *NoopTxnStore) LogBlockID(dbId, tid, bid uint64)   {}
 func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
+func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	return
+}
 
 func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
 
-func (store *NoopTxnStore) HasTableDataChanges(tableID uint64) bool           { return false }
-func (store *NoopTxnStore) GetTableDirtyPoints(tableID uint64) txnif.DirtySet { return nil }
-func (store *NoopTxnStore) HasCatalogChanges() bool                           { return false }
+func (store *NoopTxnStore) HasAnyTableDataChanges() bool                  { return false }
+func (store *NoopTxnStore) GetDirty() *common.Tree                        { return nil }
+func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
+func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
+func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }

@@ -46,7 +46,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i].IsOriginal() {
-			vec, err := vector.Dup(bat.Vecs[i], proc.GetMheap())
+			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
 				return false, err
 			}
@@ -55,7 +55,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	select {
 	case <-reg.Ctx.Done():
-		bat.Clean(proc.GetMheap())
+		bat.Clean(proc.Mp())
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil

@@ -26,45 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type MVCCNode interface {
-	String() string
-
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
-
-	PreparedIn(minTS, maxTS types.TS) (in, before bool)
-	CommittedIn(minTS, maxTS types.TS) (in, before bool)
-	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
-	IsSameTxn(ts types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
-	IsCommitted() bool
-	IsAborted() bool
-
-	GetEnd() types.TS
-	GetPrepare() types.TS
-	GetTxn() txnif.TxnReader
-	SetLogIndex(idx *wal.Index)
-	GetLogIndex() *wal.Index
-
-	ApplyCommit(index *wal.Index) (err error)
-	ApplyRollback(index *wal.Index) (err error)
-	PrepareCommit() (err error)
-
-	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
-}
-
-// TODO prepare ts
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
 	Aborted             bool
-	//State txnif.TxnState
-	LogIndex *wal.Index
+	is1PC               bool // for subTxn
+	LogIndex            *wal.Index
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
@@ -88,6 +55,12 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 }
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
+}
+func (un *TxnMVCCNode) Is1PC() bool {
+	return un.is1PC
+}
+func (un *TxnMVCCNode) Set1PC() {
+	un.is1PC = true
 }
 
 // Check w-w confilct
@@ -124,11 +97,11 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(ts) {
+	if un.End.LessEq(ts) && !un.Aborted {
 		return true
 	}
 
-	// Node is invisible if the commit ts is gt ts
+	// Node is not invisible if the commit ts is gt ts
 	return false
 
 }
@@ -235,7 +208,7 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 
 	// --------+----------------+------------------------>
 	//     PrepareTs            Ts                   Time
-	// If ts is before the prepare ts. not to wait
+	// If ts is after the prepare ts. need to wait
 	return true, un.Txn
 }
 
@@ -294,19 +267,27 @@ func (un *TxnMVCCNode) GetLogIndex() *wal.Index {
 	return un.LogIndex
 }
 func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
-	un.End = un.Txn.GetCommitTS()
-	un.SetLogIndex(index)
+	if un.Is1PC() {
+		un.End = un.Txn.GetPrepareTS()
+	} else {
+		un.End = un.Txn.GetCommitTS()
+	}
+	if index != nil {
+		un.SetLogIndex(index)
+	}
 	un.Txn = nil
 	ts = un.End
 	return
 }
-func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
+
+func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (ts types.TS, err error) {
+	ts = un.Txn.GetCommitTS()
 	un.End = ts
-}
-func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
-	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
-	un.SetLogIndex(index)
+	un.Aborted = true
+	if index != nil {
+		un.SetLogIndex(index)
+	}
 	return
 }
 
@@ -314,15 +295,15 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Write(w, binary.BigEndian, un.Prepare); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Write(w, binary.BigEndian, un.End); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	var sn int64
 	logIndex := un.LogIndex
 	if logIndex == nil {
@@ -333,6 +314,14 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	is1PC := uint8(0)
+	if un.is1PC {
+		is1PC = 1
+	}
+	if err = binary.Write(w, binary.BigEndian, is1PC); err != nil {
+		return
+	}
+	n += 1
 	return
 }
 
@@ -340,15 +329,15 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Read(r, binary.BigEndian, &un.Prepare); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Read(r, binary.BigEndian, &un.End); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 
 	var sn int64
 	un.LogIndex = &store.Index{}
@@ -357,6 +346,15 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+
+	is1PC := uint8(0)
+	if err = binary.Read(r, binary.BigEndian, &is1PC); err != nil {
+		return
+	}
+	n += 1
+	if is1PC == 1 {
+		un.is1PC = true
+	}
 	return
 }
 
@@ -366,10 +364,10 @@ func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
 
 func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	if !un.Start.Equal(o.Start) {
-		panic("logic err")
+		panic(fmt.Sprintf("logic err, expect %s, start at %s", un.Start.ToString(), o.Start.ToString()))
 	}
-	if !un.End.Equal(o.End) {
-		panic("logic err")
+	if !un.Prepare.Equal(o.Prepare) {
+		panic(fmt.Sprintf("logic err expect %s, prepare at %s", un.Prepare.ToString(), o.Prepare.ToString()))
 	}
 	un.LogIndex = o.LogIndex
 }

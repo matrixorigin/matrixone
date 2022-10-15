@@ -16,16 +16,19 @@ package cnservice
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -38,6 +41,8 @@ import (
 type Service interface {
 	Start() error
 	Close() error
+
+	GetTaskRunner() taskservice.TaskRunner
 }
 
 type EngineType string
@@ -61,7 +66,8 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type EngineType `toml:"type"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -97,6 +103,17 @@ type Config struct {
 		ClientConfig logservice.HAKeeperClientConfig
 	}
 
+	// TaskRunner configuration
+	TaskRunner struct {
+		QueryLimit        int           `toml:"task-query-limit"`
+		Parallelism       int           `toml:"task-parallelism"`
+		MaxWaitTasks      int           `toml:"task-max-wait-tasks"`
+		FetchInterval     toml.Duration `toml:"task-fetch-interval"`
+		FetchTimeout      toml.Duration `toml:"task-fetch-timeout"`
+		RetryInterval     toml.Duration `toml:"task-retry-interval"`
+		HeartbeatInterval toml.Duration `toml:"task-heartbeat-interval"`
+	}
+
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 }
@@ -116,6 +133,30 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond * 500
+	}
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism == 0 {
+			c.TaskRunner.Parallelism = 1
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 5
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
 	}
 	return nil
 }
@@ -140,4 +181,7 @@ type service struct {
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
 	stopper                *stopper.Stopper
+
+	taskService taskservice.TaskService
+	taskRunner  taskservice.TaskRunner
 }

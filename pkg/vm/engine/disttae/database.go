@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -24,65 +26,147 @@ import (
 var _ engine.Database = new(database)
 
 func (db *database) Relations(ctx context.Context) ([]string, error) {
-	return db.txn.getTableList(ctx, db.databaseId)
-}
-
-func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
+	tables, err := db.txn.getTableList(ctx, db.databaseId)
 	if err != nil {
 		return nil, err
 	}
-	return &table{
-		db:        db,
-		tableId:   id,
-		tableName: name,
-		defs:      defs,
-	}, nil
+	return tables, nil
+}
+
+func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
+	key := genTableKey(ctx, name, db.databaseId)
+	if tbl, ok := db.txn.tableMap.Load(key); ok {
+		return tbl.(*table), nil
+	}
+	// for acceleration, and can work without these codes.
+	if name == catalog.MO_DATABASE {
+		id := uint64(catalog.MO_DATABASE_ID)
+		defs := catalog.MoDatabaseTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+	}
+	if name == catalog.MO_TABLES {
+		id := uint64(catalog.MO_TABLES_ID)
+		defs := catalog.MoTablesTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+	}
+	if name == catalog.MO_COLUMNS {
+		id := uint64(catalog.MO_COLUMNS_ID)
+		defs := catalog.MoColumnsTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+
+	}
+	tbl, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
+	if err != nil {
+		return nil, err
+	}
+	_, ok := db.txn.createTableMap[tbl.tableId]
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok)
+	if err != nil {
+		return nil, err
+	}
+	parts := db.txn.db.getPartitions(db.databaseId, tbl.tableId)
+	tbl.db = db
+	tbl.defs = defs
+	tbl.meta = meta
+	tbl.parts = parts
+	tbl.tableName = name
+	tbl.insertExpr = genInsertExpr(defs, len(parts))
+	db.txn.tableMap.Store(key, tbl)
+	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
+	key := genTableKey(ctx, name, db.databaseId)
+	db.txn.tableMap.Delete(key)
 	id, err := db.txn.getTableId(ctx, db.databaseId, name)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropTableTuple(id, db.m)
+	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 		return err
 	}
+	metaName := genMetaTableName(id)
+	db.txn.deleteMetaTables = append(db.txn.deleteMetaTables, metaName)
 	return nil
 }
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
-	cols, err := genColumns(name, db.databaseName, db.databaseId, defs)
+	accountId, userId, roleId := getAccessInfo(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	tableId, err := db.txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	tbl := new(table)
+	{
+		for _, def := range defs { // copy from tae
+			switch defVal := def.(type) {
+			case *engine.PropertiesDef:
+				for _, property := range defVal.Properties {
+					switch strings.ToLower(property.Key) {
+					case catalog.SystemRelAttr_Comment: // Watch priority over commentDef
+						tbl.comment = property.Value
+					case catalog.SystemRelAttr_Kind:
+						tbl.relKind = property.Value
+					case catalog.SystemRelAttr_CreateSQL:
+						tbl.createSql = property.Value // I don't trust this information.
+					default:
+					}
+				}
+			case *engine.ViewDef:
+				tbl.viewdef = defVal.View
+			case *engine.PartitionDef:
+				tbl.partition = defVal.Partition
+			}
+		}
+	}
+	cols, err := genColumns(accountId, name, db.databaseName, tableId, db.databaseId, defs)
 	if err != nil {
 		return err
 	}
 	{
-		accountId, userId, roleId := getAccessInfo(ctx)
-		bat, err := genCreateTableTuple(accountId, userId, roleId, name,
-			db.databaseId, db.databaseName, comment, db.m)
+		sql := getSql(ctx)
+		bat, err := genCreateTableTuple(tbl, sql, accountId, userId, roleId, name,
+			tableId, db.databaseId, db.databaseName, comment, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}
 	for _, col := range cols {
-		bat, err := genCreateColumnTuple(col, db.m)
+		bat, err := genCreateColumnTuple(col, db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}
+	db.txn.createTableMap[tableId] = 0
 	return nil
+}
+
+func (db *database) openSysTable(key tableKey, id uint64, name string,
+	defs []engine.TableDef) engine.Relation {
+	parts := db.txn.db.getPartitions(db.databaseId, id)
+	tbl := &table{
+		db:        db,
+		tableId:   id,
+		tableName: name,
+		defs:      defs,
+		parts:     parts,
+	}
+	db.txn.tableMap.Store(key, tbl)
+	return tbl
 }

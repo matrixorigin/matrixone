@@ -21,20 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
-	defaultIndexImpl
-	zmReader *ZMReader
-	bfReader *BFReader
+	zmReader *ZmReader
+	bfReader *BfReader
 }
 
 func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
-
+func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
+	panic("not support")
+}
+func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
+func (index *immutableIndex) String() string                         { panic("not support") }
 func (index *immutableIndex) Dedup(key any) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
@@ -58,7 +62,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
@@ -100,16 +104,12 @@ func (index *immutableIndex) Destroy() (err error) {
 func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	metaLoc := entry.GetMetaLoc()
-	idxFile := col.GetDataObject(metaLoc)
-	if idxFile == nil {
-		// FIXME: Now the block that is gc will also be replayed, here is a work around
-		return
-	}
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = NewZMReader(idxFile, colDef.Type)
-	if idxFile.GetMeta().GetBloomFilter().End() > 0 {
-		index.bfReader = NewBFReader(idxFile)
+	index.zmReader = newZmReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
+
+	if colDef.IsPrimary() {
+		index.bfReader = newBfReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
 	}
 	return
 }

@@ -16,7 +16,6 @@ package bytejson
 
 import (
 	"encoding/binary"
-	"regexp"
 )
 
 type TpCode byte
@@ -40,6 +39,12 @@ type Path struct {
 	paths []subPath
 	flag  pathFlag
 }
+type pathGenerator struct {
+	pathStr string
+	pos     int
+}
+
+type UnnestResult map[string]string
 
 const subPathIdxALL = -1
 
@@ -80,6 +85,6 @@ const (
 )
 
 var (
-	endian        = binary.LittleEndian
-	jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
+	endian = binary.LittleEndian
+	//jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
 )

@@ -16,6 +16,8 @@ package moengine
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,7 +48,7 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := containers.MOToVectorTmp(vec, allNullables[i])
+		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
@@ -54,38 +56,17 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 }
 
 func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
-	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	allNullables := schema.AllNullables()
-	bat := containers.NewEmptyBatch()
-	defer bat.Close()
-	for i, vec := range data.Vecs {
-		idx := catalog.GetAttrIdx(schema.AllNames(), data.Attrs[i])
-		if vec.Typ.Oid == types.T_any {
-			vec.Typ = schema.ColDefs[idx].Type
-			logutil.Warn("[Moengine]", common.OperationField("Update"),
-				common.OperandField("Col type is any"))
-		}
-		v := containers.MOToVectorTmp(vec, allNullables[idx])
-		bat.AddVector(data.Attrs[i], v)
-	}
-	phyAddrIdx := catalog.GetAttrIdx(data.Attrs, schema.PhyAddrKey.Name)
-	for idx := 0; idx < bat.Vecs[phyAddrIdx].Length(); idx++ {
-		v := bat.Vecs[phyAddrIdx].Get(idx)
-		for i, attr := range bat.Attrs {
-			if schema.PhyAddrKey.Name == attr {
-				continue
-			}
-			colIdx := schema.GetColIdx(attr)
-			err := rel.handle.UpdateByPhyAddrKey(v, colIdx, bat.Vecs[i].Get(idx))
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return moerr.NewNYI("Update not supported")
 }
 
-func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col string) error {
+func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
+	tvec := containers.NewVectorWithSharedMemory(keys, false)
+	defer tvec.Close()
+	return rel.handle.DeleteByPhyAddrKeys(tvec)
+}
+
+func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) error {
+	data := bat.Vecs[0]
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
@@ -95,12 +76,12 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 		logutil.Warn("[Moengine]", common.OperationField("Delete"),
 			common.OperandField("Col type is any"))
 	}
-	vec := containers.MOToVectorTmp(data, allNullables[idx])
+	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)
 	}
-	if !schema.HasPK() || schema.IsCompoundSortKey() {
+	if !schema.HasPK() {
 		panic(any("No valid primary key found"))
 	}
 	if schema.SortKey.Defs[0].Name == col {

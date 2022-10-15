@@ -20,6 +20,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -30,10 +33,10 @@ const (
 	CmdDeleteBitmap
 	CmdBatch
 	CmdAppend
-	CmdUpdate
 	CmdDelete
 	CmdComposed
 	CmdTxn
+	CmdTxnState
 	CmdCustomized
 )
 
@@ -52,6 +55,9 @@ func init() {
 	})
 	txnif.RegisterCmdFactory(CmdTxn, func(int16) txnif.TxnCmd {
 		return NewEmptyTxnCmd()
+	})
+	txnif.RegisterCmdFactory(CmdTxnState, func(int16) txnif.TxnCmd {
+		return NewEmptyTxnStateCmd()
 	})
 }
 
@@ -83,6 +89,12 @@ type TxnCmd struct {
 	*ComposedCmd
 	*TxnCtx
 	Txn txnif.AsyncTxn
+}
+
+type TxnStateCmd struct {
+	ID       string
+	State    txnif.TxnState
+	CommitTs types.TS
 }
 
 type BatchCmd struct {
@@ -131,19 +143,115 @@ func (c *BaseCustomizedCmd) GetID() uint32 {
 	return c.ID
 }
 
-func NewTxnCmd() *TxnCmd {
-	return &TxnCmd{
-		ComposedCmd: NewComposedCmd(),
+func NewEmptyTxnStateCmd() *TxnStateCmd {
+	return &TxnStateCmd{}
+}
+
+func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd {
+	return &TxnStateCmd{
+		ID:       id,
+		State:    state,
+		CommitTs: cts,
 	}
 }
-func NewEmptyTxnCmd() *TxnCmd {
+
+func NewTxnCmd() *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(),
 		TxnCtx:      &TxnCtx{},
 	}
 }
+
+func NewEmptyTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		ComposedCmd: NewComposedCmd(),
+		TxnCtx: &TxnCtx{
+			Memo: txnif.NewTxnMemo(),
+		},
+	}
+}
+func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+		return
+	}
+	n += 2
+	var sn int64
+	if sn, err = common.WriteString(c.ID, w); err != nil {
+		return
+	}
+	n += sn
+	if err = binary.Write(w, binary.BigEndian, c.State); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Write(w, binary.BigEndian, c.CommitTs); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
+}
+func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	if c.ID, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if err = binary.Read(r, binary.BigEndian, &c.State); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Read(r, binary.BigEndian, &c.CommitTs); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
+}
+func (c *TxnStateCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (c *TxnStateCmd) ApplyCommit()                  {}
+func (c *TxnStateCmd) ApplyRollback()                {}
+func (c *TxnStateCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
+func (c *TxnStateCmd) Unmarshal(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = c.ReadFrom(bbuf)
+	return err
+}
+func (c *TxnStateCmd) GetType() int16 { return CmdTxnState }
+func (c *TxnStateCmd) Desc() string {
+	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) String() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) VerboseString() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.CommitTs.ToString())
+}
+func (c *TxnStateCmd) Close() {
+}
+func (c *TxnCmd) ApplyCommit() {
+	c.ComposedCmd.ApplyCommit()
+}
+func (c *TxnCmd) ApplyRollback() {
+	c.ComposedCmd.ApplyRollback()
+}
+func (c *TxnCmd) MakeTxn() txnif.AsyncTxn {
+	return NewReplayTxn(c.TxnCtx, c)
+}
+func (c *TxnCmd) SetReplayTxn(txn txnif.AsyncTxn) {
+	c.ComposedCmd.SetReplayTxn(txn)
+}
 func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Txn = txn
+	c.ID = txn.GetID()
+	c.PrepareTS = txn.GetPrepareTS()
+	c.Participants = txn.GetParticipants()
+	c.Memo = txn.GetMemo()
 }
 func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
@@ -156,18 +264,30 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if err = binary.Write(w, binary.BigEndian, c.Txn.GetID()); err != nil {
+	if sn, err = common.WriteString(c.ID, w); err != nil {
 		return
 	}
-	n += 8
-	is2PC := uint8(0)
-	if c.Txn.Is2PC() {
-		is2PC = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, is2PC); err != nil {
+	n += sn
+	//prepare ts
+	if err = binary.Write(w, binary.BigEndian, c.PrepareTS); err != nil {
 		return
 	}
-	n += 1
+	n += types.TxnTsSize
+	//participants
+	if err = binary.Write(w, binary.BigEndian, uint32(len(c.Participants))); err != nil {
+		return
+	}
+	n += 4
+	for _, p := range c.Participants {
+		if err = binary.Write(w, binary.BigEndian, p); err != nil {
+			return
+		}
+		n += 8
+	}
+	if sn, err = c.Memo.WriteTo(w); err != nil {
+		return
+	}
+	n += sn
 	return
 }
 func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
@@ -179,19 +299,33 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	c.ComposedCmd = cmd.(*ComposedCmd)
 	n += sn
-	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+	if c.ID, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n += 8
-	is2PC := uint8(0)
-	if err = binary.Read(r, binary.BigEndian, &is2PC); err != nil {
+	n += sn
+	//prepare timestamp
+	if err = binary.Read(r, binary.BigEndian, &c.PrepareTS); err != nil {
 		return
 	}
-	n += 1
-	if is2PC == 1 {
-		c.Kind2PC = true
+	n += types.TxnTsSize
+	//participants
+	num := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &num); err != nil {
+		return
+	}
+	n += 4
+	c.Participants = make([]uint64, num)
+	for i := 0; i < int(num); i++ {
+		id := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &id); err != nil {
+			break
+		} else {
+			c.Participants = append(c.Participants, id)
+			n += 8
+		}
 	}
 	return
+
 }
 func (c *TxnCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
@@ -208,17 +342,20 @@ func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
 }
 func (c *TxnCmd) GetType() int16 { return CmdTxn }
 func (c *TxnCmd) Desc() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
 }
 func (c *TxnCmd) String() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
 }
 func (c *TxnCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
+	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
 }
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()
 }
+func (e *PointerCmd) ApplyCommit()                  {}
+func (e *PointerCmd) ApplyRollback()                {}
+func (e *PointerCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
 func (e *PointerCmd) GetType() int16 {
 	return CmdPointer
 }
@@ -274,7 +411,9 @@ func (e *PointerCmd) Unmarshal(buf []byte) error {
 	_, err := e.ReadFrom(bbuf)
 	return err
 }
-
+func (e *DeleteBitmapCmd) ApplyCommit()                  {}
+func (e *DeleteBitmapCmd) ApplyRollback()                {}
+func (e *DeleteBitmapCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
 func (e *DeleteBitmapCmd) GetType() int16 {
 	return CmdDeleteBitmap
 }
@@ -329,7 +468,9 @@ func (e *DeleteBitmapCmd) VerboseString() string {
 func (e *BatchCmd) GetType() int16 {
 	return CmdBatch
 }
-
+func (e *BatchCmd) ApplyCommit()                  {}
+func (e *BatchCmd) ApplyRollback()                {}
+func (e *BatchCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
 func (e *BatchCmd) Close() {
 	if e.Bat != nil {
 		e.Bat.Close()
@@ -385,7 +526,21 @@ func (e *BatchCmd) VerboseString() string {
 	s := fmt.Sprintf("CmdName=BAT;Rows=%d;Data=%v", e.Bat.Length(), e.Bat)
 	return s
 }
-
+func (cc *ComposedCmd) ApplyCommit() {
+	for _, c := range cc.Cmds {
+		c.ApplyCommit()
+	}
+}
+func (cc *ComposedCmd) ApplyRollback() {
+	for _, c := range cc.Cmds {
+		c.ApplyRollback()
+	}
+}
+func (cc *ComposedCmd) SetReplayTxn(txn txnif.AsyncTxn) {
+	for _, c := range cc.Cmds {
+		c.SetReplayTxn(txn)
+	}
+}
 func (cc *ComposedCmd) Close() {
 	for _, cmd := range cc.Cmds {
 		cmd.Close()

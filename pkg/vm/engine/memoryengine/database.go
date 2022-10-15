@@ -34,13 +34,19 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := DoTxnRequest[CreateDatabaseResp](
+	id, err := d.engine.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = DoTxnRequest[CreateRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Write,
+		d.txnOperator,
+		false,
 		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
+			ID:           id,
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
 			Type:         RelationTable,
@@ -59,8 +65,8 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 	_, err := DoTxnRequest[DeleteRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Write,
+		d.txnOperator,
+		false,
 		d.engine.allShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
@@ -84,9 +90,9 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 	resps, err := DoTxnRequest[OpenRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Read,
-		d.engine.allShards,
+		d.txnOperator,
+		true,
+		d.engine.anyShard,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID:   d.id,
@@ -122,9 +128,9 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
 	resps, err := DoTxnRequest[GetRelationsResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Read,
-		d.engine.allShards,
+		d.txnOperator,
+		true,
+		d.engine.anyShard,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,
@@ -134,10 +140,5 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	var relNames []string
-	for _, resp := range resps {
-		relNames = append(relNames, resp.Names...)
-	}
-
-	return relNames, nil
+	return resps[0].Names, nil
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,7 +35,7 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
 	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
 	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
-	logutil.Debugf("try set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+	logutil.Debugf("try set %X txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
 	if okt { // TODO: tenantID is required, or all need to be ok?
 		txn.BindAccessInfo(tid, uid, rid)
 	}
@@ -60,6 +59,17 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		viewDef.View = schema.View
 		defs = append(defs, viewDef)
 	}
+
+	if len(schema.IndexInfos) != 0 {
+		indexDef := new(engine.ComputeIndexDef)
+		for _, indexInfo := range schema.IndexInfos {
+			indexDef.Names = append(indexDef.Names, indexInfo.Name)
+			indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
+			indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
+		}
+		defs = append(defs, indexDef)
+	}
+
 	for _, col := range schema.ColDefs {
 		if col.IsPhyAddr() {
 			continue
@@ -166,15 +176,21 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		case *engine.ViewDef:
 			schema.View = defVal.View
 
+		case *engine.ComputeIndexDef:
+			for i := range defVal.Names {
+				schema.IndexInfos = append(schema.IndexInfos, &catalog.ComputeIndexInfo{
+					Name:      defVal.Names[i],
+					TableName: defVal.TableNames[i],
+					Unique:    defVal.Uniques[i],
+				})
+			}
+
 		default:
 			// We will not deal with other cases for the time being
 		}
 	}
 	if err = schema.Finalize(false); err != nil {
 		return
-	}
-	if schema.IsCompoundSortKey() {
-		err = moerr.NewNYI("compound idx")
 	}
 	return
 }

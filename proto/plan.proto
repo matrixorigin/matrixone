@@ -148,6 +148,9 @@ message Function {
 		// Window and Agg
 		AGG        = 128;
 		WIN        = 256;
+
+		// Monotonical function can filter by zonemap
+		MONOTONICAL = 512;
 	}
 
 	ObjectRef func		= 1;
@@ -265,6 +268,18 @@ message ViewDef {
 	string view  = 1;
 }
 
+message ComputeIndexDef {
+	repeated string names = 1;
+	repeated string table_names = 2;
+	repeated bool uniques = 3;
+}
+
+message ComputeIndexInfo {
+	string table_name = 1;
+	repeated string attrs = 2;
+	repeated ColDef cols = 3;
+}
+
 message TableDef {
 	message DefType {
 		oneof def {
@@ -273,6 +288,7 @@ message TableDef {
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
 			PartitionInfo partition				= 5;
+			ComputeIndexDef compute_index = 6;
 		}
 	}
 	string name				= 1;
@@ -282,7 +298,15 @@ message TableDef {
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
+	TableFunction tbl_func = 8;
+	repeated ComputeIndexInfo compute_index_infos = 9;
 }
+
+message TableFunction{
+	string name = 1;
+	bytes param = 2;
+}
+
 
 message Cost {
 	double card		= 1;
@@ -310,12 +334,12 @@ message RowsetData {
 
 message OrderBySpec {
 	enum OrderByFlag {
-		ASC  = 0;
-		DESC = 1;
-		NULLS_FIRST = 2;
-		NULLS_LAST  = 4;
-		UNIQUE      = 8;
-		INTERNAL    = 16;
+		INTERNAL    = 0;
+		ASC  		= 1;
+		DESC 		= 2;
+		NULLS_FIRST = 4;
+		NULLS_LAST  = 8;
+		UNIQUE      = 16;
 	}
 
 	Expr expr = 1;
@@ -341,6 +365,7 @@ message UpdateCtx {
 	repeated string other_attrs = 8;
 	repeated string order_attrs = 9;
 	ColDef composite_pkey = 10;
+	repeated string index_attrs = 11;
 }
 
 message AnalyzeInfo {
@@ -405,6 +430,9 @@ message Node {
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
+
+		//
+		TABLE_FUNCTION = 58;
 	}
 
 	enum JoinFlag {
@@ -468,6 +496,9 @@ message DeleteTableCtx {
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
 	bool isHideKey = 5;
+	int32 colIndex = 6;
+	repeated ComputeIndexInfo compute_index_infos = 7;
+	repeated string index_attrs = 8;
 }
 
 message Query {
@@ -501,6 +532,9 @@ message Query {
 
 	// return head
 	repeated string headings = 5;
+
+	// load Tag
+	bool loadTag = 6;
 }
 
 message TransationControl {
@@ -557,6 +591,7 @@ message InsertValues {
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
 	ColDef composite_pkey = 7;
+	repeated ComputeIndexInfo compute_index_infos = 8;
 }
 
 message column{
@@ -595,19 +630,22 @@ message DataDefinition {
 		ALTER_INDEX			= 7;
 		DROP_INDEX			= 8;
 		TRUNCATE_TABLE		= 9;
-		SHOW_CREATEDATABASE = 10;
-		SHOW_CREATETABLE 	= 11;
-		SHOW_DATABASES		= 12;
-		SHOW_TABLES			= 13;
-		SHOW_COLUMNS		= 14;
-		SHOW_INDEX			= 15;
-		SHOW_VARIABLES		= 16;
-		SHOW_WARNINGS		= 17;
-		SHOW_ERRORS			= 18;
-		SHOW_STATUS			= 19;
-		SHOW_PROCESSLIST	= 20;
-		SHOW_TABLE_STATUS = 21;
-		SHOW_TARGET = 22;
+		CREATE_VIEW			= 10;
+		ALTER_VIEW			= 11;
+		DROP_VIEW			= 12;
+		SHOW_CREATEDATABASE = 13;
+		SHOW_CREATETABLE 	= 14;
+		SHOW_DATABASES		= 15;
+		SHOW_TABLES			= 16;
+		SHOW_COLUMNS		= 17;
+		SHOW_INDEX			= 18;
+		SHOW_VARIABLES		= 19;
+		SHOW_WARNINGS		= 20;
+		SHOW_ERRORS			= 21;
+		SHOW_STATUS			= 22;
+		SHOW_PROCESSLIST	= 23;
+		SHOW_TABLE_STATUS 	= 24;
+		SHOW_TARGET 		= 25;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -652,6 +690,7 @@ message CreateTable {
 	bool temporary 		= 2;
 	string database 	= 3;
 	TableDef table_def 	= 4;
+	repeated TableDef index_tables = 5;
 }
 
 message AlterTable {
@@ -663,6 +702,7 @@ message DropTable {
 	bool if_exists 	= 1;
 	string database = 2;
 	string table 	= 3;
+	repeated string index_table_names = 4;
 }
 
 message CreateIndex {
@@ -714,4 +754,9 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message IndexTableInfo {
+	string index_table_name = 1;
+	repeated ColDef cols = 2;
 }

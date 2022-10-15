@@ -19,12 +19,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Shard = metadata.DNShard
@@ -33,9 +33,9 @@ type shardsFunc = func() ([]Shard, error)
 
 type getDefsFunc = func(context.Context) ([]engine.TableDef, error)
 
-func NewDefaultShardPolicy(heap *mheap.Mheap) ShardPolicy {
+func NewDefaultShardPolicy(mp *mpool.MPool) ShardPolicy {
 	return FallbackShard{
-		NewHashShard(heap),
+		NewHashShard(mp),
 		new(NoShard),
 	}
 }

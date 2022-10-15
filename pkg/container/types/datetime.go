@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,9 @@ const (
 	secsPerHour     = 60 * secsPerMinute
 	secsPerDay      = 24 * secsPerHour
 	secsPerWeek     = 7 * secsPerDay
-	microSecsPerSec = 1000000
+	NanoSecsPerSec  = 1000000000 // 10^9
+	microSecsPerSec = 1000000    // 10^6
+	MillisecsPerSec = 1000       // 10^3
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 
@@ -204,6 +207,13 @@ func FromUnix(loc *time.Location, ts int64) Datetime {
 	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpoch)
 }
 
+func FromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
+	t := time.Unix(sec, nsec).In(loc)
+	_, offset := t.Zone()
+	msec := math.Round(float64(nsec) / 1000)
+	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpoch)
+}
+
 func Now(loc *time.Location) Datetime {
 	now := time.Now().In(loc)
 	_, offset := now.Zone()
@@ -326,6 +336,43 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return 0, false
 	}
 	return newDate, true
+}
+
+func (dt Datetime) ConvertToInterval(its string) (int64, error) {
+	switch its {
+	case "microsecond":
+		return int64(dt), nil
+	case "second":
+		return dt.sec(), nil
+	case "minute":
+		return int64(dt) / (microSecsPerSec * secsPerMinute), nil
+	case "hour":
+		return int64(dt) / (microSecsPerSec * secsPerHour), nil
+	case "day":
+		return int64(dt) / (microSecsPerSec * secsPerDay), nil
+	case "week":
+		return int64(dt) / (microSecsPerSec * secsPerWeek), nil
+	case "month":
+		return dt.ConvertToMonth(), nil
+	case "quarter":
+		return dt.ConvertToMonth() / 3, nil
+	case "year":
+		return dt.ConvertToMonth() / 12, nil
+	}
+	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
+}
+
+func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
+	return int64((dt - secondDt) / microSecsPerSec)
+}
+
+func (dt Datetime) ConvertToMonth() int64 {
+	if dt < 0 {
+		dt = -dt
+		return -((int64(dt.Year())-1)*12 + int64(dt.Month()) - 1)
+	} else {
+		return (int64(dt.Year())-1)*12 + int64(dt.Month()) - 1
+	}
 }
 
 func (dt Datetime) MicroSec() int64 {

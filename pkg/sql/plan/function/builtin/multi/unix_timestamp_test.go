@@ -65,6 +65,6 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
 
 func makeVector2(src types.Timestamp, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
-	vectors[0] = vector.NewConstFixed(types.T_timestamp.ToType(), 1, src)
+	vectors[0] = vector.NewConstFixed(types.T_timestamp.ToType(), 1, src, testutil.TestUtilMp)
 	return vectors
 }

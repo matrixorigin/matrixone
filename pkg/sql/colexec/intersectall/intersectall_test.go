@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -87,13 +86,13 @@ func TestIntersectAll(t *testing.T) {
 		if result != nil && len(result.Zs) != 0 {
 			cnt += result.Length()
 			require.Equal(t, 3, len(result.Vecs))
-			c.proc.InputBatch().Clean(c.proc.GetMheap())
+			c.proc.InputBatch().Clean(c.proc.Mp())
 		} /*else {
-			c.proc.InputBatch().Clean(c.proc.GetMheap())
+			c.proc.InputBatch().Clean(c.proc.Mp())
 		}*/
 	}
 	require.Equal(t, 2, cnt) // 1 row
-	require.Equal(t, int64(0), mheap.Size(c.proc.GetMheap()))
+	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
 func newIntersectAllTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) intersectAllTestCase {
