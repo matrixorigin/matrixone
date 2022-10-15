@@ -107,7 +107,7 @@ jobs:
           retention-days: 7
 
   bvt-linux-x86:
-    runs-on: ubuntu-latest
+    runs-on: x86-runner
     name: BVT Test on Ubuntu/x64
     timeout-minutes: 30
 
