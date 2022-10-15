@@ -88,6 +88,10 @@ func NewSegmentTree(id uint64) *SegmentTree {
 	}
 }
 
+func (tree *Tree) Reset() {
+	tree.Tables = make(map[uint64]*TableTree)
+}
+
 func (tree *Tree) String() string {
 	visitor := new(stringVisitor)
 	_ = tree.Visit(visitor)
@@ -144,6 +148,13 @@ func (tree *Tree) HasTable(id uint64) bool {
 	return found
 }
 
+func (tree *Tree) AddTable(dbID, id uint64) {
+	if _, exist := tree.Tables[id]; !exist {
+		table := NewTableTree(dbID, id)
+		tree.Tables[id] = table
+	}
+}
+
 func (tree *Tree) AddSegment(dbID, tableID, id uint64) {
 	var table *TableTree
 	var exist bool
@@ -159,6 +170,14 @@ func (tree *Tree) AddBlock(dbID, tableID, segID, id uint64) {
 	tree.Tables[tableID].AddBlock(segID, id)
 }
 
+func (tree *Tree) GetSegment(tableID, segID uint64) *SegmentTree {
+	table := tree.GetTable(tableID)
+	if table == nil {
+		return nil
+	}
+	return table.GetSegment(segID)
+}
+
 func (tree *Tree) Merge(ot *Tree) {
 	if ot == nil {
 		return
@@ -171,6 +190,10 @@ func (tree *Tree) Merge(ot *Tree) {
 		}
 		t.Merge(ott)
 	}
+}
+
+func (ttree *TableTree) GetSegment(id uint64) *SegmentTree {
+	return ttree.Segs[id]
 }
 
 func (ttree *TableTree) AddSegment(id uint64) {

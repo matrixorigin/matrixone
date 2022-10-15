@@ -138,7 +138,8 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 				txnCtx := value.(*txnContext)
 				txnMeta := txnCtx.getTxn()
 				// if a txn is not a distributed txn coordinator, wait coordinator dnshard.
-				if len(txnMeta.DNShards) > 0 && s.shard.ShardID != txnMeta.DNShards[0].ShardID {
+				if len(txnMeta.DNShards) == 0 ||
+					(len(txnMeta.DNShards) > 0 && s.shard.ShardID != txnMeta.DNShards[0].ShardID) {
 					return true
 				}
 

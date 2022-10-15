@@ -14,11 +14,11 @@ SELECT @@session.autocommit;
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 
@@ -240,19 +240,19 @@ drop database if exists test_xx;
 begin;
 create database test_xx;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 
--- echo Uncommitted transaction exists. Please commit or rollback first.
+-- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 commit;

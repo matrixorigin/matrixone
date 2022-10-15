@@ -40,6 +40,12 @@ const (
 	defaultTestDB = "db"
 )
 
+func init() {
+	// workaround sca check
+	_ = tryAppendClosure
+	_ = dropDB
+}
+
 type testEngine struct {
 	*DB
 	t        *testing.T
