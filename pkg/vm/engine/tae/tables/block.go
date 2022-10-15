@@ -226,6 +226,14 @@ func (blk *dataBlock) estimateABlkRawScore() (score int) {
 		// Any deletes or append
 		score = 1
 	}
+
+	// If any delete or append found and the table or database of the block had
+	// been deleted. Force checkpoint the block
+	if score > 0 {
+		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+			score = 100
+		}
+	}
 	return
 }
 
@@ -244,6 +252,14 @@ func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
 	} else {
 		// Any delete
 		score = 1
+	}
+
+	// If any delete found and the table or database of the block had
+	// been deleted. Force checkpoint the block
+	if score > 0 {
+		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+			score = 100
+		}
 	}
 	return
 }
