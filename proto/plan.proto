@@ -532,6 +532,9 @@ message Query {
 
 	// return head
 	repeated string headings = 5;
+
+	// load Tag
+	bool loadTag = 6;
 }
 
 message TransationControl {

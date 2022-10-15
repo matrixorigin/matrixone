@@ -62,8 +62,8 @@ func (rm *RoutineManager) getCtx() context.Context {
 }
 
 func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
-	rm.rwlock.RLock()
-	defer rm.rwlock.RUnlock()
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
 	rm.clients[rs] = r
 }
 
