@@ -818,11 +818,13 @@ func (ses *Session) TxnCommit() error {
 // TxnRollback rollbacks the current transaction.
 func (ses *Session) TxnRollback() error {
 	var err error
+	tenant := ses.GetTenantName(nil)
+	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
-		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeRollback)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 	}
 	return err
 }
