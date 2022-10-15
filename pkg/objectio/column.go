@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -47,7 +48,7 @@ func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	return col
 }
 
-func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
+func (cb *ColumnBlock) GetData(m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
 	data := &fileservice.IOVector{
 		FilePath: cb.object.name,
@@ -57,14 +58,19 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
+	err = cb.allocData(data.Entries[0], m)
+	if err != nil {
+		return nil, err
+	}
 	err = cb.object.fs.Read(context.Background(), data)
 	if err != nil {
+		cb.freeData(data.Entries[0], m)
 		return nil, err
 	}
 	return data, nil
 }
 
-func (cb *ColumnBlock) GetIndex(dataType IndexDataType) (IndexData, error) {
+func (cb *ColumnBlock) GetIndex(dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
 	var err error
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
@@ -77,8 +83,13 @@ func (cb *ColumnBlock) GetIndex(dataType IndexDataType) (IndexData, error) {
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
+		err = cb.allocData(data.Entries[0], m)
+		if err != nil {
+			return nil, err
+		}
 		err = cb.object.fs.Read(context.Background(), data)
 		if err != nil {
+			cb.freeData(data.Entries[0], m)
 			return nil, err
 		}
 		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Data), nil
@@ -182,4 +193,20 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 		return err
 	}
 	return err
+}
+
+func (cb *ColumnBlock) freeData(entry fileservice.IOEntry, m *mpool.MPool) {
+	if m != nil {
+		m.Free(entry.Data)
+	}
+}
+
+func (cb *ColumnBlock) allocData(entry fileservice.IOEntry, m *mpool.MPool) (err error) {
+	if m != nil {
+		entry.Data, err = m.Alloc(int(entry.Size))
+		if err != nil {
+			return
+		}
+	}
+	return nil
 }

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -69,7 +68,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		Closed:      new(atomic.Value),
 	}
 
-	db.Wal = wal.NewDriver(dirname, WALDir, nil)
+	switch opts.LogStoreT {
+	case options.LogstoreBatchStore:
+		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
+	case options.LogstoreLogservice:
+		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
+	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
@@ -101,9 +105,16 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
-	catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
+	catalogCheckpointer := newCatalogCheckpointer(
+		db,
+		opts.CheckpointCfg.CatalogUnCkpLimit,
+		time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond)
+	gcCollector := newGarbageCollector(
+		db,
+		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
 	scanner.RegisterOp(calibrationOp)
-	scanner.RegisterOp(catalogMonotor)
+	scanner.RegisterOp(gcCollector)
+	scanner.RegisterOp(catalogCheckpointer)
 
 	// Start workers
 	db.CKPDriver.Start()
@@ -117,7 +128,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			if dirtyTree.IsEmpty() {
 				return
 			}
-			logutil.Infof(dirtyTree.String())
+			// logutil.Infof(dirtyTree.String())
 		}, nil)
 		hb.Start()
 		<-ctx.Done()

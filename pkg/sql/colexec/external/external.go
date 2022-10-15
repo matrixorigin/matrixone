@@ -20,12 +20,11 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
-	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -58,10 +57,10 @@ func Prepare(proc *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
-	if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
+	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
 		param.End = true
 		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	}
+	}*/
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.End = true
@@ -102,70 +101,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-var (
-	wildcard = []string{"*"}
-)
-
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
-	ctx := context.TODO()
-	filePath := strings.TrimSpace(param.Filepath)
-	pathDir := strings.Split(filePath, "/")
-	l := list.New()
-	if pathDir[0] == "" {
-		l.PushBack("/")
-	} else {
-		l.PushBack(pathDir[0])
-	}
-
-	for i := 1; i < len(pathDir); i++ {
-		hasWild := false
-		for j := 0; j < len(wildcard); j++ {
-			if strings.Contains(pathDir[i], wildcard[j]) {
-				hasWild = true
-				break
-			}
-		}
-		if !hasWild {
-			len := l.Len()
-			for j := 0; j < len; j++ {
-				l.PushBack(path.Join(l.Front().Value.(string), pathDir[i]))
-				l.Remove(l.Front())
-			}
-			continue
-		}
-		length := l.Len()
-		for j := 0; j < length; j++ {
-			prefix := l.Front().Value.(string)
-			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
-			if err != nil {
-				return nil, err
-			}
-			entries, err := fs.List(ctx, readPath)
-			if err != nil {
-				return nil, err
-			}
-			for _, entry := range entries {
-				if !entry.IsDir && i+1 != len(pathDir) {
-					continue
-				}
-				if entry.IsDir && i+1 == len(pathDir) {
-					continue
-				}
-				matched, _ := path.Match(pathDir[i], entry.Name)
-				if !matched {
-					continue
-				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
-			}
-			l.Remove(l.Front())
-		}
-	}
-	len := l.Len()
-	for j := 0; j < len; j++ {
-		fileList = append(fileList, l.Front().Value.(string))
-		l.Remove(l.Front())
-	}
-	return fileList, err
+	return filepath.Glob(strings.TrimSpace(param.Filepath))
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {

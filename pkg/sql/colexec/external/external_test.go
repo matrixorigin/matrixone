@@ -19,15 +19,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
+	"os"
+	"testing"
 )
 
 const (
@@ -129,8 +128,8 @@ func Test_Prepare(t *testing.T) {
 				param.CreateSql = string(json_byte)
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldBeNil)
-				convey.So(param.FileList, convey.ShouldResemble, []string{"/"})
-				convey.So(param.FileCnt, convey.ShouldEqual, 1)
+				convey.So(param.FileList, convey.ShouldBeNil)
+				convey.So(param.FileCnt, convey.ShouldEqual, 0)
 
 				extern.JsonData = "test"
 				json_byte, err = json.Marshal(extern)
