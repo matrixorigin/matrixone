@@ -410,6 +410,8 @@ message CheckerState {
   LogState LogState       = 4 [(gogoproto.nullable) = false];
   CNState CNState         = 5 [(gogoproto.nullable) = false];
   HAKeeperState State     = 6;
+  TaskInitState TaskState = 7;
+  TaskTableUser TaskTableUser = 8 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.

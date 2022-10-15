@@ -482,12 +482,14 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
-		Tick:        s.state.Tick,
-		ClusterInfo: s.state.ClusterInfo,
-		DNState:     s.state.DNState,
-		LogState:    s.state.LogState,
-		CNState:     s.state.CNState,
-		State:       s.state.State,
+		Tick:          s.state.Tick,
+		ClusterInfo:   s.state.ClusterInfo,
+		DNState:       s.state.DNState,
+		LogState:      s.state.LogState,
+		CNState:       s.state.CNState,
+		State:         s.state.State,
+		TaskState:     s.state.TaskInitState,
+		TaskTableUser: s.state.TaskTableUser,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
