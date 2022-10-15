@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -50,7 +51,7 @@ func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", s)
 }
 
-var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName) io.StringWriter {
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName, ...export.FSWriterOption) io.StringWriter {
 	return &dummyStringWriter{}
 }
 

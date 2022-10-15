@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -683,7 +683,7 @@ func (l *store) truncationWorker(ctx context.Context) {
 			return
 		case <-l.mu.truncateCh:
 			if err := l.processTruncateLog(ctx); err != nil {
-				panic(err)
+				l.logger.Error("truncate failed", zap.Error(err))
 			}
 			select {
 			case <-ctx.Done():

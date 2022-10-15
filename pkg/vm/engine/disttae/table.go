@@ -16,10 +16,13 @@ package disttae
 
 import (
 	"context"
+	"math/rand"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -136,18 +139,44 @@ func (tbl *table) getTableDef() *plan.TableDef {
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
+	// copy from tae's logic
 	defs := make([]engine.TableDef, 0, len(tbl.defs))
+	if tbl.comment != "" {
+		commentDef := new(engine.CommentDef)
+		commentDef.Comment = tbl.comment
+		defs = append(defs, commentDef)
+	}
+	if tbl.partition != "" {
+		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partition = tbl.partition
+		defs = append(defs, partitionDef)
+	}
+
+	if tbl.viewdef != "" {
+		viewDef := new(engine.ViewDef)
+		viewDef.View = tbl.viewdef
+		defs = append(defs, viewDef)
+	}
 	for i, def := range tbl.defs {
-		switch attr := def.(type) {
-		case *engine.CommentDef:
-			defs = append(defs, tbl.defs[i])
-		case *engine.AttributeDef:
+		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Name != catalog.Row_ID {
 				defs = append(defs, tbl.defs[i])
 			}
 
 		}
 	}
+	pro := new(engine.PropertiesDef)
+	pro.Properties = append(pro.Properties, engine.Property{
+		Key:   catalog.SystemRelAttr_Kind,
+		Value: string(tbl.relKind),
+	})
+	if tbl.createSql != "" {
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: tbl.createSql,
+		})
+	}
+	defs = append(defs, pro)
 	return defs, nil
 
 }
@@ -166,17 +195,29 @@ func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, erro
 
 func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
-	for _, def := range tbl.defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Name == catalog.Row_ID { // Why not hide but rowid?
-				attrs = append(attrs, &attr.Attr)
-			}
-		}
-	}
+	attrs = append(attrs, &engine.Attribute{
+		IsHidden: true,
+		IsRowId:  true,
+		Name:     catalog.Row_ID,
+		Type:     types.New(types.T_Rowid, 0, 0, 0),
+		Primary:  true,
+	})
 	return attrs, nil
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
+	if tbl.insertExpr == nil {
+		ibat := batch.New(true, bat.Attrs)
+		for j := range bat.Vecs {
+			ibat.SetVector(int32(j), vector.New(bat.GetVector(int32(j)).GetType()))
+		}
+		if _, err := ibat.Append(tbl.db.txn.proc.Mp(), bat); err != nil {
+			return err
+		}
+		i := rand.Int() % len(tbl.db.txn.dnStores)
+		return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i])
+	}
 	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
@@ -198,6 +239,7 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+
 	bat.SetAttributes([]string{catalog.Row_ID})
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
@@ -220,6 +262,21 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {
+	id, err := tbl.db.txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	bat, err := genTruncateTableTuple(id, tbl.db.databaseId,
+		genMetaTableName(tbl.tableId), tbl.db.databaseName, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return 0, err
+	}
+	for i := range tbl.db.txn.dnStores {
+		if err := tbl.db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[i]); err != nil {
+			return 0, err
+		}
+	}
 	return 0, nil
 }
 

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -224,32 +225,15 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var priKey string
 		var priKeyIdx int32 = -1
 		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
-		for _, key := range priKeys {
-			if key.IsCPkey {
-				break
-			}
-			for _, updateCol := range updateCols {
-				if key.Name == updateCol.colDef.Name {
-					e, _ := tree.NewUnresolvedName(updateCol.dbName, updateCol.aliasTblName, key.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-					priKey = key.Name
-					priKeyIdx = offset
-					break
-				}
-			}
-		}
 
 		// use hide key to update if primary key will not be updated
-		var hideKeyIdx int32 = -1
 		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
-		if priKeyIdx == -1 {
-			if hideKey == "" {
-				return nil, nil, moerr.NewInternalError("internal error: cannot find hide key")
-			}
-			e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-			hideKeyIdx = offset
+		if hideKey == "" {
+			return nil, nil, moerr.NewInternalError("internal error: cannot find hide key")
 		}
+		e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		hideKeyIdx := offset
 
 		// construct projection for list of update expr
 		for _, expr := range updateExprsArray[i] {
@@ -298,11 +282,8 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			if !isUpdateCol {
 				if col.OnUpdate != nil {
 					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
 				} else {
 					otherAttrs = append(otherAttrs, col.Name)
-					e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 				}
 			}
 		}
@@ -319,8 +300,6 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			}
 			if !find {
 				indexAttrs = append(indexAttrs, indexColName)
-				e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, indexColName)
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 			}
 		}
 		offset += int32(len(orderAttrs)) + 1
@@ -341,6 +320,15 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		}
 		for _, u := range onUpdateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
+		}
+		for _, o := range otherAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, o)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		}
+		for _, attr := range indexAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, attr)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		if len(priKeys) > 0 && priKeys[0].IsCPkey {
 			ct.CompositePkey = priKeys[0]

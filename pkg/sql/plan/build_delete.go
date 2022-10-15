@@ -262,20 +262,6 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	isHideKey := false
 	tblName := tf.baseNameMap[tableDef.Name]
 
-	// priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	// for _, key := range priKeys {
-	// if key.IsCPkey {
-	// 	break
-	// }
-	// if isContainNameInFilter(stmt, key.Name) {
-	// 	psNames[key.Name] = struct{}{}
-	// 	e := tree.SetUnresolvedName(tblName, key.Name)
-	// 	ps = append(ps, tree.SelectExpr{Expr: e})
-	// 	useKey = key
-	// 	break
-	// }
-	// }
-
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
@@ -308,28 +294,3 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	return ps, useKey, isHideKey, indexAttrs, nil
 
 }
-
-// isContainNameInFilter is to find out if contain primary key in expr.
-// it works any way. Chose other way to delete when it is not accurate judgment
-// func isContainNameInFilter(stmt *tree.Delete, name string) bool {
-// 	if stmt.TableRefs != nil {
-// 		for _, e := range stmt.TableRefs {
-// 			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
-// 				return true
-// 			}
-// 		}
-// 	}
-// 	if stmt.OrderBy != nil {
-// 		for _, e := range stmt.OrderBy {
-// 			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
-// 				return true
-// 			}
-// 		}
-// 	}
-// 	if stmt.Where != nil {
-// 		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }

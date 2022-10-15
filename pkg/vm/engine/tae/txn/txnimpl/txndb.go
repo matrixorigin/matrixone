@@ -191,6 +191,19 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 	return
 }
 
+func (db *txnDB) UnsafeGetRelation(id uint64) (relation handle.Relation, err error) {
+	meta, err := db.entry.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
+	return
+}
+
 func (db *txnDB) GetRelationByName(name string) (relation handle.Relation, err error) {
 	meta, err := db.entry.GetTableEntry(name, db.store.txn)
 	if err != nil {

@@ -11,6 +11,14 @@ select json_extract('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
 select json_extract('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
 select json_extract('{"a":[1,2,3,{"a":4}]}','$**.a');
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+select json_extract('{"a":1}','$[0]');
+select json_extract('{"a":1}','$[0].a');
+select json_extract('{"a":1}','$[0].b');
+select json_extract('{"a":1}','$[1]');
+select json_extract('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+select json_extract('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+select  json_extract('{"a":"a1","b":"b1"}','$.**');
+select  json_extract('{"a":"a1","b":"b1"}','$**.1');
 
 # Test cases of json_extract from column
 drop table if exists t1;

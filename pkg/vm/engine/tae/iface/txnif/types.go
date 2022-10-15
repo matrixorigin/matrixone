@@ -107,7 +107,6 @@ type TxnAsyncer interface {
 }
 
 type TxnTest interface {
-	MockSetCommitTSLocked(ts types.TS)
 	MockIncWriteCnt() int
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
@@ -115,7 +114,13 @@ type TxnTest interface {
 	SetApplyRollbackFn(func(AsyncTxn) error)
 }
 
+type TxnUnsafe interface {
+	UnsafeGetDatabase(id uint64) (h handle.Database, err error)
+	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
+}
+
 type AsyncTxn interface {
+	TxnUnsafe
 	TxnTest
 	Txn2PC
 	TxnHandle
@@ -125,17 +130,10 @@ type AsyncTxn interface {
 	TxnChanger
 }
 
-type SyncTxn interface {
-	TxnReader
-	TxnWriter
-	TxnChanger
-}
-
 type DeleteChain interface {
 	sync.Locker
 	RLock()
 	RUnlock()
-	// GetID() *common.ID
 	RemoveNodeLocked(DeleteNode)
 
 	AddNodeLocked(txn AsyncTxn, deleteType handle.DeleteType) DeleteNode
@@ -199,8 +197,9 @@ type DeleteNode interface {
 }
 
 type TxnStore interface {
-	Txn2PC
 	io.Closer
+	Txn2PC
+	TxnUnsafe
 	WaitPrepared() error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
@@ -247,9 +246,6 @@ type TxnStore interface {
 type TxnEntryType int16
 
 type TxnEntry interface {
-	// sync.Locker
-	// RLock()
-	// RUnlock()
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error

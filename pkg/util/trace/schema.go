@@ -17,6 +17,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"strings"
 	"time"
 
@@ -130,7 +131,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	for _, ddl := range initDDLs {
 		opts := optFactory(StatsDatabase, ddl.filePrefix)
-		sql := opts.FormatDdl(ddl.sqlPrefix) + opts.GetTableOptions()
+		sql := opts.FormatDdl(ddl.sqlPrefix) + opts.GetTableOptions(nil)
 		if err := mustExec(sql); err != nil {
 			return err
 		}
@@ -160,20 +161,23 @@ func (o *CsvTableOptions) GetCreateOptions() string {
 	return "EXTERNAL "
 }
 
-func (o *CsvTableOptions) GetTableOptions() string {
+func (o *CsvTableOptions) GetTableOptions(builder export.PathBuilder) string {
+	if builder == nil {
+		builder = export.NewDBTablePathBuilder()
+	}
 	if len(o.Formatter) > 0 {
-		return fmt.Sprintf(o.Formatter, o.DbName, o.TblName)
+		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName))
 	}
 	return ""
 }
 
 func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
+		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 	switch engine {
 	case NormalTableEngine:
 		return func(_, _ string) TableOptions { return NoopTableOptions{} }
 	case ExternalTableEngine:
-		var infileFormatter = ` infile{"filepath"="etl:%s/%s_*.csv","compression"="none"}` +
-			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 		return func(db, tbl string) TableOptions {
 			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
 		}
