@@ -412,7 +412,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	SegmentFactory := blockio.NewObjectFactory(dir)
-	factory := tables.NewDataFactory(SegmentFactory, mutBufMgr, nil, dir, SegmentFactory.(*blockio.ObjectFactory).Fs)
+	factory := tables.NewDataFactory(SegmentFactory, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()

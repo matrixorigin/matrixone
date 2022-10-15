@@ -76,7 +76,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
-		db.FileFactory, mutBufMgr, db.Scheduler, db.Dir, db.FileFactory.(*blockio.ObjectFactory).Fs)
+		db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}

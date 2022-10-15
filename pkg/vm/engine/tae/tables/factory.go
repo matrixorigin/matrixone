@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -34,14 +35,13 @@ type DataFactory struct {
 func NewDataFactory(fileFactory file.SegmentFactory,
 	appendBufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler,
-	dir string,
-	fs *objectio.ObjectFS) *DataFactory {
+	dir string) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
 		scheduler:    scheduler,
 		dir:          dir,
-		fs:           fs,
+		fs:           fileFactory.(*blockio.ObjectFactory).Fs,
 	}
 }
 
