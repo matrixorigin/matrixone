@@ -843,10 +843,21 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var tenantID int64
 	var userID int64
 	var pwd string
+	var pwdBytes []byte
+	var isSpecial bool
+	var specialAccount *TenantInfo
+
 	//Get tenant info
 	tenant, err = GetTenantInfo(userInput)
 	if err != nil {
 		return nil, err
+	}
+
+	// check the special user for initilization
+	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
+	if isSpecial && specialAccount.IsMoAdminRole() {
+		ses.SetTenantInfo(specialAccount)
+		return pwdBytes, nil
 	}
 
 	ses.SetTenantInfo(tenant)
