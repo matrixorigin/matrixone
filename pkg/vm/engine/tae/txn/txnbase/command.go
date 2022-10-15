@@ -216,7 +216,7 @@ func (c *TxnStateCmd) Marshal() (buf []byte, err error) {
 }
 func (c *TxnStateCmd) ApplyCommit()                  {}
 func (c *TxnStateCmd) ApplyRollback()                {}
-func (e *TxnStateCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
+func (c *TxnStateCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
 func (c *TxnStateCmd) Unmarshal(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = c.ReadFrom(bbuf)

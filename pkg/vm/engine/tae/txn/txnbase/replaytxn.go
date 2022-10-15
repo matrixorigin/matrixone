@@ -131,8 +131,7 @@ func (txn *ReplayTxn) PrepareRollback() (err error) {
 }
 
 func (txn *ReplayTxn) String() string {
-	str := txn.TxnCtx.String()
-	return fmt.Sprintf("%s: %v", str, txn.GetError())
+	return fmt.Sprintf("%s: %v", txn.TxnCtx.String(), txn.GetError())
 }
 
 func (txn *ReplayTxn) WaitPrepared() error {
