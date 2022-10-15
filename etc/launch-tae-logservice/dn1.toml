@@ -10,8 +10,6 @@ max-size = 512
 [hakeeper-client]
 service-addresses = [
     "127.0.0.1:32001",
-    "127.0.0.1:32011",
-    "127.0.0.1:32021",
 ]
 
 [[fileservice]]

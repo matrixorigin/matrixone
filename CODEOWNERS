@@ -66,6 +66,7 @@
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr
 /pkg/tests/service @zhangxu19830126 @cnutshell
+/pkg/tests/txn @zhangxu19830126
 /pkg/testutil @nnsgmsone
 /pkg/txn @zhangxu19830126
 /pkg/txn/storage/memorystorage @reusee

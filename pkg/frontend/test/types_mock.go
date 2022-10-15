@@ -132,6 +132,20 @@ func (mr *MockComputationWrapperMockRecorder) GetColumns() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumns", reflect.TypeOf((*MockComputationWrapper)(nil).GetColumns))
 }
 
+// GetLoadTag mocks base method.
+func (m *MockComputationWrapper) GetLoadTag() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLoadTag")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetLoadTag indicates an expected call of GetLoadTag.
+func (mr *MockComputationWrapperMockRecorder) GetLoadTag() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLoadTag", reflect.TypeOf((*MockComputationWrapper)(nil).GetLoadTag))
+}
+
 // GetUUID mocks base method.
 func (m *MockComputationWrapper) GetUUID() []byte {
 	m.ctrl.T.Helper()

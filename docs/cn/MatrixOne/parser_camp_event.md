@@ -29,6 +29,8 @@ export GOPATH=/home/go
 export GOPROXY=https://goproxy.cn,direct    
 EOF
 $ source /etc/profile
+$ rm -rf /usr/bin/go
+$ ln -s /usr/local/go/bin/go /usr/bin/go
 ```
 
 After these, your can check your golang version with go version.
@@ -42,6 +44,12 @@ After download with git clone command, then run the these commands to run Matrix
 $ make config
 $ make build
 $ ./mo-service -cfg etc/cn-standalone-test.toml
+```
+
+If in the `make config` or `make build` step, there is any timeout or downloading interrupted, please try to refresh your goproxy as following:
+
+```
+$ go env -w GOPROXY=<https://goproxy.cn,direct>
 ```
 
 While notified `"Server Listening on : 0.0.0.0:6001"` , it means your MatirxOne is started.
