@@ -108,7 +108,7 @@ jobs:
 
   bvt-linux-x86:
     runs-on: x86-runner
-    name: BVT Test on linux/x64
+    name: BVT Test on Linux/x64
     timeout-minutes: 30
 
     steps:
@@ -150,6 +150,8 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
+          export LC_ALL="C.UTF-8"
+          locale
           sleep 120s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
@@ -159,13 +161,14 @@ jobs:
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
-      - name: remove some files
+      - name: generate upload files
         continue-on-error: true
         run: |
-          cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
+          mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -230,14 +233,15 @@ jobs:
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-        
-      - name: remove some files
+
+      - name: generate upload files
         continue-on-error: true
         run: |
-          cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
+          mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/ 
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -245,9 +249,10 @@ jobs:
         with:
           name: ci_linux_arm_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/upload
           retention-days: 7
           
+
   bvt-darwin-x86:
     runs-on: macos-12
     name: BVT Test on Darwin/x86
@@ -301,13 +306,14 @@ jobs:
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
-      - name: remove some files
+      - name: generate upload files
         continue-on-error: true
         run: |
-          cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
+          mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/ 
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -315,7 +321,7 @@ jobs:
         with:
           name: ci_darwin_x86_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/upload
           retention-days: 7
 
   lint-docs:
