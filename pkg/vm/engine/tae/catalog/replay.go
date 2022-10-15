@@ -17,9 +17,7 @@ package catalog
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 const DefaultReplayCacheSize = 2 * common.M
@@ -52,7 +50,7 @@ func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload 
 	checkpoint.MaxTS = e.MaxTS
 	checkpoint.LSN = e.MaxIndex.LSN
 	for _, cmd := range e.Entries {
-		replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil, replayer.cache, txnif.CmdSnapshot, types.TS{})
+		replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil, replayer.cache)
 	}
 	if len(replayer.catalog.checkpoints) == 0 {
 		replayer.catalog.checkpoints = append(replayer.catalog.checkpoints, checkpoint)

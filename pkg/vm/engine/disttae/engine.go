@@ -24,6 +24,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -33,8 +35,9 @@ import (
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	proc *process.Process,
 	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
@@ -44,12 +47,13 @@ func New(
 		panic(err)
 	}
 	db := newDB(cli, cluster.DNStores)
-	if err := db.init(ctx, proc.Mp()); err != nil {
+	if err := db.init(ctx, mp); err != nil {
 		panic(err)
 	}
 	return &Engine{
 		db:                db,
-		proc:              proc,
+		mp:                mp,
+		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -74,7 +78,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, e.proc.Mp())
+		name, databaseId, e.mp)
 	if err != nil {
 		return err
 	}
@@ -139,7 +143,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
+	bat, err := genDropDatabaseTuple(id, name, e.mp)
 	if err != nil {
 		return err
 	}
@@ -162,8 +166,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
+	proc := process.New(
+		ctx,
+		e.mp,
+		e.cli,
+		op,
+		e.fs,
+	)
 	txn := &Transaction{
-		proc:           e.proc,
+		proc:           proc,
 		db:             e.db,
 		readOnly:       true,
 		meta:           op.Txn(),
@@ -269,7 +280,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.proc.Mp())
+			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
 	e.Lock()
