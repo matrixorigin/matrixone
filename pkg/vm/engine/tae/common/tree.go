@@ -16,7 +16,9 @@ package common
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -148,6 +150,26 @@ func (tree *Tree) HasTable(id uint64) bool {
 	return found
 }
 
+func (tree *Tree) Equal(o *Tree) bool {
+	if tree == nil && o == nil {
+		return true
+	} else if tree == nil || o == nil {
+		return false
+	}
+	if len(tree.Tables) != len(o.Tables) {
+		return false
+	}
+	for id, table := range tree.Tables {
+		if otable, found := o.Tables[id]; !found {
+			return false
+		} else {
+			if !table.Equal(otable) {
+				return false
+			}
+		}
+	}
+	return true
+}
 func (tree *Tree) AddTable(dbID, id uint64) {
 	if _, exist := tree.Tables[id]; !exist {
 		table := NewTableTree(dbID, id)
@@ -192,6 +214,42 @@ func (tree *Tree) Merge(ot *Tree) {
 	}
 }
 
+func (tree *Tree) WriteTo(w io.Writer) (n int64, err error) {
+	cnt := uint32(len(tree.Tables))
+	if err = binary.Write(w, binary.BigEndian, cnt); err != nil {
+		return
+	}
+	n += 4
+	var tmpn int64
+	for _, table := range tree.Tables {
+		if tmpn, err = table.WriteTo(w); err != nil {
+			return
+		}
+		n += tmpn
+	}
+	return
+}
+
+func (tree *Tree) ReadFrom(r io.Reader) (n int64, err error) {
+	var cnt uint32
+	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+		return
+	}
+	n += 4
+	if cnt == 0 {
+		return
+	}
+	var tmpn int64
+	for i := 0; i < int(cnt); i++ {
+		table := NewTableTree(0, 0)
+		if tmpn, err = table.ReadFrom(r); err != nil {
+			return
+		}
+		tree.Tables[table.ID] = table
+		n += tmpn
+	}
+	return
+}
 func (ttree *TableTree) GetSegment(id uint64) *SegmentTree {
 	return ttree.Segs[id]
 }
@@ -220,6 +278,79 @@ func (ttree *TableTree) Merge(ot *TableTree) {
 	}
 }
 
+func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, ttree.DbID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, ttree.ID); err != nil {
+		return
+	}
+	cnt := uint32(len(ttree.Segs))
+	if err = binary.Write(w, binary.BigEndian, cnt); err != nil {
+		return
+	}
+	n += 8 + 8 + 4
+	var tmpn int64
+	for _, seg := range ttree.Segs {
+		if tmpn, err = seg.WriteTo(w); err != nil {
+			return
+		}
+		n += tmpn
+	}
+	return
+}
+
+func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &ttree.DbID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &ttree.ID); err != nil {
+		return
+	}
+	var cnt uint32
+	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+		return
+	}
+	n += 8 + 8 + 4
+	if cnt == 0 {
+		return
+	}
+	var tmpn int64
+	for i := 0; i < int(cnt); i++ {
+		seg := NewSegmentTree(0)
+		if tmpn, err = seg.ReadFrom(r); err != nil {
+			return
+		}
+		ttree.Segs[seg.ID] = seg
+		n += tmpn
+	}
+	return
+}
+
+func (ttree *TableTree) Equal(o *TableTree) bool {
+	if ttree == nil && o == nil {
+		return true
+	} else if ttree == nil || o == nil {
+		return false
+	}
+	if ttree.ID != o.ID || ttree.DbID != o.DbID {
+		return false
+	}
+	if len(ttree.Segs) != len(o.Segs) {
+		return false
+	}
+	for id, seg := range ttree.Segs {
+		if oseg, found := o.Segs[id]; !found {
+			return false
+		} else {
+			if !seg.Equal(oseg) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (stree *SegmentTree) AddBlock(id uint64) {
 	if _, exist := stree.Blks[id]; !exist {
 		stree.Blks[id] = true
@@ -236,4 +367,69 @@ func (stree *SegmentTree) Merge(ot *SegmentTree) {
 	for id := range ot.Blks {
 		stree.AddBlock(id)
 	}
+}
+
+func (stree *SegmentTree) Equal(o *SegmentTree) bool {
+	if stree == nil && o == nil {
+		return true
+	} else if stree == nil || o == nil {
+		return false
+	}
+	if stree.ID != o.ID {
+		return false
+	}
+	if len(stree.Blks) != len(o.Blks) {
+		return false
+	}
+	for id := range stree.Blks {
+		if _, found := o.Blks[id]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (stree *SegmentTree) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, stree.ID); err != nil {
+		return
+	}
+	n += 8
+	cnt := len(stree.Blks)
+	if err = binary.Write(w, binary.BigEndian, uint32(cnt)); err != nil {
+		return
+	}
+	n += 4
+	if cnt == 0 {
+		return
+	}
+	for id := range stree.Blks {
+		if err = binary.Write(w, binary.BigEndian, id); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
+}
+
+func (stree *SegmentTree) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &stree.ID); err != nil {
+		return
+	}
+	var cnt uint32
+	var id uint64
+	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
+		return
+	}
+	n += 12
+	if cnt == 0 {
+		return
+	}
+	for i := 0; i < int(cnt); i++ {
+		if err = binary.Read(r, binary.BigEndian, &id); err != nil {
+			return
+		}
+		stree.Blks[id] = true
+	}
+	n += 8 * int64(cnt)
+	return
 }
