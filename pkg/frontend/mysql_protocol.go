@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -176,6 +177,8 @@ type MysqlProtocol interface {
 var _ MysqlProtocol = &MysqlProtocolImpl{}
 
 func (ses *Session) GetMysqlProtocol() MysqlProtocol {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.protocol.(MysqlProtocol)
 }
 
@@ -252,7 +255,7 @@ type MysqlProtocolImpl struct {
 
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
-	sequenceId uint8
+	sequenceId atomic.Uint32
 
 	//joint capability shared by the server and the client
 	capability uint32
@@ -299,10 +302,30 @@ type MysqlProtocolImpl struct {
 	skipCheckUser bool
 }
 
+func (mp *MysqlProtocolImpl) GetSession() *Session {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.ses
+}
+
 func (mp *MysqlProtocolImpl) SetSkipCheckUser(b bool) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.skipCheckUser = b
+}
+
+func (mp *MysqlProtocolImpl) GetCapability() uint32 {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.capability
+}
+
+func (mp *MysqlProtocolImpl) GetSequenceId() uint8 {
+	return uint8(mp.sequenceId.Load())
+}
+
+func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.sequenceId.Add(uint32(a))
 }
 
 func (mp *MysqlProtocolImpl) GetSkipCheckUser() bool {
@@ -312,18 +335,26 @@ func (mp *MysqlProtocolImpl) GetSkipCheckUser() bool {
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	return mp.database
 }
 
 func (mp *MysqlProtocolImpl) SetDatabaseName(s string) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.database = s
 }
 
 func (mp *MysqlProtocolImpl) GetUserName() string {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	return mp.username
 }
 
 func (mp *MysqlProtocolImpl) SetUserName(s string) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.username = s
 }
 
@@ -343,6 +374,8 @@ func (mp *MysqlProtocolImpl) Quit() {
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	mp.ses = ses
 }
 
@@ -978,30 +1011,31 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	var psw []byte
 	var err error
 
+	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
-		psw, err = mp.ses.AuthenticateUser(mp.username)
+		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
 
 		//TO Check password
-		if mp.checkPassword(psw, mp.salt, authResponse) {
+		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
 			logutil.Infof("check password succeeded\n")
 		} else {
 			return moerr.NewInternalError("check password failed")
 		}
 	} else {
 		//Get tenant info
-		tenant, err := GetTenantInfo(mp.username)
+		tenant, err := GetTenantInfo(mp.GetUserName())
 		if err != nil {
 			return err
 		}
 
-		if mp.ses != nil {
-			mp.ses.SetTenantInfo(tenant)
+		if ses != nil {
+			ses.SetTenantInfo(tenant)
 
 			//TO Check password
-			if len(psw) == 0 || mp.checkPassword(psw, mp.salt, authResponse) {
+			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
 				logutil.Infof("check password succeeded\n")
 			} else {
 				return moerr.NewInternalError("check password failed")
@@ -1012,8 +1046,8 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) setSequenceID(value uint8) {
-	mp.sequenceId = value
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
@@ -1100,10 +1134,10 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.writeStringNUL(data, pos, serverVersion)
 
 	//int<4> connection id
-	pos = mp.io.WriteUint32(data, pos, mp.connectionID)
+	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
 
 	//string[8] auth-plugin-data-part-1
-	pos = mp.writeCountOfBytes(data, pos, mp.salt[0:8])
+	pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[0:8])
 
 	//int<1> filler 0
 	pos = mp.io.WriteUint8(data, pos, 0)
@@ -1123,7 +1157,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	if (DefaultCapability & CLIENT_PLUGIN_AUTH) != 0 {
 		//int<1>              length of auth-plugin-data
 		//set 21 always
-		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.salt)+1))
+		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.GetSalt())+1))
 	} else {
 		//int<1>              [00]
 		//set 0 always
@@ -1135,7 +1169,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 
 	if (DefaultCapability & CLIENT_SECURE_CONNECTION) != 0 {
 		//string[$len]   auth-plugin-data-part-2 ($len=MAX(13, length of auth-plugin-data - 8))
-		pos = mp.writeCountOfBytes(data, pos, mp.salt[8:])
+		pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[8:])
 		pos = mp.io.WriteUint8(data, pos, 0)
 	}
 
@@ -1389,11 +1423,11 @@ func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error 
 
 // the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
 func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string) []byte {
-	data := make([]byte, HeaderOffset+1+len(authMethodName)+1+len(mp.salt)+1)
+	data := make([]byte, HeaderOffset+1+len(authMethodName)+1+len(mp.GetSalt())+1)
 	pos := HeaderOffset
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	pos = mp.writeStringNUL(data, pos, authMethodName)
-	pos = mp.writeCountOfBytes(data, pos, mp.salt)
+	pos = mp.writeCountOfBytes(data, pos, mp.GetSalt())
 	pos = mp.io.WriteUint8(data, pos, 0)
 	return data[:pos]
 }
@@ -1428,7 +1462,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 	}
 
 	data := pack.Payload
-	mp.sequenceId++
+	mp.AddSequenceId(1)
 	return data, nil
 }
 
@@ -1495,7 +1529,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.errInfo.push(errorCode, errorMessage)
+		mp.ses.GetErrInfo().push(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
@@ -1925,13 +1959,14 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 		return nil
 	}
 
+	cmd := mp.GetSession().GetCmd()
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
 	var err error = nil
 
 	binary := false
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	if mp.ses.Cmd == int(COM_STMT_EXECUTE) {
+	if cmd == int(COM_STMT_EXECUTE) {
 		binary = true
 	}
 
@@ -2109,9 +2144,9 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 
 	buf := outbuf.RawBuf()
 	binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(payLoadLen))
-	buf[mp.beginWriteIndex+3] = mp.sequenceId
+	buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
 
-	mp.sequenceId++
+	mp.AddSequenceId(1)
 
 	if appendZeroPacket && payLoadLen == int(MaxPayloadSize) { //last 16MB packet,append a zero packet
 		//if the size of the last packet is exactly MaxPayloadSize, a zero-size payload should be sent
@@ -2121,8 +2156,8 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 		}
 		buf = outbuf.RawBuf()
 		binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(0))
-		buf[mp.beginWriteIndex+3] = mp.sequenceId
-		mp.sequenceId++
+		buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
+		mp.AddSequenceId(1)
 	}
 
 	mp.resetPacket()
@@ -2271,7 +2306,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		mp.io.WriteUint32(header[:], 0, uint32(curLen))
 
 		//int<1> sequence id
-		mp.io.WriteUint8(header[:], 3, mp.sequenceId)
+		mp.io.WriteUint8(header[:], 3, mp.GetSequenceId())
 
 		//send packet
 		var packet = append(header[:], payload[i:i+curLen]...)
@@ -2280,16 +2315,14 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		if err != nil {
 			return err
 		}
-		mp.m.Lock()
-		mp.sequenceId++
-		mp.m.Unlock()
+		mp.AddSequenceId(1)
 
 		if i+curLen == length && curLen == int(MaxPayloadSize) {
 			//if the size of the last packet is exactly MaxPayloadSize, a zero-size payload should be sent
 			header[0] = 0
 			header[1] = 0
 			header[2] = 0
-			header[3] = mp.sequenceId
+			header[3] = mp.GetSequenceId()
 
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
@@ -2297,7 +2330,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 				return err
 			}
 
-			mp.sequenceId++
+			mp.AddSequenceId(1)
 		}
 	}
 	return nil
@@ -2384,9 +2417,7 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 			tcpConn:      tcp,
 			salt:         salt,
 			connectionID: connectionID,
-			established:  false,
 		},
-		sequenceId:       0,
 		charset:          "utf8mb4",
 		capability:       DefaultCapability,
 		strconvBuffer:    make([]byte, 0, 16*1024),

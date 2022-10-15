@@ -20,6 +20,7 @@ package hakeeper
 import (
 	"encoding/binary"
 	"encoding/gob"
+	"fmt"
 	"io"
 	"time"
 
@@ -365,7 +366,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 
 func (s *stateMachine) assertState() {
 	if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
-		panic("HAKeeper not in the running state")
+		panic(fmt.Sprintf("HAKeeper not in the running state, in %s", s.state.State.String()))
 	}
 }
 
