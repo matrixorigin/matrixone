@@ -133,7 +133,7 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer, txn txnif.AsyncTxn) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -141,7 +141,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache, txn)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
@@ -157,24 +157,24 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer, txn)
+		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
 	case CmdUpdateTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer, txn)
+		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache, txn)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache)
 	case CmdUpdateBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer, txn)
+		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver, txn txnif.AsyncTxn) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	prepareTS := txn.GetPrepareTS()
+	prepareTS := cmd.GetTs()
 	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -184,7 +184,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	var err error
 	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
 	un.SetLogIndex(idx)
-	un.Txn = txn
 	if un.Is1PC() {
 		un.onReplayCommit()
 	}
@@ -236,9 +235,9 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}, true)
 }
 
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, txn txnif.AsyncTxn) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.Table.ID)
-	prepareTS := txn.GetPrepareTS()
+	prepareTS := cmd.GetTs()
 	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -253,7 +252,6 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 
 	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
 	un.SetLogIndex(idx)
-	un.Txn = txn
 	if un.Is1PC() {
 		un.onReplayCommit()
 	}
@@ -309,8 +307,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	dataFactory DataFactory,
 	idx *wal.Index,
 	observer wal.ReplayObserver,
-	cache *bytes.Buffer,
-	txn txnif.AsyncTxn) {
+	cache *bytes.Buffer) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	prepareTS := cmd.GetTs()
 	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
@@ -322,7 +319,6 @@ func (catalog *Catalog) onReplayUpdateSegment(
 
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
-	un.Txn = txn
 	if un.Is1PC() {
 		un.onReplayCommit()
 	}
@@ -381,10 +377,9 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	dataFactory DataFactory,
 	idx *wal.Index,
-	observer wal.ReplayObserver,
-	txn txnif.AsyncTxn) {
+	observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
-	prepareTS := txn.GetPrepareTS()
+	prepareTS := cmd.GetTs()
 	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -406,7 +401,6 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
-	un.Txn = txn
 	if un.Is1PC() {
 		un.onReplayCommit()
 	}

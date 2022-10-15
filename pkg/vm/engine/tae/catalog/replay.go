@@ -50,7 +50,7 @@ func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload 
 	checkpoint.MaxTS = e.MaxTS
 	checkpoint.LSN = e.MaxIndex.LSN
 	for _, cmd := range e.Entries {
-		replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil, replayer.cache, nil)
+		replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil, replayer.cache)
 	}
 	if len(replayer.catalog.checkpoints) == 0 {
 		replayer.catalog.checkpoints = append(replayer.catalog.checkpoints, checkpoint)
