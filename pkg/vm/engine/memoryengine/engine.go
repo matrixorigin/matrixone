@@ -27,6 +27,7 @@ import (
 type Engine struct {
 	shardPolicy       ShardPolicy
 	getClusterDetails GetClusterDetailsFunc
+	idGenerator       IDGenerator
 }
 
 type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
@@ -35,12 +36,14 @@ func New(
 	ctx context.Context,
 	shardPolicy ShardPolicy,
 	getClusterDetails GetClusterDetailsFunc,
+	idGenerator IDGenerator,
 ) *Engine {
 	_ = ctx
 
 	engine := &Engine{
 		shardPolicy:       shardPolicy,
 		getClusterDetails: getClusterDetails,
+		idGenerator:       idGenerator,
 	}
 
 	return engine
@@ -62,13 +65,19 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := DoTxnRequest[CreateDatabaseResp](
+	id, err := e.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		txnOperator,
 		false,
 		e.allShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
+			ID:         id,
 			AccessInfo: getAccessInfo(ctx),
 			Name:       dbName,
 		},

@@ -27,3 +27,7 @@ a	b
 select a, b from t1 intersect select b, c from t2;
 a	b
 4	5
+set max_allowed_packet = cast('2048' as unsigned);
+show variables where variable_name = 'max_allowed_packet';
+Variable_name    Value
+max_allowed_packet    2048

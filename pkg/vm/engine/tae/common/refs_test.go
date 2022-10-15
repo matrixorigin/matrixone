@@ -22,7 +22,6 @@ import (
 
 func TestRefs(t *testing.T) {
 	helper := RefHelper{
-		Refs: int64(0),
 		OnZeroCB: func() {
 
 		},

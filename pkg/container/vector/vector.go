@@ -437,6 +437,9 @@ func expandVector[T any](v *Vector, sz int, m *mpool.MPool) *Vector {
 		}
 	}
 	v.Col = vs
+	if v.data != nil {
+		m.Free(v.data)
+	}
 	v.data = data[:len(vs)*sz]
 	return v
 }

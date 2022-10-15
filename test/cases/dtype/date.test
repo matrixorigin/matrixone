@@ -10,12 +10,8 @@ select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
 select cast('2000-01-01' as date);
 select cast('200-01-1' as date);
 select cast('2021-02-29' as date);
--- @bvt:issue#3291
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
--- @bvt:issue
--- @bvt:issue#3291
 select cast('2020-02-01' as date)+NULL;
--- @bvt:issue
 select cast('0000-00-00' as date);
 -- @bvt:issue#3293
 select cast(cast(0x13488c5 as signed) as date);

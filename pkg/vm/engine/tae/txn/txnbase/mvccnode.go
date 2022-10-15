@@ -101,7 +101,7 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 		return true
 	}
 
-	// Node is invisible if the commit ts is gt ts
+	// Node is not invisible if the commit ts is gt ts
 	return false
 
 }

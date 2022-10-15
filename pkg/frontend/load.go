@@ -533,6 +533,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	result := handler.result
 
 	//logutil.Infof("-----ignoreFieldError %v",handler.ignoreFieldError)
+	timeZone := handler.ses.GetTimeZone()
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
@@ -969,7 +970,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseTimestamp(handler.ses.timeZone, fs, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(timeZone, fs, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1517,7 +1518,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseTimestamp(handler.ses.timeZone, field, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(timeZone, field, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1657,7 +1658,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
-		tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
+		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
@@ -1801,7 +1802,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
-				tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
+				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
@@ -1944,33 +1945,33 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 
 	//processTime := time.Now()
 	process_block := time.Duration(0)
-
-	curBatchSize := int(ses.Pu.SV.BatchSizeInLoadData)
+	pu := ses.GetParameterUnit()
+	curBatchSize := int(pu.SV.BatchSizeInLoadData)
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart: SharePart{
 			load:             load,
 			lineIdx:          0,
 			simdCsvLineArray: make([][]string, curBatchSize),
-			storage:          ses.Pu.StorageEngine,
+			storage:          pu.StorageEngine,
 			dbHandler:        dbHandler,
 			tableHandler:     tableHandler,
 			tableName:        string(load.Table.Name()),
 			dbName:           dbName,
 			txnHandler:       ses.GetTxnHandler(),
 			ses:              ses,
-			oneTxnPerBatch:   !ses.Pu.SV.DisableOneTxnPerBatchDuringLoad,
+			oneTxnPerBatch:   !pu.SV.DisableOneTxnPerBatchDuringLoad,
 			lineCount:        0,
 			batchSize:        curBatchSize,
 			result:           result,
-			skipWriteBatch:   ses.Pu.SV.LoadDataSkipWritingBatch,
+			skipWriteBatch:   pu.SV.LoadDataSkipWritingBatch,
 			loadCtx:          requestCtx,
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
 	}
 
-	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())
+	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvBatchPool = make(chan *PoolElement, handler.simdCsvConcurrencyCountOfWriteBatch)
 	for i := 0; i < handler.simdCsvConcurrencyCountOfWriteBatch; i++ {
@@ -2098,7 +2099,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 	}()
 
 	close := CloseFlag{}
-	var a = time.Duration(ses.Pu.SV.PrintLogInterVal)
+	var a = time.Duration(pu.SV.PrintLogInterVal)
 	go func() {
 		PrintThreadInfo(handler, &close, a)
 	}()
