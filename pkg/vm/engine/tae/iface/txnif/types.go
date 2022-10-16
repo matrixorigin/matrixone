@@ -56,6 +56,7 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+	GetMemo() *TxnMemo
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -240,12 +241,6 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
-
-	HasAnyTableDataChanges() bool
-	HasTableDataChanges(id uint64) bool
-	HasCatalogChanges() bool
-	GetDirtyTableByID(id uint64) *common.TableTree
-	GetDirty() *common.Tree
 }
 
 type TxnEntryType int16
