@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -88,8 +89,9 @@ type MVCC interface {
 
 type Engine struct {
 	sync.RWMutex
+	mp                *mpool.MPool
+	fs                fileservice.FileService
 	db                *DB
-	proc              *process.Process
 	cli               client.TxnClient
 	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc

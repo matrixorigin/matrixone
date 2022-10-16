@@ -32,8 +32,8 @@ func (v *LogtailReader) GetDirty() (tree *common.Tree) {
 	tree = common.NewTree()
 
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
-		if store := txn.GetStore(); store.HasAnyTableDataChanges() {
-			tree.Merge(store.GetDirty())
+		if memo := txn.GetMemo(); memo.HasAnyTableDataChanges() {
+			tree.Merge(memo.GetDirty())
 		}
 		return true
 	}
@@ -44,8 +44,8 @@ func (v *LogtailReader) GetDirty() (tree *common.Tree) {
 func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree) {
 	tree = common.NewTableTree(dbID, id)
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
-		if store := txn.GetStore(); store.HasTableDataChanges(id) {
-			tree.Merge(store.GetDirtyTableByID(id))
+		if memo := txn.GetMemo(); memo.HasTableDataChanges(id) {
+			tree.Merge(memo.GetDirtyTableByID(id))
 		}
 		return true
 	}
@@ -59,7 +59,7 @@ func (v *LogtailReader) HasCatalogChanges() bool {
 	}
 	changed := false
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
-		if txn.GetStore().HasCatalogChanges() {
+		if txn.GetMemo().HasCatalogChanges() {
 			changed = true
 			return false
 		}
