@@ -415,6 +415,11 @@ func (m *MockDatabase) Create(arg0 context.Context, arg1 string, arg2 []engine.T
 	return ret0
 }
 
+func (m *MockDatabase) Truncate(ctx context.Context, s string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 // Create indicates an expected call of Create.
 func (mr *MockDatabaseMockRecorder) Create(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

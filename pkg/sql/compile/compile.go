@@ -108,12 +108,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 	case DropTable:
 		return c.scope.DropTable(c)
 	case TruncateTable:
-		affectRows, err := c.scope.TruncateTable(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectRows)
-		return nil
+		return c.scope.TruncateTable(c)
 	case Deletion:
 		defer c.fillAnalyzeInfo()
 		affectedRows, err := c.scope.Delete(c)

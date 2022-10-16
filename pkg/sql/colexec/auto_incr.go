@@ -398,28 +398,36 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 	return nil
 }
 
-// for delete table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, tableID string) error {
-	rel2, err := db.Relation(ctx, AUTO_INCR_TABLE)
+// for truncate table operation, reset col in mo_increment_columns table
+func ResetAutoInsrCol(tblName string, db engine.Database, ctx context.Context, proc *process.Process, tableID string) error {
+	autoRel, err := db.Relation(ctx, AUTO_INCR_TABLE)
 	if err != nil {
-		return nil
+		return err
+	}
+
+	rel, err := db.Relation(ctx, tblName)
+	if err != nil {
+		return err
 	}
 	defs, err := rel.TableDefs(ctx)
 	if err != nil {
-		return nil
+		return err
 	}
+
+	name := rel.GetTableID(ctx) + "_"
 	for _, def := range defs {
 		switch d := def.(type) {
 		case *engine.AttributeDef:
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
-			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+			bat := GetDeleteBatch(autoRel, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}
-			bat = makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1, proc.Mp())
-			if err = rel2.Write(ctx, bat); err != nil {
+
+			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
+			if err = autoRel.Write(ctx, bat2); err != nil {
 				return err
 			}
 		}

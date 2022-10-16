@@ -110,27 +110,28 @@ func (s *Scope) CreateTable(c *Compile) error {
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
 }
 
-func (s *Scope) TruncateTable(c *Compile) (uint64, error) {
+// Truncation operations cannot be performed if the session holds an active table lock.
+func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	tblName := tqry.GetTable()
 	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		return 0, err
+		return err
 	}
-	affect, err := rel.Truncate(c.ctx)
+	err = dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	err = colexec.ResetAutoInsrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
 	if err != nil {
-		return 0, err
+		return err
 	}
-	return affect, nil
+	return nil
 }
 
 func (s *Scope) DropTable(c *Compile) error {
