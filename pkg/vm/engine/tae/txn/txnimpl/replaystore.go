@@ -35,7 +35,6 @@ type replayTxnStore struct {
 	Observer    wal.ReplayObserver
 	catalog     *catalog.Catalog
 	dataFactory *tables.DataFactory
-	cache       *bytes.Buffer
 	wal         wal.Driver
 }
 
@@ -47,14 +46,12 @@ func MakeReplayTxn(
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
 	dataFactory *tables.DataFactory,
-	cache *bytes.Buffer,
 	wal wal.Driver) *txnbase.Txn {
 	store := &replayTxnStore{
 		Cmd:         cmd,
 		Observer:    observer,
 		catalog:     catalog,
 		dataFactory: dataFactory,
-		cache:       cache,
 		wal:         wal,
 	}
 	txn := txnbase.NewPersistedTxn(
@@ -117,7 +114,7 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) 
 	var err error
 	switch cmd := txncmd.(type) {
 	case *catalog.EntryCommand:
-		store.catalog.ReplayCmd(txncmd, store.dataFactory, idxCtx, store.Observer, store.cache)
+		store.catalog.ReplayCmd(txncmd, store.dataFactory, idxCtx, store.Observer)
 	case *AppendCmd:
 		store.replayAppendData(cmd, store.Observer)
 	case *updates.UpdateCmd:

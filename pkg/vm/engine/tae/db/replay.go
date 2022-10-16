@@ -127,7 +127,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index, lsn u
 	var err error
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
-		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.cache, replayer.db.Wal)
+		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
 	}
