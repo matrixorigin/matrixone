@@ -200,7 +200,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidInput:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
 	ErrSyntaxError:         {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
 	ErrParseError:          {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
-	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint vialation: %s"},
+	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 

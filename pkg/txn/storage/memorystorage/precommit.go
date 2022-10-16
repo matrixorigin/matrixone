@@ -80,16 +80,27 @@ func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req 
 					return err
 				}
 			}
-		case []catalog.DropTable:
+		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
-				req := txnengine.DeleteRelationReq{
-					Name:         cmd.Name,
-					DatabaseName: cmd.DatabaseName,
-					DatabaseID:   txnengine.ID(cmd.DatabaseId),
-				}
-				if err = m.HandleDeleteRelation(ctx, meta, req,
-					new(txnengine.DeleteRelationResp)); err != nil {
-					return err
+				if cmd.IsDrop {
+					req := txnengine.DeleteRelationReq{
+						Name:         cmd.Name,
+						DatabaseName: cmd.DatabaseName,
+						DatabaseID:   txnengine.ID(cmd.DatabaseId),
+					}
+					if err = m.HandleDeleteRelation(ctx, meta, req,
+						new(txnengine.DeleteRelationResp)); err != nil {
+						return err
+					}
+				} else {
+					req := txnengine.TruncateReq{
+						TableID:      txnengine.ID(cmd.Id),
+						DatabaseName: cmd.DatabaseName,
+					}
+					if err = m.HandleTruncate(ctx, meta, req,
+						new(txnengine.TruncateResp)); err != nil {
+						return err
+					}
 				}
 			}
 		default:
@@ -98,6 +109,7 @@ func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req 
 			if err != nil {
 				return err
 			}
+
 			if pe.EntryType == apipb.Entry_Insert {
 				req := txnengine.WriteReq{
 					TableID:      txnengine.ID(pe.GetTableId()),

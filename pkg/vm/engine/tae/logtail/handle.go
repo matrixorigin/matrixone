@@ -351,12 +351,12 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
 		var dstBatch *containers.Batch
 		if !metaNode.HasDropCommitted() {
 			dstBatch = b.blkMetaInsBatch
-			dstBatch.GetVectorByName(blkMetaAttrBlockID).Append(e.ID)
-			dstBatch.GetVectorByName(blkMetaAttrEntryState).Append(e.IsAppendable())
-			dstBatch.GetVectorByName(blkMetaAttrCreateAt).Append(metaNode.CreatedAt)
-			dstBatch.GetVectorByName(blkMetaAttrDeleteAt).Append(metaNode.DeletedAt)
-			dstBatch.GetVectorByName(blkMetaAttrMetaLoc).Append([]byte(metaNode.MetaLoc))
-			dstBatch.GetVectorByName(blkMetaAttrDeltaLoc).Append([]byte(metaNode.DeltaLoc))
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_CreateAt).Append(metaNode.CreatedAt)
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeleteAt).Append(metaNode.DeletedAt)
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		} else {
 			dstBatch = b.blkMetaDelBatch
 		}

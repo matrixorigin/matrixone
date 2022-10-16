@@ -248,6 +248,10 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		return cur
 	}
 	sub, nPath := path.step()
+	if sub.tp == subPathIdx && bj.Type == TpCodeObject && sub.idx == 0 {
+		cur = bj.query(cur, &nPath)
+		return cur
+	}
 	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
 		cnt := bj.GetElemCnt()
 		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
@@ -298,6 +302,16 @@ func (bj ByteJson) Query(path *Path) *ByteJson {
 	}
 	if len(out) == 1 {
 		return &out[0]
+	}
+	fullNull := true
+	for i := 0; i < len(out); i++ {
+		if out[i].Type != TpCodeLiteral || out[i].Data[0] != LiteralNull {
+			fullNull = false
+			break
+		}
+	}
+	if fullNull {
+		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
 	return mergeToArray(out)
 }

@@ -23,6 +23,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path"
+	"strings"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,12 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
-	"io"
 	"math"
-	"path"
 	"strconv"
-	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -58,10 +59,10 @@ func Prepare(proc *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
-	//if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
-	//	param.End = true
-	//	return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	//}
+	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
+		param.End = true
+		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
+	}*/
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.End = true

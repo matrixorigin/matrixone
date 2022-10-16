@@ -402,3 +402,14 @@ func (entry *TableEntry) IsActive() bool {
 	}
 	return !entry.HasDropCommitted()
 }
+
+// GetTerminationTS is coarse API: no consistency check
+func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
+	dbEntry := entry.GetDB()
+
+	dbEntry.RLock()
+	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	dbEntry.RUnlock()
+
+	return
+}
