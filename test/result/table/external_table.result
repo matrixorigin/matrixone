@@ -17,7 +17,11 @@ select * from  ex_table_1;
 The result set is not correct because of unexpected reason,Message: For input string: "-Inf"
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='/Users/heni/test_data/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_1;
-internal error: the input value 'abc' is not int8 type for row 0
+num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
+60    -1000    8403    -10934535423423    200    1    673892    8374    73.98    9.0002    8345398234.9838234985858298432
+-128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -Infinity    9345.4535000000000000000
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    Infinity    883453.0999320000000000000
+null    null    null    null    null    null    null    null    null    null    null
 create external table ex_table_2_2(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='/Users/heni/test_data/ex_table_2_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_2;
 internal error: the input value 'cd' is not int16 type for row 0
