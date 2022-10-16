@@ -59,7 +59,7 @@ func (n *ColumnMetaNode) onLoad() {
 	n.ColumnObject = meta
 
 	// deserialize zonemap
-	zmData, err := meta.GetIndex(objectio.ZoneMapType)
+	zmData, err := meta.GetIndex(objectio.ZoneMapType, nil)
 
 	// TODOa: Error Handling?
 	if err != nil {

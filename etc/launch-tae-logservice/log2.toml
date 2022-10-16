@@ -14,8 +14,6 @@ raft-address = "127.0.0.1:32010"
 logservice-address = "127.0.0.1:32011"
 gossip-address = "127.0.0.1:32012"
 gossip-seed-addresses = [
-  "127.0.0.1:32002",
-  "127.0.0.1:32012",
   "127.0.0.1:32022",
 ]
 
@@ -23,11 +21,9 @@ gossip-seed-addresses = [
 bootstrap-cluster = true
 num-of-log-shards = 1
 num-of-dn-shards = 1
-num-of-log-shard-replicas = 3
+num-of-log-shard-replicas = 1
 init-hakeeper-members = [
-  "131072:7c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
   "131073:8c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-  "131074:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
 ]
 
 [logservice.HAKeeperConfig]
@@ -50,9 +46,7 @@ data-dir = "mo-data/log2"
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:32001",
   "127.0.0.1:32011",
-  "127.0.0.1:32021",
 ]
 
 [observability]
