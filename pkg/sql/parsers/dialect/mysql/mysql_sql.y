@@ -326,6 +326,9 @@ import (
 // JSON table function
 %token <str> UNNEST
 
+// table function
+%token <str> GENERATE_SERIES
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -3709,6 +3712,17 @@ table_function:
                 Exprs: exprs,
                 Type: tree.FUNC_TYPE_TABLE,
             },
+	}
+    }
+|   GENERATE_SERIES '(' expression_list ')'
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: $3,
+		Type: tree.FUNC_TYPE_TABLE,
+	    },
 	}
     }
 
@@ -7738,6 +7752,7 @@ func_not_keyword:
 |   SYSTEM_USER
 |   TRANSLATE
 |   UNNEST
+|   GENERATE_SERIES
 
 not_keyword:
     ADDDATE

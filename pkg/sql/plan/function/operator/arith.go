@@ -135,6 +135,11 @@ func MinusDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vect
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, sub.Decimal128VecSub)
 }
 
+func MinusDatetime(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := types.T_int64.ToType()
+	return Arith[types.Datetime, types.Datetime](args, proc, resultType, sub.DatetimeSub)
+}
+
 // Multiplication operation
 func MultUint[T constraints.Unsigned](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, args[0].GetType(), mult.NumericMultUnsigned[T])

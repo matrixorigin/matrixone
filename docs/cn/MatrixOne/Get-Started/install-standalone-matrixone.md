@@ -88,19 +88,45 @@ MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) �
 
 ### 1. 下载二进制包并解压
 
-- **Linux 环境**
+**Linux 环境**
 
-```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
-unzip mo-server-v0.5.1-linux-amd64.zip
-```
+   + 下载方式一：
 
-- **MacOS 环境**
+      ```bash
+      wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+      unzip mo-server-v0.5.1-linux-amd64.zip
+      ```
 
-```bash
-wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
-unzip mo-server-v0.5.1-darwin-x86_64.zip
-```
+   + 下载方式二：
+
+      ```bash
+      curl -OL https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-linux-amd64.zip
+      unzip mo-server-v0.5.1-linux-amd64.zip
+      ```
+
+   + 下载方式三：
+
+      进入[版本 0.5.1](https://github.com/matrixorigin/matrixone/releases/tag/v0.5.1)，下拉找到 **Assets** 栏，点击安装包 *mo-server-v0.5.1-linux-amd64.zip* 下载即可。
+
+**MacOS 环境**
+
+   + 下载方式一：
+
+      ```bash
+      wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+      unzip mo-server-v0.5.1-darwin-x86_64.zip
+      ```
+
+   + 下载方式二：
+
+      ```bash
+      curl -OL https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-server-v0.5.1-darwin-x86_64.zip
+      unzip mo-server-v0.5.1-darwin-x86_64.zip
+      ```
+
+   + 下载方式三：
+
+      进入[版本 0.5.1](https://github.com/matrixorigin/matrixone/releases/tag/v0.5.1)，下拉找到 **Assets** 栏，点击安装包 *mo-server-v0.5.1-darwin-x86_64.zip* 下载即可。
 
 !!! info
     ARM 芯片硬件配置下，MatrixOne 仅支持通过源代码方式进行安装部署；如果你使用的是 MacOS 系统 M1 及以上版本，请使用<a href="#code_source">源代码</a>构建的方式安装部署 MatrixOne。若果在 X86 硬件配置下使用二进制方式安装部署 MatrixOne 会导致未知问题。

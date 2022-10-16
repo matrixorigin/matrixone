@@ -31,10 +31,8 @@ const (
 	QUIT Cmd = iota
 )
 
-type State = int32
-
 const (
-	CREATED State = iota
+	CREATED int32 = iota
 	RUNNING
 	StoppingReceiver
 	StoppingCMD
@@ -52,37 +50,37 @@ var (
 type OpExecFunc func(op iops.IOp)
 
 type Stats struct {
-	Processed uint64
-	Successed uint64
-	Failed    uint64
-	AvgTime   int64
+	Processed atomic.Uint64
+	Successed atomic.Uint64
+	Failed    atomic.Uint64
+	AvgTime   atomic.Int64
 }
 
 func (s *Stats) AddProcessed() {
-	atomic.AddUint64(&s.Processed, uint64(1))
+	s.Processed.Add(1)
 }
 
 func (s *Stats) AddSuccessed() {
-	atomic.AddUint64(&s.Successed, uint64(1))
+	s.Successed.Add(1)
 }
 
 func (s *Stats) AddFailed() {
-	atomic.AddUint64(&s.Failed, uint64(1))
+	s.Failed.Add(1)
 }
 
 func (s *Stats) RecordTime(t int64) {
-	procced := atomic.LoadUint64(&s.Processed)
-	avg := atomic.LoadInt64(&s.AvgTime)
+	procced := s.Processed.Load()
+	avg := s.AvgTime.Load()
 	//TODO: avgTime is wrong
-	atomic.StoreInt64(&s.AvgTime, (avg*int64(procced-1)+t)/int64(procced))
+	s.AvgTime.Store((avg*int64(procced-1) + t) / int64(procced))
 }
 
 func (s *Stats) String() string {
-	procced := atomic.LoadUint64(&s.Processed)
-	succ := atomic.LoadUint64(&s.Successed)
-	fail := atomic.LoadUint64(&s.Failed)
-	avg := atomic.LoadInt64(&s.AvgTime)
-	r := fmt.Sprintf("Total: %d, Succ: %d, Fail: %d, AvgTime: %dus", procced, succ, fail, avg)
+	r := fmt.Sprintf("Total: %d, Succ: %d, Fail: %d, AvgTime: %dus",
+		s.Processed.Load(),
+		s.Failed.Load(),
+		s.AvgTime.Load(),
+		s.AvgTime.Load())
 	return r
 }
 
@@ -90,8 +88,8 @@ type OpWorker struct {
 	Name       string
 	OpC        chan iops.IOp
 	CmdC       chan Cmd
-	State      State
-	Pending    int64
+	State      atomic.Int32
+	Pending    atomic.Int64
 	ClosedCh   chan struct{}
 	Stats      Stats
 	ExecFunc   OpExecFunc
@@ -116,9 +114,9 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 		Name:     name,
 		OpC:      make(chan iops.IOp, l),
 		CmdC:     make(chan Cmd, l),
-		State:    CREATED,
 		ClosedCh: make(chan struct{}),
 	}
+	worker.State.Store(CREATED)
 	worker.ExecFunc = worker.onOp
 	worker.CancelFunc = worker.opCancelOp
 	return worker
@@ -126,13 +124,13 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 
 func (w *OpWorker) Start() {
 	logutil.Debugf("%s Started", w.Name)
-	if w.State != CREATED {
-		panic(fmt.Sprintf("logic error: %v", w.State))
+	if w.State.Load() != CREATED {
+		panic(fmt.Sprintf("logic error: %v", w.State.Load()))
 	}
-	w.State = RUNNING
+	w.State.Store(RUNNING)
 	go func() {
 		for {
-			state := atomic.LoadInt32(&w.State)
+			state := w.State.Load()
 			if state == STOPPED {
 				break
 			}
@@ -144,7 +142,7 @@ func (w *OpWorker) Start() {
 				// } else {
 				// 	w.CancelFunc(op)
 				// }
-				atomic.AddInt64(&w.Pending, int64(-1))
+				w.Pending.Add(-1)
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
 			}
@@ -159,30 +157,28 @@ func (w *OpWorker) Stop() {
 }
 
 func (w *OpWorker) StopReceiver() {
-	state := atomic.LoadInt32(&w.State)
+	state := w.State.Load()
 	if state >= StoppingReceiver {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&w.State, state, StoppingReceiver) {
-		return
-	}
+	w.State.CompareAndSwap(state, StoppingReceiver)
 }
 
 func (w *OpWorker) WaitStop() {
-	state := atomic.LoadInt32(&w.State)
+	state := w.State.Load()
 	if state <= RUNNING {
 		panic("logic error")
 	}
 	if state == STOPPED {
 		return
 	}
-	if atomic.CompareAndSwapInt32(&w.State, StoppingReceiver, StoppingCMD) {
-		pending := atomic.LoadInt64(&w.Pending)
+	if w.State.CompareAndSwap(StoppingReceiver, StoppingCMD) {
+		pending := w.Pending.Load()
 		for {
 			if pending == 0 {
 				break
 			}
-			pending = atomic.LoadInt64(&w.Pending)
+			pending = w.Pending.Load()
 		}
 		w.CmdC <- QUIT
 	}
@@ -190,13 +186,13 @@ func (w *OpWorker) WaitStop() {
 }
 
 func (w *OpWorker) SendOp(op iops.IOp) bool {
-	state := atomic.LoadInt32(&w.State)
+	state := w.State.Load()
 	if state != RUNNING {
 		return false
 	}
-	atomic.AddInt64(&w.Pending, int64(1))
-	if atomic.LoadInt32(&w.State) != RUNNING {
-		atomic.AddInt64(&w.Pending, int64(-1))
+	w.Pending.Add(1)
+	if w.State.Load() != RUNNING {
+		w.Pending.Add(-1)
 		return false
 	}
 	w.OpC <- op
@@ -225,7 +221,7 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 		// log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
-		if !atomic.CompareAndSwapInt32(&w.State, StoppingCMD, STOPPED) {
+		if !w.State.CompareAndSwap(StoppingCMD, STOPPED) {
 			panic("logic error")
 		}
 		w.ClosedCh <- struct{}{}

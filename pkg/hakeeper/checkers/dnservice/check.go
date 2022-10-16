@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -57,6 +58,9 @@ func Check(
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
 	)
+	for _, node := range stores.ExpiredStores() {
+		logutil.Info("node is expired", zap.String("uuid", node.ID))
+	}
 	if len(stores.WorkingStores()) < 1 {
 		logger.Warn("no working dn stores")
 		return nil

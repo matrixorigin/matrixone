@@ -92,3 +92,5 @@ a    regexp_like(b, ^P)
 8    null
 9    false
 drop table t1;
+select regexp_like('Cat', '*');
+invalid input: regexp_like have invalid input

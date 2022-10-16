@@ -31,20 +31,20 @@ type IRef interface {
 type OnZeroCB func()
 
 type RefHelper struct {
-	Refs     int64
+	Refs     atomic.Int64
 	OnZeroCB OnZeroCB
 }
 
 func (helper *RefHelper) RefCount() int64 {
-	return atomic.LoadInt64(&helper.Refs)
+	return helper.Refs.Load()
 }
 
 func (helper *RefHelper) Ref() {
-	atomic.AddInt64(&helper.Refs, int64(1))
+	helper.Refs.Add(1)
 }
 
 func (helper *RefHelper) Unref() {
-	v := atomic.AddInt64(&helper.Refs, int64(-1))
+	v := helper.Refs.Add(-1)
 	if v == 0 {
 		if helper.OnZeroCB != nil {
 			helper.OnZeroCB()

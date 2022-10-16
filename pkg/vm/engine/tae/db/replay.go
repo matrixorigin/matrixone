@@ -16,13 +16,12 @@ package db
 
 import (
 	"bytes"
+
 	//"fmt"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"path"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,6 +46,7 @@ type Replayer struct {
 	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
 	once         sync.Once
+	txns         map[string]txnif.AsyncTxn
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
@@ -55,6 +55,7 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 		db:           db,
 		cache:        bytes.NewBuffer(make([]byte, DefaultReplayCacheSize)),
 		staleIndexes: make([]*wal.Index, 0),
+		txns:         make(map[string]txnif.AsyncTxn),
 	}
 }
 
@@ -84,26 +85,6 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 }
 
-func (replayer *Replayer) scanFiles() map[uint64]string {
-	files := make(map[uint64]string)
-	infos, err := os.ReadDir(replayer.db.Dir)
-	if err != nil {
-		panic(err)
-	}
-	for _, info := range infos {
-		if info.IsDir() {
-			continue
-		}
-		name := info.Name()
-		id, err := replayer.db.FileFactory.DecodeName(name)
-		if err != nil {
-			continue
-		}
-		files[id] = path.Join(replayer.db.Dir, name)
-	}
-	return files
-}
-
 func (replayer *Replayer) Replay() {
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
@@ -111,89 +92,6 @@ func (replayer *Replayer) Replay() {
 	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
 		panic(err)
 	}
-	replayer.PostReplayWal()
-}
-
-func (replayer *Replayer) PostReplayWal() {
-	activeSegs := make(map[uint64]*catalog.SegmentEntry)
-	processor := new(catalog.LoopProcessor)
-	processor.DatabaseFn = func(entry *catalog.DBEntry) (err error) {
-		if entry.IsActive() {
-			return
-		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
-			return
-		}
-		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
-			panic(err)
-		}
-		err = moerr.GetOkStopCurrRecur()
-		return
-	}
-	processor.TableFn = func(entry *catalog.TableEntry) (err error) {
-		if entry.IsActive() {
-			return
-		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
-			return
-		}
-		if err = entry.GetDB().RemoveEntry(entry); err != nil {
-			panic(err)
-		}
-		err = moerr.GetOkStopCurrRecur()
-		return
-	}
-	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
-		if entry.IsActive() {
-			if !entry.GetTable().IsVirtual() {
-				activeSegs[entry.ID] = entry
-			}
-			return
-		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
-			if !entry.GetTable().IsVirtual() {
-				activeSegs[entry.ID] = entry
-			}
-			return
-		}
-		if err = entry.GetTable().RemoveEntry(entry); err != nil {
-			panic(err)
-		}
-		err = moerr.GetOkStopCurrRecur()
-		return
-	}
-	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
-		if entry.IsActive() {
-			return
-		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
-			return
-		}
-		if err = gcBlockClosure(entry, GCType_Block)(); err != nil {
-			panic(err)
-		}
-		return
-	}
-	_ = replayer.db.Catalog.RecurLoop(processor)
-
-	files := replayer.scanFiles()
-	for id := range activeSegs {
-		_, ok := files[id]
-		if !ok {
-			//panic(moerr.NewInternalError("cannot find segment file for: %d", id))
-			continue
-		}
-		delete(files, id)
-	}
-	for _, file := range files {
-		logutil.Info("[Replay]", common.OperationField("clean-segment"),
-			common.OperandField(file))
-		/*if err := os.Remove(file); err != nil {
-			panic(err)
-		}*/
-	}
-
-	logutil.Info(replayer.db.Catalog.SimplePPString(common.PPL1))
 }
 
 func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
@@ -211,7 +109,8 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if err != nil {
 		panic(err)
 	}
-	replayer.OnReplayCmd(txnCmd, idxCtx, txnif.CmdInvalid, types.TS{})
+	defer txnCmd.Close()
+	replayer.OnReplayCmd(txnCmd, idxCtx)
 	if err != nil {
 		panic(err)
 	}
@@ -227,9 +126,9 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	}
 }
 
-func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cmdType txnif.CmdType, commitTS types.TS) {
+func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 	if idxCtx != nil && idxCtx.Size > 0 {
-		logutil.Info("", common.OperationField("replay-cmd"),
+		logutil.Debug("", common.OperationField("replay-cmd"),
 			common.OperandField(txncmd.Desc()),
 			common.AnyField("index", idxCtx.String()))
 	}
@@ -238,37 +137,43 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cm
 	case *txnbase.TxnCmd:
 		idxCtx.Size = cmd.CmdSize
 		internalCnt := uint32(0)
-		cmdType := txnif.CmdPrepare
-		if !cmd.Is2PC() {
-			cmdType = txnif.Cmd1PC
-		}
+		txn := cmd.MakeTxn()
+		cmd.SetReplayTxn(txn)
+		replayer.OnTimeStamp(txn.GetPrepareTS())
 		for i, command := range cmd.Cmds {
 			_, ok := command.(*txnimpl.AppendCmd)
 			if ok {
 				internalCnt++
-				replayer.OnReplayCmd(command, nil, cmdType, commitTS)
+				replayer.OnReplayCmd(command, nil)
 			} else {
 				idx := idxCtx.Clone()
 				idx.CSN = uint32(i) - internalCnt
-				replayer.OnReplayCmd(command, idx, cmdType, commitTS)
+				replayer.OnReplayCmd(command, idx)
 			}
 		}
+		if !cmd.Is2PC() {
+			if err := txn.SetCommitTS(txn.GetPrepareTS()); err != nil {
+				panic(err)
+			}
+			if err := txn.Commit(); err != nil {
+				panic(err)
+			}
+		} else {
+			replayer.txns[txn.GetID()] = txn
+		}
 	case *catalog.EntryCommand:
-		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache, cmdType, commitTS)
+		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache)
 	case *txnimpl.AppendCmd:
-		replayer.db.onReplayAppendCmd(cmd, replayer, cmdType, commitTS)
+		replayer.db.onReplayAppendCmd(cmd, replayer)
 	case *updates.UpdateCmd:
-		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer, cmdType, commitTS)
+		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer)
 	}
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
-	if cmdType == txnif.CmdCommit {
-		return
-	}
+func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
 	hasActive := false
 	for _, info := range cmd.Infos {
 		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
@@ -349,33 +254,28 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 	}
 }
 
-func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) (err error) {
+func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd, idxCtx, observer, cmdType, commitTS)
+		db.onReplayAppend(cmd, idxCtx, observer)
 	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd, idxCtx, observer, cmdType, commitTS)
+		db.onReplayDelete(cmd, idxCtx, observer)
 	}
 	return
 }
 
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
-	switch cmdType {
-	case txnif.CmdInvalid:
-		panic("invalid type")
-	case txnif.CmdPrepare:
-		return
-	}
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
-	if cmdType == txnif.Cmd1PC || deleteNode.Is1PC() {
-		commitTS = deleteNode.GetPrepareTS()
+	if deleteNode.Is1PC() {
+		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
-	deleteNode.OnReplayCommit(commitTS)
 	id := deleteNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
@@ -385,37 +285,25 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if commitTS.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
 	blkData := blk.GetBlockData()
 	err = blkData.OnReplayDelete(deleteNode)
 	if err != nil {
 		panic(err)
 	}
-	if observer != nil {
-		observer.OnTimeStamp(commitTS)
-	}
 }
 
-func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
-	switch cmdType {
-	case txnif.CmdInvalid:
-		panic("invalid type")
-	case txnif.CmdPrepare:
-		return
-	}
+func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
-	if cmdType == txnif.Cmd1PC || appendNode.Is1PC() {
-		commitTS = appendNode.GetPrepare()
+	if appendNode.Is1PC() {
+		if _, err := appendNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
-	appendNode.OnReplayCommit(commitTS)
 	id := appendNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
@@ -431,8 +319,5 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
-	}
-	if observer != nil {
-		observer.OnTimeStamp(appendNode.GetCommitTS())
 	}
 }

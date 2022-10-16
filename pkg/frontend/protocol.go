@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -181,31 +182,39 @@ type ProtocolImpl struct {
 	connectionID uint32
 
 	// whether the handshake succeeded
-	established bool
+	established atomic.Bool
 
 	// whether the tls handshake succeeded
-	tlsEstablished bool
+	tlsEstablished atomic.Bool
+}
+
+func (cpi *ProtocolImpl) GetSalt() []byte {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
+	return cpi.salt
 }
 
 func (cpi *ProtocolImpl) IsEstablished() bool {
-	return cpi.established
+	return cpi.established.Load()
 }
 
 func (cpi *ProtocolImpl) SetEstablished() {
 	logutil.Infof("SWITCH ESTABLISHED to true")
-	cpi.established = true
+	cpi.established.Store(true)
 }
 
 func (cpi *ProtocolImpl) IsTlsEstablished() bool {
-	return cpi.tlsEstablished
+	return cpi.tlsEstablished.Load()
 }
 
 func (cpi *ProtocolImpl) SetTlsEstablished() {
 	logutil.Infof("SWITCH TLS_ESTABLISHED to true")
-	cpi.tlsEstablished = true
+	cpi.tlsEstablished.Store(true)
 }
 
 func (cpi *ProtocolImpl) ConnectionID() uint32 {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
 	return cpi.connectionID
 }
 
@@ -213,6 +222,8 @@ func (cpi *ProtocolImpl) ConnectionID() uint32 {
 // before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
 // please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (cpi *ProtocolImpl) Quit() {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
 	if cpi.tcpConn != nil {
 		if !cpi.tcpConn.Connected() {
 			logutil.Warn("close tcp meet conn not Connected")
@@ -229,12 +240,14 @@ func (cpi *ProtocolImpl) GetLock() sync.Locker {
 	return &cpi.lock
 }
 
-func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession) {
-	cpi.tcpConn = tcp
+func (cpi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
+	return cpi.tcpConn
 }
 
 func (cpi *ProtocolImpl) Peer() (string, string) {
-	addr := cpi.tcpConn.RemoteAddress()
+	addr := cpi.GetTcpConnection().RemoteAddress()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		logutil.Errorf("get peer host:port failed. error:%v ", err)

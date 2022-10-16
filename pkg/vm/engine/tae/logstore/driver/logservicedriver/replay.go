@@ -15,7 +15,13 @@
 package logservicedriver
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -55,10 +61,7 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 
 func (r *replayer) replay() {
 	var err error
-	r.truncatedLogserviceLsn, err = r.d.GetTruncated()
-	if err != nil {
-		panic(err) //retry
-	}
+	r.truncatedLogserviceLsn = r.d.getLogserviceTruncate()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
 			err := r.replayLogserviceEntry(r.replayedLsn + 1)
@@ -77,6 +80,12 @@ func (r *replayer) replay() {
 
 func (r *replayer) readRecords() (readEnd bool) {
 	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
+		if record.meta.metaType == TReplay {
+			cmd := NewEmptyReplayCmd()
+			cmd.Unmarshal(record.payload)
+			r.removeEntries(cmd.skipLsns)
+			return
+		}
 		drlsn := record.GetMinLsn()
 		r.driverLsnLogserviceLsnMap[drlsn] = lsn
 		if drlsn < r.replayedLsn {
@@ -95,14 +104,23 @@ func (r *replayer) readRecords() (readEnd bool) {
 	}
 	return false
 }
-
+func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
+	for lsn := range skipMap {
+		if _, ok := r.driverLsnLogserviceLsnMap[lsn]; !ok {
+			panic(fmt.Sprintf("lsn %d not existed, map is %v", lsn, r.driverLsnLogserviceLsnMap))
+		}
+		delete(r.driverLsnLogserviceLsnMap, lsn)
+	}
+}
 func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
 		if len(r.driverLsnLogserviceLsnMap) == 0 {
 			return ErrAllRecordsRead
 		}
-		panic("logic error")
+		r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
+		logutil.Infof("skip lsns %v", r.driverLsnLogserviceLsnMap)
+		return ErrAllRecordsRead
 	}
 	record, err := r.d.readFromCache(logserviceLsn)
 	if err == ErrAllRecordsRead {
@@ -121,6 +139,33 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	delete(r.driverLsnLogserviceLsnMap, lsn)
 	return nil
 }
+
+func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
+	cmd := NewReplayCmd(skipMap)
+	recordEntry := newRecordEntry()
+	recordEntry.meta.metaType = TReplay
+	recordEntry.cmd = cmd
+	size := recordEntry.prepareRecord()
+	c, _ := r.d.getClient()
+	c.TryResize(size)
+	record := c.record
+	copy(record.Payload(), recordEntry.payload)
+	record.ResizePayload(size)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	_, err := c.c.Append(ctx, c.record)
+	cancel()
+	if err != nil {
+		err = RetryWithTimeout(r.d.config.RetryTimeout, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			_, err := c.c.Append(ctx, c.record)
+			cancel()
+			return err == nil
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 func (r *replayer) onReplayDriverLsn(lsn uint64) {
 	if lsn == 0 {
 		return
@@ -131,4 +176,75 @@ func (r *replayer) onReplayDriverLsn(lsn uint64) {
 	if lsn > r.maxDriverLsn {
 		r.maxDriverLsn = lsn
 	}
+}
+
+type ReplayCmd struct {
+	skipLsns map[uint64]uint64
+}
+
+func NewReplayCmd(skipLsns map[uint64]uint64) *ReplayCmd {
+	return &ReplayCmd{
+		skipLsns: skipLsns,
+	}
+}
+func NewEmptyReplayCmd() *ReplayCmd {
+	return &ReplayCmd{
+		skipLsns: make(map[uint64]uint64),
+	}
+}
+
+func (c *ReplayCmd) WriteTo(w io.Writer) (n int64, err error) {
+	length := uint16(len(c.skipLsns))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 2
+	for drlsn, logserviceLsn := range c.skipLsns {
+		if err = binary.Write(w, binary.BigEndian, drlsn); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Write(w, binary.BigEndian, logserviceLsn); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
+}
+
+func (c *ReplayCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	length := uint16(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 2
+	for i := 0; i < int(length); i++ {
+		drlsn := uint64(0)
+		lsn := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &drlsn); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+			return
+		}
+		n += 8
+		c.skipLsns[drlsn] = lsn
+	}
+	return
+}
+
+func (c *ReplayCmd) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := c.ReadFrom(bbuf)
+	return err
+}
+
+func (c *ReplayCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
 }

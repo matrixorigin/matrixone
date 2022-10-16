@@ -37,7 +37,7 @@ type MVCCHandle struct {
 	deletes         *DeleteChain
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice
-	changes         uint32
+	changes         atomic.Uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
 }
@@ -78,11 +78,11 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
-	atomic.AddUint32(&n.changes, uint32(1))
+	n.changes.Add(1)
 }
 
 func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
-	return atomic.LoadUint32(&n.changes)
+	return n.changes.Load()
 }
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
@@ -234,8 +234,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 		return 0
 	}
 	an := van.(*AppendNode)
-	delets := n.deletes.cnt
-	return an.maxRow - delets
+	return an.maxRow - n.deletes.cnt.Load()
 }
 
 func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {

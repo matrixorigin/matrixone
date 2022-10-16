@@ -38,7 +38,8 @@ type CNService interface {
 
 	// ID returns uuid of store
 	ID() string
-
+	// SQLAddress returns the sql listen address
+	SQLAddress() string
 	//GetTaskRunner returns the taskRunner.
 	GetTaskRunner() taskservice.TaskRunner
 }
@@ -49,8 +50,8 @@ type CNService interface {
 type cnService struct {
 	sync.Mutex
 	status ServiceStatus
-	uuid   string
 	svc    cnservice.Service
+	cfg    *cnservice.Config
 }
 
 func (c *cnService) Start() error {
@@ -94,7 +95,11 @@ func (c *cnService) ID() string {
 	c.Lock()
 	defer c.Unlock()
 
-	return c.uuid
+	return c.cfg.UUID
+}
+
+func (c *cnService) SQLAddress() string {
+	return fmt.Sprintf("127.0.0.1:%d", c.cfg.Frontend.Port)
 }
 
 func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
@@ -119,8 +124,8 @@ func newCNService(
 
 	return &cnService{
 		status: ServiceInitialized,
-		uuid:   cfg.UUID,
 		svc:    srv,
+		cfg:    cfg,
 	}, nil
 }
 

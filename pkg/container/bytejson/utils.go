@@ -277,85 +277,51 @@ func calStrLen(buf []byte) (int, int) {
 	}
 	return int(strLen), lenLen
 }
-
-func isBlank(c rune) bool {
-	if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-		return true
+func isIdentifier(s string) bool {
+	if len(s) == 0 {
+		return false
 	}
-	return false
+	for i := 0; i < len(s); i++ {
+		if (i != 0 && s[i] >= '0' && s[i] <= '9') ||
+			(s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') ||
+			s[i] == '_' || s[i] == '$' || s[i] >= 0x80 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func ParseJsonPath(path string) (p Path, err error) {
-	flagIdx := strings.Index(path, "$")
-	if flagIdx < 0 {
-		err = moerr.NewInvalidInput("json path has no '$'")
-		return
+	pg := NewPathGenerator(path)
+	pg.trimSpace()
+	if !pg.hasNext() || pg.next() != '$' {
+		err = moerr.NewInvalidInput("invalid json path '%s'", path)
 	}
-	for i := 0; i < flagIdx; i++ {
-		if !isBlank(rune(path[i])) {
-			err = moerr.NewInvalidInput("json path cannot start with non-blank character")
+	pg.trimSpace()
+	subPaths := make([]subPath, 0, 8)
+	var ok bool
+	for pg.hasNext() {
+		switch pg.front() {
+		case '.':
+			subPaths, ok = pg.generateKey(subPaths)
+		case '[':
+			subPaths, ok = pg.generateIndex(subPaths)
+		case '*':
+			subPaths, ok = pg.generateDoubleStar(subPaths)
+		default:
+			ok = false
+		}
+		if !ok {
+			err = moerr.NewInvalidInput("invalid json path '%s'", path)
 			return
 		}
+		pg.trimSpace()
 	}
 
-	pathExpr := strings.TrimFunc(path[flagIdx+1:], isBlank)
-	indices := jsonSubPathRe.FindAllStringIndex(pathExpr, -1)
-	if len(indices) == 0 && len(pathExpr) != 0 {
-		err = moerr.NewInvalidInput("json path is not a valid JSON-Pointer")
+	if len(subPaths) > 0 && subPaths[len(subPaths)-1].tp == subPathDoubleStar {
+		err = moerr.NewInvalidInput("invalid json path '%s'", path)
 		return
-	}
-
-	subPaths := make([]subPath, 0, len(indices))
-
-	lastEnd := 0
-	for _, indice := range indices {
-		start, end := indice[0], indice[1]
-
-		// Check all characters between two subPath are blank.
-		for i := lastEnd; i < start; i++ {
-			if !isBlank(rune(pathExpr[i])) {
-				err = moerr.NewInvalidInput("json path cannot contain non-blank characters between two subPaths")
-				return
-			}
-		}
-		lastEnd = end
-
-		if pathExpr[start] == '[' {
-			// The subPath is an index of a JSON array.
-			var sub = strings.TrimFunc(pathExpr[start+1:end], isBlank)
-			var idxStr = strings.TrimFunc(sub[0:len(sub)-1], isBlank)
-			var idx int
-			if len(idxStr) == 1 && idxStr[0] == '*' {
-				idx = subPathIdxALL
-			} else {
-				if idx, err = strconv.Atoi(idxStr); err != nil {
-					err = moerr.NewInvalidInput("json path error %s", err.Error())
-					return
-				}
-			}
-			subPaths = append(subPaths, subPath{tp: subPathIdx, idx: idx})
-		} else if pathExpr[start] == '.' {
-			// The subPath is a key of a JSON object.
-			var key = strings.TrimFunc(pathExpr[start+1:end], isBlank)
-			if key[0] == '"' {
-				// TODO check here is ok
-				if key, err = strconv.Unquote(key); err != nil {
-					err = moerr.NewInvalidInput("json path error %s", err.Error())
-					return
-				}
-			}
-			subPaths = append(subPaths, subPath{tp: subPathKey, key: key})
-		} else {
-			// '**'
-			subPaths = append(subPaths, subPath{tp: subPathDoubleStar})
-		}
-	}
-	if len(subPaths) > 0 {
-		// The last subPath of a path expression cannot be '**'.
-		if subPaths[len(subPaths)-1].tp == subPathDoubleStar {
-			err = moerr.NewInvalidInput("the last subPath of a json path expression cannot be '**'")
-			return
-		}
 	}
 	p.init(subPaths)
 	return
