@@ -15,7 +15,7 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -62,7 +62,7 @@ type DB struct {
 
 	HeartBeatJobs *stopper.Stopper
 
-	FileFactory *blockio.ObjectFactory
+	Fs *objectio.ObjectFS
 
 	DBLocker io.Closer
 
