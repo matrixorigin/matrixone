@@ -21,8 +21,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -213,7 +211,7 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	files, err := os.ReadDir(e.FileFactory.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -230,7 +228,7 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 
 func getBlockFileNames(e *DB) (names []string) {
 	names = make([]string, 0)
-	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	files, err := os.ReadDir(e.FileFactory.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}

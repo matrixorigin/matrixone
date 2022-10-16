@@ -3813,7 +3813,7 @@ func TestBlockRead(t *testing.T) {
 		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.FileFactory.(*blockio.ObjectFactory).Fs.Service
+	fs := tae.DB.FileFactory.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)

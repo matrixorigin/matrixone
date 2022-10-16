@@ -17,7 +17,6 @@ package blockio
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"path"
 	"strings"
 )
@@ -26,17 +25,13 @@ type ObjectFactory struct {
 	Fs *objectio.ObjectFS
 }
 
-func NewObjectFactory(dirname string) file.SegmentFactory {
+func NewObjectFactory(dirname string) *ObjectFactory {
 	serviceDir := path.Join(dirname, "data")
 	service := objectio.TmpNewFileservice(path.Join(dirname, "data"))
 	SegmentFactory := &ObjectFactory{
 		Fs: objectio.NewObjectFS(service, serviceDir),
 	}
 	return SegmentFactory
-}
-
-func (factory *ObjectFactory) EncodeName(id uint64) string {
-	return ""
 }
 
 func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
@@ -49,5 +44,3 @@ func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
 	}
 	return id.SegmentID, err
 }
-
-func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) {}
