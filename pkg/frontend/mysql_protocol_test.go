@@ -1721,7 +1721,7 @@ func Test_openpacket(t *testing.T) {
 }
 
 func TestSendPrepareResponse(t *testing.T) {
-	convey.Convey("send prepare response succ", t, func() {
+	convey.Convey("send Prepare response succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1755,7 +1755,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("send prepare response error", t, func() {
+	convey.Convey("send Prepare response error", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)

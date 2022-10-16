@@ -861,7 +861,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 }
 
 func Test_HandlePrepareStmt(t *testing.T) {
-	stmt, err := parsers.ParseOne(dialect.MYSQL, "prepare stmt1 from select 1, 2")
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "Prepare stmt1 from select 1, 2")
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
@@ -873,7 +873,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 }
 
 func Test_HandleDeallocate(t *testing.T) {
-	stmt, err := parsers.ParseOne(dialect.MYSQL, "deallocate prepare stmt1")
+	stmt, err := parsers.ParseOne(dialect.MYSQL, "deallocate Prepare stmt1")
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}

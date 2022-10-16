@@ -1443,8 +1443,7 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 		return nil, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,8 +1475,7 @@ func userIsAdministrator(ctx context.Context, bh BackgroundExec, userId int64, a
 		return false, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
@@ -1650,12 +1648,11 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		}
 
 		//step1 : check the role exists or not;
-		pu := ses.GetParameterUnit()
-		bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 		var sql string
 		var rsset []ExecResult
-		var results []interface{}
+
 		var roleId int64
 
 		err = bh.Exec(ctx, "begin;")
@@ -1670,8 +1667,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1693,8 +1689,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1730,13 +1725,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
-	pu := ses.GetParameterUnit()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var err error
 	var sql string
 	var rsset []ExecResult
-	var results []interface{}
+
 	var deleteCtx context.Context
 	var accountId int64
 	var hasAccount = true
@@ -1759,8 +1753,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		goto handleFailed
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		goto handleFailed
 	}
@@ -1825,8 +1818,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.GetParameterUnit()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1891,8 +1884,8 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.GetParameterUnit()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1963,9 +1956,8 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		return err
 	}
 
-	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
@@ -2077,8 +2069,7 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return 0, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return 0, err
 	}
@@ -2240,9 +2231,8 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		return err
 	}
 
-	pu := ses.GetParameterUnit()
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//Get primary keys
@@ -2269,8 +2259,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			goto handleFailed
 		}
 
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2334,8 +2323,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 
-			results := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2399,9 +2387,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	if err != nil {
 		return err
 	}
-	pu := ses.GetParameterUnit()
+
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2568,9 +2556,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.GetParameterUnit()
+
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2653,8 +2641,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			goto handleFailed
 		}
 
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -2719,8 +2706,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 				goto handleFailed
 			}
 
-			results := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -3219,7 +3205,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var sql string
 	var err error
 	var pls []privilegeLevelType
-	var results []interface{}
+
 	var yes bool
 	var operateCatalog bool
 	//there is no privilege needs, just approve
@@ -3239,8 +3225,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			if err != nil {
 				return false, err
 			}
-			results = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				return false, err
 			}
@@ -3352,7 +3338,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	var rsset []ExecResult
 	var yes bool
 	var err error
-	var results []interface{}
+
 	var roleB int64
 	var setVisited *btree.Set[int64]
 	var setRList []int64
@@ -3360,8 +3346,8 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
-	pu := ses.GetParameterUnit()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step 1: The Set R1 {default role id}
@@ -3439,8 +3425,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 				goto handleFailed
 			}
 
-			results = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -3506,7 +3491,7 @@ const (
 func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *TenantInfo, Rc *btree.Set[int64]) error {
 	var err error
 	var sql string
-	var results []interface{}
+
 	var rsset []ExecResult
 	var roleId int64
 
@@ -3518,8 +3503,7 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 			return err
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			return err
 		}
@@ -3547,10 +3531,9 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 		return false, err
 	}
 
-	pu := ses.GetParameterUnit()
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -3658,7 +3641,7 @@ handleFailed:
 // Algorithm 1
 func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, UserId int64) (bool, error) {
 	var err error
-	var results []interface{}
+
 	var rsset []ExecResult
 	sql := getSqlForCheckUserGrantWGO(roleId, UserId)
 	bh.ClearExecResultSet()
@@ -3667,8 +3650,7 @@ func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, User
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
@@ -3684,7 +3666,7 @@ func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, User
 // Algorithm 2
 func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, roleId int64, RVisited, RkPlusOne *btree.Set[int64]) (*btree.Set[int64], error) {
 	var err error
-	var results []interface{}
+
 	var rsset []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
@@ -3695,8 +3677,7 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 		return nil, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
@@ -3824,7 +3805,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 // The algorithm 3
 func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
 	var err error
-	var results []interface{}
+
 	var rsset []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
@@ -3834,8 +3815,8 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	if err != nil {
 		return nil, err
 	}
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
@@ -3871,10 +3852,9 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
-	pu := ses.GetParameterUnit()
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.GetMemPool(), pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -4117,7 +4097,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
-	var results []interface{}
+
 	var rsset []ExecResult
 	var err error
 	var tableNames []string
@@ -4130,12 +4110,10 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	if len(results) != 1 {
+	rsset, err = getResultSet(bh)
+	if len(rsset) != 1 {
 		return false, moerr.NewInternalError("it must have result set")
 	}
-
-	rsset, err = convertIntoResultSet(results)
 	if err != nil {
 		return false, err
 	}
@@ -4154,12 +4132,10 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	if len(results) != 1 {
+	rsset, err = getResultSet(bh)
+	if len(rsset) != 1 {
 		return false, moerr.NewInternalError("it must have result set")
 	}
-
-	rsset, err = convertIntoResultSet(results)
 	if err != nil {
 		return false, err
 	}
@@ -4348,7 +4324,7 @@ func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, ten
 
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit, userName string) (bool, error) {
 	var sqlForCheckTenant string
-	var results []interface{}
+
 	var rsset []ExecResult
 	var err error
 	sqlForCheckTenant = getSqlForCheckTenant(userName)
@@ -4358,8 +4334,7 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.P
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
@@ -4371,10 +4346,11 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.P
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
 	var newTenant *TenantInfo
+	tenant := ses.GetTenantInfo()
 	pu := config.GetParameterUnit(ctx)
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
@@ -4455,7 +4431,7 @@ handleFailed:
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
 	var err error
 	var initMoAccount string
-	var results []interface{}
+
 	var rsset []ExecResult
 	var newTenantID int64
 	var newUserId int64
@@ -4505,8 +4481,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		goto handleFailed
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	rsset, err = getResultSet(bh)
 	if err != nil {
 		goto handleFailed
 	}
@@ -4679,7 +4654,6 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var rsset []ExecResult
 	var newUserId int64
 	var host string
-	var values []interface{}
 	var newRoleId int64
 	var status string
 
@@ -4719,8 +4693,8 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4766,8 +4740,8 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4784,8 +4758,8 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			if err != nil {
 				goto handleFailed
 			}
-			values = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(values)
+
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -4845,8 +4819,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			goto handleFailed
 		}
 
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+		rsset, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4925,8 +4898,8 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			if err != nil {
 				goto handleFailed
 			}
-			values := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(values)
+
+			rsset, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -4942,8 +4915,8 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 				if err != nil {
 					goto handleFailed
 				}
-				values = bh.GetExecResultSet()
-				rsset, err = convertIntoResultSet(values)
+
+				rsset, err = getResultSet(bh)
 				if err != nil {
 					goto handleFailed
 				}

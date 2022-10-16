@@ -86,7 +86,7 @@ func getPrepareStmtName(stmtID uint32) string {
 func GetPrepareStmtID(name string) (int, error) {
 	idx := len(prefixPrepareStmtName) + 1
 	if idx >= len(name) {
-		return -1, moerr.NewInternalError("can not get prepare stmtID")
+		return -1, moerr.NewInternalError("can not get Prepare stmtID")
 	}
 	return strconv.Atoi(name[idx:])
 }
@@ -1517,11 +1517,8 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
-	ses := mce.GetSession()
-	tenant := ses.GetTenantInfo()
-
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, tenant, ca)
+	return InitGeneralTenant(ctx, mce.GetSession(), ca)
 }
 
 // handleDropAccount drops a new user-level tenant
@@ -1741,7 +1738,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// for _, obj := range preparePlan.GetSchemas() {
 		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
 		// 	if newObj == nil || newObj.Obj != obj.Obj {
-		// 		return nil, moerr.NewInternalError("", fmt.Sprintf("table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName))
+		// 		return nil, moerr.NewInternalError("", fmt.Sprintf("table '%s' has been changed, please reset Prepare statement '%s'", obj.ObjName, stmtName))
 		// 	}
 		// }
 
@@ -2616,6 +2613,47 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	return nil
 }
 
+// execute query. Currently, it is developing. Finally, it will replace the doComQuery.
+func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sql string) (retErr error) {
+	var stmtExecs []StmtExecutor
+	var err error
+	beginInstant := time.Now()
+	ses := mce.GetSession()
+	ses.SetShowStmtType(NotShowStatement)
+	proto := ses.GetMysqlProtocol()
+	ses.SetSql(sql)
+	ses.GetExportParam().Outfile = false
+	pu := ses.GetParameterUnit()
+	proc := process.New(
+		requestCtx,
+		ses.GetMemPool(),
+		pu.TxnClient,
+		ses.GetTxnHandler().GetTxnOperator(),
+		pu.FileService,
+	)
+	proc.Id = mce.getNextProcessId()
+	proc.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
+	proc.SessionInfo = process.SessionInfo{
+		User:         ses.GetUserName(),
+		Host:         pu.SV.Host,
+		ConnectionID: uint64(proto.ConnectionID()),
+		Database:     ses.GetDatabaseName(),
+		Version:      serverVersion,
+		TimeZone:     ses.GetTimeZone(),
+	}
+	//TODO: make stmtExecs
+
+	for _, exec := range stmtExecs {
+		err = exec.Execute(requestCtx, ses, nil, beginInstant)
+		if err != nil {
+			return err
+		}
+	}
+	return
+}
+
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Request) (resp *Response, err error) {
 	defer func() {
@@ -2712,10 +2750,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql := string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 
-		// rewrite to "prepare stmt_name from 'xxx'"
+		// rewrite to "Prepare stmt_name from 'xxx'"
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+		sql = fmt.Sprintf("Prepare %s from %s", newStmtName, sql)
 		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
@@ -2740,10 +2778,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_STMT_CLOSE:
 		data := req.GetData().([]byte)
 
-		// rewrite to "deallocate prepare stmt_name"
+		// rewrite to "deallocate Prepare stmt_name"
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
-		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+		sql := fmt.Sprintf("deallocate Prepare %s", stmtName)
 		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err := mce.doComQuery(requestCtx, sql)
@@ -2918,7 +2956,7 @@ func IsParameterModificationStatement(stmt tree.Statement) bool {
 	return false
 }
 
-// IsPrepareStatement checks the statement is the prepare statement.
+// IsPrepareStatement checks the statement is the Prepare statement.
 func IsPrepareStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.PrepareStmt, *tree.PrepareString:
