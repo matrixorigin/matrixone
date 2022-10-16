@@ -24,6 +24,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/simdcsv"
@@ -106,6 +107,17 @@ func WithMinFilesMerge(files int) MergeOption {
 }
 
 const ETLFileServiceName = "ETL"
+
+// serviceInited handle Merge as service
+var serviceInited uint32
+
+func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool) {
+	// fix multi-init in standalone
+	if !atomic.CompareAndSwapUint32(&serviceInited, 0, 1) {
+		return nil, true
+	}
+	return NewMerge(ctx, opts...), false
+}
 
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
