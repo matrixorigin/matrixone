@@ -17,7 +17,6 @@ package tables
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -84,21 +83,17 @@ func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *con
 }
 
 func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	var data *containers.Batch
 	schema := node.block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	reader, err := blockio.NewReader(node.block.fs, node.block.meta.GetMetaLoc())
-	if err != nil {
-		return nil, err
-	}
-	data, err = reader.LoadBlkColumns(
-		schema.AllTypes(),
-		schema.AllNames(),
-		schema.AllNullables(),
-		opts)
-	if err != nil {
-		return
+	data := containers.NewBatch()
+	var vec containers.Vector
+	for i, col := range schema.ColDefs {
+		vec, err = node.block.LoadColumnData(i, nil)
+		if err != nil {
+			return nil, err
+		}
+		data.AddVector(col.Name, vec)
 	}
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data
