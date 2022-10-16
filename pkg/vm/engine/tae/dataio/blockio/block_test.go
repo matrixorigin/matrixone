@@ -56,7 +56,7 @@ func TestBlock1(t *testing.T) {
 
 	col, err := block.OpenColumn(3)
 	assert.Nil(t, err)
-	iovector, err := col.GetDataObject("").GetData()
+	iovector, err := col.GetDataObject("").GetData(nil)
 	assert.Nil(t, err)
 	buf := iovector.Entries[0].Data
 	buf1, err := newbat.Vecs[3].Show()

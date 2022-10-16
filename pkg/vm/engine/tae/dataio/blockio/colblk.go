@@ -75,7 +75,7 @@ func (cb *columnBlock) GetData(
 	_ *bytes.Buffer,
 ) (vec containers.Vector, err error) {
 	var fsVector *fileservice.IOVector
-	fsVector, err = cb.GetDataObject(metaLoc).GetData()
+	fsVector, err = cb.GetDataObject(metaLoc).GetData(nil)
 	if err != nil {
 		return
 	}

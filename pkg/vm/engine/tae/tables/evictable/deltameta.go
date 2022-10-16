@@ -36,7 +36,7 @@ func NewDeltaMetaNode(mgr base.INodeManager, metaKey string, blk file.Block, del
 		blk:      blk,
 		deltaloc: deltaloc,
 	}
-	_, ext := blockio.DecodeDeltaLoc(deltaloc)
+	_, ext, _ := blockio.DecodeMetaLoc(deltaloc)
 	baseNode := buffer.NewNode(node, mgr, metaKey, uint64(ext.OriginSize()))
 	node.Node = baseNode
 	node.LoadFunc = node.onLoad
