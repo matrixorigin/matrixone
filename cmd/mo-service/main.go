@@ -282,7 +282,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if true {
+	if SV.MergeCycle > 0 {
 		stopper.RunNamedTask("merge", func(ctx context.Context) {
 			merge := export.NewMerge(ctx,
 				export.WithDB(metric.MetricDBConst),

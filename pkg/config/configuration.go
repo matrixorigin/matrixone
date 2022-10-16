@@ -114,7 +114,8 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
-	defaultMergeCycle = 3600
+	// defaultMergeCycle default: 0 sec, means disable merge as service
+	defaultMergeCycle = 0
 )
 
 // FrontendParameters of the frontend
