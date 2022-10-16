@@ -104,6 +104,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 				}()
 				err = cs.PushdownRun(c)
 			}(s.PreScopes[i])
+		case ExternalScan:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				err = cs.ExternalRun(c)
+			}(s.PreScopes[i])
 		}
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
@@ -175,6 +183,28 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	}
 	newScope := newParallelScope(c, s, ss)
 	return newScope.MergeRun(c)
+}
+
+func (s *Scope) ExternalRun(c *Compile) error {
+	mcpu := c.NumCPU()
+	if mcpu < 1 {
+		mcpu = 1
+	}
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				Attributes:   s.DataSource.Attributes,
+				Bat:          &batch.Batch{},
+			},
+		}
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+	}
+	s = newParallelScope(c, s, ss)
+	return s.MergeRun(c)
 }
 
 func (s *Scope) PushdownRun(c *Compile) error {

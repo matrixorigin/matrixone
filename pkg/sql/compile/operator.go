@@ -18,12 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -222,7 +220,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *external.Argument:
 		rin.Arg = &external.Argument{
-			Es: arg.Es,
+			Es: &external.ExternalParam{
+				Attrs:         arg.Es.Attrs,
+				Cols:          arg.Es.Cols,
+				Name2ColIndex: arg.Es.Name2ColIndex,
+				CreateSql:     arg.Es.CreateSql,
+				Ctx:           arg.Es.Ctx,
+				Fileparam:	   arg.Es.Fileparam,
+			},
 		}
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
@@ -249,7 +254,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-
 		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
 		if err != nil {
 			return nil, err
@@ -259,11 +263,24 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 			return nil, err
 		}
 
+		computeIndexTables := make([]engine.Relation, 0)
+		for _, info := range n.DeleteTablesCtx[i].ComputeIndexInfos {
+			computeIndexTable, err := dbSource.Relation(ctx, info.TableName)
+			if err != nil {
+				return nil, err
+			}
+			computeIndexTables = append(computeIndexTables, computeIndexTable)
+		}
+
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:  relation,
-			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
+			TableSource:        relation,
+			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:          n.DeleteTablesCtx[i].IsHideKey,
+			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
+			ComputeIndexInfos:  n.DeleteTablesCtx[i].ComputeIndexInfos,
+			ComputeIndexTables: computeIndexTables,
+			IndexAttrs:         n.DeleteTablesCtx[i].IndexAttrs,
 		}
 	}
 
@@ -282,13 +299,23 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	if err != nil {
 		return nil, err
 	}
+	computeIndexTables := make([]engine.Relation, 0)
+	for _, info := range n.TableDef.ComputeIndexInfos {
+		computeIndexTable, err := db.Relation(ctx, info.TableName)
+		if err != nil {
+			return nil, err
+		}
+		computeIndexTables = append(computeIndexTables, computeIndexTable)
+	}
 	return &insert.Argument{
-		TargetTable:   relation,
-		TargetColDefs: n.TableDef.Cols,
-		Engine:        eg,
-		DB:            db,
-		TableID:       relation.GetTableID(ctx),
-		CPkeyColDef:   n.TableDef.CompositePkey,
+		TargetTable:        relation,
+		TargetColDefs:      n.TableDef.Cols,
+		Engine:             eg,
+		DB:                 db,
+		TableID:            relation.GetTableID(ctx),
+		CPkeyColDef:        n.TableDef.CompositePkey,
+		ComputeIndexTables: computeIndexTables,
+		ComputeIndexInfos:  n.TableDef.ComputeIndexInfos,
 	}, nil
 }
 
@@ -314,16 +341,34 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			colNames = append(colNames, col.Name)
 		}
 
+		var k int
+		for k = 0; k < len(n.TableDefVec); k++ {
+			if updateCtx.TblName == n.TableDefVec[k].Name {
+				break
+			}
+		}
+		computeIndexTables := make([]engine.Relation, 0)
+		for _, info := range n.TableDefVec[k].ComputeIndexInfos {
+			computeIndexTable, err := dbSource.Relation(ctx, info.TableName)
+			if err != nil {
+				return nil, err
+			}
+			computeIndexTables = append(computeIndexTables, computeIndexTable)
+		}
+
 		us[i] = &update.UpdateCtx{
-			PriKey:      updateCtx.PriKey,
-			PriKeyIdx:   updateCtx.PriKeyIdx,
-			HideKey:     updateCtx.HideKey,
-			HideKeyIdx:  updateCtx.HideKeyIdx,
-			UpdateAttrs: colNames,
-			OtherAttrs:  updateCtx.OtherAttrs,
-			OrderAttrs:  updateCtx.OrderAttrs,
-			TableSource: relation,
-			CPkeyColDef: updateCtx.CompositePkey,
+			PriKey:             updateCtx.PriKey,
+			PriKeyIdx:          updateCtx.PriKeyIdx,
+			HideKey:            updateCtx.HideKey,
+			HideKeyIdx:         updateCtx.HideKeyIdx,
+			UpdateAttrs:        colNames,
+			OtherAttrs:         updateCtx.OtherAttrs,
+			OrderAttrs:         updateCtx.OrderAttrs,
+			TableSource:        relation,
+			CPkeyColDef:        updateCtx.CompositePkey,
+			ComputeIndexInfos:  n.TableDefVec[k].ComputeIndexInfos,
+			ComputeIndexTables: computeIndexTables,
+			IndexAttrs:         updateCtx.IndexAttrs,
 		}
 	}
 	return &update.Argument{
@@ -353,10 +398,11 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
+			Fileparam: 	   &external.ExternalFileparam{},
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
