@@ -15,7 +15,9 @@
 package options
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 func (o *Options) FillDefaults(dirname string) *Options {
@@ -57,13 +59,19 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.Clock == nil {
-		o.Clock = types.NewMockHLCClock(1)
+		o.Clock = clock.NewHLCClock(func() int64 {
+			return time.Now().UTC().UnixNano()
+		}, 0)
 	}
 
 	if o.LogtailCfg == nil {
 		o.LogtailCfg = &LogtailCfg{
 			PageSize: DefaultLogtailTxnPageSize,
 		}
+	}
+
+	if o.LogStoreT == "" {
+		o.LogStoreT = DefaultLogstoreType
 	}
 
 	return o

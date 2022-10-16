@@ -52,6 +52,8 @@ type collectorOpts struct {
 	flushInterval time.Duration
 	// the number of goroutines to execute insert into sql, default is runtime.NumCPU()
 	sqlWorkerNum int
+	// multiTable
+	multiTable bool
 }
 
 func defaultCollectorOpts() collectorOpts {
@@ -89,6 +91,12 @@ type WithFlushInterval time.Duration
 
 func (x WithFlushInterval) ApplyTo(o *collectorOpts) {
 	o.flushInterval = time.Duration(x)
+}
+
+type ExportMultiTable bool
+
+func (x ExportMultiTable) ApplyTo(o *collectorOpts) {
+	o.multiTable = bool(x)
 }
 
 var _ MetricCollector = (*metricCollector)(nil)
@@ -186,6 +194,7 @@ func (s *mfset) IsEmpty() bool {
 	return len(s.mfs) == 0
 }
 
+// GetBatch
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
 // used to mitigate memory allocation
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
@@ -237,7 +246,7 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 var _ MetricCollector = (*metricFSCollector)(nil)
 
 type metricFSCollector struct {
-	*bp.BaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest]
+	*bp.BaseBatchPipe[*pb.MetricFamily, trace.CSVRequests]
 	writerFactory export.FSWriterFactory
 	opts          collectorOpts
 }
@@ -260,20 +269,30 @@ func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collecto
 		writerFactory: writerFactory,
 		opts:          initOpts,
 	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c, bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum))
+	pipeOpts := []bp.BaseBatchPipeOpt{bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum)}
+	if !initOpts.multiTable {
+		pipeOpts = append(pipeOpts,
+			bp.PipeWithBufferWorkerNum(1),
+			bp.PipeWithItemNameFormatter(func(bp.HasName) string {
+				return singleMetricTable.GetName()
+			}))
+	}
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, trace.CSVRequests](c, pipeOpts...)
 	c.BaseBatchPipe = base
 	return c
 }
 
-func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch *trace.CSVRequest) {
-	return func(batch *trace.CSVRequest) {
-		if _, err := batch.Handle(); err != nil {
-			logutil.Error(fmt.Sprintf("[Metric] faield to write csv: %s, err: %v", batch.Content(), err))
+func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch trace.CSVRequests) {
+	return func(batchs trace.CSVRequests) {
+		for _, batch := range batchs {
+			if _, err := batch.Handle(); err != nil {
+				logutil.Errorf("[Metric] failed to write csv: %s, err: %v", batch.Content(), err)
+			}
 		}
 	}
 }
 
-func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, *trace.CSVRequest] {
+func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, trace.CSVRequests] {
 	return &mfsetCSV{
 		mfset: mfset{
 			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
@@ -281,12 +300,14 @@ func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFami
 			sampleThreshold: c.opts.sampleThreshold,
 		},
 		writerFactory: c.writerFactory,
+		multiTable:    c.opts.multiTable,
 	}
 }
 
 type mfsetCSV struct {
 	mfset
 	writerFactory export.FSWriterFactory
+	multiTable    bool
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
@@ -306,7 +327,14 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 	buf.WriteRune(opts.Terminator)
 }
 
-func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
+func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) trace.CSVRequests {
+	if !s.multiTable {
+		return s.GetBatchSingleTable(buf)
+	}
+	return s.GetBatchMultiTable(buf)
+}
+
+func (s *mfsetCSV) GetBatchMultiTable(buf *bytes.Buffer) trace.CSVRequests {
 
 	buf.Reset()
 
@@ -350,7 +378,69 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 			}
 		}
 	}
-	return trace.NewCSVRequest(writer, buf.String())
+	return []*trace.CSVRequest{trace.NewCSVRequest(writer, buf.String())}
+}
+
+func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
+	buf.Reset()
+
+	ts := time.Now()
+	buffer := make(map[string]*bytes.Buffer, 2)
+	writeValues := func(row *trace.Row) {
+		buf, exist := buffer[row.GetAccount()]
+		if !exist {
+			buf = bytes.NewBuffer(nil)
+			buffer[row.GetAccount()] = buf
+		}
+		s.writeCsvOneLine(buf, row.ToStrings())
+	}
+
+	row := singleMetricTable.GetRow()
+	for _, mf := range s.mfs {
+		for _, metric := range mf.Metric {
+
+			// reserved labels
+			row.Reset()
+			row.SetVal(metricNameColumn.Name, mf.GetName())
+			row.SetVal(metricNodeColumn.Name, mf.GetNode())
+			row.SetVal(metricRoleColumn.Name, mf.GetRole())
+			// custom labels
+			for _, lbl := range metric.Label {
+				row.SetVal(lbl.GetName(), lbl.GetValue())
+			}
+
+			switch mf.GetType() {
+			case pb.MetricType_COUNTER:
+				time := localTimeStr(metric.GetCollecttime())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Counter.GetValue())
+				writeValues(row)
+			case pb.MetricType_GAUGE:
+				time := localTimeStr(metric.GetCollecttime())
+				row.SetVal(metricCollectTimeColumn.Name, time)
+				row.SetFloat64(metricValueColumn.Name, metric.Gauge.GetValue())
+				writeValues(row)
+			case pb.MetricType_RAWHIST:
+				for _, sample := range metric.RawHist.Samples {
+					time := localTimeStr(sample.GetDatetime())
+					row.SetVal(metricCollectTimeColumn.Name, time)
+					row.SetFloat64(metricValueColumn.Name, sample.GetValue())
+					writeValues(row)
+				}
+			default:
+				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+			}
+		}
+	}
+
+	reqs := make([]*trace.CSVRequest, 0, len(buffer))
+	for account, buf := range buffer {
+		writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable,
+			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(singleMetricTable.PathBuilder))
+		reqs = append(reqs, trace.NewCSVRequest(writer, buf.String()))
+	}
+
+	return reqs
 }
 
 func localTimeStr(value int64) string {

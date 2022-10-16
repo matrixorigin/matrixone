@@ -45,6 +45,20 @@ func New(
 		}, math.MaxInt)
 	}
 
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnAddr := "1"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
 	storage, err := memorystorage.NewMemoryStorage(
 		mpool.MustNewZero(),
 		memorystorage.SnapshotIsolation,
@@ -57,21 +71,10 @@ func New(
 
 	client = memorystorage.NewStorageTxnClient(
 		ck,
-		storage,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
 	)
-
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
-		Shards:         shards,
-	}
 
 	e := memoryengine.New(
 		ctx,
@@ -85,6 +88,7 @@ func New(
 				},
 			}, nil
 		},
+		memoryengine.RandomIDGenerator,
 	)
 
 	txnOp, err := client.New()

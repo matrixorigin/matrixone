@@ -19,12 +19,13 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -70,6 +71,21 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 	panic("unimplemented")
 }
 
+func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	if _, err := p.data.Get(tx, RowID(key)); err != nil {
+		return false
+	}
+	return true
+}
+
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
@@ -78,7 +94,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -116,7 +132,7 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 
 	txID := uuid.NewString()
 
-	iter := memorystorage.NewBatchIter(bat)
+	iter := memtable.NewBatchIter(bat)
 	for {
 		tuple := iter()
 		if len(tuple) == 0 {
@@ -174,18 +190,24 @@ func (p *Partition) NewReader(
 	)
 
 	inserts := make([]*batch.Batch, 0, len(entries))
-	deletes := make([]*batch.Batch, 0, len(entries))
+	deletes := make(map[types.Rowid]uint8)
 	for _, entry := range entries {
 		if entry.typ == INSERT {
 			inserts = append(inserts, entry.bat)
 		} else {
-			deletes = append(deletes, entry.bat)
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
 		}
 	}
 
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0, 0)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {

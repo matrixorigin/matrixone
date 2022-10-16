@@ -133,6 +133,7 @@ type Schema struct {
 	Relkind          string
 	Createsql        string
 	View             string
+	IndexInfos       []*ComputeIndexInfo
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -140,9 +141,10 @@ type Schema struct {
 
 func NewEmptySchema(name string) *Schema {
 	return &Schema{
-		Name:      name,
-		ColDefs:   make([]*ColDef, 0),
-		NameIndex: make(map[string]int),
+		Name:       name,
+		ColDefs:    make([]*ColDef, 0),
+		NameIndex:  make(map[string]int),
+		IndexInfos: make([]*ComputeIndexInfo, 0),
 	}
 }
 
@@ -832,4 +834,10 @@ func GetAttrIdx(attrs []string, name string) int {
 		}
 	}
 	panic("logic error")
+}
+
+type ComputeIndexInfo struct {
+	Name      string
+	TableName string
+	Unique    bool
 }

@@ -44,7 +44,7 @@ type TableEntry struct {
 	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
-	rows      uint64
+	rows      atomic.Uint64
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 }
@@ -130,15 +130,15 @@ func (entry *TableEntry) IsVirtual() bool {
 }
 
 func (entry *TableEntry) GetRows() uint64 {
-	return atomic.LoadUint64(&entry.rows)
+	return entry.rows.Load()
 }
 
 func (entry *TableEntry) AddRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, delta)
+	return entry.rows.Add(delta)
 }
 
 func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, ^(delta - 1))
+	return entry.rows.Add(^(delta - 1))
 }
 
 func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {
@@ -173,10 +173,10 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (entry *TableEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *TableEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
@@ -255,7 +255,7 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropped()
+		dropped := itSeg.HasDropCommitted()
 		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
@@ -394,22 +394,22 @@ func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 	}
 }
 
-func (entry *TableEntry) CloneCreateEntry() *TableEntry {
-	return &TableEntry{
-		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
-		db:             entry.db,
-		schema:         entry.schema,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
 	if !db.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
+}
+
+// GetTerminationTS is coarse API: no consistency check
+func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
+	dbEntry := entry.GetDB()
+
+	dbEntry.RLock()
+	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	dbEntry.RUnlock()
+
+	return
 }

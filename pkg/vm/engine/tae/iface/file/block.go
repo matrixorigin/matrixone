@@ -40,6 +40,9 @@ type Block interface {
 	GetMetaFormKey(location string) objectio.BlockObject
 	GetDelta() objectio.BlockObject
 	GetDeltaFormKey(location string) objectio.BlockObject
+	GetObjectBlocks() []objectio.BlockObject
+	FreeObjectBlocks()
+	UpdateName(name string)
 	Destroy() error
 }
 

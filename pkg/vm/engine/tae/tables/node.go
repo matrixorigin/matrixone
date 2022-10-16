@@ -47,9 +47,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	// XXX What is the rule of using these Allocators?   It all seems
-	// very random.
+	// opts.Capacity = int(schema.BlockMaxRows)
 	opts.Allocator = common.MutMemAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),
@@ -65,10 +63,6 @@ func (node *appendableNode) Rows() uint32 {
 	node.block.mvcc.RLock()
 	defer node.block.mvcc.RUnlock()
 	return node.rows
-}
-
-func (node *appendableNode) CheckUnloadable() bool {
-	return !node.block.mvcc.HasActiveAppendNode()
 }
 
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
@@ -127,7 +121,7 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 ) (vec containers.Vector, err error) {
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
-		data = data.Window(int(minRow), int(maxRow))
+		data = data.Window(int(minRow), int(maxRow-minRow))
 		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
 	} else {
 		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)

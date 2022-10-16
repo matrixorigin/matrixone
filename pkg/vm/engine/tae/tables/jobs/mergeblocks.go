@@ -105,6 +105,9 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
 func (task *mergeBlocksTask) mergeColumn(vecs []containers.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []containers.Vector, mapping []uint32) {
+	if len(vecs) == 0 {
+		return
+	}
 	if sort {
 		if isPrimary {
 			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
@@ -163,7 +166,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
 	vecs := make([]containers.Vector, 0)
-	rows := make([]uint32, len(task.compacted))
+	rows := make([]uint32, 0)
+	skipBlks := make([]int, 0)
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
@@ -187,8 +191,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		view.ApplyDeletes()
 		vec := view.Orphan()
 		defer vec.Close()
+		if vec.Length() == 0 {
+			skipBlks = append(skipBlks, i)
+			continue
+		}
 		vecs = append(vecs, vec)
-		rows[i] = uint32(vec.Length())
+		rows = append(rows, uint32(vec.Length()))
 		fromAddr = append(fromAddr, uint32(length))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
@@ -262,6 +270,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			defer view.Close()
 			view.ApplyDeletes()
 			vec := view.Orphan()
+			if vec.Length() == 0 {
+				continue
+			}
 			defer vec.Close()
 			vecs = append(vecs, vec)
 		}
@@ -300,8 +311,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err != nil {
 		return err
 	}
+	var metaLoc string
 	for i, block := range blocks {
-		metaLoc := blockio.EncodeSegMetaLoc(id, block.GetExtent(), uint32(batchs[i].Length()))
+		metaLoc, err = blockio.EncodeSegMetaLocWithObject(id, block.GetExtent(), uint32(batchs[i].Length()), blocks)
+		if err != nil {
+			return
+		}
 		err = blockHandles[i].UpdateMetaLoc(metaLoc)
 	}
 	for _, blk := range task.createdBlks {
@@ -334,7 +349,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		fromAddr,
 		toAddr,
 		task.scheduler,
-		task.deletes)
+		task.deletes,
+		skipBlks)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -63,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -739,15 +740,22 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
-		dt, err := t.Es.Extern.Marshal()
-		if err != nil {
+		var (
+			dt  []byte
+			err error
+		)
+		if dt, err = json.Marshal(t.Es.Extern); err != nil {
 			return ctxId, nil, err
 		}
-		logutil.Infof("unnest marshal: %+v", t.Es.Extern)
 		in.Unnest = &pipeline.Unnest{
 			Attrs:  t.Es.Attrs,
 			Cols:   t.Es.Cols,
 			Extern: dt,
+		}
+	case *generate_series.Argument:
+		in.GenerateSeries = &pipeline.GenerateSeries{
+			Attrs: t.Es.Attrs,
+			Cols:  t.Es.Cols,
 		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -946,9 +954,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.Unnest:
-		param := &tree.UnnestParam{}
-		err := param.Unmarshal(opr.Unnest.Extern)
-		if err != nil {
+		param := &unnest.ExternalParam{}
+		if err := json.Unmarshal(opr.Unnest.Extern, param); err != nil {
 			return v, err
 		}
 		logutil.Infof("unnest unmarshal %+v", param)
@@ -959,6 +966,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				Extern: param,
 			},
 		}
+	case vm.GenerateSeries:
+		v.Arg = &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs: opr.GenerateSeries.Attrs,
+				Cols:  opr.GenerateSeries.Cols,
+			},
+		}
 	default:
 		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -967,9 +981,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 
 // newCompile generates a new compile for remote run.
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
+	// compile is almost surely wanting a small or mid pool.  Later.
+	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
 	proc := process.New(
-		ctx,
-		mpool.MustNewZero(),
+		ctx, mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,

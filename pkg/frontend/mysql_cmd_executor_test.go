@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -109,6 +110,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
 		create_1.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
@@ -122,6 +124,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		cola := &MysqlColumn{}
@@ -201,6 +204,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
 			select_2.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
@@ -334,7 +338,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		mce.PrepareSessionBeforeExecRequest(ses)
 		err = mce.handleChangeDB(ctx, "T")
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ses.protocol.GetDatabaseName(), convey.ShouldEqual, "T")
+		convey.So(ses.GetDatabaseName(), convey.ShouldEqual, "T")
 
 		err = mce.handleChangeDB(ctx, "T")
 		convey.So(err, convey.ShouldBeError)
@@ -412,8 +416,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeError)
 
-		ses.Mrs = &MysqlResultSet{}
-		ses.protocol.SetDatabaseName("T")
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		ses.SetDatabaseName("T")
 		mce.tableInfos = make(map[string][]ColumnInfo)
 		mce.tableInfos["A"] = []ColumnInfo{&engineColumnInfo{
 			name: "a",
@@ -423,7 +427,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
-		mce.db = ses.protocol.GetDatabaseName()
+		mce.db = ses.GetDatabaseName()
 		err = mce.handleCmdFieldList(ctx, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -755,7 +759,7 @@ func Test_handleShowVariables(t *testing.T) {
 		mce.PrepareSessionBeforeExecRequest(ses)
 
 		sv := &tree.ShowVariables{Global: true}
-		convey.So(mce.handleShowVariables(sv), convey.ShouldBeNil)
+		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
 	})
 }
 
@@ -803,14 +807,15 @@ func Test_handleShowColumns(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
-		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
-		ses.Data[0][0] = []byte("col1")
+		data := make([][]interface{}, 1)
+		data[0] = make([]interface{}, primaryKeyPos+1)
+		data[0][0] = []byte("col1")
 		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
 		convey.So(err, convey.ShouldBeNil)
-		ses.Data[0][1] = typ
-		ses.Data[0][2] = int8(2)
-		ses.Data[0][primaryKeyPos] = []byte("p")
+		data[0][1] = typ
+		data[0][2] = int8(2)
+		data[0][primaryKeyPos] = []byte("p")
+		ses.SetData(data)
 		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
@@ -974,7 +979,7 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		for _, k := range kases {
-			ret := StatementCanBeExecutedInUncommittedTransaction(k.stmt)
+			ret, _ := StatementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
 			convey.So(ret, convey.ShouldBeTrue)
 		}
 
@@ -1056,7 +1061,9 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json := serializePlanToJson(plan, uuid.New())
+		json, rows, bytes := serializePlanToJson(plan, uuid.New())
+		require.Equal(t, int64(0), rows)
+		require.Equal(t, int64(0), bytes)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
 }

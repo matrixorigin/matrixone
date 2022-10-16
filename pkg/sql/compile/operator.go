@@ -18,13 +18,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -226,7 +228,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 				Name2ColIndex: arg.Es.Name2ColIndex,
 				CreateSql:     arg.Es.CreateSql,
 				Ctx:           arg.Es.Ctx,
-				Fileparam:	   arg.Es.Fileparam,
+				Fileparam:     arg.Es.Fileparam,
 			},
 		}
 	case *unnest.Argument:
@@ -398,7 +400,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			Fileparam: 	   &external.ExternalFileparam{},
+			Fileparam:     &external.ExternalFileparam{},
 		},
 	}
 }
@@ -415,6 +417,20 @@ func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalPa
 		},
 	}
 }
+
+func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	return &generate_series.Argument{
+		Es: &generate_series.Param{
+			Attrs: attrs,
+			Cols:  n.TableDef.Cols,
+		},
+	}
+}
+
 func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {

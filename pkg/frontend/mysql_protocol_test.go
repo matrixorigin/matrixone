@@ -31,7 +31,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+
+	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -86,43 +87,41 @@ func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//TODO: fix data race
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
-	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
+	//client connect
+	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	//pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-	//_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	//pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	//
-	//ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	//rm, _ := NewRoutineManager(ctx, pu)
-	//rm.SetSkipCheckUser(true)
-	//
-	//wg := sync.WaitGroup{}
-	//wg.Add(1)
-	//
-	////running server
-	//go func() {
-	//	defer wg.Done()
-	//	echoServer(rm.Handler, rm, NewSqlCodec())
-	//}()
-	//
-	//// to := NewTimeout(1*time.Minute, false)
-	//// for isClosed() && !to.isTimeout() {
-	//// }
-	//
-	//time.Sleep(time.Second * 2)
-	//db := open_db(t, 6001)
-	//close_db(t, db)
-	//
-	//time.Sleep(time.Millisecond * 10)
-	////close server
-	//setServer(1)
-	//wg.Wait()
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, pu)
+	rm.SetSkipCheckUser(true)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	//running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, NewSqlCodec())
+	}()
+
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
+
+	time.Sleep(time.Second * 2)
+	db := open_db(t, 6001)
+	close_db(t, db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
 }
 
 func TestReadIntLenEnc(t *testing.T) {
@@ -300,16 +299,12 @@ func TestReadStringLenEnc(t *testing.T) {
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
 // func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 // 	//before anything using the configuration
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 // 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 // 	if err != nil {
 // 		panic(err)
 // 	}
 // 	pu.SV.EnableTls = true
-
-// 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-// 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-
 // 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 // 	rm, _ := NewRoutineManager(ctx, pu)
 // 	rm.SetSkipCheckUser(true)
@@ -992,12 +987,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	routine, ok := tRM.clients[rs]
 	tRM.rwlock.RUnlock()
 
-	pro := routine.protocol.(*MysqlProtocolImpl)
+	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
 	if !ok {
 		return moerr.NewInternalError("routine does not exist")
 	}
 	packet, ok := msg.(*Packet)
-	pro.sequenceId = uint8(packet.SequenceID + 1)
+	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
 		return moerr.NewInternalError("message is not Packet")
 	}
@@ -1016,7 +1011,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 			return moerr.NewInternalError("message is not Packet")
 		}
 
-		pro.sequenceId = uint8(packet.SequenceID + 1)
+		pro.SetSequenceID(uint8(packet.SequenceID + 1))
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -1292,7 +1287,7 @@ func TestMysqlResultSet(t *testing.T) {
 // 		log.Fatal("Failed to append PEM.")
 // 	}
 // 	clientCert := make([]tls.Certificate, 0, 1)
-// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+// 	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
 // 	if err != nil {
 // 		setServer(1)
 // 		require.NoError(t, err)
@@ -1701,7 +1696,7 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		for _, c := range kases {
-			proto.setSequenceID(0)
+			proto.SetSequenceID(0)
 
 			err = proto.openRow(nil)
 			convey.So(err, convey.ShouldBeNil)

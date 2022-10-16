@@ -131,6 +131,9 @@ func startCNService(
 	fileService fileservice.FileService,
 	taskService taskservice.TaskService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
@@ -166,6 +169,9 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
@@ -272,7 +278,9 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory),
+			metric.WithExportInterval(SV.MetricExportInterval),
+			metric.WithMultiTable(SV.MetricMultiTable))
 	}
 	return nil
 }

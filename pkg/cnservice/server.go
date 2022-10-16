@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"go.uber.org/zap"
 	"sync"
 
@@ -215,7 +216,7 @@ func (s *service) initEngine(
 	switch s.cfg.Engine.Type {
 
 	case EngineTAE:
-		if err := initTAE(cancelMoServerCtx, pu); err != nil {
+		if err := initTAE(cancelMoServerCtx, pu, s.cfg); err != nil {
 			return err
 		}
 
@@ -254,6 +255,9 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		panic(err)
 	}
 	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
+	}
+	if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
 		panic(err)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)

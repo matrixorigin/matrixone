@@ -60,22 +60,28 @@ func (be *MetaBaseEntry) PPString(level common.PPLevel, depth int, prefix string
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
+func (be *MetaBaseEntry) HasPersistedData() bool {
+	return be.GetMetaLoc() != ""
+}
 func (be *MetaBaseEntry) GetMetaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
-	if be.GetNodeLocked() == nil {
+	if be.GetLatestNodeLocked() == nil {
 		return ""
 	}
-	str := be.GetNodeLocked().(*MetadataMVCCNode).MetaLoc
+	str := be.GetLatestNodeLocked().(*MetadataMVCCNode).MetaLoc
 	return str
+}
+func (be *MetaBaseEntry) HasPersistedDeltaData() bool {
+	return be.GetDeltaLoc() != ""
 }
 func (be *MetaBaseEntry) GetDeltaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
-	if be.GetNodeLocked() == nil {
+	if be.GetLatestNodeLocked() == nil {
 		return ""
 	}
-	str := be.GetNodeLocked().(*MetadataMVCCNode).DeltaLoc
+	str := be.GetLatestNodeLocked().(*MetadataMVCCNode).DeltaLoc
 	return str
 }
 
@@ -92,11 +98,11 @@ func (be *MetaBaseEntry) GetVisibleDeltaLoc(ts types.TS) string {
 	return str
 }
 func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode()
+	node := be.GetLatestCommittedNode()
 	if node == nil {
 		return
 	}
-	if node.(*MetadataMVCCNode).HasDropped() {
+	if node.(*MetadataMVCCNode).HasDropCommitted() {
 		return true, node.(*MetadataMVCCNode).DeletedAt
 	}
 	return
@@ -124,7 +130,7 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MetadataMVCCNode) {
-	entry := be.GetNodeLocked()
+	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*MetadataMVCCNode)
 	} else {
@@ -189,7 +195,7 @@ func (be *MetaBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -197,19 +203,25 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 }
 
 func (be *MetaBaseEntry) IsCreating() bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return true
 	}
 	return un.IsActive()
 }
 
-func (be *MetaBaseEntry) IsDroppedCommitted() bool {
-	un := be.GetCommittedNode()
+func (be *MetaBaseEntry) HasDropCommitted() bool {
+	be.RLock()
+	defer be.RUnlock()
+	return be.HasDropCommittedLocked()
+}
+
+func (be *MetaBaseEntry) HasDropCommittedLocked() bool {
+	un := be.GetLatestCommittedNode()
 	if un == nil {
 		return false
 	}
-	return un.(*MetadataMVCCNode).HasDropped()
+	return un.(*MetadataMVCCNode).HasDropCommitted()
 }
 
 func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
@@ -219,20 +231,6 @@ func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
 	oe.RLock()
 	defer oe.RUnlock()
 	return CompareUint64(be.ID, oe.ID)
-}
-
-func (be *MetaBaseEntry) HasDropped() bool {
-	be.RLock()
-	defer be.RUnlock()
-	return be.HasDroppedLocked()
-}
-
-func (be *MetaBaseEntry) HasDroppedLocked() bool {
-	node := be.GetCommittedNode()
-	if node == nil {
-		return false
-	}
-	return node.(*MetadataMVCCNode).HasDropped()
 }
 
 func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
@@ -248,7 +246,12 @@ func (be *MetaBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool
 	if un == nil {
 		return
 	}
-	visible, dropped = true, un.(*MetadataMVCCNode).HasDropped()
+	visible = true
+	if un.IsSameTxn(ts) {
+		dropped = un.(*MetadataMVCCNode).HasDropIntent()
+	} else {
+		dropped = un.(*MetadataMVCCNode).HasDropCommitted()
+	}
 	return
 }
 
@@ -263,29 +266,20 @@ func (be *MetaBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err 
 	return
 }
 
-func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
-	cloned, uncloned := be.CloneLatestNode()
-	uncloned.(*MetadataMVCCNode).DeletedAt = types.TS{}
-	return &MetaBaseEntry{
-		MVCCChain: cloned,
-		ID:        be.ID,
-	}
-}
-
-func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
-	err = be.CheckConflict(txnCtx)
+func (be *MetaBaseEntry) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	err = be.CheckConflict(txn)
 	if err != nil {
 		return
 	}
-	if be.HasDroppedLocked() {
+	if be.HasDropCommittedLocked() {
 		return false, moerr.NewNotFound()
 	}
-	isNewNode, err = be.DeleteLocked(txnCtx)
+	isNewNode, err = be.DeleteLocked(txn)
 	return
 }
 
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -303,19 +297,8 @@ func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 	}
 }
 
-func (be *MetaBaseEntry) GetCurrOp() OpT {
-	un := be.GetNodeLocked()
-	if un == nil {
-		return OpCreate
-	}
-	if !un.(*MetadataMVCCNode).HasDropped() {
-		return OpCreate
-	}
-	return OpSoftDelete
-}
-
 func (be *MetaBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -323,7 +306,7 @@ func (be *MetaBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *MetaBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetNodeLocked()
+	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

@@ -178,7 +178,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)
-		seg.table.store.dirtyMemo.recordBlk(seg.table.entry.GetDB().ID, id)
+		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
 		appended += toAppend
@@ -329,35 +329,6 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	return n.IsRowDeleted(noffset)
-}
-
-func (seg *localSegment) Update(row uint32, col uint16, value any) error {
-	if seg.table.entry.GetSchema().PhyAddrKey.Idx == int(col) {
-		return moerr.NewTAEError("update physical addr key")
-	}
-	npos, noffset := seg.GetLocalPhysicalAxis(row)
-	n := seg.nodes[npos]
-	window, err := n.Window(uint32(noffset), uint32(noffset)+1)
-	if err != nil {
-		return err
-	}
-	defer window.Close()
-	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
-		return err
-	}
-	if err = seg.DeleteFromIndex(row, row, n); err != nil {
-		return err
-	}
-
-	orig := window.Vecs[col]
-	defer orig.Close()
-	vec := containers.MakeVector(orig.GetType(), orig.Nullable())
-	defer vec.Close()
-	vec.Append(value)
-	window.Vecs[col] = vec
-
-	err = seg.Append(window)
-	return err
 }
 
 func (seg *localSegment) Rows() uint32 {

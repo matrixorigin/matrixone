@@ -16,7 +16,6 @@ package export
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"path"
 	"sync"
@@ -24,84 +23,101 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 const etlFileServiceName = "ETL"
-const csvExtension = ".csv"
 
 var _ stringWriter = (*FSWriter)(nil)
 
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
+	ts  time.Time               // WithTimestamp
+	// pathBuilder
+	pathBuilder PathBuilder // WithPathBuilder
 
-	mux      sync.Mutex
-	prefix   string // see WithPrefix, as filename prefix, see GetNewFileName
-	dir      string // see WithDir, default: ""
+	mux sync.Mutex
+	// rejoin builder
+	account  string // see WithAccount, default: ""
+	name     string // see WithName, as filename name, see GetNewFileName
+	database string // see WithDatabase, default: ""
 	nodeUUID string // see WithNode
 	nodeType string // see WithNode
-	filename string // see GetNewFileName, auto generated
+	// filename auto generated
+	filename string // see NewFSWriter
+	path     string // see NewFSWriter
 
 	fileServiceName string // see WithFileServiceName
 
 	offset int // see Write, should not have size bigger than 2GB
 }
 
-type FSWriterOption interface {
-	Apply(*FSWriter)
+type FSWriterOption func(*FSWriter)
+
+func (f FSWriterOption) Apply(w *FSWriter) {
+	f(w)
 }
 
 func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWriterOption) *FSWriter {
 	w := &FSWriter{
-		ctx:      ctx,
-		fs:       fs,
-		prefix:   "info",
-		dir:      "",
-		nodeUUID: "00000000-0000-0000-0000-000000000000",
-		nodeType: "standalone",
+		ctx:         ctx,
+		fs:          fs,
+		ts:          time.Now(),
+		pathBuilder: NewDBTablePathBuilder(),
+		name:        "info",
+		database:    "",
+		nodeUUID:    "0",
+		nodeType:    "standalone",
 
 		fileServiceName: etlFileServiceName,
 	}
 	for _, o := range opts {
 		o.Apply(w)
 	}
-	w.filename = w.GetNewFileName(util.Now())
+	w.filename = w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
+	w.path = w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
 	return w
 }
 
-type fsWriterOptionFunc func(*FSWriter)
-
-func (f fsWriterOptionFunc) Apply(w *FSWriter) {
-	f(w)
-}
-
-func WithPrefix(item batchpipe.HasName) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
-		w.prefix = item.GetName()
+func WithAccount(a string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.account = a
 	})
 }
 
-func WithDir(dir string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
-		w.dir = dir
+func WithName(item batchpipe.HasName) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.name = item.GetName()
 	})
 }
-func WithNode(uuid, nodeType string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
+
+func WithDatabase(dir string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.database = dir
+	})
+}
+func WithNode(uuid, nodeType string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
 		w.nodeUUID, w.nodeType = uuid, nodeType
 	})
 }
 
-func WithFileServiceName(serviceName string) fsWriterOptionFunc {
-	return fsWriterOptionFunc(func(w *FSWriter) {
+func WithFileServiceName(serviceName string) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
 		w.fileServiceName = serviceName
 	})
 }
 
-func (w *FSWriter) GetNewFileName(ts time.Time) string {
-	return fmt.Sprintf(`%s_%s_%s_%s`, w.prefix, w.nodeUUID, w.nodeType, ts.Format("20060102.150405.000000"))
+func WithTimestamp(ts time.Time) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.ts = ts
+	})
+}
+func WithPathBuilder(builder PathBuilder) FSWriterOption {
+	return FSWriterOption(func(w *FSWriter) {
+		w.pathBuilder = builder
+	})
 }
 
 // Write implement io.Writer, Please execute in series
@@ -113,7 +129,7 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
 		// like: etl:store/system/filename.csv
-		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + csvExtension,
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.path, w.filename),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: int64(w.offset),
@@ -138,14 +154,11 @@ func (w *FSWriter) WriteString(s string) (n int, err error) {
 	return w.Write(b)
 }
 
-type FSWriterFactory func(context.Context, string, batchpipe.HasName) io.StringWriter
+type FSWriterFactory func(ctx context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter
 
 func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) FSWriterFactory {
-	return func(_ context.Context, dir string, i batchpipe.HasName) io.StringWriter {
-		return NewFSWriter(DefaultContext(), fs,
-			WithPrefix(i),
-			WithDir(dir),
-			WithNode(nodeUUID, nodeType),
-		)
+	return func(_ context.Context, db string, name batchpipe.HasName, options ...FSWriterOption) io.StringWriter {
+		options = append(options, WithDatabase(db), WithName(name), WithNode(nodeUUID, nodeType))
+		return NewFSWriter(DefaultContext(), fs, options...)
 	}
 }

@@ -102,6 +102,17 @@ var (
 
 	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
+
+	// defaultMetricExportInterval default: 15 sec.
+	defaultMetricExportInterval = 15
+
+	// defaultLogShardID default: 1
+	defaultLogShardID = 1
+
+	// defaultDNReplicaID default: 1
+	defaultDNReplicaID = 1
+	// defaultMetricGatherInterval default: 15 sec.
+	defaultMetricGatherInterval = 15
 )
 
 // FrontendParameters of the frontend
@@ -216,6 +227,12 @@ type FrontendParameters struct {
 
 	//default is ''. Path of file that contains X509 key in PEM format for client
 	TlsKeyFile string `toml:"tlsKeyFile"`
+
+	//default is 1
+	LogShardID uint64 `toml:"logshardid"`
+
+	//default is 1
+	DNReplicaID uint64 `toml:"dnreplicalid"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -302,6 +319,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.PortOfRpcServerInComputationEngine == 0 {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
 	}
+
+	if fp.DNReplicaID == 0 {
+		fp.DNReplicaID = uint64(defaultDNReplicaID)
+	}
+
+	if fp.LogShardID == 0 {
+		fp.LogShardID = uint64(defaultLogShardID)
+	}
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
@@ -342,10 +367,19 @@ type ObservabilityParameters struct {
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
 	// TraceExportInterval default is 15s.
-	TraceExportInterval int `toml:"trace_export_interval"`
+	TraceExportInterval int `toml:"traceExportInterval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"long_query_time"`
+	LongQueryTime float64 `toml:"longQueryTime"`
+
+	// MetricMultiTable default is false. With true, save all metric data in one table.
+	MetricMultiTable bool `toml:"metricMultiTable"`
+
+	// MetricExportInterval default is 15 sec.
+	MetricExportInterval int `toml:"metricExportInterval"`
+
+	// MetricGatherInterval default is 15 sec.
+	MetricGatherInterval int `toml:"metricGatherInterval"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -363,8 +397,16 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.BatchProcessor = defaultBatchProcessor
 	}
 
-	if op.TraceExportInterval == 0 {
+	if op.TraceExportInterval <= 0 {
 		op.TraceExportInterval = defaultTraceExportInterval
+	}
+
+	if op.MetricExportInterval <= 0 {
+		op.MetricExportInterval = defaultMetricExportInterval
+	}
+
+	if op.MetricGatherInterval <= 0 {
+		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 }
 

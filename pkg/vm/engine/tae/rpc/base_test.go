@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,10 +42,101 @@ type mockHandle struct {
 	m *mpool.MPool
 }
 
-func (h *mockHandle) HandleClose() error {
-	err := h.Handle.HandleClose()
-	//TODO::free h.m?
+type CmdType int32
+
+const (
+	CmdPreCommitWrite CmdType = iota
+	CmdPrepare
+	CmdCommitting
+	CmdCommit
+	CmdRollback
+)
+
+type txnCommand struct {
+	typ CmdType
+	cmd any
+}
+
+func (h *mockHandle) HandleClose(ctx context.Context) error {
+	err := h.Handle.HandleClose(ctx)
 	return err
+}
+
+func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) error {
+	//2PC
+	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
+		meta.CommitTS = meta.PreparedTS.Next()
+	}
+	return h.Handle.HandleCommit(ctx, *meta)
+}
+
+func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
+	//meta.CommitTS = h.eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	if meta.PreparedTS.IsEmpty() {
+		return moerr.NewInternalError("PreparedTS is empty")
+	}
+	meta.CommitTS = meta.PreparedTS.Next()
+	return h.Handle.HandleCommitting(ctx, *meta)
+}
+
+func (h *mockHandle) HandlePrepare(ctx context.Context, meta *txn.TxnMeta) error {
+	pts, err := h.Handle.HandlePrepare(ctx, *meta)
+	if err != nil {
+		return err
+	}
+	meta.PreparedTS = pts
+	return nil
+}
+
+func (h *mockHandle) HandleRollback(ctx context.Context, meta *txn.TxnMeta) error {
+	return h.Handle.HandleRollback(ctx, *meta)
+}
+
+func (h *mockHandle) HandlePreCommit(
+	ctx context.Context,
+	meta *txn.TxnMeta,
+	req api.PrecommitWriteCmd,
+	resp *api.SyncLogTailResp) error {
+
+	return h.Handle.HandlePreCommit(ctx, *meta, req, resp)
+}
+
+func (h *mockHandle) handleCmds(
+	ctx context.Context,
+	txn *txn.TxnMeta,
+	cmds []txnCommand) (err error) {
+	for _, e := range cmds {
+		switch e.typ {
+		case CmdPreCommitWrite:
+			cmd, ok := e.cmd.(api.PrecommitWriteCmd)
+			if !ok {
+				return moerr.NewInfo("cmd is not PreCommitWriteCmd")
+			}
+			if err = h.Handle.HandlePreCommit(ctx, *txn,
+				cmd, new(api.SyncLogTailResp)); err != nil {
+				return
+			}
+		case CmdPrepare:
+			if err = h.HandlePrepare(ctx, txn); err != nil {
+				return
+			}
+		case CmdCommitting:
+			if err = h.HandleCommitting(ctx, txn); err != nil {
+				return
+			}
+		case CmdCommit:
+			if err = h.HandleCommit(ctx, txn); err != nil {
+				return
+			}
+		case CmdRollback:
+			if err = h.HandleRollback(ctx, txn); err != nil {
+				return
+			}
+		default:
+			panic(moerr.NewInfo("Invalid CmdType"))
+		}
+	}
+	return
 }
 
 func initDB(t *testing.T, opts *options.Options) *db.DB {
@@ -65,8 +157,8 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	return mh
 }
 
-func mock1PCTxn(eng moengine.TxnEngine) txn.TxnMeta {
-	txnMeta := txn.TxnMeta{}
+func mock1PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	return txnMeta
@@ -83,13 +175,13 @@ func mockDNShard(id uint64) metadata.DNShard {
 	}
 }
 
-func mock2PCTxn(eng moengine.TxnEngine) (txn.TxnMeta, error) {
-	txnMeta := txn.TxnMeta{}
+func mock2PCTxn(eng moengine.TxnEngine) *txn.TxnMeta {
+	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = eng.GetTAE(context.TODO()).TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
 	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
-	return txnMeta, nil
+	return txnMeta
 }
 
 const (
@@ -120,6 +212,8 @@ type Entry struct {
 
 type column struct {
 	databaseId uint64
+	accountId  uint32
+	tableId    uint64
 	// column name
 	name            string
 	tableName       string
@@ -134,13 +228,29 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+	hasUpdate       int8
+	updateExpr      []byte
 }
 
-func genColumns(
-	tableName,
-	databaseName string,
-	databaseId uint64,
-	defs []engine.TableDef) ([]column, error) {
+func genColumns(accountId uint32, tableName, databaseName string,
+	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
+	{ // XXX Why not store PrimaryIndexDef and
+		// then use PrimaryIndexDef for all primary key constraints.
+		mp := make(map[string]int)
+		for i, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				mp[attr.Attr.Name] = i
+			}
+		}
+		for _, def := range defs {
+			if indexDef, ok := def.(*engine.PrimaryIndexDef); ok {
+				for _, name := range indexDef.Names {
+					attr, _ := defs[mp[name]].(*engine.AttributeDef)
+					attr.Attr.Primary = true
+				}
+			}
+		}
+	}
 	num := 0
 	cols := make([]column, 0, len(defs))
 	for _, def := range defs {
@@ -148,13 +258,15 @@ func genColumns(
 		if !ok {
 			continue
 		}
-		typ, err := types.Encode(attrDef.Attr.Type)
+		typ, err := types.Encode(&attrDef.Attr.Type)
 		if err != nil {
 			return nil, err
 		}
 		col := column{
 			typ:          typ,
 			typLen:       int32(len(typ)),
+			accountId:    accountId,
+			tableId:      tableId,
 			databaseId:   databaseId,
 			name:         attrDef.Attr.Name,
 			tableName:    tableName,
@@ -162,6 +274,7 @@ func genColumns(
 			num:          int32(num),
 			comment:      attrDef.Attr.Comment,
 		}
+		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)
 			if err != nil {
@@ -170,7 +283,16 @@ func genColumns(
 			if len(defaultExpr) > 0 {
 				col.hasDef = 1
 				col.defaultExpr = defaultExpr
-
+			}
+		}
+		if attrDef.Attr.OnUpdate != nil {
+			expr, err := types.Encode(attrDef.Attr.OnUpdate)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) > 0 {
+				col.hasUpdate = 1
+				col.updateExpr = expr
 			}
 		}
 		if attrDef.Attr.IsHidden {
@@ -223,7 +345,8 @@ func genCreateDatabaseTuple(
 	userId,
 	roleId uint32,
 	name string,
-	m *mpool.MPool) (*batch.Batch, error) {
+	m *mpool.MPool,
+) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	{
@@ -271,9 +394,13 @@ func genCreateDatabaseTuple(
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
+func genCreateColumnTuple(
+	col column,
+	m *mpool.MPool,
+) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -298,8 +425,7 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 
 		idx = catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_relname_id
-		//TODO::rel id get from col
-		if err := bat.Vecs[idx].Append(uint64(0), false, m); err != nil {
+		if err := bat.Vecs[idx].Append(col.tableId, false, m); err != nil {
 			return nil, err
 		}
 
@@ -374,6 +500,18 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 		if err := bat.Vecs[idx].Append(col.isHidden, false, m); err != nil {
 			return nil, err
 		}
+
+		idx = catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_has_update
+		if err := bat.Vecs[idx].Append(col.hasUpdate, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_UPDATE_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_update
+		if err := bat.Vecs[idx].Append(col.updateExpr, false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }
@@ -417,13 +555,14 @@ func makeCreateTableEntries(
 	sql string,
 	ac AccessInfo,
 	name string,
+	tableId uint64,
 	dbId uint64,
 	dbName string,
 	m *mpool.MPool,
 	defs []engine.TableDef,
 ) ([]*api.Entry, error) {
 	comment := getTableComment(defs)
-	cols, err := genColumns(name, dbName, dbId, defs)
+	cols, err := genColumns(ac.accountId, name, dbName, tableId, dbId, defs)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +571,7 @@ func makeCreateTableEntries(
 	{
 		bat, err := genCreateTableTuple(
 			sql, ac.accountId, ac.userId, ac.roleId,
-			name, dbId, dbName, comment, m)
+			name, tableId, dbId, dbName, comment, m)
 		if err != nil {
 			return nil, err
 		}
@@ -466,16 +605,18 @@ func genCreateTableTuple(
 	userId,
 	roleId uint32,
 	name string,
+	tableId uint64,
 	databaseId uint64,
 	databaseName string,
 	comment string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
+	bat.SetZs(1, m)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_id
-		if err := bat.Vecs[idx].Append(uint64(0), false, m); err != nil {
+		if err := bat.Vecs[idx].Append(tableId, false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_REL_NAME_IDX
@@ -538,6 +679,12 @@ func genCreateTableTuple(
 		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VIEWDEF_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // viewdef
+		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+			return nil, err
+		}
+
 	}
 	return bat, nil
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -119,6 +118,12 @@ type ViewDef struct {
 	View string
 }
 
+type ComputeIndexDef struct {
+	Names      []string
+	TableNames []string
+	Uniques    []bool
+}
+
 type TableDef interface {
 	tableDef()
 }
@@ -130,6 +135,7 @@ func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
 func (*PrimaryIndexDef) tableDef() {}
+func (*ComputeIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics
@@ -146,7 +152,8 @@ type Relation interface {
 
 	Update(context.Context, *batch.Batch) error
 
-	Delete(context.Context, *vector.Vector, string) error
+	// Delete(context.Context, *vector.Vector, string) error
+	Delete(context.Context, *batch.Batch, string) error
 
 	Truncate(context.Context) (uint64, error)
 

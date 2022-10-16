@@ -62,8 +62,8 @@ type Catalog struct {
 
 	nodesMu sync.RWMutex
 
-	tableCnt  int32
-	columnCnt int32
+	tableCnt  atomic.Int32
+	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -133,7 +133,7 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -141,7 +141,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache, cmdType, commitTS)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
@@ -157,58 +157,44 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
 	case CmdUpdateTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache, cmdType, commitTS)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache)
 	case CmdUpdateBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
+		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
 	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
 	var err error
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
+	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
+	un.SetLogIndex(idx)
+	if un.Is1PC() {
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
 		}
 	}
-	un := cmd.entry.GetNodeLocked().(*DBMVCCNode)
-	if cmdType == txnif.CmdCommit {
-		un.onReplayCommit(commitTS)
-		return
-	}
-	if cmdType == txnif.Cmd1PC || un.Is1PC() {
-		un.onReplayCommit(prepareTS)
-	}
-	un.SetLogIndex(idx)
 
 	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
-		if cmdType == txnif.CmdCommit {
-			panic("logic err")
-		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
-		cmd.entry.GetNodeLocked().SetLogIndex(idx)
+		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
 		err = catalog.AddEntryLocked(cmd.DB, nil)
 		if err != nil {
 			panic(err)
@@ -218,9 +204,9 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 
 	dbun := db.SearchNode(un)
 	if dbun == nil {
-		db.Insert(un) //TODO isvalid
+		db.Insert(un)
 	} else {
-		dbun.Update(un)
+		panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
 }
 
@@ -251,23 +237,14 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}, true)
 }
 
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.Table.ID)
 	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
-	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -275,14 +252,13 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
 
-	un := cmd.entry.GetNodeLocked().(*TableMVCCNode)
-	if cmdType == txnif.CmdCommit {
-		un.onReplayCommit(commitTS)
-	}
-	if cmdType == txnif.Cmd1PC || un.Is1PC() {
-		un.onReplayCommit(prepareTS)
-	}
+	un := cmd.entry.GetLatestNodeLocked().(*TableMVCCNode)
 	un.SetLogIndex(idx)
+	if un.Is1PC() {
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
+	}
 
 	if err != nil {
 		cmd.Table.db = db
@@ -297,7 +273,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
 	} else {
-		tblun.Update(un)
+		panic(fmt.Sprintf("duplicate node %v and %v", tblun, un))
 	}
 
 }
@@ -335,39 +311,22 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	dataFactory DataFactory,
 	idx *wal.Index,
 	observer wal.ReplayObserver,
-	cache *bytes.Buffer,
-	cmdType txnif.CmdType,
-	commitTS types.TS) {
+	cache *bytes.Buffer) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
-	}
 
-	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		cmdType = txnif.Cmd1PC
-	}
-	switch cmdType {
-	case txnif.CmdCommit:
-		un.onReplayCommit(commitTS)
-	case txnif.CmdPrepare:
-		un.SetLogIndex(idx)
-	case txnif.Cmd1PC:
-		un.SetLogIndex(idx)
-		un.onReplayCommit(prepareTS)
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -424,25 +383,14 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	dataFactory DataFactory,
 	idx *wal.Index,
-	observer wal.ReplayObserver,
-	cmdType txnif.CmdType,
-	commitTS types.TS) {
+	observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	prepareTS := cmd.GetTs()
-	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
-		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil && cmdType == txnif.CmdPrepare {
+	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
-	}
-	if observer != nil {
-		switch cmdType {
-		case txnif.CmdCommit:
-			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare, txnif.Cmd1PC:
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -457,18 +405,12 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		cmdType = txnif.Cmd1PC
-	}
-	switch cmdType {
-	case txnif.CmdCommit:
-		un.onReplayCommit(commitTS)
-	case txnif.CmdPrepare:
-		un.SetLogIndex(idx)
-	case txnif.Cmd1PC:
-		un.SetLogIndex(idx)
-		un.onReplayCommit(prepareTS)
+		if err := un.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
 	}
 	if err == nil {
 		blkun := blk.SearchNode(un)
@@ -540,7 +482,7 @@ func (catalog *Catalog) ReplayTableRows() {
 		if err != nil {
 			panic(err)
 		}
-		tbl.rows = rows
+		tbl.rows.Store(rows)
 		return nil
 	}
 	err := catalog.RecurLoop(processor)
@@ -562,23 +504,21 @@ func (catalog *Catalog) CoarseDBCnt() int {
 }
 
 func (catalog *Catalog) CoarseTableCnt() int {
-	return int(atomic.LoadInt32(&catalog.tableCnt))
+	return int(catalog.tableCnt.Load())
 }
 
 func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(atomic.LoadInt32(&catalog.columnCnt))
+	return int(catalog.columnCnt.Load())
 }
 
 func (catalog *Catalog) AddTableCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.tableCnt, int32(cnt))
-	if n < 0 {
+	if catalog.tableCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }
 
 func (catalog *Catalog) AddColumnCnt(cnt int) {
-	n := atomic.AddInt32(&catalog.columnCnt, int32(cnt))
-	if n < 0 {
+	if catalog.columnCnt.Add(int32(cnt)) < 0 {
 		panic("logic error")
 	}
 }
@@ -684,50 +624,49 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
+func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	fullName := genDBFullName(txnCtx.GetTenantID(), name)
+	fullName := genDBFullName(txn.GetTenantID(), name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
 		return nil, moerr.NewNotFound()
 	}
-	return node.TxnGetNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(txn)
 }
 
-func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
-	n, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
+func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
+	n, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return nil, err
 	}
 	return n.GetPayload(), nil
 }
 
-func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
+func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == pkgcatalog.MO_CATALOG {
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
+	dn, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return
 	}
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	newEntry, err = entry.DropEntryLocked(txnCtx)
-	if err == nil {
+	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
 		deleted = entry
 	}
 	return
 }
 
-func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, txnCtx)
-	err = catalog.AddEntryLocked(entry, txnCtx)
+	entry := NewDBEntry(catalog, name, txn)
+	err = catalog.AddEntryLocked(entry, txn)
 
 	return entry, err
 }
