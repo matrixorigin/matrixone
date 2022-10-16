@@ -116,7 +116,6 @@ func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	txn.ToPreparedLocked()
 	mgr.Lock()
 	defer mgr.Unlock()
 	// TODO: idempotent check
