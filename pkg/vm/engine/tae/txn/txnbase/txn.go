@@ -112,7 +112,7 @@ func NewPersistedTxn(
 		ApplyCommitFn:     applyCommitFn,
 	}
 }
-
+func (txn *Txn) GetLsn() uint64 { return txn.LSN }
 func (txn *Txn) IsReplay() bool { return txn.isReplay }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
