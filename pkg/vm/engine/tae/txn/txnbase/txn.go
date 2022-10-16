@@ -49,7 +49,8 @@ type OpTxn struct {
 	Op  OpType
 }
 
-func (txn *OpTxn) Is2PC() bool { return txn.Txn.Is2PC() }
+func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }
+func (txn *OpTxn) Is2PC() bool    { return txn.Txn.Is2PC() }
 func (txn *OpTxn) IsTryCommitting() bool {
 	return txn.Op == OpCommit || txn.Op == OpPrepare
 }
@@ -73,6 +74,7 @@ type Txn struct {
 	Err                      error
 	LSN                      uint64
 	TenantID, UserID, RoleID atomic.Uint32
+	isReplay                 bool
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -88,6 +90,17 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS,
 	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
 }
+
+func NewReplayedTxn(mgr *TxnManager, ctx *TxnCtx, lsn uint64) *Txn {
+	return &Txn{
+		Mgr:      mgr,
+		TxnCtx:   ctx,
+		isReplay: true,
+		LSN:      lsn,
+	}
+}
+
+func (txn *Txn) IsReplay() bool { return txn.isReplay }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
 
@@ -245,9 +258,8 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 func (txn *Txn) PrepareCommit() (err error) {
 	logutil.Debugf("Prepare Commite %X", txn.ID)
 	if txn.PrepareCommitFn != nil {
-		if err = txn.PrepareCommitFn(txn); err != nil {
-			return
-		}
+		err = txn.PrepareCommitFn(txn)
+		return
 	}
 	err = txn.Store.PrepareCommit()
 	return err
@@ -259,6 +271,10 @@ func (txn *Txn) PreApplyCommit() (err error) {
 }
 
 func (txn *Txn) ApplyCommit() (err error) {
+	if txn.ApplyCommitFn != nil {
+		err = txn.ApplyCommitFn(txn)
+		return
+	}
 	defer func() {
 		//Get the lsn of ETTxnRecord entry in GroupC.
 		txn.LSN = txn.Store.GetLSN()
@@ -268,16 +284,15 @@ func (txn *Txn) ApplyCommit() (err error) {
 			txn.Store.Close()
 		}
 	}()
-	if txn.ApplyCommitFn != nil {
-		if err = txn.ApplyCommitFn(txn); err != nil {
-			return
-		}
-	}
 	err = txn.Store.ApplyCommit()
 	return
 }
 
 func (txn *Txn) ApplyRollback() (err error) {
+	if txn.ApplyRollbackFn != nil {
+		err = txn.ApplyRollbackFn(txn)
+		return
+	}
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()
 		if err == nil {
@@ -286,11 +301,6 @@ func (txn *Txn) ApplyRollback() (err error) {
 			txn.Store.Close()
 		}
 	}()
-	if txn.ApplyRollbackFn != nil {
-		if err = txn.ApplyRollbackFn(txn); err != nil {
-			return
-		}
-	}
 	err = txn.Store.ApplyRollback()
 	return
 }
@@ -302,9 +312,8 @@ func (txn *Txn) PrePrepare() error {
 func (txn *Txn) PrepareRollback() (err error) {
 	logutil.Debugf("Prepare Rollbacking %X", txn.ID)
 	if txn.PrepareRollbackFn != nil {
-		if err = txn.PrepareRollbackFn(txn); err != nil {
-			return
-		}
+		err = txn.PrepareRollbackFn(txn)
+		return
 	}
 	err = txn.Store.PrepareRollback()
 	return

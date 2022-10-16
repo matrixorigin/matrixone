@@ -228,6 +228,12 @@ func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
+	// Replay txn is always prepared
+	if op.IsReplay() {
+		ts = op.Txn.GetPrepareTS()
+		return
+	}
+
 	mgr.Lock()
 	defer mgr.Unlock()
 

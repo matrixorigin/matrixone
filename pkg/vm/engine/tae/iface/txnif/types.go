@@ -40,6 +40,7 @@ type Txn2PC interface {
 type TxnReader interface {
 	RLock()
 	RUnlock()
+	IsReplay() bool
 	Is2PC() bool
 	GetID() string
 	GetCtx() []byte
