@@ -140,9 +140,10 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 
 // Prepare is used to pre-commit a 2PC distributed transaction.
 // Notice that once any error happened, we should rollback the txn.
-// TODO: 1. How to handle the case in which log service timed out?
-//  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
-//     should handle this case by TxnStorage?
+// TODO:
+// 1. How to handle the case in which log service timed out?
+// 2. For a 2pc transaction, Rollback message may arrive before Prepare message,
+//    should handle this case by TxnStorage?
 func (txn *Txn) Prepare() (pts types.TS, err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
@@ -277,7 +278,7 @@ func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
-		//FIXME::??
+		// FIXME::??
 		txn.WaitGroup.Done()
 		return
 	}

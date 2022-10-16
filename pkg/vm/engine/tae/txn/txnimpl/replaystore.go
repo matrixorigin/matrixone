@@ -72,8 +72,6 @@ func MakeReplayTxn(
 func (store *replayTxnStore) IsReadonly() bool { return false }
 
 func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
-	logutil.Infof("TODO PreparCommit %s", txn.String())
-	// TODO
 	// PrepareCommit all commands
 	// Check idempotent of each command
 	// Record all idempotent error commands and skip apply|rollback later
@@ -121,16 +119,16 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) 
 	case *catalog.EntryCommand:
 		store.catalog.ReplayCmd(txncmd, store.dataFactory, idxCtx, store.Observer, store.cache)
 	case *AppendCmd:
-		store.AppendData(cmd, store.Observer)
+		store.replayAppendData(cmd, store.Observer)
 	case *updates.UpdateCmd:
-		store.Update(cmd, idxCtx, store.Observer)
+		store.replayDataCmds(cmd, idxCtx, store.Observer)
 	}
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (store *replayTxnStore) AppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
 	hasActive := false
 	for _, info := range cmd.Infos {
 		database, err := store.catalog.GetDatabaseByID(info.GetDBID())
@@ -211,16 +209,16 @@ func (store *replayTxnStore) AppendData(cmd *AppendCmd, observer wal.ReplayObser
 	}
 }
 
-func (store *replayTxnStore) Update(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		store.AppendReplay(cmd, idxCtx, observer)
+		store.replayAppend(cmd, idxCtx, observer)
 	case txnbase.CmdDelete:
-		store.Delete(cmd, idxCtx, observer)
+		store.replayDelete(cmd, idxCtx, observer)
 	}
 }
 
-func (store *replayTxnStore) Delete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := store.catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
@@ -249,7 +247,7 @@ func (store *replayTxnStore) Delete(cmd *updates.UpdateCmd, idxCtx *wal.Index, o
 
 }
 
-func (store *replayTxnStore) AppendReplay(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := store.catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)

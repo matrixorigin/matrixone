@@ -238,9 +238,6 @@ func (c *TxnCmd) ApplyCommit() {
 func (c *TxnCmd) ApplyRollback() {
 	c.ComposedCmd.ApplyRollback()
 }
-func (c *TxnCmd) MakeTxn() txnif.AsyncTxn {
-	return NewReplayTxn(c.TxnCtx, c)
-}
 func (c *TxnCmd) SetReplayTxn(txn txnif.AsyncTxn) {
 	c.ComposedCmd.SetReplayTxn(txn)
 }
