@@ -210,6 +210,9 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 	} else {
 		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
 	}
+	if id == types.T_json {
+		return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", id.String(), str, col.Name, rowIdx+1)
+	}
 	return moerr.NewTruncatedValueForField(id.String(), str, col.Name, rowIdx+1)
 }
 

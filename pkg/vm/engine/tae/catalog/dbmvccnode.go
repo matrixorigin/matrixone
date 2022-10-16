@@ -78,10 +78,13 @@ func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	e.EntryMVCCNode.ApplyCommit(commitTS)
 	return nil
 }
-
-func (e *DBMVCCNode) onReplayCommit(ts types.TS) (err error) {
-	e.EntryMVCCNode.ReplayCommit(ts)
-	e.TxnMVCCNode.OnReplayCommit(ts)
+func (e *DBMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	if err != nil {
+		return
+	}
+	e.EntryMVCCNode.ApplyCommit(commitTS)
 	return nil
 }
 
