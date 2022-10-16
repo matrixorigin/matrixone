@@ -116,7 +116,28 @@ type MysqlCmdExecutor struct {
 
 	cancelRequestFunc context.CancelFunc
 
+	doQueryFunc doComQueryFunc
+
 	mu sync.Mutex
+}
+
+func (mce *MysqlCmdExecutor) ChooseDoQueryFunc(choice bool) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	if choice {
+		mce.doQueryFunc = mce.doComQueryInProgress
+	} else {
+		mce.doQueryFunc = mce.doComQuery
+	}
+}
+
+func (mce *MysqlCmdExecutor) GetDoQueryFunc() doComQueryFunc {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	if mce.doQueryFunc == nil {
+		mce.doQueryFunc = mce.doComQuery
+	}
+	return mce.doQueryFunc
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
@@ -1362,7 +1383,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
-	return mce.doComQuery(requestCtx, sql)
+	return mce.GetDoQueryFunc()(requestCtx, sql)
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1891,6 +1912,50 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
 	}
 	return cw, nil
+}
+
+var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]StmtExecutor, error) {
+	var seList []StmtExecutor = nil
+	var stmts []tree.Statement = nil
+	var cmdFieldStmt *InternalCmdFieldList
+	var err error
+
+	appendSe := func(se StmtExecutor) {
+		seList = append(seList, se)
+	}
+
+	if isCmdFieldListSql(sql) {
+		cmdFieldStmt, err = parseCmdFieldList(sql)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdFieldStmt)
+	} else {
+		stmts, err = parsers.Parse(dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for _, stmt := range stmts {
+		cw := InitTxnComputationWrapper(ses, stmt, proc)
+		base := &baseStmtExecutor{}
+		base.TxnComputationWrapper = cw
+		switch st := stmt.(type) {
+		case *tree.Select:
+			result := &resultSetStmtExecutor{
+				father: base,
+			}
+			selExec := &selectExecutor{
+				father: result,
+				sel:    st,
+			}
+			appendSe(selExec)
+		default:
+			return nil, moerr.NewInternalError("no such statement %s", stmt.String())
+		}
+	}
+	return seList, nil
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
@@ -2564,7 +2629,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Deallocate, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
+			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 				trace.EndStatement(requestCtx, err2)
 				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -2643,15 +2708,25 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		Version:      serverVersion,
 		TimeZone:     ses.GetTimeZone(),
 	}
-	//TODO: make stmtExecs
+
+	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
+		sql,
+		ses.GetUserName(),
+		pu.StorageEngine,
+		proc, ses)
+	if err != nil {
+		retErr = moerr.NewParseError(err.Error())
+		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		return retErr
+	}
 
 	for _, exec := range stmtExecs {
-		err = exec.Execute(requestCtx, ses, nil, beginInstant)
+		err = exec.Execute(requestCtx, ses, proc, beginInstant)
 		if err != nil {
 			return err
 		}
 	}
-	return
+	return err
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
@@ -2671,6 +2746,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
+	doComQuery := mce.GetDoQueryFunc()
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
 		/*resp = NewResponse(
@@ -2715,7 +2791,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 			return resp, nil
 		}
 
-		err := mce.doComQuery(requestCtx, query)
+		err := doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -2724,7 +2800,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := mce.doComQuery(requestCtx, query)
+		err := doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -2734,7 +2810,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := mce.doComQuery(requestCtx, query)
+		err := doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -2756,7 +2832,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql = fmt.Sprintf("Prepare %s from %s", newStmtName, sql)
 		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err := doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -2769,7 +2845,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
-		err = mce.doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
@@ -2784,7 +2860,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql := fmt.Sprintf("deallocate Prepare %s", stmtName)
 		logutil.Info("query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err := doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}

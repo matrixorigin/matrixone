@@ -30,9 +30,14 @@ uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "127.0.0.1:3307"
 role = "TP"
 
+[cn.Frontend]
+comQueryInProgress = true
+
 [cn.Engine]
 type = "tae"
 logstore = "logservice"
 
 [observability]
 statusPort = 9001
+disableTrace = true
+disableMetric = true

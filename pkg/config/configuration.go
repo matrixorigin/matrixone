@@ -233,6 +233,8 @@ type FrontendParameters struct {
 
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
+
+	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {

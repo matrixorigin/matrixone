@@ -16,8 +16,12 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"time"
@@ -36,6 +40,15 @@ type CmdExecutor interface {
 type CmdExecutorImpl struct {
 	CmdExecutor
 }
+
+type doComQueryFunc func(context.Context, string) error
+
+type stmtExecStatus int
+
+const (
+	stmtExecSuccess stmtExecStatus = iota
+	stmtExecFail
+)
 
 // StmtExecutor represents the single statement execution.
 // it is also independent of the protocol
@@ -62,6 +75,12 @@ type StmtExecutor interface {
 	// ExecuteImpl runs concrete logic. every statement has its implementation
 	ExecuteImpl(ctx context.Context, ses *Session) error
 
+	// RecordPlan saves the plan into the log
+	RecordPlan(ctx context.Context, ses *Session) error
+
+	// CommitOrRollbackTxn commits or rollbacks the transaction based on the status
+	CommitOrRollbackTxn(ctx context.Context, ses *Session) error
+
 	// Execute runs the execution framework
 	Execute(ctx context.Context, ses *Session, proc *process.Process, beginInstant time.Time) error
 }
@@ -72,18 +91,60 @@ var _ StmtExecutor = &resultSetStmtExecutor{}
 
 // baseStmtExecutor the base class for the statement execution
 type baseStmtExecutor struct {
-	mu sync.Mutex
 	*TxnComputationWrapper
-
+	mu sync.Mutex
 	// the ctx will be updated in Prepare
 	updatedCtx context.Context
 
 	tenantName string
+
+	status stmtExecStatus
+	err    error
+}
+
+func (bse *baseStmtExecutor) RecordPlan(ctx context.Context, ses *Session) error {
+	_ = bse.RecordExecPlan(bse.updatedCtx)
+	return nil
+}
+
+func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	var txnErr error
+	stmt := bse.stmt
+	requestCtx := bse.updatedCtx
+	tenant := bse.tenantName
+	incStatementCounter(tenant, stmt)
+	if bse.status == stmtExecSuccess {
+		txnErr = ses.TxnCommitSingleStatement(stmt)
+		if txnErr != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+			trace.EndStatement(requestCtx, txnErr)
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		trace.EndStatement(requestCtx, nil)
+		logStatementStatus(requestCtx, ses, stmt, success, nil)
+	} else {
+		incStatementErrorsCounter(tenant, stmt)
+		trace.EndStatement(requestCtx, bse.err)
+		logutil.Error(bse.err.Error())
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		logStatementStatus(requestCtx, ses, stmt, fail, bse.err)
+	}
+	return nil
 }
 
 func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	//TODO implement me
-	panic("implement me")
+	if bse.compile != nil {
+		var runner ComputationRunner
+		runner = bse.compile
+		return runner.Run(0)
+	}
+	return nil
 }
 
 func (bse *baseStmtExecutor) Prepare(ctx context.Context, ses *Session, proc *process.Process, beginInstant time.Time) error {
@@ -93,7 +154,7 @@ func (bse *baseStmtExecutor) Prepare(ctx context.Context, ses *Session, proc *pr
 }
 
 func (bse *baseStmtExecutor) Close(ctx context.Context, ses *Session) error {
-	//TODO: commit or rollback
+	ses.SetMysqlResultSet(nil)
 	return nil
 }
 
@@ -154,11 +215,23 @@ func (bse *baseStmtExecutor) ResponseBefore(ctx context.Context, ses *Session) e
 }
 
 func (bse *baseStmtExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+	var err, retErr error
+	if bse.status == stmtExecSuccess {
+		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
+			trace.EndStatement(bse.updatedCtx, err)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+			logStatementStatus(bse.updatedCtx, ses, bse.stmt, fail, retErr)
+			return retErr
+		}
+	}
 	return nil
 }
 
 func (bse *baseStmtExecutor) Execute(ctx context.Context, ses *Session, proc *process.Process, beginInstant time.Time) error {
 	var err error
+	var cmpBegin, runBegin time.Time
+	pu := ses.GetParameterUnit()
 	err = bse.Prepare(ctx, ses, proc, beginInstant)
 	if err != nil {
 		goto handleRet
@@ -174,12 +247,35 @@ func (bse *baseStmtExecutor) Execute(ctx context.Context, ses *Session, proc *pr
 		goto handleRet
 	}
 
+	if err = bse.SetDatabaseName(ses.GetDatabaseName()); err != nil {
+		goto handleRet
+	}
+
+	cmpBegin = time.Now()
+
+	if _, err = bse.Compile(ctx, ses, ses.GetOutputCallback()); err != nil {
+		goto handleRet
+	}
+
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+	}
+
 	err = bse.ResponseBefore(ctx, ses)
 	if err != nil {
 		goto handleRet
 	}
 
+	runBegin = time.Now()
+
 	err = bse.ExecuteImpl(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	_ = bse.RecordExecPlan(ctx)
+
+	err = bse.CommitOrRollbackTxn(ctx, ses)
 	if err != nil {
 		goto handleRet
 	}
@@ -189,7 +285,16 @@ func (bse *baseStmtExecutor) Execute(ctx context.Context, ses *Session, proc *pr
 		goto handleRet
 	}
 
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
+	}
+
 handleRet:
+	bse.status = stmtExecSuccess
+	if err != nil {
+		bse.status = stmtExecFail
+	}
+
 	err = bse.Close(ctx, ses)
 	if err != nil {
 		return err
@@ -200,6 +305,15 @@ handleRet:
 // statusStmtExecutor represents the execution without outputting result set to the client
 type statusStmtExecutor struct {
 	father *baseStmtExecutor
+}
+
+func (sse *statusStmtExecutor) RecordPlan(ctx context.Context, ses *Session) error {
+	//TODO implement me
+	return sse.father.RecordPlan(ctx, ses)
+}
+
+func (sse *statusStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	return sse.father.CommitOrRollbackTxn(ctx, ses)
 }
 
 func (sse *statusStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -284,6 +398,15 @@ type resultSetStmtExecutor struct {
 	father *baseStmtExecutor
 }
 
+func (rsse *resultSetStmtExecutor) RecordPlan(ctx context.Context, ses *Session) error {
+	//TODO implement me
+	return rsse.father.RecordPlan(ctx, ses)
+}
+
+func (rsse *resultSetStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	return rsse.father.CommitOrRollbackTxn(ctx, ses)
+}
+
 func (rsse *resultSetStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	//TODO:
 	return nil
@@ -344,11 +467,52 @@ func (rsse *resultSetStmtExecutor) VerifyTxnRestriction(ctx context.Context, ses
 
 func (rsse *resultSetStmtExecutor) ResponseBefore(ctx context.Context, ses *Session) error {
 	var err error
+	var columns []interface{}
+	proto := ses.GetMysqlProtocol()
 	err = rsse.father.ResponseBefore(ctx, ses)
 	if err != nil {
 		return err
 	}
-	//TODO:
+
+	columns, err = rsse.GetColumns()
+	if err != nil {
+		logutil.Errorf("GetColumns from Computation handler failed. error: %v", err)
+		return err
+	}
+	/*
+		Step 1 : send column count and column definition.
+	*/
+	//send column count
+	colCnt := uint64(len(columns))
+	err = proto.SendColumnCountPacket(colCnt)
+	if err != nil {
+		return err
+	}
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := ses.GetCmd()
+	mrs := ses.GetMysqlResultSet()
+	for _, c := range columns {
+		mysqlc := c.(Column)
+		mrs.AddColumn(mysqlc)
+
+		/*
+			mysql COM_QUERY response: send the column definition per column
+		*/
+		err = proto.SendColumnDefinitionPacket(mysqlc, cmd)
+		if err != nil {
+			return err
+		}
+	}
+
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = proto.SendEOFPacketIf(0, 0)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
