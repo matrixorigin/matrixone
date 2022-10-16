@@ -16,7 +16,6 @@ package tables
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,26 +46,12 @@ func newNode(block *dataBlock) *appendableNode {
 	opts := new(containers.Options)
 	// opts.Capacity = int(schema.BlockMaxRows)
 	opts.Allocator = common.MutMemAllocator
-	impl.data = impl.initData(
-		schema.AllTypes(),
+	impl.data = containers.BuildBatch(
 		schema.AllNames(),
+		schema.AllTypes(),
 		schema.AllNullables(),
 		opts)
 	return impl
-}
-
-func (node *appendableNode) initData(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	opts *containers.Options) (bat *containers.Batch) {
-	bat = containers.NewBatch()
-
-	for i := range colNames {
-		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
-		bat.AddVector(colNames[i], vec)
-	}
-	return bat
 }
 
 func (node *appendableNode) Rows() uint32 {
