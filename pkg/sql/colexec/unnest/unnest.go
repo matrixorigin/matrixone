@@ -119,14 +119,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 	switch jsonVec.Typ.Oid {
 	case types.T_json:
-		rbat, err = handle(jsonVec, &path, outer, param, proc, func(dt []byte) (bytejson.ByteJson, error) {
-			ret := types.DecodeJson(dt)
-			return ret, nil
-		})
+		rbat, err = handle(jsonVec, &path, outer, param, proc, parseJson)
 	case types.T_varchar:
-		rbat, err = handle(jsonVec, &path, outer, param, proc, func(dt []byte) (bytejson.ByteJson, error) {
-			return types.ParseSliceToByteJson(dt)
-		})
+		rbat, err = handle(jsonVec, &path, outer, param, proc, parseStr)
 	}
 	if err != nil {
 		return false, err
@@ -220,4 +215,12 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 }
 func dupType(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
+}
+
+func parseJson(dt []byte) (bytejson.ByteJson, error) {
+	ret := types.DecodeJson(dt)
+	return ret, nil
+}
+func parseStr(dt []byte) (bytejson.ByteJson, error) {
+	return types.ParseSliceToByteJson(dt)
 }

@@ -16,7 +16,7 @@ package tree
 
 type TableFunction struct {
 	statementImpl
-	Func *FuncExpr
+	Func       *FuncExpr
 	SelectStmt *Select
 }
 

@@ -479,7 +479,6 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		c.anal.curr = curr
-		
 		ss, err := c.compileTableFunction(n, pre)
 		if err != nil {
 			return nil, err

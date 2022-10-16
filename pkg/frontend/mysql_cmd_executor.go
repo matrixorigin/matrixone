@@ -2248,9 +2248,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		cmpBegin = time.Now()
-		if strings.Contains(sql,"select a"){
-			fmt.Println("sql:",sql)
-		}
 		if ret, err = cw.Compile(requestCtx, ses, ses.outputCallback); err != nil {
 			goto handleFailed
 		}

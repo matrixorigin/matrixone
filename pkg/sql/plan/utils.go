@@ -584,12 +584,7 @@ func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) err
 	//	//newTableAliasMap[alias] = newAlias
 	//}
 	for i := range tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs {
-		var (
-			selectExpr tree.SelectExpr
-			//newTableName string
-			//newColAlias  string
-		)
-		selectExpr = tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i] //take care, this is not a pointer
+		selectExpr := tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i] //take care, this is not a pointer
 		expr := selectExpr.Expr.(*tree.UnresolvedName)
 		_, tableName, colName := expr.GetNames()
 		if len(tableName) == 0 {
