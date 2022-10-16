@@ -92,7 +92,7 @@ func (blk *dataBlock) replayImmutIndex() error {
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
-	for i, _ := range schema.ColDefs {
+	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(blk, schema.ColDefs[i], uint16(i)); err != nil {
 			return err
