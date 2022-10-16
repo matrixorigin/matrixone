@@ -32,35 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-// dirtyMemo intercepts txn to record changed segments and blocks, or catalog
-//
-// no locks to protect dirtyMemo because it is expected to be quried by other goroutines
-// until the txn enqueued, and after that, no one will change it
-type dirtyMemo struct {
-	// tableChanges records modified segments and blocks in current txn
-	tableChanges *common.Tree
-	// catalogChanged indicates whether create/drop db/table
-	catalogChanged bool
-}
-
-func newDirtyMemo() *dirtyMemo {
-	return &dirtyMemo{
-		tableChanges: common.NewTree(),
-	}
-}
-
-func (m *dirtyMemo) recordBlk(dbID uint64, id *common.ID) {
-	m.tableChanges.AddBlock(dbID, id.TableID, id.SegmentID, id.BlockID)
-}
-
-func (m *dirtyMemo) recordSeg(dbID, tableID, segID uint64) {
-	m.tableChanges.AddSegment(dbID, tableID, segID)
-}
-
-func (m *dirtyMemo) recordCatalogChange() {
-	m.catalogChanged = true
-}
-
 type txnStore struct {
 	txnbase.NoopTxnStore
 	dbs      map[uint64]*txnDB
@@ -76,8 +47,6 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
-
-	dirtyMemo *dirtyMemo
 }
 
 var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
@@ -95,7 +64,6 @@ func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeM
 		logs:        make([]entry.Entry, 0),
 		dataFactory: dataFactory,
 		nodesMgr:    txnBufMgr,
-		dirtyMemo:   newDirtyMemo(),
 	}
 }
 
@@ -574,23 +542,3 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
-
-func (store *txnStore) HasAnyTableDataChanges() bool {
-	return store.dirtyMemo.tableChanges.TableCount() > 0
-}
-
-// GetDirty returns all touched segments and blocks in the txn, group by table
-func (store *txnStore) GetDirty() *common.Tree { return store.dirtyMemo.tableChanges }
-
-func (store *txnStore) HasTableDataChanges(id uint64) bool {
-	return store.dirtyMemo.tableChanges.HasTable(id)
-}
-
-// GetDirtyTableByID returns touched segments and blocks of a table in the txn, group by segment
-func (store *txnStore) GetDirtyTableByID(id uint64) *common.TableTree {
-	return store.dirtyMemo.tableChanges.GetTable(id)
-}
-
-func (store *txnStore) HasCatalogChanges() bool {
-	return store.dirtyMemo.catalogChanged
-}

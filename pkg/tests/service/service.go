@@ -51,6 +51,8 @@ type Cluster interface {
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
+	// Options returns the adjusted options
+	Options() Options
 
 	ClusterOperation
 	ClusterAwareness
@@ -196,6 +198,10 @@ type ClusterWaitState interface {
 	WaitDNStoreReported(ctx context.Context, uuid string)
 	// WaitDNStoreReportedIndexed waits dn store reported by index.
 	WaitDNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitCNStoreReported waits cn store reported by uuid.
+	WaitCNStoreReported(ctx context.Context, uuid string)
+	// WaitCNStoreReportedIndexed waits cn store reported by index.
+	WaitCNStoreReportedIndexed(ctx context.Context, index int)
 
 	// WaitLogStoreTimeout waits log store timeout by uuid.
 	WaitLogStoreTimeout(ctx context.Context, uuid string)
@@ -285,7 +291,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
 
 	// build dn service configurations
-	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
+	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
 
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 
@@ -324,6 +330,10 @@ func (c *testCluster) Start() error {
 
 	c.mu.running = true
 	return nil
+}
+
+func (c *testCluster) Options() Options {
+	return c.opt
 }
 
 func (c *testCluster) Close() error {
@@ -792,6 +802,41 @@ func (c *testCluster) WaitDNStoreReportedIndexed(ctx context.Context, index int)
 	c.WaitDNStoreReported(ctx, ds.ID())
 }
 
+func (c *testCluster) WaitCNStoreReported(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting cn store reported",
+				"cn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.CNStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check cn store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if !expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitCNStoreReportedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetCNServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitCNStoreReported(ctx, ds.ID())
+}
+
 func (c *testCluster) WaitLogStoreTimeout(ctx context.Context, uuid string) {
 	for {
 		select {
@@ -1113,8 +1158,8 @@ func (c *testCluster) buildFileServices() *fileServices {
 	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
 }
 
-// buildDnConfigs builds configurations for all dn services.
-func (c *testCluster) buildDnConfigs(
+// buildDNConfigs builds configurations for all dn services.
+func (c *testCluster) buildDNConfigs(
 	address serviceAddresses,
 ) ([]*dnservice.Config, []dnOptions) {
 	batch := c.opt.initial.dnServiceNum
@@ -1122,11 +1167,11 @@ func (c *testCluster) buildDnConfigs(
 	cfgs := make([]*dnservice.Config, 0, batch)
 	opts := make([]dnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildDnConfig(i, c.opt, address)
+		cfg := buildDNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
 		localAddr := cfg.ListenAddress
-		opt := buildDnOptions(cfg, c.backendFilterFactory(localAddr))
+		opt := buildDNOptions(cfg, c.backendFilterFactory(localAddr))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
