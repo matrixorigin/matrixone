@@ -409,8 +409,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		blockID := uint64(0)
 		tableName := b.tname
 		if metaChange {
-			blockID = 1 // make metadata change stand out, just a flag
-			tableName = fmt.Sprintf("_%d_%s", b.tid, b.tname)
+			tableName = fmt.Sprintf("_%d_meta", b.tid)
 		}
 		entry := &api.Entry{
 			EntryType:    typ,
