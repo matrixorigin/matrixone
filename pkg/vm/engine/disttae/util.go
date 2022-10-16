@@ -127,7 +127,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs fileservice.FileService) ([][64]byte, error) {
+func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
 	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, columnLength)
 	idxs := make([]uint16, columnLength)
@@ -141,7 +141,7 @@ func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs
 		return nil, err
 	}
 
-	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType)
+	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
 	if err != nil {
 		return nil, err
 	}

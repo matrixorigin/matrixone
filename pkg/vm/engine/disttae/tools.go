@@ -945,12 +945,12 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any, fs fileservice.FileService) ([]BlockMeta, error) {
+func genBlockMetas(rows [][]any, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	columnLength := len(rows)
 	metas := make([]BlockMeta, len(rows))
 	for i, blockInfo := range blockInfos {
-		zm, err := fetchZonemapFromBlockInfo(columnLength, blockInfo, fs)
+		zm, err := fetchZonemapFromBlockInfo(columnLength, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}

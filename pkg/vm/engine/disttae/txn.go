@@ -145,7 +145,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			if err != nil {
 				return nil, err
 			}
-			blocks[i], err = genBlockMetas(rows, txn.proc.FileService)
+			blocks[i], err = genBlockMetas(rows, txn.proc.FileService, txn.proc.GetMPool())
 			if err != nil {
 				return nil, err
 			}
