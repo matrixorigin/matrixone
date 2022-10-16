@@ -378,6 +378,7 @@ func TestNonAppendableBlock(t *testing.T) {
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
+		assert.Nil(t, err)
 		blk.UpdateMetaLoc(metaLoc)
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)

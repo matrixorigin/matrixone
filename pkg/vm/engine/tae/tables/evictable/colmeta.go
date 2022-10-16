@@ -57,6 +57,9 @@ func (n *ColumnMetaNode) onLoad() {
 	}
 	// Do IO, fetch columnData
 	reader, err := blockio.NewReader(n.fs, n.metaloc)
+	if err != nil {
+		panic(err)
+	}
 	meta := reader.GetDataObject(n.idx, nil)
 	n.ColumnObject = meta
 

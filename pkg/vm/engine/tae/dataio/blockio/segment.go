@@ -50,6 +50,4 @@ func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
 	return id.SegmentID, err
 }
 
-func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) {
-	return
-}
+func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) {}

@@ -93,6 +93,9 @@ func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 
 func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
 	block, err := r.ReadMeta(m)
+	if err != nil {
+		panic(any(err))
+	}
 	if block == nil {
 		return nil
 	}
