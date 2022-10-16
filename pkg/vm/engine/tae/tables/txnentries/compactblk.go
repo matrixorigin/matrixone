@@ -18,12 +18,10 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -64,6 +62,10 @@ func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
 	return
 }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
+	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().FreeData()
+	if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
+		return
+	}
 	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
 		// TODO:
 		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
@@ -97,25 +99,8 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	if view == nil || err != nil {
 		return
 	}
-	deletes := entry.deletes
-	for _, column := range view.Columns {
-		column.UpdateMask, column.UpdateVals, column.DeleteMask = compute.ShuffleByDeletes(
-			column.UpdateMask,
-			column.UpdateVals,
-			column.DeleteMask, deletes)
-	}
-	_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, deletes)
-	if view.DeleteMask != nil {
-		it := view.DeleteMask.Iterator()
-		for it.HasNext() {
-			row := it.Next()
-			if entry.mapping != nil && len(entry.mapping) > int(row) {
-				row = entry.mapping[row]
-			}
-			if err = entry.to.RangeDelete(row, row, handle.DT_MergeCompact); err != nil {
-				return
-			}
-		}
+	if view.DeleteMask != nil && !view.DeleteMask.IsEmpty() {
+		return moerr.NewTxnWWConflict()
 	}
 	return
 }

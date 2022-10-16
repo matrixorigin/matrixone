@@ -17,6 +17,8 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,6 +62,8 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		} else if tblRef.TableType == catalog.SystemViewRel {
 			return nil, moerr.NewInternalError("view is not support update operation")
 		}
+		computeIndexInfo := BuildComputeIndexInfos(ctx, tf.dbNames[i], tblRef.Defs)
+		tblRef.ComputeIndexInfos = computeIndexInfo
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
 	}
@@ -221,32 +225,15 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var priKey string
 		var priKeyIdx int32 = -1
 		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
-		for _, key := range priKeys {
-			if key.IsCPkey {
-				break
-			}
-			for _, updateCol := range updateCols {
-				if key.Name == updateCol.colDef.Name {
-					e, _ := tree.NewUnresolvedName(updateCol.dbName, updateCol.aliasTblName, key.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-					priKey = key.Name
-					priKeyIdx = offset
-					break
-				}
-			}
-		}
 
 		// use hide key to update if primary key will not be updated
-		var hideKeyIdx int32 = -1
 		hideKey := ctx.GetHideKeyDef(updateCols[0].dbName, updateCols[0].tblName).GetName()
-		if priKeyIdx == -1 {
-			if hideKey == "" {
-				return nil, nil, moerr.NewInternalError("internal error: cannot find hide key")
-			}
-			e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
-			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-			hideKeyIdx = offset
+		if hideKey == "" {
+			return nil, nil, moerr.NewInternalError("internal error: cannot find hide key")
 		}
+		e, _ := tree.NewUnresolvedName(updateCols[0].dbName, updateCols[0].aliasTblName, hideKey)
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		hideKeyIdx := offset
 
 		// construct projection for list of update expr
 		for _, expr := range updateExprsArray[i] {
@@ -267,6 +254,18 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 
 		// figure out other cols that will not be updated
 		var onUpdateCols []updateCol
+		// make true we can get all the index col data before update, so we can delete index info.
+		indexColNameMap := make(map[string]bool)
+		for _, info := range tblRefs[k].ComputeIndexInfos {
+			if info.Cols[0].IsCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[info.Cols[0].Name] = true
+			}
+		}
 		for _, col := range tblRefs[k].Cols {
 			if col.Name == hideKey {
 				continue
@@ -283,12 +282,24 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			if !isUpdateCol {
 				if col.OnUpdate != nil {
 					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
 				} else {
 					otherAttrs = append(otherAttrs, col.Name)
-					e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 				}
+			}
+		}
+		var indexAttrs []string = nil
+
+		for indexColName := range indexColNameMap {
+			find := false
+
+			for _, otherAttr := range otherAttrs {
+				if otherAttr == indexColName {
+					find = true
+					break
+				}
+			}
+			if !find {
+				indexAttrs = append(indexAttrs, indexColName)
 			}
 		}
 		offset += int32(len(orderAttrs)) + 1
@@ -302,12 +313,22 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			HideKeyIdx: hideKeyIdx,
 			OtherAttrs: otherAttrs,
 			OrderAttrs: orderAttrs,
+			IndexAttrs: indexAttrs,
 		}
 		for _, u := range updateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
 		}
 		for _, u := range onUpdateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
+		}
+		for _, o := range otherAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, o)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		}
+		for _, attr := range indexAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, attr)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		if len(priKeys) > 0 && priKeys[0].IsCPkey {
 			ct.CompositePkey = priKeys[0]

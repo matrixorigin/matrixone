@@ -16,9 +16,9 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
@@ -69,13 +69,12 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id []byte, s
 }
 
 type Txn struct {
-	sync.WaitGroup
 	*TxnCtx
 	Mgr                      *TxnManager
 	Store                    txnif.TxnStore
 	Err                      error
 	LSN                      uint64
-	TenantID, UserID, RoleID uint32
+	TenantID, UserID, RoleID atomic.Uint32
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -237,6 +236,7 @@ func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
+		//FIXME::??
 		txn.WaitGroup.Done()
 		return
 	}
@@ -332,17 +332,17 @@ func (txn *Txn) WaitDone(err error, isAbort bool) error {
 }
 
 func (txn *Txn) BindAccessInfo(tenantID, userID, roleID uint32) {
-	atomic.StoreUint32(&txn.TenantID, tenantID)
-	atomic.StoreUint32(&txn.UserID, userID)
-	atomic.StoreUint32(&txn.RoleID, roleID)
+	txn.TenantID.Store(tenantID)
+	txn.UserID.Store(userID)
+	txn.RoleID.Store(roleID)
 }
 
 func (txn *Txn) GetTenantID() uint32 {
-	return atomic.LoadUint32(&txn.TenantID)
+	return txn.TenantID.Load()
 }
 
 func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
-	return atomic.LoadUint32(&txn.UserID), atomic.LoadUint32(&txn.RoleID)
+	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
 func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
@@ -350,6 +350,14 @@ func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
 }
 
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) UnsafeGetDatabase(id uint64) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) UnsafeGetRelation(dbId, id uint64) (db handle.Relation, err error) {
 	return
 }
 

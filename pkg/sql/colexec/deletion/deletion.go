@@ -17,6 +17,7 @@ package deletion
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,6 +70,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// for j := filterColIndex + 1; j < maxIndex; j++ {
 			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
 			// }
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
@@ -87,6 +89,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			// for j := filterColIndex + 1; j < maxIndex; j++ {
 			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
 			// }
+			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
@@ -96,9 +99,18 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			tmpBat.Clean(proc.Mp())
 		}
-
+		for infoNum, info := range p.DeleteCtxs[i].ComputeIndexInfos {
+			rel := p.DeleteCtxs[i].ComputeIndexTables[infoNum]
+			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, info.Cols, proc)
+			if rowNum != 0 {
+				err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+				if err != nil {
+					return false, err
+				}
+			}
+			oldBatch.Clean(proc.Mp())
+		}
 	}
-
 	atomic.AddUint64(&p.AffectedRows, affectedRows)
 
 	return false, nil

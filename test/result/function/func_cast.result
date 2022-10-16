@@ -163,17 +163,11 @@ null	null	null
 CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
 insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
 SELECT CAST(col_char AS DATETIME) FROM t;
-CAST(col_char AS DATETIME)
-null
-null
+invalid input: invalid datatime value L
 SELECT col_char <> col_datetime FROM t;
-col_char <> col_datetime
-1
-null
+invalid input: invalid datatime value L
 SELECT CAST(col_char AS DATE) FROM t;
-CAST(col_char AS DATE)
-null
-null
+invalid argument parsedate, bad value L
 SELECT col_char <> col_date FROM t;
 col_char <> col_date
 1

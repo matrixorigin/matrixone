@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package external
+package catalog
 
-const NULL_FLAG = "\\N"
+import "testing"
+
+func TestGenBlockMeta(t *testing.T) {
+	_ = GenBlockInfo(nil)
+}

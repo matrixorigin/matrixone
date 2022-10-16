@@ -40,7 +40,7 @@ type vFile struct {
 	*os.File
 	*vInfo
 	version    int
-	committed  int32
+	committed  atomic.Int32
 	size       int //update when write
 	wg         sync.WaitGroup
 	commitCond sync.Cond
@@ -102,7 +102,7 @@ func (vf *vFile) GetState() *vFileState {
 }
 
 func (vf *vFile) HasCommitted() bool {
-	return atomic.LoadInt32(&vf.committed) == int32(1)
+	return vf.committed.Load() == int32(1)
 }
 
 func (vf *vFile) PrepareWrite(size int) {
@@ -135,7 +135,7 @@ func (vf *vFile) Commit() {
 	vf.buf = nil
 	vf.Unlock()
 	vf.commitCond.L.Lock()
-	atomic.StoreInt32(&vf.committed, int32(1))
+	vf.committed.Store(1)
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
@@ -181,11 +181,11 @@ func (vf *vFile) Sync() error {
 }
 
 func (vf *vFile) WaitCommitted() {
-	if atomic.LoadInt32(&vf.committed) == int32(1) {
+	if vf.committed.Load() == int32(1) {
 		return
 	}
 	vf.commitCond.L.Lock()
-	if atomic.LoadInt32(&vf.committed) != int32(1) {
+	if vf.committed.Load() != int32(1) {
 		vf.commitCond.Wait()
 	}
 	vf.commitCond.L.Unlock()
@@ -297,5 +297,5 @@ func (vf *vFile) readEntryAt(offset int) (*entry.Entry, error) {
 	return e, err
 }
 func (vf *vFile) OnReplayCommitted() {
-	vf.committed = 1
+	vf.committed.Store(1)
 }

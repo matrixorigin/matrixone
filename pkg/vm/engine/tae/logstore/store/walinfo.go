@@ -20,6 +20,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,7 +40,7 @@ type StoreInfo struct {
 	ckpMu               sync.RWMutex
 	walDriverLsnMap     map[uint32]map[uint64]uint64
 	lsnMu               sync.RWMutex
-	driverCheckpointing uint64
+	driverCheckpointing atomic.Uint64
 	driverCheckpointed  uint64
 	walCurrentLsn       map[uint32]uint64 //todo
 	lsnmu               sync.RWMutex

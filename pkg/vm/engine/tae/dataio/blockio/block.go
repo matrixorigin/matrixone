@@ -15,6 +15,10 @@
 package blockio
 
 import (
+	"os"
+	"path"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,22 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"os"
-	"path"
-	"sync"
 )
 
 type blockFile struct {
 	common.RefHelper
 	sync.RWMutex
-	name     string
-	seg      *segmentFile
-	id       *common.ID
-	metaKey  objectio.Extent
-	deltaKey objectio.Extent
-	columns  []*columnBlock
-	writer   *Writer
-	reader   *Reader
+	name         string
+	seg          *segmentFile
+	id           *common.ID
+	metaKey      objectio.Extent
+	deltaKey     objectio.Extent
+	objectBlocks []objectio.BlockObject
+	columns      []*columnBlock
+	writer       *Writer
+	reader       *Reader
 }
 
 func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
@@ -46,7 +48,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 		SegmentID: seg.id.SegmentID,
 		BlockID:   id,
 	}
-	name := EncodeBlkName(blockID)
+	name := EncodeBlkName(blockID, types.TS{})
 	bf := &blockFile{
 		seg:     seg,
 		id:      blockID,
@@ -69,6 +71,10 @@ func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objecti
 	return block, err
 }
 
+func (bf *blockFile) UpdateName(name string) {
+	bf.writer = NewWriter(bf.seg.fs, name)
+	bf.reader = NewReader(bf.seg.fs, bf, name)
+}
 func (bf *blockFile) GetWriter() objectio.Writer {
 	return bf.writer.writer
 }
@@ -117,6 +123,14 @@ func (bf *blockFile) getDeltaKey() objectio.Extent {
 	return bf.deltaKey
 }
 
+func (bf *blockFile) GetObjectBlocks() []objectio.BlockObject {
+	return bf.objectBlocks
+}
+
+func (bf *blockFile) FreeObjectBlocks() {
+	bf.objectBlocks = nil
+}
+
 func (bf *blockFile) GetMeta() objectio.BlockObject {
 	metaKey := bf.getMetaKey()
 	if metaKey.End() == 0 {
@@ -125,7 +139,7 @@ func (bf *blockFile) GetMeta() objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(metaKey)
+	block, err := bf.reader.ReadMeta(metaKey, nil)
 	if err != nil {
 		panic(any(err))
 	}
@@ -137,7 +151,7 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
-	block, err := bf.reader.ReadMeta(extent)
+	block, err := bf.reader.ReadMeta(extent, nil)
 	if err != nil {
 		// FIXME: Now the block that is gc will also be replayed, here is a work around
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -157,7 +171,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(metaKey)
+	block, err := bf.reader.ReadMeta(metaKey, nil)
 	if err != nil {
 		panic(any(err))
 	}
@@ -165,11 +179,11 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 }
 
 func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
-	name, extent := DecodeDeltaLoc(metaLoc)
+	name, extent, _ := DecodeMetaLoc(metaLoc)
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
-	block, err := bf.reader.ReadMeta(extent)
+	block, err := bf.reader.ReadMeta(extent, nil)
 	if err != nil {
 		// FIXME: Now the block that is gc will also be replayed, here is a work around
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -224,6 +238,7 @@ func (bf *blockFile) Sync() error {
 	if len(blocks) > 1 {
 		bf.setDeltaKey(blocks[1].GetExtent())
 	}
+	bf.objectBlocks = blocks
 	return err
 }
 

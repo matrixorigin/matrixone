@@ -19,10 +19,13 @@ import (
 	"container/heap"
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,8 +35,9 @@ import (
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	proc *process.Process,
 	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
@@ -43,12 +47,13 @@ func New(
 		panic(err)
 	}
 	db := newDB(cli, cluster.DNStores)
-	if err := db.init(ctx, proc.Mp()); err != nil {
+	if err := db.init(ctx, mp); err != nil {
 		panic(err)
 	}
 	return &Engine{
 		db:                db,
-		proc:              proc,
+		mp:                mp,
+		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -73,7 +78,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, e.proc.Mp())
+		name, databaseId, e.mp)
 	if err != nil {
 		return err
 	}
@@ -92,8 +97,8 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	if db, ok := txn.databaseMap[key]; ok {
-		return db, nil
+	if db, ok := txn.databaseMap.Load(key); ok {
+		return db.(*database), nil
 	}
 	if name == catalog.MO_CATALOG {
 		db := &database{
@@ -102,7 +107,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
-		txn.databaseMap[key] = db
+		txn.databaseMap.Store(key, db)
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)
@@ -115,7 +120,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		databaseId:   id,
 		databaseName: name,
 	}
-	txn.databaseMap[key] = db
+	txn.databaseMap.Store(key, db)
 	return db, nil
 }
 
@@ -133,12 +138,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	delete(txn.databaseMap, key)
+	txn.databaseMap.Delete(key)
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
+	bat, err := genDropDatabaseTuple(id, name, e.mp)
 	if err != nil {
 		return err
 	}
@@ -161,17 +166,25 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
+	proc := process.New(
+		ctx,
+		e.mp,
+		e.cli,
+		op,
+		e.fs,
+	)
 	txn := &Transaction{
-		proc:        e.proc,
-		db:          e.db,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		rowId:       [2]uint64{math.MaxUint64, 0},
-		dnStores:    cluster.DNStores,
-		fileMap:     make(map[string]uint64),
-		tableMap:    make(map[tableKey]*table),
-		databaseMap: make(map[databaseKey]*database),
+		proc:           proc,
+		db:             e.db,
+		readOnly:       true,
+		meta:           op.Txn(),
+		idGen:          e.idGen,
+		rowId:          [2]uint64{math.MaxUint64, 0},
+		dnStores:       cluster.DNStores,
+		fileMap:        make(map[string]uint64),
+		tableMap:       new(sync.Map),
+		databaseMap:    new(sync.Map),
+		createTableMap: make(map[uint64]uint8),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
@@ -208,6 +221,11 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
+	if err == nil {
+		for _, name := range txn.deleteMetaTables {
+			txn.db.delMetaTable(name)
+		}
+	}
 	return err
 }
 
@@ -222,21 +240,23 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	clusterDetails, err := e.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
+	return nil, nil
+	/*
+		clusterDetails, err := e.getClusterDetails()
+		if err != nil {
+			return nil, err
+		}
 
-	var nodes engine.Nodes
-	for _, store := range clusterDetails.CNStores {
-		nodes = append(nodes, engine.Node{
-			Mcpu: 10, // TODO
-			Id:   store.UUID,
-			Addr: store.ServiceAddress,
-		})
-	}
-
-	return nodes, nil
+		var nodes engine.Nodes
+		for _, store := range clusterDetails.CNStores {
+			nodes = append(nodes, engine.Node{
+				Mcpu: 10, // TODO
+				Id:   store.UUID,
+				Addr: store.ServiceAddress,
+			})
+		}
+		return nodes, nil
+	*/
 }
 
 func (e *Engine) Hints() (h engine.Hints) {
@@ -260,7 +280,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.proc.Mp())
+			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
 	e.Lock()

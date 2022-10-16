@@ -90,9 +90,7 @@ func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) OnReplayCommit(ts types.TS) {
-	node.TxnMVCCNode.OnReplayCommit(ts)
-}
+
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -187,7 +185,7 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	err = node.TxnMVCCNode.ApplyRollback(index)
+	_, err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 
