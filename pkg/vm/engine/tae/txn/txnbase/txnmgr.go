@@ -30,14 +30,14 @@ import (
 )
 
 type TxnCommitListener interface {
-	OnBeginPrePrepare(*OpTxn)
-	OnEndPrePrepare(*OpTxn)
+	OnBeginPrePrepare(txnif.AsyncTxn)
+	OnEndPrePrepare(txnif.AsyncTxn)
 }
 
 type NoopCommitListener struct{}
 
-func (bl *NoopCommitListener) OnBeginPrePrepare(op *OpTxn) {}
-func (bl *NoopCommitListener) OnEndPrePrepare(op *OpTxn)   {}
+func (bl *NoopCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {}
+func (bl *NoopCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn)   {}
 
 type batchTxnCommitListener struct {
 	listeners []TxnCommitListener
@@ -53,15 +53,15 @@ func (bl *batchTxnCommitListener) AddTxnCommitListener(l TxnCommitListener) {
 	bl.listeners = append(bl.listeners, l)
 }
 
-func (bl *batchTxnCommitListener) OnBeginPrePrepare(op *OpTxn) {
+func (bl *batchTxnCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
-		l.OnBeginPrePrepare(op)
+		l.OnBeginPrePrepare(txn)
 	}
 }
 
-func (bl *batchTxnCommitListener) OnEndPrePrepare(op *OpTxn) {
+func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
-		l.OnEndPrePrepare(op)
+		l.OnEndPrePrepare(txn)
 	}
 }
 
@@ -114,11 +114,15 @@ func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 	return
 }
 
+// Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
+	// op := TxnO
 	mgr.Lock()
 	defer mgr.Unlock()
 	// TODO: idempotent check
 	mgr.IDMap[txn.GetID()] = txn
+	mgr.CommitListener.OnBeginPrePrepare(txn)
+	defer mgr.CommitListener.OnEndPrePrepare(txn)
 	return
 }
 
@@ -202,8 +206,8 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 		return
 	}
 
-	mgr.CommitListener.OnBeginPrePrepare(op)
-	defer mgr.CommitListener.OnEndPrePrepare(op)
+	mgr.CommitListener.OnBeginPrePrepare(op.Txn)
+	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
