@@ -91,12 +91,25 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS,
 	return txn
 }
 
-func NewReplayedTxn(mgr *TxnManager, ctx *TxnCtx, lsn uint64) *Txn {
+func NewPersistedTxn(
+	mgr *TxnManager,
+	ctx *TxnCtx,
+	store txnif.TxnStore,
+	lsn uint64,
+	prepareCommitFn func(txnif.AsyncTxn) error,
+	prepareRollbackFn func(txnif.AsyncTxn) error,
+	applyCommitFn func(txnif.AsyncTxn) error,
+	applyRollbackFn func(txnif.AsyncTxn) error) *Txn {
 	return &Txn{
-		Mgr:      mgr,
-		TxnCtx:   ctx,
-		isReplay: true,
-		LSN:      lsn,
+		Mgr:               mgr,
+		TxnCtx:            ctx,
+		Store:             store,
+		isReplay:          true,
+		LSN:               lsn,
+		PrepareRollbackFn: prepareRollbackFn,
+		PrepareCommitFn:   prepareRollbackFn,
+		ApplyRollbackFn:   applyRollbackFn,
+		ApplyCommitFn:     applyCommitFn,
 	}
 }
 
@@ -189,6 +202,14 @@ func (txn *Txn) Rollback() (err error) {
 // Notice that txn must commit successfully once committing message arrives, since Preparing
 // had already succeeded.
 func (txn *Txn) Committing() (err error) {
+	return txn.doCommitting(false)
+}
+
+func (txn *Txn) CommittingInRecovery() (err error) {
+	return txn.doCommitting(true)
+}
+
+func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFound()
 		return
@@ -203,11 +224,15 @@ func (txn *Txn) Committing() (err error) {
 	if err = txn.ToCommittingFinished(); err != nil {
 		panic(err)
 	}
-	//Make a committing log entry, flush and wait it synced.
-	//A log entry's payload contains txn id , commit timestamp and txn's state.
-	_, err = txn.LogTxnState(true)
-	if err != nil {
-		panic(err)
+
+	// Skip logging in recovery
+	if !inRecovery {
+		//Make a committing log entry, flush and wait it synced.
+		//A log entry's payload contains txn id , commit timestamp and txn's state.
+		_, err = txn.LogTxnState(true)
+		if err != nil {
+			panic(err)
+		}
 	}
 	err = txn.Err
 	return
@@ -217,6 +242,15 @@ func (txn *Txn) Committing() (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
+	return txn.doCommit(false)
+}
+
+// CommitInRecovery is called during recovery
+func (txn *Txn) CommitInRecovery() (err error) {
+	return txn.doCommit(true)
+}
+
+func (txn *Txn) doCommit(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFound()
 		return
@@ -228,10 +262,10 @@ func (txn *Txn) Commit() (err error) {
 	}
 
 	if txn.Is2PC() {
-		return txn.commit2PC()
+		return txn.commit2PC(inRecovery)
 	}
 
-	return txn.commit1PC()
+	return txn.commit1PC(inRecovery)
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {

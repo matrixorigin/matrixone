@@ -267,9 +267,9 @@ func (mgr *TxnManager) onPrepare(op *OpTxn, ts types.TS) {
 		op.Txn.Unlock()
 		mgr.onPreparRollback(op.Txn)
 	} else {
-		//1.  Appending the data into appendableNode of block
+		// 1. Appending the data into appendableNode of block
 		// 2. Collect redo log,append into WalDriver
-		//TODO::need to handle the error,instead of panic for simplicity
+		// TODO::need to handle the error,instead of panic for simplicity
 		mgr.onPreApplyCommit(op.Txn)
 		if op.Txn.GetError() != nil {
 			panic(op.Txn.GetID())

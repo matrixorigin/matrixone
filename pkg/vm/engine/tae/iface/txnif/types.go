@@ -93,6 +93,9 @@ type TxnChanger interface {
 	SetCommitTS(cts types.TS) error
 	SetParticipants(ids []uint64) error
 	SetError(error)
+
+	CommittingInRecovery() error
+	CommitInRecovery() error
 }
 
 type TxnWriter interface {
