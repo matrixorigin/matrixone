@@ -21,7 +21,6 @@ SHOW TABLE STATUS LIKE 't' \G;
 SHOW TABLE STATUS LIKE 't%' \G;
 
 -- for item 'Create_time', check it whether time_zone related.
-SHOW VARIABLES LIKE '%time_zone%';
 --SET time_zone = '+07:00';
 DROP TABLE IF EXISTS t;
 DROP TABLE IF EXISTS t1;
