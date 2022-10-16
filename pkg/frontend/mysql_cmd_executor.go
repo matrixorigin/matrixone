@@ -1911,6 +1911,10 @@ func incStatementCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+func incTransactionCounter(tenant string) {
+	metric.TransactionCounter(tenant).Inc()
+}
+
 func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 	metric.TransactionErrorsCounter(tenant, t).Inc()
 }

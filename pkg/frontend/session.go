@@ -744,8 +744,11 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		// metric count
+		tenant := ses.GetTenantName(stmt)
+		incTransactionCounter(tenant)
 		if err != nil {
-			incTransactionErrorsCounter(ses.GetTenantName(stmt), metric.SQLTypeAutoCommit)
+			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoCommit)
 		}
 	}
 	return err
@@ -766,11 +769,13 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	*/
 	if !ses.InMultiStmtTransactionMode() ||
 		ses.InActiveTransaction() && IsStatementToBeCommittedInActiveTransaction(stmt) {
-		tenant := ses.GetTenantName(stmt)
-		incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		// metric count
+		tenant := ses.GetTenantName(stmt)
+		incTransactionCounter(tenant)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
 		if err != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
 		}
@@ -784,20 +789,24 @@ It commits the current transaction implicitly.
 */
 func (ses *Session) TxnBegin() error {
 	var err error
+	tenant := ses.GetTenantName(nil)
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		err = ses.GetTxnHandler().CommitTxn()
+		// metric count: last txn
+		incTransactionCounter(tenant)
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
-		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeBegin)
+		// metric count: last txn commit failed.
+		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
 	if err != nil {
-		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeBegin)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
 	}
 	return err
 }
@@ -809,8 +818,11 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
+	// metric count
+	tenant := ses.GetTenantName(nil)
+	incTransactionCounter(tenant)
 	if err != nil {
-		incTransactionErrorsCounter(ses.GetTenantName(nil), metric.SQLTypeCommit)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 	}
 	return err
 }
@@ -818,11 +830,13 @@ func (ses *Session) TxnCommit() error {
 // TxnRollback rollbacks the current transaction.
 func (ses *Session) TxnRollback() error {
 	var err error
-	tenant := ses.GetTenantName(nil)
-	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
+	// metric count
+	tenant := ses.GetTenantName(nil)
+	incTransactionCounter(tenant)
+	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
 	if err != nil {
 		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 	}

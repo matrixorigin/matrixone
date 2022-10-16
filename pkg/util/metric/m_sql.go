@@ -25,6 +25,16 @@ var (
 		false,
 	)
 
+	TransactionCounterFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "transaction_total",
+			Help:      "Counter of transaction",
+		},
+		[]string{constTenantKey},
+		false,
+	)
+
 	TransactionErrorsFactory = NewCounterVec(
 		CounterOpts{
 			Subsystem: "sql",
@@ -64,6 +74,10 @@ var (
 
 func StatementCounter(tenant string, t SQLType) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, string(t))
+}
+
+func TransactionCounter(tenant string) Counter {
+	return TransactionCounterFactory.WithLabelValues(tenant)
 }
 
 func TransactionErrorsCounter(account string, t SQLType) Counter {
