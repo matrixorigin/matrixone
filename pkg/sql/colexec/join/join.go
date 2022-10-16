@@ -201,7 +201,7 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 						return err
 					}
 					if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp()) // TODO: index need to be cleaned?
+						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
@@ -270,7 +270,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	// 1. the join columns of both left table and right table are indexed
 	// 2. left condition is not an expression
 	if vec.IsLowCardinality() && !ctr.evecs[0].needFree {
-		leftIdx := ctr.vecs[0].Index().(*index.LowCardinalityIndex)
+		leftIdx := ctr.vecs[0].Index().(*index.LowCardinalityIndex).Dup()
 		// e.g. idx.dict = ["a"->1, "b"->2, "c"->3]
 		// leftIdx.dict = ["c"->1, "d"->2, "b"->3, "a"->4]
 		// => fixed map = [3, 0, 2, 1]
@@ -278,6 +278,9 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 		poses := vector.MustTCols[uint16](leftIdx.GetPoses())
 		col := make([]uint16, len(poses))
 		for i, pos := range poses {
+			if pos == 0 {
+				continue
+			}
 			col[i] = fixedMap[pos-1]
 		}
 		if err := vector.AppendFixed(encoded, col, m); err != nil {
@@ -309,7 +312,7 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) e
 
 	idx := selected.Index().(*index.LowCardinalityIndex)
 	if result.Index() == nil {
-		result.SetIndex(idx.Dup())
+		result.SetIndex(idx.DupWithEmptyPoses())
 	}
 
 	dst := result.Index().(*index.LowCardinalityIndex).GetPoses()

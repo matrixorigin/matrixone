@@ -127,6 +127,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 		// SELECT COUNT(*) FROM t GROUP BY t.values
 		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
 			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
+		tc.arg.NeedEval = true
 
 		// a->4, b->3, c->3, d->2
 		values := []string{"a", "b", "b", "a", "c", "b", "c", "a", "a", "d", "c", "d"}
@@ -143,15 +144,14 @@ func TestLowCardinalityGroup(t *testing.T) {
 		require.NoError(t, err)
 
 		rbat := tc.proc.Reg.InputBatch
-		groups := vector.GetStrVectorValues(rbat.Vecs[0])
-		require.Equal(t, []string{"a", "b", "c", "d"}, groups)
-		counts := rbat.Zs
-		require.Equal(t, []int64{4, 3, 3, 2}, counts)
+		require.Equal(t, []string{"a", "b", "c", "d"}, vector.GetStrVectorValues(rbat.Vecs[0]))
+		require.Equal(t, []int64{4, 3, 3, 2}, vector.MustTCols[int64](rbat.Vecs[1]))
 
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 	}
+
 	{
 		// SELECT SUM(t.values) FROM t GROUP BY t.values
 		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_int64}},
@@ -170,6 +170,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 		_, err = Call(0, tc.proc, tc.arg)
 
 		rbat := tc.proc.Reg.InputBatch
+		require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustTCols[int64](rbat.Vecs[0]))
 		require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustTCols[int64](rbat.Vecs[1]))
 
 		if tc.proc.Reg.InputBatch != nil {

@@ -153,6 +153,9 @@ func (ctr *container) indexBuild() error {
 	ctr.sels = make([][]int64, math.MaxUint16+1)
 	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
+		if v == 0 {
+			continue
+		}
 		bucket := int(v) - 1
 		if len(ctr.sels[bucket]) == 0 {
 			ctr.sels[bucket] = make([]int64, 0, 64)
@@ -187,7 +190,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		// 2. do not want the condition to be an expression
 		if len(conds) == 1 && !ctr.evecs[i].needFree {
 			if idx, ok := ctr.vecs[i].Index().(*index.LowCardinalityIndex); ok {
-				ctr.idx = idx
+				ctr.idx = idx.Dup()
 			}
 		}
 	}

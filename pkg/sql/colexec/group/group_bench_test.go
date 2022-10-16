@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	benchFlag        = false
+	benchFlag        = true
 	benchCardinality = 1024
 
 	benchTargetRows = 1_000_000
@@ -42,6 +42,10 @@ var (
 )
 
 func init() {
+	if !benchFlag {
+		return
+	}
+
 	benchGroupData = testutil.MakeRandomStrings(benchCardinality, benchTargetRows)
 
 	var err error
@@ -108,7 +112,7 @@ func TestGroupPerf(t *testing.T) {
 	{
 		t.Log("---------- test low cardinality group by performance ----------")
 		for i := 0; i < testCnt; i++ {
-			mockTimingCase(t, metricMp, i, benchGroupIndex)
+			mockTimingCase(t, metricMp, i, benchGroupIndex.Dup())
 		}
 
 		metric, err := json.Marshal(metricMp)

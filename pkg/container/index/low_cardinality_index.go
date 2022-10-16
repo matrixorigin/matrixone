@@ -38,6 +38,8 @@ type LowCardinalityIndex struct {
 	// the max cardinality of LowCardinalityIndex is 65536.
 	// The position of `null` value is 0.
 	poses *vector.Vector
+
+	ref int
 }
 
 func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
@@ -55,6 +57,7 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		m:     m,
 		dict:  d,
 		poses: vector.New(types.T_uint16.ToType()),
+		ref:   1,
 	}, nil
 }
 
@@ -67,11 +70,17 @@ func (idx *LowCardinalityIndex) GetDict() *dict.Dict {
 }
 
 func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
+	idx.ref++
+	return idx
+}
+
+func (idx *LowCardinalityIndex) DupWithEmptyPoses() *LowCardinalityIndex {
 	return &LowCardinalityIndex{
 		typ:   idx.typ,
 		m:     idx.m,
 		dict:  idx.dict.Dup(),
 		poses: vector.New(types.T_uint16.ToType()),
+		ref:   1,
 	}
 }
 
@@ -123,6 +132,14 @@ func (idx *LowCardinalityIndex) Encode(dst, src *vector.Vector) error {
 }
 
 func (idx *LowCardinalityIndex) Free() {
+	if idx.ref == 0 {
+		return
+	}
+	idx.ref--
+	if idx.ref > 0 {
+		return
+	}
+
 	idx.poses.Free(idx.m)
 	idx.dict.Free()
 }

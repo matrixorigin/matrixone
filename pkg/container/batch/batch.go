@@ -238,7 +238,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 		if vec != nil {
 			vec.Free(m)
 			if vec.IsLowCardinality() {
-				//vec.Index().(*index.LowCardinalityIndex).Free()
+				vec.Index().(*index.LowCardinalityIndex).Free()
 			}
 		}
 	}
@@ -292,7 +292,7 @@ func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 		if b.Vecs[i].IsLowCardinality() {
 			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
 			if bat.Vecs[i].Index() == nil {
-				bat.Vecs[i].SetIndex(idx.Dup())
+				bat.Vecs[i].SetIndex(idx.DupWithEmptyPoses())
 			}
 
 			dst := bat.Vecs[i].Index().(*index.LowCardinalityIndex).GetPoses()

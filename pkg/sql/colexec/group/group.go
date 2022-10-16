@@ -215,7 +215,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 	if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
 		if ctr.groupVecs[0].vec.IsLowCardinality() {
-			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex)
+			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex).Dup()
 		}
 	}
 	if ctr.bat == nil {
@@ -331,12 +331,10 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 }
 
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
-	// TODO null values
 	groups := make([]int64, 0)
 	nulls := make([]int64, 0)
 	sels := make([][]int64, math.MaxUint16+1)
 	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
-	// ["a", "b", NULL, ...]
 	for k, v := range poses {
 		if v == 0 {
 			nulls = append(nulls, int64(k))
@@ -380,6 +378,12 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 	//}
 
 	if len(nulls) > 0 {
+		nullGroupIndex := int64(len(groups))
+		ctr.bat.Zs = append(ctr.bat.Zs, 0)
+		for _, k := range nulls {
+			ctr.bat.Zs[nullGroupIndex] += bat.Zs[k]
+		}
+
 		for _, ag := range ctr.bat.Aggs {
 			if err := ag.Grows(1, proc.Mp()); err != nil {
 				return err
@@ -389,8 +393,6 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 			return err
 		}
 
-		// TODO
-		nullGroupIndex := int64(len(groups))
 		for i, ag := range ctr.bat.Aggs {
 			aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
 			for _, ri := range nulls {
