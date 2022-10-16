@@ -110,6 +110,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	defer txnCmd.Close()
+	// replayer.OnReplayTxn(txnCmd, idxCtx)
 	replayer.OnReplayCmd(txnCmd, idxCtx)
 	if err != nil {
 		panic(err)
@@ -123,6 +124,24 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	if ts.Greater(replayer.maxTs) {
 		replayer.maxTs = ts
+	}
+}
+
+func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index) {
+	var err error
+	txnCmd := cmd.(*txnbase.TxnCmd)
+	txn := txnbase.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, 0, txnCmd)
+	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
+		panic(err)
+	}
+	if txn.Is2PC() {
+		if _, err = txn.Prepare(); err != nil {
+			panic(err)
+		}
+	} else {
+		if err = txn.Commit(); err != nil {
+			panic(err)
+		}
 	}
 }
 

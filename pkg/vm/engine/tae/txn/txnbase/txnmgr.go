@@ -231,6 +231,9 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	// Replay txn is always prepared
 	if op.IsReplay() {
 		ts = op.Txn.GetPrepareTS()
+		if err := op.Txn.ToPreparingLocked(ts); err != nil {
+			panic(err)
+		}
 		return
 	}
 

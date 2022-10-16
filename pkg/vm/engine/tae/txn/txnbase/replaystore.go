@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -46,7 +47,8 @@ func MakeReplayTxn(
 
 func (store *replayTxnStore) IsReadonly() bool { return false }
 
-func (store *replayTxnStore) prepareCommit(_ txnif.AsyncTxn) (err error) {
+func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
+	logutil.Infof("TODO PreparCommit %s", txn.String())
 	// TODO
 	// PrepareCommit all commands
 	// Check idempotent of each command
@@ -54,7 +56,8 @@ func (store *replayTxnStore) prepareCommit(_ txnif.AsyncTxn) (err error) {
 	return
 }
 
-func (store *replayTxnStore) applyCommit(_ txnif.AsyncTxn) (err error) {
+func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
+	logutil.Infof("TODO ApplyCommit %s", txn.String())
 	// TODO
 	// ApplyCommit all commands
 	// Release all commands
@@ -62,6 +65,7 @@ func (store *replayTxnStore) applyCommit(_ txnif.AsyncTxn) (err error) {
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
+	logutil.Infof("TODO ApplyRollback %s", txn.String())
 	if !txn.Is2PC() {
 		panic(moerr.NewInternalError("cannot apply rollback 1PC replay txn: %s",
 			txn.String()))

@@ -107,7 +107,7 @@ func NewPersistedTxn(
 		isReplay:          true,
 		LSN:               lsn,
 		PrepareRollbackFn: prepareRollbackFn,
-		PrepareCommitFn:   prepareRollbackFn,
+		PrepareCommitFn:   prepareCommitFn,
 		ApplyRollbackFn:   applyRollbackFn,
 		ApplyCommitFn:     applyCommitFn,
 	}
