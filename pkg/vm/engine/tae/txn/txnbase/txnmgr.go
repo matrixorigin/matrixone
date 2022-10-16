@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -78,7 +77,6 @@ type TxnManager struct {
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
-	Active          *btree.BTreeG[types.TS]
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
 }
@@ -93,11 +91,8 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		Active: btree.NewBTreeG(func(a, b types.TS) bool {
-			return a.Less(b)
-		}),
-		Exception:      new(atomic.Value),
-		CommitListener: newBatchCommitListener(),
+		Exception:       new(atomic.Value),
+		CommitListener:  newBatchCommitListener(),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
@@ -112,28 +107,18 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 	return nil
 }
 
-func (mgr *TxnManager) StatActiveTxnCnt() int {
-	mgr.RLock()
-	defer mgr.RUnlock()
-	return mgr.Active.Len()
-}
-
-func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
-	mgr.RLock()
-	if len(mgr.IDMap) > 0 {
-		ts, _ = mgr.Active.Min()
-		ts = ts.Prev()
-	} else {
-		ts = mgr.TsAlloc.Alloc()
-	}
-	mgr.RUnlock()
-	return
-}
-
 func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 	mgr.RLock()
 	ts = mgr.TsAlloc.Alloc()
 	mgr.RUnlock()
+	return
+}
+
+func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	// TODO: idempotent check
+	mgr.IDMap[txn.GetID()] = txn
 	return
 }
 
@@ -153,7 +138,6 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.IDMap[string(txnId)] = txn
-	mgr.Active.Set(startTs)
 	return
 }
 
@@ -175,7 +159,6 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		txn = mgr.TxnFactory(mgr, store, id, ts, info)
 		store.BindTxn(txn)
 		mgr.IDMap[string(id)] = txn
-		mgr.Active.Set(ts)
 	}
 	return
 }
@@ -190,7 +173,6 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 		return
 	}
 	delete(mgr.IDMap, id)
-	mgr.Active.Delete(txn.GetStartTS())
 	return
 }
 
