@@ -284,11 +284,11 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	}
 	if true {
 		stopper.RunNamedTask("merge", func(ctx context.Context) {
-			merge := trace.NewMerge(ctx,
-				trace.WithDatabase(metric.MetricDBConst),
-				trace.WithTable(metric.SingleMetricTable),
-				trace.WithFileService(fs),
-				trace.WithMinFilesMerge(1),
+			merge := export.NewMerge(ctx,
+				export.WithDB(metric.MetricDBConst),
+				export.WithTable(metric.SingleMetricTable),
+				export.WithFileService(fs),
+				export.WithMinFilesMerge(1),
 			)
 			cycle := time.Duration(SV.MergeCycle) * time.Second
 			logutil.Infof("merge cycle: %v", cycle)

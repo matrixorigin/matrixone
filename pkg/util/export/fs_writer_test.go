@@ -195,7 +195,6 @@ func TestFSWriter_Write(t *testing.T) {
 				WithName(tt.fields.prefix),
 				WithDatabase(tt.fields.dir),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
-				WithFileServiceName(""),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {

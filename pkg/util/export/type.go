@@ -34,6 +34,15 @@ func init() {
 	SetDefaultContextFunc(func() context.Context { return context.Background() })
 }
 
+const (
+	B int64 = 1 << (iota * 10)
+	KB
+	MB
+	GB
+	TB
+	PB
+)
+
 type BatchProcessor interface {
 	Collect(context.Context, batchpipe.HasName) error
 	Start() bool

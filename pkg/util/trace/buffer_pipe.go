@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/uuid"
@@ -493,7 +494,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
-	opts := CommonCsvOptions
+	opts := export.CommonCsvOptions
 
 	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i)
 

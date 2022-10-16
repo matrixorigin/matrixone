@@ -311,7 +311,7 @@ type mfsetCSV struct {
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
-	opts := trace.CommonCsvOptions
+	opts := export.CommonCsvOptions
 	for idx, field := range fields {
 		if idx > 0 {
 			buf.WriteRune(opts.FieldTerminator)
@@ -386,7 +386,7 @@ func (s *mfsetCSV) GetBatchSingleTable(buf *bytes.Buffer) trace.CSVRequests {
 
 	ts := time.Now()
 	buffer := make(map[string]*bytes.Buffer, 2)
-	writeValues := func(row *trace.Row) {
+	writeValues := func(row *export.Row) {
 		buf, exist := buffer[row.GetAccount()]
 		if !exist {
 			buf = bytes.NewBuffer(nil)

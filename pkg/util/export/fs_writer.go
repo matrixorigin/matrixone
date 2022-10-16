@@ -47,7 +47,7 @@ type FSWriter struct {
 
 	mux sync.Mutex
 
-	fileServiceName string // see WithFileServiceName
+	fileServiceName string // const
 
 	offset int // see Write, should not have size bigger than 2GB
 }
@@ -103,12 +103,6 @@ func WithDatabase(dir string) FSWriterOption {
 func WithNode(uuid, nodeType string) FSWriterOption {
 	return FSWriterOption(func(w *FSWriter) {
 		w.nodeUUID, w.nodeType = uuid, nodeType
-	})
-}
-
-func WithFileServiceName(serviceName string) FSWriterOption {
-	return FSWriterOption(func(w *FSWriter) {
-		w.fileServiceName = serviceName
 	})
 }
 

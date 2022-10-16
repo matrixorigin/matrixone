@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package export
 
 import (
 	"bytes"
@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"io"
 	"path"
 	"strings"
@@ -37,11 +36,11 @@ import (
 // Merge like a compaction, merge input files into one/two/... files.
 type Merge struct {
 	Table       *Table                  // see WithTable
-	DB          string                  // see WithDatabase
-	Datetime    time.Time               // see WithDatetime
+	DB          string                  // see WithDB
 	FS          fileservice.FileService // see WithFileService
 	FSName      string                  // see WithFileServiceName, cooperate with FS
-	pathBuilder export.PathBuilder      // see WithPathBuilder
+	datetime    time.Time               // see Main
+	pathBuilder PathBuilder             // const as NewMetricLogPathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
 	MaxFileSize int64 // see WithMaxFileSize
@@ -74,14 +73,9 @@ func WithTable(tbl *Table) MergeOption {
 		m.Table = tbl
 	})
 }
-func WithDatabase(db string) MergeOption {
+func WithDB(db string) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.DB = db
-	})
-}
-func WithDatetime(ts time.Time) MergeOption {
-	return MergeOption(func(m *Merge) {
-		m.Datetime = ts
 	})
 }
 func WithFileService(fs fileservice.FileService) MergeOption {
@@ -92,11 +86,6 @@ func WithFileService(fs fileservice.FileService) MergeOption {
 func WithFileServiceName(name string) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.FSName = name
-	})
-}
-func WithPathBuilder(builder export.PathBuilder) MergeOption {
-	return MergeOption(func(m *Merge) {
-		m.pathBuilder = builder
 	})
 }
 func WithMaxFileSize(filesize int64) MergeOption {
@@ -120,9 +109,9 @@ const ETLFileServiceName = "ETL"
 
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
-		Datetime:      time.Now(),
 		FSName:        ETLFileServiceName,
-		pathBuilder:   export.NewMetricLogPathBuilder(),
+		datetime:      time.Now(),
+		pathBuilder:   NewMetricLogPathBuilder(),
 		MaxFileSize:   128 * MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 2,
@@ -137,7 +126,6 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	}
 	m.valid()
 	m.runningJobs = make(chan struct{}, m.MaxMergeJobs)
-	// fixme: m.pathBuilder = ?? // init with Table and Datetime
 	return m
 }
 
@@ -146,14 +134,12 @@ func (m *Merge) valid() {
 	if m.Table == nil {
 		panic(moerr.NewInternalError("Merge Task missing input 'Table'"))
 	}
-	if m.Datetime.IsZero() {
-		panic(moerr.NewInternalError("Merge Task missing input 'Datetime'"))
-	}
 	if m.FS == nil {
 		panic(moerr.NewInternalError("Merge Task missing input 'FileService'"))
 	}
 }
 
+// Start for service Loop
 func (m *Merge) Start(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -182,8 +168,11 @@ func (m *Merge) Main(ts time.Time) error {
 	var files = make([]string, 0, 1000)
 	var totalSize int64
 
-	m.Datetime = ts
-	logutil.Debugf("Merge start on %s.%s, %v", m.DB, m.Table.GetName(), m.Datetime)
+	m.datetime = ts
+	if m.datetime.IsZero() {
+		return moerr.NewInternalError("Merge Task missing input 'datetime'")
+	}
+	logutil.Debugf("Merge start on %s.%s, %v", m.DB, m.Table.GetName(), m.datetime)
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
@@ -193,7 +182,7 @@ func (m *Merge) Main(ts time.Time) error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, export.MergeLogTypeLog, m.Datetime, m.DB, m.Table.GetName())
+		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLog, m.datetime, m.DB, m.Table.GetName())
 		// get all file entry
 
 		fileEntrys, err := m.FS.List(m.ctx, rootPath)
@@ -254,7 +243,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 	timestampEnd := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
-	prefix := m.pathBuilder.Build(account, export.MergeLogTypeMerged, m.Datetime, m.DB, m.Table.GetName())
+	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.DB, m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath)
@@ -398,8 +387,8 @@ func (w *ContentWriter) FlushAndClose() error {
 
 func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string) (CSVWriter, error) {
 
-	factory := export.GetFSWriterFactory(fs, "", "")
-	fsWriter := factory(ctx, "", nil, export.WithFilePath(path))
+	factory := GetFSWriterFactory(fs, "", "")
+	fsWriter := factory(ctx, "", nil, WithFilePath(path))
 
 	return NewContentWriter(fsWriter), nil
 }
