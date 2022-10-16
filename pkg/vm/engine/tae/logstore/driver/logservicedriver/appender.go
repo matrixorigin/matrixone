@@ -43,7 +43,7 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 	a.entry.append(e)
 }
 
-func (a *driverAppender) append(appendTimeout time.Duration) {
+func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
@@ -52,12 +52,12 @@ func (a *driverAppender) append(appendTimeout time.Duration) {
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 	lsn, err := a.client.c.Append(ctx, a.client.record)
 	cancel()
 	if err != nil {
-		err = RetryWithTimeout(appendTimeout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 			lsn, err = a.client.c.Append(ctx, a.client.record)
 			cancel()
 			return err == nil

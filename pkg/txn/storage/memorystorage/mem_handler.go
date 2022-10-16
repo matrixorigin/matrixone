@@ -24,6 +24,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -458,7 +459,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	return nil
 }
 
-const rowIDColumnName = "__rowid"
+const rowIDColumnName = catalog.Row_ID
 
 func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
@@ -551,7 +552,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
 				index_RowID, memtable.ToOrdered(rowID),
@@ -584,7 +585,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if len(entries) == 1 && entries[0].Value.Name == req.ColumnName {
 		// by primary key
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			key := DataKey{
 				tableID:    req.TableID,
 				primaryKey: Tuple{memtable.ToOrdered(value.Value)},
@@ -626,7 +627,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			break
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
@@ -1077,7 +1078,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m, 0, b, namedRow); err != nil {
+		if err := appendNamedRowToBatch(tx, m, 0, b, namedRow); err != nil {
 			return err
 		}
 	}
@@ -1186,7 +1187,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	// iter
-	batchIter := NewBatchIter(b)
+	batchIter := memtable.NewBatchIter(b)
 	for {
 		row := batchIter()
 		if len(row) == 0 {
@@ -1272,7 +1273,13 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 
 func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(tx.Time); err != nil {
+	commitTS := meta.CommitTS
+	if commitTS.IsEmpty() {
+		commitTS = tx.Time.Timestamp
+	}
+	if err := tx.Commit(Time{
+		Timestamp: commitTS,
+	}); err != nil {
 		return err
 	}
 	return nil

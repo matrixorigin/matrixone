@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -70,7 +69,6 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id []byte, s
 }
 
 type Txn struct {
-	sync.WaitGroup
 	*TxnCtx
 	Mgr                      *TxnManager
 	Store                    txnif.TxnStore
@@ -352,6 +350,14 @@ func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
 }
 
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) UnsafeGetDatabase(id uint64) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) UnsafeGetRelation(dbId, id uint64) (db handle.Relation, err error) {
 	return
 }
 

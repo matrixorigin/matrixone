@@ -42,6 +42,8 @@ func IsTempError(err error) bool {
 	return isTempError(err)
 }
 
+type ClientFactory func() (Client, error)
+
 // Client is the Log Service Client interface exposed to the DN.
 type Client interface {
 	// Close closes the client.

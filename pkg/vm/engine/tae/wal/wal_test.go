@@ -43,7 +43,7 @@ func initWal(t *testing.T) (Driver, string) {
 		BatchStoreConfig:   cfg,
 		CheckpointDuration: time.Millisecond * 10,
 	}
-	driver := NewDriver(dir, "store", dcfg)
+	driver := NewDriverWithBatchStore(dir, "store", dcfg)
 	return driver, dir
 }
 
@@ -56,7 +56,7 @@ func restart(t *testing.T, driver Driver, dir string) Driver {
 		BatchStoreConfig:   cfg,
 		CheckpointDuration: time.Millisecond * 10,
 	}
-	driver = NewDriver(dir, "store", dcfg)
+	driver = NewDriverWithBatchStore(dir, "store", dcfg)
 	return driver
 }
 

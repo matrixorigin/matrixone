@@ -338,3 +338,6 @@ func (cmd *mergeBlocksCmd) VerboseString() string {
 	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v;Mapping=%v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
 	return s
 }
+func (cmd *mergeBlocksCmd) ApplyCommit()                  {}
+func (cmd *mergeBlocksCmd) ApplyRollback()                {}
+func (cmd *mergeBlocksCmd) SetReplayTxn(_ txnif.AsyncTxn) {}

@@ -16,6 +16,7 @@ package trace
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,6 +54,9 @@ type Table struct {
 	Engine           string
 	Comment          string
 	TableOptions     TableOptions
+	PathBuilder      export.PathBuilder
+
+	AccountColumn *Column
 }
 
 func (tbl *Table) GetName() string {
@@ -63,7 +67,7 @@ type TableOptions interface {
 	FormatDdl(ddl string) string
 	// GetCreateOptions return option for `create {option}table`, which should end with ' '
 	GetCreateOptions() string
-	GetTableOptions() string
+	GetTableOptions(export.PathBuilder) string
 }
 
 func (tbl *Table) ToCreateSql(ifNotExists bool) string {
@@ -106,7 +110,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
-	sb.WriteString(tbl.TableOptions.GetTableOptions())
+	sb.WriteString(tbl.TableOptions.GetTableOptions(tbl.PathBuilder))
 
 	return sb.String()
 }
@@ -160,6 +164,7 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 
 type Row struct {
 	Table          *Table
+	AccountIdx     int
 	Columns        []string
 	Name2ColumnIdx map[string]int
 }
@@ -167,13 +172,35 @@ type Row struct {
 func (tbl *Table) GetRow() *Row {
 	row := &Row{
 		Table:          tbl,
+		AccountIdx:     -1,
 		Columns:        make([]string, len(tbl.Columns)),
 		Name2ColumnIdx: make(map[string]int),
 	}
 	for idx, col := range tbl.Columns {
 		row.Name2ColumnIdx[col.Name] = idx
 	}
+	if tbl.AccountColumn != nil {
+		idx, exist := row.Name2ColumnIdx[tbl.AccountColumn.Name]
+		if !exist {
+			panic(moerr.NewInternalError("%s table missing %s column", tbl.GetName(), tbl.AccountColumn.Name))
+		}
+		row.AccountIdx = idx
+	}
 	return row
+}
+
+func (r *Row) Reset() {
+	for idx := 0; idx < len(r.Columns); idx++ {
+		r.Columns[idx] = ""
+	}
+}
+
+// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0, else return "sys"
+func (r *Row) GetAccount() string {
+	if r.AccountIdx >= 0 {
+		return r.Columns[r.AccountIdx]
+	}
+	return "sys"
 }
 
 func (r *Row) SetVal(col string, val string) {
@@ -206,6 +233,6 @@ var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
 
-func (o NoopTableOptions) FormatDdl(ddl string) string { return ddl }
-func (o NoopTableOptions) GetCreateOptions() string    { return "" }
-func (o NoopTableOptions) GetTableOptions() string     { return "" }
+func (o NoopTableOptions) FormatDdl(ddl string) string               { return ddl }
+func (o NoopTableOptions) GetCreateOptions() string                  { return "" }
+func (o NoopTableOptions) GetTableOptions(export.PathBuilder) string { return "" }
