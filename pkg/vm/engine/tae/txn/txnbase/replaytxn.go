@@ -16,12 +16,9 @@ package txnbase
 
 import (
 	"fmt"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -30,9 +27,8 @@ import (
 
 type ReplayTxn struct {
 	*TxnCtx
-	LSN                      uint64
-	TenantID, UserID, RoleID atomic.Uint32
-	Cmd                      *TxnCmd
+	LSN uint64
+	Cmd *TxnCmd
 }
 
 func NewReplayTxn(txnCtx *TxnCtx, cmd *TxnCmd) *ReplayTxn {
@@ -41,10 +37,6 @@ func NewReplayTxn(txnCtx *TxnCtx, cmd *TxnCmd) *ReplayTxn {
 		Cmd:    cmd,
 	}
 	return txn
-}
-
-func (txn *ReplayTxn) HandleCmd(entry *api.Entry) (err error) {
-	return
 }
 
 func (txn *ReplayTxn) MockIncWriteCnt() int {
@@ -143,18 +135,11 @@ func (txn *ReplayTxn) WaitDone(err error, isAbort bool) error {
 }
 
 func (txn *ReplayTxn) BindAccessInfo(tenantID, userID, roleID uint32) {
-	txn.TenantID.Store(tenantID)
-	txn.UserID.Store(userID)
-	txn.RoleID.Store(roleID)
 }
 
-func (txn *ReplayTxn) GetTenantID() uint32 {
-	return txn.TenantID.Load()
-}
+func (txn *ReplayTxn) GetTenantID() uint32 { return 0 }
 
-func (txn *ReplayTxn) GetUserAndRoleID() (uint32, uint32) {
-	return txn.UserID.Load(), txn.RoleID.Load()
-}
+func (txn *ReplayTxn) GetUserAndRoleID() (uint32, uint32) { return 0, 0 }
 
 func (txn *ReplayTxn) CreateDatabase(name string) (db handle.Database, err error) {
 	return

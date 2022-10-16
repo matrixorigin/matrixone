@@ -20,8 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -89,10 +87,6 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS,
 	}
 	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
-}
-
-func (txn *Txn) HandleCmd(entry *api.Entry) (err error) {
-	return
 }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
