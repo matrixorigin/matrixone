@@ -116,13 +116,11 @@ func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	// op := TxnO
+	txn.ToPreparedLocked()
 	mgr.Lock()
 	defer mgr.Unlock()
 	// TODO: idempotent check
 	mgr.IDMap[txn.GetID()] = txn
-	mgr.CommitListener.OnBeginPrePrepare(txn)
-	defer mgr.CommitListener.OnEndPrePrepare(txn)
 	return
 }
 

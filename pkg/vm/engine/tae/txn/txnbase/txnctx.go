@@ -65,6 +65,7 @@ func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 	return ctx
 }
 
+func (ctx *TxnCtx) IsReplay() bool { return false }
 func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
 	return ctx.Memo
 }
