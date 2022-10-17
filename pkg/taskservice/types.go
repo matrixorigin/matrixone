@@ -182,7 +182,7 @@ type TaskRunner interface {
 	// Parallelism maximum number of concurrently executing Tasks
 	Parallelism() int
 	// RegisterExecutor register the task executor
-	RegisterExecutor(code int, executor TaskExecutor)
+	RegisterExecutor(code uint32, executor TaskExecutor)
 }
 
 // TaskStorage task storage

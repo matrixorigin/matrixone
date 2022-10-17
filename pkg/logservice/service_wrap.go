@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -65,6 +66,11 @@ func (w *WrappedService) SetInitialClusterInfo(
 	)
 }
 
+func (w *WrappedService) CreateInitTasks() error {
+	return w.svc.createInitTasks(context.Background())
+}
+
+// StartHAKeeperReplica
 // TODO: start hakeeper with specified log store, specified by caller
 func (w *WrappedService) StartHAKeeperReplica(
 	replicaID uint64, replicas map[uint64]dragonboat.Target, join bool,

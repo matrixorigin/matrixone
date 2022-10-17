@@ -29,8 +29,8 @@ const (
 	defaultLogServiceNum = 3
 	defaultLogShardNum   = 1
 	defaultLogReplicaNum = 3
-	defaultCNServiceNum  = 0
-	defaultCNShardNum    = 0
+	defaultCNServiceNum  = 1
+	defaultCNShardNum    = 1
 
 	// default configuration for services
 	defaultHostAddr    = "127.0.0.1"
