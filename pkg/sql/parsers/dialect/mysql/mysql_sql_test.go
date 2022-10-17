@@ -1513,20 +1513,28 @@ var (
 			output: `select * from unnest(t.a, $.b, true) as f`,
 		},
 		{
-			input:  `dump all into 'a.sql'`,
-			output: `dump all into a.sql`,
-		},
-		{
 			input:  `dump database t into 'a.sql'`,
 			output: `dump database t into a.sql`,
+		},
+		{
+			input:  `dump database t into 'a.sql' max_file_size 1`,
+			output: `dump database t into a.sql max_file_size 1`,
 		},
 		{
 			input:  `dump table t into 'a.sql'`,
 			output: `dump table t into a.sql`,
 		},
 		{
+			input:  `dump table t into 'a.sql' max_file_size 1`,
+			output: `dump table t into a.sql max_file_size 1`,
+		},
+		{
 			input:  `dump table t.c into 'a.sql'`,
 			output: `dump table t.c into a.sql`,
+		},
+		{
+			input:  `dump table t.c into 'a.sql' max_file_size 1`,
+			output: `dump table t.c into a.sql max_file_size 1`,
 		},
 	}
 )

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
 	"reflect"
@@ -819,41 +820,112 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 }
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.Dump) error {
+	var err error
 	ses := mce.GetSession()
-	txnHandler := ses.GetTxnHandler()
-	exists, _, err := PathExists(dump.OutFile)
-	if err != nil {
-		return err
-	}
+	proto := ses.protocol
+	exists, err := FileExists(dump.OutFile)
 	if exists {
 		return moerr.NewFileAlreadyExists(dump.OutFile)
 	}
-	if dump.All {
-		dbs, err := ses.Pu.StorageEngine.Databases(requestCtx, txnHandler.GetTxn())
-		if err != nil {
-			return err
-		}
-		for _, dbName := range dbs {
-			db, err := ses.Pu.StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn())
-			if err != nil {
-				return err
-			}
-			rels, err := db.Relations(requestCtx)
-			if err != nil {
-				return err
-			}
-			for _, relName := range rels {
-				rel, err := db.Relation(requestCtx, relName)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		if err != nil {
-			return err
-		}
-		logutil.Infof("Dump all databases %v\n", dbs)
+	if err != nil {
+		return err
 	}
+	if dump.MaxFileSize != 0 && dump.MaxFileSize < mpool.KB {
+		return moerr.NewInvalidInput("max file size must be larger than 1KB")
+	}
+	if len(dump.Database) != 0 {
+		if err = mce.handleDumpDB(requestCtx, dump); err != nil {
+			return err
+		}
+	}
+	if err = mce.handleDumpTable(requestCtx, dump); err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleDumpDB(requestCtx context.Context, dump *tree.Dump) error {
+	ses := mce.GetSession()
+	txnHandler := ses.GetTxnHandler()
+	dbName := string(dump.Database)
+	db, err := ses.Pu.StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn())
+	if err != nil {
+		return err
+	}
+	dbDDL := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\nCREATE DATABASE `%s`;\nUSE `%s`;\n", dbName, dbName, dbName)
+	tables, err := db.Relations(requestCtx)
+	if err != nil {
+		return err
+	}
+	tblDDLs := make([]string, 0, len(tables))
+	for _, tblName := range tables {
+		table, err := db.Relation(requestCtx, tblName)
+		if err != nil {
+			return err
+		}
+		tblDefs, err := table.TableDefs(requestCtx)
+		if err != nil {
+			return err
+		}
+		tblDDL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (", tblName, tblName)
+		var viewDDL string
+		first := true
+		for _, tblDef := range tblDefs {
+			switch def := tblDef.(type) {
+			case *engine.AttributeDef:
+				if def.Attr.IsHidden || def.Attr.IsRowId {
+					continue
+				}
+				if !first {
+					tblDDL += ","
+				}
+				first = false
+				tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type)
+				if def.Attr.AutoIncrement {
+					tblDDL += " AUTO_INCREMENT"
+				}
+				if def.Attr.Default != nil {
+					if def.Attr.Default.NullAbility { //TODO support other case
+						tblDDL += fmt.Sprintf(" DEFAULT NULL")
+					}
+				}
+				if def.Attr.OnUpdate != nil { //TODO support on update
+					return moerr.NewNotSupported("on update")
+				}
+				if def.Attr.Comment != "" {
+					tblDDL += fmt.Sprintf(" COMMENT '%s'", def.Attr.Comment)
+				}
+
+			case *engine.CommentDef:
+				tblDDL += fmt.Sprintf(",\n  COMMENT '%s'", def.Comment)
+			case *engine.IndexTableDef:
+				tblDDL += fmt.Sprintf(",\n  %s `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`"))
+			case *engine.PrimaryIndexDef:
+				tblDDL += fmt.Sprintf(",\n  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
+			case *engine.ViewDef:
+				viewDDL = fmt.Sprintf("%s\n%s", viewDDL, def.View)
+			case *engine.ComputeIndexDef, *engine.PropertiesDef, *engine.PartitionDef:
+			default:
+				return moerr.NewInternalError("unsupported table def %T", tblDef)
+			}
+		}
+		tblDDL += "\n);\n" + viewDDL
+		tblDDLs = append(tblDDLs, tblDDL)
+	}
+	dumpDDL := dbDDL + strings.Join(tblDDLs, "\n")
+	fmt.Println("dumpDDL: ", dumpDDL)
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleDumpTable(requestCtx context.Context, dump *tree.Dump) error {
+	//ses := mce.GetSession()
+	//txnHandler := ses.GetTxnHandler()
 	return nil
 }
 

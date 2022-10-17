@@ -363,7 +363,6 @@ import (
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> dump_stmt
-%type <str> dump_into_param
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -613,34 +612,23 @@ stmt:
 
 
 dump_stmt:
-    DUMP ALL dump_into_param
-    {
-	$$ = &tree.Dump{
-	    All: true,
-	    OutFile: $3,
-	}
-    }
-|   DUMP DATABASE database_id dump_into_param
+    DUMP DATABASE database_id INTO STRING max_file_size_opt
     {
 	$$ = &tree.Dump{
 	    Database: tree.Identifier($3),
-	    OutFile: $4,
+	    OutFile: $5,
+	    MaxFileSize: $6,
 	}
     }
-|   DUMP TABLE table_name dump_into_param
+|   DUMP TABLE table_name INTO STRING max_file_size_opt
     {
 	$$ = &tree.Dump{
 	    Table: $3,
-	    OutFile: $4,
+	    OutFile: $5,
+	    MaxFileSize: $6,
 	}
     }
 
-
-dump_into_param:
-    INTO STRING
-    {
-	$$ = $2
-    }
 
 
 import_data_stmt:
