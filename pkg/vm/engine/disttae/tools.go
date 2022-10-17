@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -944,8 +945,21 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any) []BlockMeta {
-	return []BlockMeta{}
+func genBlockMetas(rows [][]any, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
+	blockInfos := catalog.GenBlockInfo(rows)
+	columnLength := len(rows)
+	metas := make([]BlockMeta, len(rows))
+	for i, blockInfo := range blockInfos {
+		zm, err := fetchZonemapFromBlockInfo(columnLength, blockInfo, fs, m)
+		if err != nil {
+			return nil, err
+		}
+		metas[i] = BlockMeta{
+			info:    blockInfo,
+			zonemap: zm,
+		}
+	}
+	return metas, nil
 }
 
 func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
