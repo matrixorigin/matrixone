@@ -367,16 +367,18 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		blockFile := dataBlk.GetBlockFile()
-		_, err = blockFile.WriteBatch(bat, txn.GetStartTS())
+		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
+		writer := blockio.NewWriter(dataBlk.GetFs(), name)
+		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
-		err = blockFile.Sync()
+		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc := blockio.EncodeBlkMetaLoc(
-			blockFile.Fingerprint(),
-			types.TS{},
-			blockFile.GetMeta().GetExtent(),
-			uint32(bat.Length()))
+		metaLoc, err := blockio.EncodeBlkMetaLocWithObject(
+			dataBlk.GetID(),
+			blocks[0].GetExtent(),
+			uint32(bat.Length()),
+			blocks)
+		assert.Nil(t, err)
 		blk.UpdateMetaLoc(metaLoc)
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)
@@ -3814,7 +3816,7 @@ func TestBlockRead(t *testing.T) {
 		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.FileFactory.(*blockio.ObjectFactory).Fs.Service
+	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
