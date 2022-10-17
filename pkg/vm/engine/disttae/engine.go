@@ -241,23 +241,20 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	return nil, nil
-	/*
-		clusterDetails, err := e.getClusterDetails()
-		if err != nil {
-			return nil, err
-		}
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
 
-		var nodes engine.Nodes
-		for _, store := range clusterDetails.CNStores {
-			nodes = append(nodes, engine.Node{
-				Mcpu: 10, // TODO
-				Id:   store.UUID,
-				Addr: store.ServiceAddress,
-			})
-		}
-		return nodes, nil
-	*/
+	var nodes engine.Nodes
+	for _, store := range clusterDetails.CNStores {
+		nodes = append(nodes, engine.Node{
+			Mcpu: 10, // TODO
+			Id:   store.UUID,
+			Addr: store.ServiceAddress,
+		})
+	}
+	return nodes, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {

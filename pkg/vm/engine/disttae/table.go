@@ -82,10 +82,11 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			return nil, err
 		}
 	}
+	ranges := make([][]byte, 0, 1)
+	ranges = append(ranges, []byte{})
 	if tbl.meta == nil {
-		return nil, nil
+		return ranges, nil
 	}
-	ranges := make([][]byte, 0, len(tbl.meta.blocks))
 	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
 		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
@@ -293,10 +294,13 @@ func (tbl *table) GetTableID(ctx context.Context) string {
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
-	rds := make([]engine.Reader, num)
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
+	if len(ranges) == 1 && len(ranges[0]) == 0 {
+		return tbl.newMergeReader(ctx, num, expr)
+	}
+	rds := make([]engine.Reader, num)
 	blks := make([]BlockMeta, len(ranges))
 	for i := range ranges {
 		blks[i] = blockUnmarshal(ranges[i])

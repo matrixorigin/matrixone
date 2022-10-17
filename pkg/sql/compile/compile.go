@@ -1091,6 +1091,11 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+	/*
+		{
+			return c.cnList, nil
+		}
+	*/
 	var err error
 	var ranges [][]byte
 	var nodes engine.Nodes
@@ -1107,12 +1112,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		nodes = append(nodes, engine.Node{Mcpu: 1})
-	} else {
-		nodes = append(nodes, engine.Node{Mcpu: c.NumCPU()})
-	}
 	if len(ranges) == 0 {
+		return nodes, nil
+	}
+	if len(ranges[0]) == 0 {
+		if c.info.Typ == plan2.ExecTypeTP {
+			nodes = append(nodes, engine.Node{Mcpu: 1})
+		} else {
+			nodes = append(nodes, engine.Node{Mcpu: c.NumCPU()})
+		}
+		ranges = ranges[1:]
+	}
+	if len(nodes) == 0 {
 		return nodes, nil
 	}
 	step := len(ranges) / len(c.cnList)
