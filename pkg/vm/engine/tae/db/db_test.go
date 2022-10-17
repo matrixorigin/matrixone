@@ -3330,16 +3330,16 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, 3, len(resp.Commands)) // insert meta, insert data and delete data
+	assert.Equal(t, 2, len(resp.Commands)) // insert data and delete data
 
 	// blk meta change
-	blkMetaEntry := resp.Commands[0]
-	assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
-	assert.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
-	check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
+	// blkMetaEntry := resp.Commands[0]
+	// assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
+	// assert.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
+	// check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
 
 	// check data change
-	insDataEntry := resp.Commands[1]
+	insDataEntry := resp.Commands[0]
 	assert.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
 	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile + aborted
 	check_same_rows(insDataEntry.Bat, 99)                              // 99 rows, because the first write is excluded.
@@ -3349,7 +3349,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	assert.NoError(t, err)
 
-	delDataEntry := resp.Commands[2]
+	delDataEntry := resp.Commands[1]
 	assert.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
 	assert.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
