@@ -1118,7 +1118,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 		ranges = ranges[1:]
 	}
-	if len(nodes) == 0 {
+	if len(ranges) == 0 {
 		return nodes, nil
 	}
 	step := len(ranges) / len(c.cnList)
