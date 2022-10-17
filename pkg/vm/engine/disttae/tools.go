@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -717,7 +718,9 @@ func getColumnsFromRows(rows [][]any) []column {
 		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
 		cols[i].hasUpdate = row[catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8)
 		cols[i].updateExpr = row[catalog.MO_COLUMNS_ATT_UPDATE_IDX].([]byte)
+		cols[i].num = row[catalog.MO_COLUMNS_ATTNUM_IDX].(int32)
 	}
+	sort.Sort(Columns(cols))
 	return cols
 }
 
