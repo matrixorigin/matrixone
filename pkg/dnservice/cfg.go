@@ -32,6 +32,13 @@ var (
 	defaultHeatbeatDuration = time.Second
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
+
+	defaultScannerInterval    = int64(5000)          // millisecond
+	defaultExecutionInterval  = int64(2000)          // millisecond
+	defaultFlushInterval      = int64(1 * 60 * 1000) // millisecond
+	defaultExecutionLevels    = int16(30)
+	defaultCatalogCkpInterval = int64(30000) // millisecond
+	defaultCatalogUnCkpLimit  = int64(10)
 )
 
 // Config dn store configuration
@@ -64,6 +71,15 @@ type Config struct {
 
 	// RPC configuration
 	RPC rpc.Config `toml:"rpc"`
+
+	Ckp struct {
+		ScannerInterval    int64 `toml:"scanner-interval"`
+		ExecutionInterval  int64 `toml:"execution-interval"`
+		FlushInterval      int64 `toml:"flush-interval"`
+		ExecutionLevels    int16 `toml:"execution-levels"`
+		CatalogCkpInterval int64 `toml:"catalog-ckp-interval"`
+		CatalogUnCkpLimit  int64 `toml:"catalog-unckp-limit"`
+	}
 
 	// Txn transactions configuration
 	Txn struct {
@@ -119,6 +135,27 @@ func (c *Config) Validate() error {
 	}
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.Ckp.ScannerInterval == 0 {
+		c.Ckp.ScannerInterval = defaultScannerInterval
+	}
+	if c.Ckp.ExecutionInterval == 0 {
+		c.Ckp.ExecutionInterval = defaultExecutionInterval
+	}
+	if c.Ckp.FlushInterval == 0 {
+		c.Ckp.FlushInterval = defaultFlushInterval
+	}
+	if c.Ckp.ExecutionLevels == 0 {
+		c.Ckp.ExecutionLevels = defaultExecutionLevels
+	}
+	if c.Ckp.CatalogCkpInterval == 0 {
+		c.Ckp.CatalogCkpInterval = defaultCatalogCkpInterval
+	}
+	if c.Ckp.CatalogUnCkpLimit == 0 {
+		c.Ckp.CatalogUnCkpLimit = defaultCatalogUnCkpLimit
+	}
+	if c.Ckp.ScannerInterval == 0 {
+		c.Ckp.ScannerInterval = defaultScannerInterval
 	}
 	return nil
 }

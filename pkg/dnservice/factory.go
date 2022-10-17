@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -134,5 +135,13 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
-	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock)
+	ckpcfg := &options.CheckpointCfg{
+		ScannerInterval:    s.cfg.Ckp.ScannerInterval,
+		ExecutionInterval:  s.cfg.Ckp.ExecutionInterval,
+		FlushInterval:      s.cfg.Ckp.FlushInterval,
+		ExecutionLevels:    s.cfg.Ckp.ExecutionLevels,
+		CatalogCkpInterval: s.cfg.Ckp.CatalogCkpInterval,
+		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
+	}
+	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock, ckpcfg)
 }
