@@ -17,6 +17,7 @@ package update
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
@@ -27,6 +28,9 @@ type Argument struct {
 	Engine       engine.Engine
 	DB           []engine.Database
 	TableID      []string
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type UpdateCtx struct {

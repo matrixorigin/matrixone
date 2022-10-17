@@ -82,27 +82,27 @@ func TestString(t *testing.T) {
 
 func TestMark(t *testing.T) {
 	/* XXX There are some problems with the mark join code for handling null. Modify later
-	for _, tc := range tcs {
-		bat := hashBuild(t, tc)
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-		batWithNull := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		batWithNull.Vecs[0].Nsp.Np.Add(0)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batWithNull
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bat
-		for {
-			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
-				break
-			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
+	   for _, tc := range tcs {
+	   	bat := hashBuild(t, tc)
+	   	err := Prepare(tc.proc, tc.arg)
+	   	require.NoError(t, err)
+	   	batWithNull := newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	   	batWithNull.Vecs[0].Nsp.Np.Add(0)
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- batWithNull
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	   	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	   	tc.proc.Reg.MergeReceivers[1].Ch <- bat
+	   	for {
+	   		if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
+	   			break
+	   		}
+	   		tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+	   	}
+	   	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	   }
 	*/
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
@@ -120,6 +120,7 @@ func TestMark(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

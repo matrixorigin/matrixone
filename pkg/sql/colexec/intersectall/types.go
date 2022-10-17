@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
@@ -42,4 +43,18 @@ type Argument struct {
 	IBucket uint64
 	// buckets count
 	NBucket uint64
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanHashMap()
+	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
 }
