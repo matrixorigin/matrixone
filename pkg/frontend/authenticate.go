@@ -4921,6 +4921,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	}
 
 	for _, r := range cr.Roles {
+		exists = 0
 		if isPredefinedRole(r.UserName) {
 			exists = 3
 		} else {
