@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type DeltaMetaNode struct {
@@ -27,13 +26,13 @@ type DeltaMetaNode struct {
 	// data
 	objectio.BlockObject
 	// used to load data
-	blk      file.Block
+	fs       *objectio.ObjectFS
 	deltaloc string
 }
 
-func NewDeltaMetaNode(mgr base.INodeManager, metaKey string, blk file.Block, deltaloc string) *DeltaMetaNode {
+func NewDeltaMetaNode(mgr base.INodeManager, metaKey string, fs *objectio.ObjectFS, deltaloc string) *DeltaMetaNode {
 	node := &DeltaMetaNode{
-		blk:      blk,
+		fs:       fs,
 		deltaloc: deltaloc,
 	}
 	_, ext, _ := blockio.DecodeMetaLoc(deltaloc)
@@ -50,7 +49,14 @@ func (n *DeltaMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	meta := n.blk.GetDeltaFormKey(n.deltaloc)
+	reader, err := blockio.NewReader(n.fs, n.deltaloc)
+	if err != nil {
+		panic(err)
+	}
+	meta, err := reader.ReadMeta(nil)
+	if err != nil {
+		panic(err)
+	}
 	n.BlockObject = meta
 }
 

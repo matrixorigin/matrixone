@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,7 +32,7 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
-	deletes, err := blk.file.LoadDeletes()
+	deletes := &roaring.Bitmap{}
 	if err != nil || deletes == nil {
 		return
 	}
@@ -91,9 +92,9 @@ func (blk *dataBlock) replayImmutIndex() error {
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
-	for i, column := range blk.colObjects {
+	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
+		if err := index.ReadFrom(blk, schema.ColDefs[i], uint16(i)); err != nil {
 			return err
 		}
 		blk.indexes[i] = index

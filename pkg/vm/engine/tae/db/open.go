@@ -16,11 +16,12 @@ package db
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"path"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -56,7 +57,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
-	SegmentFactory := blockio.NewObjectFactory(dirname)
+	// TODO:fileservice needs to be passed in as a parameter
+	serviceDir := path.Join(dirname, "data")
+	service := objectio.TmpNewFileservice(path.Join(dirname, "data"))
+	fs := objectio.NewObjectFS(service, serviceDir)
 
 	db = &DB{
 		Dir:         dirname,
@@ -64,7 +68,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: SegmentFactory,
+		Fs:          fs,
 		Closed:      new(atomic.Value),
 	}
 
@@ -75,7 +79,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(
+		db.Fs, mutBufMgr, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}

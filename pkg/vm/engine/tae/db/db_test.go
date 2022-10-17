@@ -367,16 +367,18 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		blockFile := dataBlk.GetBlockFile()
-		_, err = blockFile.WriteBatch(bat, txn.GetStartTS())
+		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
+		writer := blockio.NewWriter(dataBlk.GetFs(), name)
+		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
-		err = blockFile.Sync()
+		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc := blockio.EncodeBlkMetaLoc(
-			blockFile.Fingerprint(),
-			types.TS{},
-			blockFile.GetMeta().GetExtent(),
-			uint32(bat.Length()))
+		metaLoc, err := blockio.EncodeBlkMetaLocWithObject(
+			dataBlk.GetID(),
+			blocks[0].GetExtent(),
+			uint32(bat.Length()),
+			blocks)
+		assert.Nil(t, err)
 		blk.UpdateMetaLoc(metaLoc)
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)
@@ -3629,7 +3631,7 @@ func TestWatchDirty(t *testing.T) {
 	assert.Zero(t, tbl)
 
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 100
+	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	appendCnt := 200
@@ -3640,7 +3642,7 @@ func TestWatchDirty(t *testing.T) {
 	tae.checkRowsByScan(1, false)
 
 	wg := &sync.WaitGroup{}
-	pool, _ := ants.NewPool(5)
+	pool, _ := ants.NewPool(3)
 	worker := func(i int) func() {
 		return func() {
 			txn, _ := tae.getRelation()
@@ -3703,9 +3705,12 @@ func TestWatchDirty(t *testing.T) {
 				// 10 zeros were found, can stop
 				return false, nil
 			}
+			t.Log("check consecutive zeros failed, wait more")
 		}
 		return true, nil
 	}))
+	// debug log
+	t.Logf("prevVal: %d, prevCount: %d, seen Dirty: %v", prevVal, prevCount, seenDirty)
 }
 
 func TestDirtyWatchRace(t *testing.T) {
@@ -3811,7 +3816,7 @@ func TestBlockRead(t *testing.T) {
 		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.FileFactory.(*blockio.ObjectFactory).Fs.Service
+	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
