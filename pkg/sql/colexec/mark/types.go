@@ -16,11 +16,13 @@ package mark
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -159,4 +161,51 @@ type Argument struct {
 	Cond *plan.Expr
 
 	OnList []*plan.Expr
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		mp := proc.Mp()
+		ctr.cleanBatch(mp)
+		ctr.cleanEvalVectors(mp)
+		ctr.cleanEqVectors(mp)
+		ctr.cleanHashMap()
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
+	if ctr.nullWithBatch != nil {
+		ctr.nullWithBatch.Clean(mp)
+		ctr.nullWithBatch = nil
+	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
+}
+
+func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+	for i := range ctr.evecs {
+		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
+			ctr.evecs[i].vec.Free(mp)
+			ctr.evecs[i].vec = nil
+		}
+	}
+}
+
+func (ctr *container) cleanEqVectors(mp *mpool.MPool) {
+	for i := range ctr.buildEqEvecs {
+		if ctr.buildEqEvecs[i].needFree && ctr.buildEqEvecs[i].vec != nil {
+			ctr.buildEqEvecs[i].vec.Free(mp)
+			ctr.buildEqEvecs[i].vec = nil
+		}
+	}
 }
