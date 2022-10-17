@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -509,4 +510,60 @@ func (r *Row) Size() (size int64) {
 		size += int64(len(col))
 	}
 	return
+}
+
+func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
+
+	return func(ctx context.Context, task task.Task) error {
+
+		args := task.Metadata.Context
+		ts := time.Now()
+		logutil.Infof("try to merge '%s' at %v", args, ts)
+
+		elems := strings.Split(string(args), ParamSeparator)
+		id := elems[0]
+		table, exist := gTable[id]
+		if !exist {
+			return moerr.NewNotSupported("merge task not support table: %s", id)
+		}
+		if len(elems) == 2 {
+			date := elems[1]
+			switch date {
+			case MergeTaskToday:
+			case MergeTaskYesterday:
+				ts = ts.Add(-24 * time.Hour)
+			default:
+				return moerr.NewNotSupported("merge task not support args: %s", args)
+			}
+		}
+
+		// handle metric
+		opts = append(opts, WithTable(table))
+		merge := NewMerge(ctx, opts...)
+		if err := merge.Main(ts); err != nil {
+			logutil.Errorf("merge metric failed: %v", err)
+			return err
+		}
+
+		return nil
+	}
+}
+
+// MergeTaskCronExpr          s m h   d ...
+const MergeTaskCronExpr4Hour = "0 * */4 * * *"
+const MergeTaskCronExpr15Min = "0 */15 * * * *"
+const MergeTaskCronExpr = MergeTaskCronExpr15Min
+const MergeTaskToday = "today"
+const MergeTaskYesterday = "yesterday"
+const ParamSeparator = " "
+
+// MergeTaskMetadata
+//
+// args like: "{db_tbl_name} [date, default: today]"
+var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
+	return task.TaskMetadata{
+		ID:       "ETL_merge_task",
+		Executor: uint32(id),
+		Context:  []byte(strings.Join(args, ParamSeparator)),
+	}
 }

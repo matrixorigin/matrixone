@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"go.uber.org/zap"
 	"sync"
@@ -125,6 +126,9 @@ func NewService(
 		return nil, err
 	}
 	srv.taskRunner = runner
+	if err = srv.initTaskRunner(ctx); err != nil {
+		return nil, err
+	}
 
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
@@ -265,6 +269,26 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	if err != nil {
 		panic(err)
 	}
+}
+
+const MergeTaskExecutor int = 1
+
+func (s *service) initTaskRunner(ctx context.Context) error {
+	var err error
+	if s.taskRunner == nil {
+		return moerr.NewInternalError("TaskRunner is nil.")
+	}
+
+	// register MergeTask
+	s.taskRunner.RegisterExecutor(MergeTaskExecutor, export.MergeTaskExecutorFactory(
+		export.WithFileService(s.fileService),
+		export.WithMinFilesMerge(1),
+	))
+	if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, metric.SingleMetricTable.GetIdentify()), export.MergeTaskCronExpr); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *service) runMoServer() error {
