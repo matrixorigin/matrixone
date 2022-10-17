@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -244,6 +245,7 @@ type blockReader struct {
 	blks     []BlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService
+	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
 }
 
@@ -252,4 +254,9 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
+}
+
+type BlockMeta struct {
+	info    catalog.BlockInfo
+	zonemap [][64]byte
 }
