@@ -18,66 +18,53 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type Reader struct {
 	reader objectio.Reader
-	block  *blockFile
 	fs     *objectio.ObjectFS
+	key    string
+	meta   *Meta
 }
 
-func NewReader(fs *objectio.ObjectFS, block *blockFile, name string) *Reader {
-	reader, err := objectio.NewObjectReader(name, fs.Service)
-	if err != nil {
-		panic(any(err))
-	}
-	return &Reader{
-		fs:     fs,
-		block:  block,
-		reader: reader,
-	}
-}
-
-func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
-	/*name := EncodeDeleteName(id, r.fs)
-	f, err := r.fs.OpenFile(name, os.O_RDWR)
+func NewReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
+	meta, err := DecodeMetaLocToMeta(key)
 	if err != nil {
 		return nil, err
 	}
-	size := f.Stat().Size()
-	if size == 0 {
-		return
+	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.Service)
+	if err != nil {
+		return nil, err
 	}
-	node := mpool.DefaultAllocator.Alloc(size)
-	defer mpool.DefaultAllocator.Free(node)
-	if _, err = f.Read(node.Buf[:size]); err != nil {
-		return
-	}
-	mask = roaring.New()
-	err = mask.UnmarshalBinary(node.Buf[:size])*/
-	return
+	return &Reader{
+		fs:     fs,
+		reader: reader,
+		key:    key,
+		meta:   meta,
+	}, nil
 }
 
 func (r *Reader) LoadBlkColumns(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
-	opts *containers.Options) (bat *containers.Batch, err error) {
-	bat = containers.NewBatch()
+	opts *containers.Options) (*containers.Batch, error) {
+	bat := containers.NewBatch()
 
-	metaKey := r.block.getMetaKey()
-	for i := range r.block.columns {
+	block, err := r.ReadMeta(nil)
+	if err != nil {
+		return nil, err
+	}
+	for i := range colNames {
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
-		if metaKey.End() == 0 {
+		if r.meta.GetLoc().End() == 0 {
 			continue
 		}
-		col, err := r.block.GetMeta().GetColumn(uint16(i))
+		col, err := block.GetColumn(uint16(i))
 		if err != nil {
 			return bat, err
 		}
@@ -94,12 +81,27 @@ func (r *Reader) LoadBlkColumns(
 	return bat, err
 }
 
-func (r *Reader) ReadMeta(extent objectio.Extent, m *mpool.MPool) (objectio.BlockObject, error) {
+func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
-	extents[0] = extent
+	extents[0] = r.meta.GetLoc()
 	block, err := r.reader.ReadMeta(extents, m)
 	if err != nil {
 		return nil, err
 	}
 	return block[0], err
+}
+
+func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
+	block, err := r.ReadMeta(m)
+	if err != nil {
+		panic(any(err))
+	}
+	if block == nil {
+		return nil
+	}
+	object, err := block.GetColumn(idx)
+	if err != nil {
+		panic(any(err))
+	}
+	return object
 }

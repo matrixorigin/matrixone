@@ -444,7 +444,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = db.Open(targetDir+"/tae", nil)
+		tae, err = db.Open(targetDir+"/tae", opt)
 		if err != nil {
 			logutil.Infof("Open tae failed. error:%v", err)
 			return nil, err
