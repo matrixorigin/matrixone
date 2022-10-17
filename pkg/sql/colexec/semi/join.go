@@ -49,7 +49,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
-				ctr.mp.Free()
 				return true, err
 			}
 			ctr.state = Probe
@@ -57,10 +56,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.mp.Free()
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -72,7 +67,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
-				ctr.mp.Free()
 				proc.SetInputBatch(nil)
 				return true, err
 			}
@@ -86,8 +80,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat := <-proc.Reg.MergeReceivers[1].Ch
-	ctr.bat = bat
-	ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	if bat != nil {
+		ctr.bat = bat
+		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	}
 	return nil
 }
 
@@ -102,7 +98,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.freeJoinCondition(proc)
+	defer ctr.cleanEvalVectors(proc.Mp())
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
@@ -156,11 +152,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -174,12 +165,4 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeJoinCondition(proc *process.Process) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.Mp())
-		}
-	}
 }

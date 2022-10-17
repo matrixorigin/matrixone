@@ -50,15 +50,12 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
-			ctr.state = End
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							ctr.clean()
-							ctr.bat.Clean(proc.Mp())
 							return false, err
 						}
 						ctr.bat.Aggs[i] = nil
@@ -72,10 +69,10 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 				anal.Output(ctr.bat)
 				ctr.bat.ExpandNulls()
 			}
-			ctr.clean()
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			return true, nil
+			ctr.state = End
+			return false, nil
 		case End:
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -160,8 +157,6 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		ctr.clean()
-		ctr.cleanBatch(proc)
 		return err
 	}
 	return nil
@@ -271,22 +266,4 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		}
 	}
 	return nil
-}
-
-func (ctr *container) clean() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
-	}
 }

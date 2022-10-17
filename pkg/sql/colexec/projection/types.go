@@ -14,8 +14,14 @@
 
 package projection
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type Argument struct {
 	Es []*plan.Expr
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

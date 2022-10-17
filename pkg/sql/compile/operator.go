@@ -222,14 +222,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *external.Argument:
 		rin.Arg = &external.Argument{
-			Es: &external.ExternalParam{
-				Attrs:         arg.Es.Attrs,
-				Cols:          arg.Es.Cols,
-				Name2ColIndex: arg.Es.Name2ColIndex,
-				CreateSql:     arg.Es.CreateSql,
-				Ctx:           arg.Es.Ctx,
-				Fileparam:     arg.Es.Fileparam,
-			},
+			Es: arg.Es,
 		}
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
@@ -388,7 +381,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -400,7 +393,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			Fileparam:     &external.ExternalFileparam{},
+			Fileparam:     fileparam,
 		},
 	}
 }
