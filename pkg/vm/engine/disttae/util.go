@@ -239,12 +239,12 @@ func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 }
 
 // getNewBlockName Each time a unique name is generated in one CN
-func getNewBlockName() (string, error) {
+func getNewBlockName(accountId uint32) (string, error) {
 	uuid, err := types.BuildUuid()
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s.blk", uuid.ToString()), nil
+	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
 }
 
 // computeRange compute primaryKey range by Expr

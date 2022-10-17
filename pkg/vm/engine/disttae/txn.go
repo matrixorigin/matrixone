@@ -476,8 +476,9 @@ func blockUnmarshal(data []byte) BlockMeta {
 
 // write a block to s3
 func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
-	// 2. write bat
-	s3FileName, err := getNewBlockName()
+	// 1. write bat
+	accountId, _, _ := getAccessInfo(ctx)
+	s3FileName, err := getNewBlockName(accountId)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +491,7 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 		return nil, err
 	}
 
-	// 3. write index (index and zonemap)
+	// 2. write index (index and zonemap)
 	for i, vec := range bat.Vecs {
 		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
 		if err != nil {
@@ -510,7 +511,7 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 		}
 	}
 
-	// 4. get return
+	// 3. get return
 	return writer.WriteEnd()
 }
 
