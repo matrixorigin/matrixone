@@ -45,3 +45,17 @@ Grants for test@localhost
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
+create database if not exists test03;
+use test03;
+drop view if exists v1;
+drop table if exists t1;
+create table t1(a int, b int);
+create view v1 as select * from t1;
+show full tables;
+tables_in_test03    table_type
+t1    BASE TABLE
+v1    VIEW
+show full tables from test03;
+tables_in_test03    table_type
+t1    BASE TABLE
+v1    VIEW
