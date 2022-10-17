@@ -41,6 +41,44 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	}
 }
 
+func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err error) {
+	for _, col := range colDefs {
+		expr := &plan.Expr{}
+		if col.Default.Expr != nil {
+			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+				return nil, err
+			}
+		} else {
+			expr = nil
+		}
+
+		onUpdate := &plan.Expr{}
+		if col.OnUpdate != nil {
+			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+				return nil, err
+			}
+		} else {
+			onUpdate = nil
+		}
+
+		attr := &engine.Attribute{
+			Name:    col.Name,
+			Type:    col.Type,
+			Primary: col.IsPrimary(),
+			Comment: col.Comment,
+			Default: &plan.Default{
+				NullAbility:  col.Default.NullAbility,
+				OriginString: col.Default.OriginString,
+				Expr:         expr,
+			},
+			OnUpdate:      onUpdate,
+			AutoIncrement: col.IsAutoIncrement(),
+		}
+		attrs = append(attrs, attr)
+	}
+	return
+}
+
 func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	if schema.Comment != "" {
 		commentDef := new(engine.CommentDef)
