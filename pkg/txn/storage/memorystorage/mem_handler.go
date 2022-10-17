@@ -1103,15 +1103,6 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	return nil
 }
 
-//func (m *MemHandler) HandleTruncate(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) error {
-//	tx := m.getTx(meta)
-//	_, err := m.relations.Get(tx, req.TableID)
-//	if errors.Is(err, sql.ErrNoRows) {
-//		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-//	}
-//	return m.deleteRelationData(tx, req.TableID)
-//}
-
 func (m *MemHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) error {
 	tx := m.getTx(meta)
 

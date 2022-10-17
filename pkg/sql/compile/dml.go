@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -49,7 +50,21 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				return 0, err
 			}
 		}
-		return 0, dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
+
+		var rel engine.Relation
+		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
+			return 0, err
+		}
+		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
+		if err != nil {
+			return 0, err
+		}
+
+		err = colexec.MoveAutoIncrCol(arg.DeleteCtxs[0].TableName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+		if err != nil {
+			return 0, err
+		}
+		return 0, nil
 	}
 
 	if err := s.MergeRun(c); err != nil {

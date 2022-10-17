@@ -565,18 +565,6 @@ func (c *CatalogHandler) HandleStartRecovery(ctx context.Context, ch chan txn.Tx
 	c.upstream.HandleStartRecovery(ctx, ch)
 }
 
-//func (c *CatalogHandler) HandleTruncate(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) (err error) {
-//	if _, ok := c.sysRelationIDs[req.TableID]; ok {
-//		defer logReq("catalog", req, meta, resp, &err)()
-//		return moerr.NewInternalError(
-//			"read only, db %v, table %v",
-//			req.DatabaseName,
-//			req.TableName,
-//		)
-//	}
-//	return c.upstream.HandleTruncate(ctx, meta, req, resp)
-//}
-
 func (c *CatalogHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()

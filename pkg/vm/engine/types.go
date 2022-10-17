@@ -155,8 +155,6 @@ type Relation interface {
 	// Delete(context.Context, *vector.Vector, string) error
 	Delete(context.Context, *batch.Batch, string) error
 
-	//Truncate(context.Context) (uint64, error)
-
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 

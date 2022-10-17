@@ -150,13 +150,6 @@ type OperationHandler interface {
 		resp *DeleteResp,
 	) error
 
-	//HandleTruncate(
-	//	ctx context.Context,
-	//	meta txn.TxnMeta,
-	//	req TruncateReq,
-	//	resp *TruncateResp,
-	//) error
-
 	HandleUpdate(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -285,11 +278,6 @@ func handle(
 		var r GetHiddenKeysResp
 		err = handler.HandleGetHiddenKeys(ctx, meta, req.(GetHiddenKeysReq), &r)
 		ret = r
-
-	//case OpTruncate:
-	//	var r TruncateResp
-	//	err = handler.HandleTruncate(ctx, meta, req.(TruncateReq), &r)
-	//	ret = r
 
 	case OpUpdate:
 		var r UpdateResp
