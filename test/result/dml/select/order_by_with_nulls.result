@@ -176,7 +176,7 @@ int_test INT NOT NULL,
 big BIGINT NOT NULL
 );
 INSERT INTO t1() VALUES(1, 2, 3, 4),(100, 101, 102, 103),(NULL, NULL, NULL, 204),(64,1,4564,46843);
-constraint vialation: Column 'tiny' cannot be null
+constraint violation: Column 'tiny' cannot be null
 SELECT * FROM t1 ORDER BY small DESC;
 tiny    small    int_test    big
 SELECT * FROM t1 WHERE tiny < 100 ORDER BY big ASC;
