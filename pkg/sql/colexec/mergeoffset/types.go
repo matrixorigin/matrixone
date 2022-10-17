@@ -14,14 +14,10 @@
 
 package mergeoffset
 
-const (
-	Eval = iota
-	End
-)
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 type container struct {
-	state int
-	seen  uint64
+	seen uint64
 }
 
 type Argument struct {
@@ -29,4 +25,7 @@ type Argument struct {
 	Offset uint64
 	// ctr contains the attributes needn't do serialization work
 	ctr *container
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

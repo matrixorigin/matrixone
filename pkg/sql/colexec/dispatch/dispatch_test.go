@@ -82,7 +82,7 @@ func TestDispatch(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		for {
+		for len(tc.arg.Regs[0].Ch) > 0 {
 			bat := <-tc.arg.Regs[0].Ch
 			if bat == nil {
 				break

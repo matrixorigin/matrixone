@@ -260,3 +260,9 @@ type BlockMeta struct {
 	info    catalog.BlockInfo
 	zonemap [][64]byte
 }
+
+type Columns []column
+
+func (cols Columns) Len() int           { return len(cols) }
+func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
+func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
