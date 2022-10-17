@@ -62,8 +62,22 @@ func NewTaskService(store TaskStorage, logger *zap.Logger) TaskService {
 }
 
 func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error {
-	_, err := s.store.Add(ctx, newTaskFromMetadata(value))
-	return err
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Error("create task timeout")
+			return errNotReady
+		default:
+			if _, err := s.store.Add(ctx, newTaskFromMetadata(value)); err != nil {
+				if err == errNotReady {
+					time.Sleep(300 * time.Millisecond)
+					continue
+				}
+				return err
+			}
+			return nil
+		}
+	}
 }
 
 func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata) error {

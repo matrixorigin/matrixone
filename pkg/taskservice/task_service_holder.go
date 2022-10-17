@@ -95,7 +95,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 	store := newRefreshableTaskStorage(h.logger,
 		h.addressFactory,
 		h.taskStorageFactorySelector(command.User.Username,
-			command.User.Username,
+			command.User.Password,
 			command.TaskDatabase))
 	h.mu.store = store
 	h.mu.service = NewTaskService(store, h.logger.Named("task"))
@@ -143,12 +143,15 @@ func newRefreshableTaskStorage(logger *zap.Logger,
 }
 
 func (s *refreshableTaskStorage) Close() error {
+	var err error
 	s.mu.Lock()
 	if s.mu.closed {
 		return nil
 	}
 	s.mu.closed = true
-	err := s.mu.store.Close()
+	if s.mu.store != nil {
+		err = s.mu.store.Close()
+	}
 	s.mu.Unlock()
 	s.stopper.Stop()
 	close(s.refreshC)
@@ -348,7 +351,7 @@ func (f *mysqlBasedStorageFactory) Create(address string) (TaskStorage, error) {
 		f.password,
 		address,
 		f.database)
-	return NewMysqlTaskStorage(dsn)
+	return NewMysqlTaskStorage(dsn, f.database)
 }
 
 type fixedTaskStorageFactory struct {

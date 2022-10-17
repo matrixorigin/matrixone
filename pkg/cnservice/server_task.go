@@ -88,5 +88,8 @@ func (s *service) stopTask() error {
 	if err := s.task.holder.Close(); err != nil {
 		return err
 	}
-	return s.task.runner.Stop()
+	if s.task.runner != nil {
+		return s.task.runner.Stop()
+	}
+	return nil
 }

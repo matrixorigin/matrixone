@@ -47,7 +47,7 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			}
 		} else if cmd.GetShutdownStore() != nil {
 			s.handleShutdownStore(cmd)
-		} else if cmd.CreateTaskService != nil {
+		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
 		} else {
 			panic("unknown schedule command type")

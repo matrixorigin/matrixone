@@ -282,9 +282,6 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
-	if !hb.TaskServiceCreated {
-		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.CNService))
-	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -295,9 +292,6 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.DNState.Update(hb, s.state.Tick)
-	if !hb.TaskServiceCreated {
-		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.DNService))
-	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -308,9 +302,6 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
-	if !hb.TaskServiceCreated {
-		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.LogService))
-	}
 	return s.getCommandBatch(hb.UUID)
 }
 

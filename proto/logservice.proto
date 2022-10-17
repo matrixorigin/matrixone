@@ -382,6 +382,8 @@ message CNStoreInfo {
   string          ServiceAddress = 2;
   string          SQLAddress     = 3;
   metadata.CNRole Role           = 4;
+
+  bool TaskServiceCreated = 5;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -396,6 +398,8 @@ message DNStoreInfo {
   uint64 Tick                 = 1;
   string ServiceAddress       = 2;
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+
+  bool TaskServiceCreated = 4;
 }
 
 // DNState contains all DN details known to the HAKeeper.
@@ -431,6 +435,8 @@ message LogStoreInfo {
   string ServiceAddress                       = 3;
   string GossipAddress                        = 4;
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+
+  bool TaskServiceCreated = 6;
 }
 
 message LogState {

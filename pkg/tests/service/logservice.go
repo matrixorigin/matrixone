@@ -15,6 +15,7 @@
 package service
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"path"
 	"strconv"
 	"sync"
@@ -58,6 +59,9 @@ type LogService interface {
 
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
+
+	// GetTaskService returns the taskservice
+	GetTaskService() (taskservice.TaskService, bool)
 }
 
 // logService wraps logservice.WrappedService.
@@ -129,6 +133,10 @@ func (ls *logService) StartHAKeeperReplica(
 	replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool,
 ) error {
 	return ls.svc.StartHAKeeperReplica(replicaID, initialReplicas, join)
+}
+
+func (ls *logService) GetTaskService() (taskservice.TaskService, bool) {
+	return ls.svc.GetTaskService()
 }
 
 // logOptions is options for a log service.

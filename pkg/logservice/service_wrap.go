@@ -19,6 +19,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 type WrappedService struct {
@@ -68,6 +69,15 @@ func (w *WrappedService) SetInitialClusterInfo(
 
 func (w *WrappedService) CreateInitTasks() error {
 	return w.svc.createInitTasks(context.Background())
+}
+
+func (w *WrappedService) GetTaskService() (taskservice.TaskService, bool) {
+	w.svc.task.RLock()
+	defer w.svc.task.RUnlock()
+	if w.svc.task.holder == nil {
+		return nil, false
+	}
+	return w.svc.task.holder.Get()
 }
 
 // StartHAKeeperReplica

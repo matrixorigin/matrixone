@@ -196,9 +196,9 @@ type ClusterWaitState interface {
 	WaitDNStoreReported(ctx context.Context, uuid string)
 	// WaitDNStoreReportedIndexed waits dn store reported by index.
 	WaitDNStoreReportedIndexed(ctx context.Context, index int)
-	// WaitDNStoreTaskServiceCreated waits cn store task service started by uuid.
+	// WaitDNStoreTaskServiceCreated waits dn store task service started by uuid.
 	WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string)
-	// WaitDNStoreTaskServiceCreatedIndexed waits cn store task service started  by index.
+	// WaitDNStoreTaskServiceCreatedIndexed waits dn store task service started by index.
 	WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 	// WaitCNStoreReported waits cn store reported by uuid.
 	WaitCNStoreReported(ctx context.Context, uuid string)
@@ -206,8 +206,12 @@ type ClusterWaitState interface {
 	WaitCNStoreReportedIndexed(ctx context.Context, index int)
 	// WaitCNStoreTaskServiceCreated waits cn store task service started by uuid.
 	WaitCNStoreTaskServiceCreated(ctx context.Context, uuid string)
-	// WaitCNStoreTaskServiceCreatedIndexed waits cn store task service started  by index.
+	// WaitCNStoreTaskServiceCreatedIndexed waits cn store task service started by index.
 	WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+	// WaitLogStoreTaskServiceCreated waits log store task service started by uuid
+	WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitLogStoreTaskServiceCreatedIndexed waits log store task service started by index
+	WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 
 	// WaitLogStoreTimeout waits log store timeout by uuid.
 	WaitLogStoreTimeout(ctx context.Context, uuid string)
@@ -334,6 +338,9 @@ func (c *testCluster) Start() error {
 		}
 	}
 
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.mu.running = true
 	return nil
 }
@@ -897,6 +904,34 @@ func (c *testCluster) WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, 
 	ds, err := c.GetDNServiceIndexed(index)
 	require.NoError(c.t, err)
 	c.WaitDNStoreTaskServiceCreated(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ls, err := c.GetLogService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on log store",
+				"log store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ls.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetLogServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitLogStoreTaskServiceCreated(ctx, ds.ID())
 }
 
 func (c *testCluster) WaitLogStoreTimeout(ctx context.Context, uuid string) {

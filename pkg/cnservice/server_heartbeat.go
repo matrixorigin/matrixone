@@ -66,6 +66,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 				if command.ServiceType != logservicepb.CNService {
 					panic(fmt.Sprintf("received a Non-CN Schedule Command: %s", command.ServiceType.String()))
 				}
+				s.logger.Info("applying schedule command", zap.String("command", command.LogString()))
 				if command.CreateTaskService != nil {
 					s.createTaskService(command.CreateTaskService)
 				}

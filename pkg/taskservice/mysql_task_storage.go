@@ -27,6 +27,11 @@ import (
 )
 
 var (
+	createDB = []string{
+		`create database if not exists `,
+		`use `,
+	}
+
 	createSqls = []string{
 		`create table if not exists sys_async_task (
 			task_id                     int primary key auto_increment,
@@ -39,8 +44,8 @@ var (
 			task_runner                 varchar(16),
 			task_epoch                  int,
 			last_heartbeat              bigint,
-			result_code                 int,
-			error_msg                   varchar(1000),
+			result_code                 int null,
+			error_msg                   varchar(1000) null,
 			create_at                   bigint,
 			end_at                      bigint)`,
 		`create table if not exists sys_cron_task (
@@ -137,37 +142,54 @@ var (
 )
 
 type mysqlTaskStorage struct {
-	db *sql.DB
+	dsn string
 }
 
-func NewMysqlTaskStorage(dsn string) (TaskStorage, error) {
+func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		panic(err)
+	}
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
+	for _, s := range createDB {
+		if _, err = db.Exec(s + dbname); err != nil {
+			return nil, err
+		}
 	}
 
 	// TODO: Can not init here. Consider how many CNs are started and how many times they will be executed,
 	// the initialization logic needs to be moved to the initialization of HaKeeper
 	for _, s := range createSqls {
-		_, err = db.Exec(s)
-		if err != nil {
+		if _, err = db.Exec(s); err != nil {
 			return nil, err
 		}
 	}
 
 	return &mysqlTaskStorage{
-		db: db,
+		dsn: dsn,
 	}, nil
 }
 
-func (m *mysqlTaskStorage) Close() error {
-	if err := m.db.Close(); err != nil {
-		return err
+func (m *mysqlTaskStorage) open() *sql.DB {
+	db, err := sql.Open("mysql", m.dsn)
+	if err != nil {
+		panic(err)
 	}
+	return db
+}
+
+func (m *mysqlTaskStorage) Close() error {
 	return nil
 }
 
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
 	if len(tasks) == 0 {
 		return 0, nil
 	}
@@ -200,7 +222,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 		return 0, nil
 	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	stmt, err := m.db.Prepare(sqlStr)
+	stmt, err := db.Prepare(sqlStr)
 	if err != nil {
 		return 0, err
 	}
@@ -225,6 +247,11 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 }
 
 func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condition ...Condition) (int, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	c := conditions{}
 	for _, cond := range condition {
 		cond(&c)
@@ -250,7 +277,7 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 			return 0, err
 		}
 
-		exec, err := m.db.Exec(update,
+		exec, err := db.Exec(update,
 			t.Metadata.Executor,
 			t.Metadata.Context,
 			string(j),
@@ -278,13 +305,18 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 }
 
 func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (int, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	c := conditions{}
 	for _, cond := range condition {
 		cond(&c)
 	}
 	where := buildWhereClause(c)
 
-	exec, err := m.db.Exec("delete from sys_async_task where " + where)
+	exec, err := db.Exec("delete from sys_async_task where " + where)
 	if err != nil {
 		return 0, err
 	}
@@ -296,6 +328,11 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 }
 
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	c := conditions{}
 	for _, cond := range condition {
 		cond(&c)
@@ -310,7 +347,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	}
 	query += buildLimitClause(c)
 
-	rows, err := m.db.Query(query)
+	rows, err := db.Query(query)
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
@@ -360,7 +397,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			if err != nil {
 				return nil, err
 			}
-			t.ExecuteResult.Code = task.ResultCode(code.(int32))
+			t.ExecuteResult.Code = task.ResultCode(code.(int64))
 
 			msg, err := msgOption.Value()
 			if err != nil {
@@ -375,6 +412,11 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	sqlStr := insertCronTask
 	vals := make([]any, 0)
 	for _, t := range cronTask {
@@ -402,7 +444,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	stmt, err := m.db.Prepare(sqlStr)
+	stmt, err := db.Prepare(sqlStr)
 	if err != nil {
 		return 0, err
 	}
@@ -426,7 +468,12 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 }
 
 func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
-	rows, err := m.db.Query(selectCronTask)
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
+	rows, err := db.Query(selectCronTask)
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
@@ -468,6 +515,11 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 }
 
 func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, t task.Task) (int, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	if m.taskExists(t.Metadata.ID) {
 		return 0, nil
 	}
@@ -476,7 +528,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, nil
 	}
 
-	tx, err := m.db.Begin()
+	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
 	}
@@ -536,8 +588,13 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 }
 
 func (m *mysqlTaskStorage) taskExists(taskMetadataID string) bool {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	var exists bool
-	err := m.db.QueryRow("select exists(select * from sys_async_task where task_metadata_id=?)", taskMetadataID).Scan(&exists)
+	err := db.QueryRow("select exists(select * from sys_async_task where task_metadata_id=?)", taskMetadataID).Scan(&exists)
 	if err != nil {
 		panic(err)
 	}
@@ -545,8 +602,13 @@ func (m *mysqlTaskStorage) taskExists(taskMetadataID string) bool {
 }
 
 func (m *mysqlTaskStorage) getTriggerTimes(taskMetadataID string) (uint64, error) {
+	db := m.open()
+	defer func(db *sql.DB) {
+		_ = db.Close()
+	}(db)
+
 	var triggerTimes uint64
-	err := m.db.QueryRow("select trigger_times from sys_cron_task where task_metadata_id=?", taskMetadataID).Scan(&triggerTimes)
+	err := db.QueryRow("select trigger_times from sys_cron_task where task_metadata_id=?", taskMetadataID).Scan(&triggerTimes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, err

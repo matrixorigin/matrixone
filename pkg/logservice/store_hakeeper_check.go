@@ -121,7 +121,6 @@ func (l *store) hakeeperCheck() {
 		l.taskScheduler.StopScheduleCronTask()
 		return
 	}
-	l.taskScheduler.StartScheduleCronTask()
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
@@ -200,6 +199,7 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 	l.assertHAKeeperState(pb.HAKeeperRunning)
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 
+	l.taskScheduler.StartScheduleCronTask()
 	l.taskScheduler.Schedule(state.GetCNState(), state.Tick)
 }
 
@@ -279,8 +279,7 @@ func (l *store) getScheduleCommand(check bool,
 	}
 
 	if check {
-		return l.checker.Check(l.alloc,
-			state.ClusterInfo, state.DNState, state.LogState, state.Tick), nil
+		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
