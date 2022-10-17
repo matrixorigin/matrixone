@@ -24,7 +24,7 @@ import (
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := newTaskServiceHolderWithTaskStorageFactorySelecter(nil,
+	h := newTaskServiceHolderWithTaskStorageFactorySelector(nil,
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -41,7 +41,7 @@ func TestTaskHolderCanCreateTaskService(t *testing.T) {
 
 func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := newTaskServiceHolderWithTaskStorageFactorySelecter(nil,
+	h := newTaskServiceHolderWithTaskStorageFactorySelector(nil,
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -51,7 +51,7 @@ func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
 
 func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := newTaskServiceHolderWithTaskStorageFactorySelecter(nil,
+	h := newTaskServiceHolderWithTaskStorageFactorySelector(nil,
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
@@ -61,7 +61,7 @@ func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 
 func TestTaskHolderCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
-	h := newTaskServiceHolderWithTaskStorageFactorySelecter(nil,
+	h := newTaskServiceHolderWithTaskStorageFactorySelector(nil,
 		func() (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)

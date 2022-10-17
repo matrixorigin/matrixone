@@ -30,7 +30,7 @@ import (
 type taskServiceHolder struct {
 	logger                     *zap.Logger
 	addressFactory             func() (string, error)
-	taskStorageFactorySelecter func(string, string, string) TaskStorageFactory
+	taskStorageFactorySelector func(string, string, string) TaskStorageFactory
 	mu                         struct {
 		sync.RWMutex
 		closed  bool
@@ -42,18 +42,18 @@ type taskServiceHolder struct {
 // NewTaskServiceHolder create a task service hold, it will create task storage and task service from the hakeeper's schedule command.
 func NewTaskServiceHolder(logger *zap.Logger,
 	addressFactory func() (string, error)) TaskServiceHolder {
-	return newTaskServiceHolderWithTaskStorageFactorySelecter(logger, addressFactory, func(username, password, database string) TaskStorageFactory {
+	return newTaskServiceHolderWithTaskStorageFactorySelector(logger, addressFactory, func(username, password, database string) TaskStorageFactory {
 		return NewMySQLBasedTaskStorageFactory(username, password, database)
 	})
 }
 
-func newTaskServiceHolderWithTaskStorageFactorySelecter(logger *zap.Logger,
+func newTaskServiceHolderWithTaskStorageFactorySelector(logger *zap.Logger,
 	addressFactory func() (string, error),
-	selecter func(string, string, string) TaskStorageFactory) TaskServiceHolder {
+	selector func(string, string, string) TaskStorageFactory) TaskServiceHolder {
 	return &taskServiceHolder{
 		logger:                     logutil.Adjust(logger),
 		addressFactory:             addressFactory,
-		taskStorageFactorySelecter: selecter,
+		taskStorageFactorySelector: selector,
 	}
 }
 
@@ -90,7 +90,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 
 	store := newRefreshableTaskStorage(h.logger,
 		h.addressFactory,
-		h.taskStorageFactorySelecter(command.User.Username,
+		h.taskStorageFactorySelector(command.User.Username,
 			command.User.Username,
 			command.TaskDatabase))
 	h.mu.store = store
