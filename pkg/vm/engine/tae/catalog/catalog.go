@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -44,7 +43,7 @@ import (
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
 	MakeSegmentFactory() SegmentDataFactory
-	MakeBlockFactory(segFile file.Segment) BlockDataFactory
+	MakeBlockFactory() BlockDataFactory
 }
 
 type Catalog struct {
@@ -423,7 +422,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	}
 	cmd.Block.RWMutex = new(sync.RWMutex)
 	cmd.Block.segment = seg
-	cmd.Block.blkData = dataFactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
+	cmd.Block.blkData = dataFactory.MakeBlockFactory()(cmd.Block)
 	ts := cmd.Block.blkData.GetMaxCheckpointTS()
 	if observer != nil {
 		observer.OnTimeStamp(ts)

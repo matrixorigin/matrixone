@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -34,12 +33,12 @@ type BfNode struct {
 	colMetaFactory EvictableNodeFactory
 }
 
-func NewBfNode(mgr base.INodeManager, bfKey, metaKey string, col file.ColumnBlock, metaloc string, typ types.Type) (node *BfNode, err error) {
+func NewBfNode(mgr base.INodeManager, bfKey, metaKey string, fs *objectio.ObjectFS, idx uint16, metaloc string, typ types.Type) (node *BfNode, err error) {
 	node = &BfNode{
 		bfKey:          bfKey,
 		metaKey:        metaKey,
 		mgr:            mgr,
-		colMetaFactory: func() (base.INode, error) { return NewColumnMetaNode(mgr, metaKey, col, metaloc, typ), nil },
+		colMetaFactory: func() (base.INode, error) { return NewColumnMetaNode(mgr, metaKey, fs, idx, metaloc, typ), nil },
 	}
 
 	h, err := PinEvictableNode(mgr, metaKey, node.colMetaFactory)

@@ -20,11 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -37,25 +35,22 @@ type appendableNode struct {
 	exception *atomic.Value
 }
 
-func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
+func newNode(block *dataBlock) *appendableNode {
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
 	impl.rows = 0
 	impl.prefix = block.meta.MakeKey()
 
-	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
 	// opts.Capacity = int(schema.BlockMaxRows)
 	opts.Allocator = common.MutMemAllocator
-	if impl.data, err = file.LoadBatch(
-		schema.AllTypes(),
+	impl.data = containers.BuildBatch(
 		schema.AllNames(),
+		schema.AllTypes(),
 		schema.AllNullables(),
-		opts); err != nil {
-		panic(err)
-	}
+		opts)
 	return impl
 }
 
@@ -73,17 +68,17 @@ func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *con
 }
 
 func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	var data *containers.Batch
 	schema := node.block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	data, err = node.block.file.LoadBatch(
-		schema.AllTypes(),
-		schema.AllNames(),
-		schema.AllNullables(),
-		opts)
-	if err != nil {
-		return
+	data := containers.NewBatch()
+	var vec containers.Vector
+	for i, col := range schema.ColDefs {
+		vec, err = node.block.LoadColumnData(i, nil)
+		if err != nil {
+			return nil, err
+		}
+		data.AddVector(col.Name, vec)
 	}
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data

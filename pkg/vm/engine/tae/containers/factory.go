@@ -14,7 +14,9 @@
 
 package containers
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 	switch typ.Oid {
@@ -70,9 +72,7 @@ func BuildBatch(
 	attrs []string,
 	colTypes []types.Type,
 	nullables []bool,
-	capacity int) *Batch {
-	opts := new(Options)
-	opts.Capacity = capacity
+	opts *Options) *Batch {
 	bat := NewBatch()
 	for i, attr := range attrs {
 		vec := MakeVector(colTypes[i], nullables[i], opts)
