@@ -28,13 +28,18 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
+func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
+	logutil.Infof("[Logtail] begin handle %v", req)
+	defer func() {
+		logutil.Infof("[Logtail] end handle err %v", err)
+	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
@@ -342,29 +347,58 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
-func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
+func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
+	var latestCommittedNode *catalog.MetadataMVCCNode
+	newEnd := b.end
 	e.RLock()
-	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
+	// try to find new end
+	if newest := e.GetLatestCommittedNode(); newest != nil {
+		latestCommittedNode = newest.CloneAll().(*catalog.MetadataMVCCNode)
+		latestPrepareTs := latestCommittedNode.GetPrepare()
+		if latestPrepareTs.Greater(b.end) {
+			newEnd = latestPrepareTs
+		}
+	}
+	mvccNodes := e.ClonePreparedInRange(b.start, newEnd)
 	e.RUnlock()
+
 	for _, node := range mvccNodes {
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		var dstBatch *containers.Batch
-		if !metaNode.HasDropCommitted() {
-			dstBatch = b.blkMetaInsBatch
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_CreateAt).Append(metaNode.CreatedAt)
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeleteAt).Append(metaNode.DeletedAt)
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
-			dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
-		} else {
-			dstBatch = b.blkMetaDelBatch
-		}
-
-		dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
-		dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
-		dstBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
+		b.appendBlkMeta(e, metaNode)
 	}
+
+	if e.IsAppendable() {
+		if latestCommittedNode.MetaLoc != "" {
+			// appendable block has been flushed, no need to collect data
+			return true
+		}
+	} else {
+		if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
+			// non-appendable block has newer delta data on s3, no need to collect data
+			return true
+		}
+	}
+	return false
+}
+
+func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
+	// for now, we treat all mvcc nodes as update operation. Only Insert
+	dstBatch := b.blkMetaInsBatch
+
+	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
+		e.AsCommonID().String(), e.IsAppendable(),
+		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
+
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_CreateAt).Append(metaNode.CreatedAt)
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeleteAt).Append(metaNode.DeletedAt)
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+
+	dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+	dstBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
 }
 
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
@@ -391,7 +425,10 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 }
 
 func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
-	b.visitBlkMeta(entry)
+	if b.visitBlkMeta(entry) {
+		// data has been flushed, no need to collect data
+		return nil
+	}
 	return b.visitBlkData(entry)
 }
 
@@ -409,8 +446,8 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		blockID := uint64(0)
 		tableName := b.tname
 		if metaChange {
-			blockID = 1 // make metadata change stand out, just a flag
-			tableName = fmt.Sprintf("_%d_%s", b.tid, b.tname)
+			tableName = fmt.Sprintf("_%d_meta", b.tid)
+			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 		}
 		entry := &api.Entry{
 			EntryType:    typ,
