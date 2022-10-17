@@ -76,6 +76,7 @@ func (vec *vecView) Allocated() int    { return vec.impl.Allocated() }
 func (vec *vecView) GetAllocator() *mpool.MPool { return vec.impl.GetAllocator() }
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }
 func (vec *vecView) String() string             { return vec.impl.String() }
+func (vec *vecView) PPString(num int) string    { return vec.impl.PPString(num) }
 func (vec *vecView) Close()                     {}
 func (vec *vecView) Slice() any                 { return vec.impl.Slice() }
 
