@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -103,7 +104,6 @@ type Engine struct {
 type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
-	cli        client.TxnClient
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
 }
@@ -131,6 +131,7 @@ type Transaction struct {
 	// use for solving halloween problem
 	statementId uint64
 	meta        txn.TxnMeta
+	op          client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
@@ -244,6 +245,7 @@ type blockReader struct {
 	blks     []BlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService
+	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
 }
 
@@ -252,4 +254,9 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
+}
+
+type BlockMeta struct {
+	info    catalog.BlockInfo
+	zonemap [][64]byte
 }

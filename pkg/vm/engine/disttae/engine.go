@@ -46,7 +46,7 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	db := newDB(cli, cluster.DNStores)
+	db := newDB(cluster.DNStores)
 	if err := db.init(ctx, mp); err != nil {
 		panic(err)
 	}
@@ -174,6 +174,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.fs,
 	)
 	txn := &Transaction{
+		op:             op,
 		proc:           proc,
 		db:             e.db,
 		readOnly:       true,
@@ -189,15 +190,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
@@ -240,23 +241,20 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	return nil, nil
-	/*
-		clusterDetails, err := e.getClusterDetails()
-		if err != nil {
-			return nil, err
-		}
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
 
-		var nodes engine.Nodes
-		for _, store := range clusterDetails.CNStores {
-			nodes = append(nodes, engine.Node{
-				Mcpu: 10, // TODO
-				Id:   store.UUID,
-				Addr: store.ServiceAddress,
-			})
-		}
-		return nodes, nil
-	*/
+	var nodes engine.Nodes
+	for _, store := range clusterDetails.CNStores {
+		nodes = append(nodes, engine.Node{
+			Mcpu: 10, // TODO
+			Id:   store.UUID,
+			Addr: store.ServiceAddress,
+		})
+	}
+	return nodes, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {
