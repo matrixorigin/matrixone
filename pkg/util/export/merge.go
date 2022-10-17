@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+
 	"github.com/matrixorigin/simdcsv"
 )
 
@@ -36,7 +38,8 @@ import (
 // ========================
 
 // Merge like a compaction, merge input files into one/two/... files.
-//   - `NewMergeService` init merge as service, with param `serviceInit` to avoid multi init.
+//   - `NewMergeService` init merge as service, with param `serviceInited` to avoid multi init.
+//   - `MergeTaskExecutorFactory` drive by Cron TaskService.
 //   - `NewMerge` handle merge obj init.
 //   - `Merge::Start` as service loop, trigger `Merge::Main` each cycle
 //   - `Merge::Main` handle handle job,
@@ -126,7 +129,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		pathBuilder:   NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
-		MinFilesMerge: 2,
+		MinFilesMerge: 1,
 		FileCacheSize: mpool.PB, // disable it by set very large
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
@@ -230,7 +233,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		<-m.runningJobs
 	}()
 
-	if len(paths) < m.MinFilesMerge {
+	if len(paths) <= m.MinFilesMerge {
 		return moerr.NewInternalError("file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
 	}
 
@@ -509,4 +512,67 @@ func (r *Row) Size() (size int64) {
 		size += int64(len(col))
 	}
 	return
+}
+
+func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
+
+	return func(ctx context.Context, task task.Task) error {
+
+		args := task.Metadata.Context
+		ts := time.Now()
+		logutil.Infof("try to merge '%s' at %v", args, ts)
+
+		elems := strings.Split(string(args), ParamSeparator)
+		id := elems[0]
+		table, exist := gTable[id]
+		if !exist {
+			return moerr.NewNotSupported("merge task not support table: %s", id)
+		}
+		if !table.PathBuilder.SupportMergeSplit() {
+			logutil.Info("not support merge task", logutil.TableField(table.GetIdentify()))
+			return nil
+		}
+		if len(elems) == 2 {
+			date := elems[1]
+			switch date {
+			case MergeTaskToday:
+			case MergeTaskYesterday:
+				ts = ts.Add(-24 * time.Hour)
+			default:
+				return moerr.NewNotSupported("merge task not support args: %s", args)
+			}
+		}
+
+		// handle metric
+		opts = append(opts, WithTable(table))
+		merge := NewMerge(ctx, opts...)
+		if err := merge.Main(ts); err != nil {
+			logutil.Errorf("merge metric failed: %v", err)
+			return err
+		}
+
+		return nil
+	}
+}
+
+// MergeTaskCronExpr            s m h   d ...
+const MergeTaskCronExpr = MergeTaskCronExpr1Hour
+const MergeTaskCronExpr1Hour = "0 0 */1 * * *"
+const MergeTaskCronExpr4Hour = "0 0 */4 * * *"
+const MergeTaskCronExpr15Min = "0 */15 * * * *"
+const MergeTaskCronExpr15Sec = "*/15 * * * * *"
+const MergeTaskCronExprYesterday = "0 0 4 * * *"
+const MergeTaskToday = "today"
+const MergeTaskYesterday = "yesterday"
+const ParamSeparator = " "
+
+// MergeTaskMetadata
+//
+// args like: "{db_tbl_name} [date, default: today]"
+var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
+	return task.TaskMetadata{
+		ID:       path.Join("ETL_merge_task", path.Join(args...)),
+		Executor: uint32(id),
+		Context:  []byte(strings.Join(args, ParamSeparator)),
+	}
 }

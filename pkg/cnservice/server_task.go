@@ -24,6 +24,7 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -194,7 +195,7 @@ func (s *service) registerExecutors() {
 	}
 
 	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
-		func(ctx context.Context, task task.Task) error {
+		func(ctx context.Context, t task.Task) error {
 			if err := frontend.InitSysTenant(moServerCtx); err != nil {
 				return err
 			}
@@ -207,6 +208,10 @@ func (s *service) registerExecutors() {
 			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
+
+			s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+				export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
+
 			return nil
 		})
 }
