@@ -191,7 +191,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 					},
 					ChangeType: pb.StartReplica,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case RemoveDnReplica:
 			cmd = pb.ScheduleCommand{
@@ -205,7 +205,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 					},
 					ChangeType: pb.StopReplica,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case StopDnStore:
 			cmd = pb.ScheduleCommand{
@@ -213,7 +213,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 				ShutdownStore: &pb.ShutdownStore{
 					StoreID: st.StoreID,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case StopLogStore:
 			cmd = pb.ScheduleCommand{

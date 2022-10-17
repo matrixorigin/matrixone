@@ -58,6 +58,7 @@ func firstError(err1 error, err2 error) error {
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
+	logger      *zap.Logger
 	store       *store
 	server      morpc.RPCServer
 	pool        *sync.Pool
@@ -71,13 +72,16 @@ type Service struct {
 		backendFilter func(msg morpc.Message, backendAddr string) bool
 	}
 
-	logger *zap.Logger
+	task struct {
+		sync.RWMutex
+		created bool
+		holder  taskservice.TaskServiceHolder
+	}
 }
 
 func NewService(
 	cfg Config,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 	opts ...Option,
 ) (*Service, error) {
 	cfg.Fill()
@@ -85,7 +89,15 @@ func NewService(
 		return nil, err
 	}
 	logger := logutil.GetGlobalLogger().Named("LogService").With(zap.String("uuid", cfg.UUID))
-	store, err := newLogStore(cfg, taskService, logger)
+
+	service := &Service{
+		cfg:         cfg,
+		stopper:     stopper.NewStopper("log-service"),
+		fileService: fileService,
+		logger:      logger,
+	}
+
+	store, err := newLogStore(cfg, service.getTaskService, logger)
 	if err != nil {
 		logger.Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -120,17 +132,11 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{
-		cfg:         cfg,
-		store:       store,
-		server:      server,
-		pool:        pool,
-		respPool:    respPool,
-		stopper:     stopper.NewStopper("log-service"),
-		fileService: fileService,
 
-		logger: logger,
-	}
+	service.store = store
+	service.server = server
+	service.pool = pool
+	service.respPool = respPool
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -157,6 +163,7 @@ func NewService(
 			return nil, err
 		}
 	}
+	service.initTaskHolder()
 	return service, nil
 }
 

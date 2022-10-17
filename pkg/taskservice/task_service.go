@@ -183,3 +183,7 @@ func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error
 func (s *taskService) Close() error {
 	return s.store.Close()
 }
+
+func (s *taskService) GetStorage() TaskStorage {
+	return s.store
+}

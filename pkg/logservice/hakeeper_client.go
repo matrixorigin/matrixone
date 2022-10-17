@@ -29,37 +29,37 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// CNHAKeeperClient is the HAKeeper client used by a CN store.
-type CNHAKeeperClient interface {
+type basicHAKeeperClient interface {
 	// Close closes the hakeeper client.
 	Close() error
+	// AllocateID allocate a globally unique ID
+	AllocateID(ctx context.Context) (uint64, error)
 	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
-	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
-	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error
-	// AllocateID allocate a globally unique ID
-	AllocateID(ctx context.Context) (uint64, error)
 	// GetClusterState queries the cluster state
 	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
+// CNHAKeeperClient is the HAKeeper client used by a CN store.
+type CNHAKeeperClient interface {
+	basicHAKeeperClient
+	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
+	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
+}
+
 // DNHAKeeperClient is the HAKeeper client used by a DN store.
 type DNHAKeeperClient interface {
-	// Close closes the hakeeper client.
-	Close() error
+	basicHAKeeperClient
 	// SendDNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// DN store.
 	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
-	// AllocateID allocate a globally unique ID
-	AllocateID(ctx context.Context) (uint64, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
 type LogHAKeeperClient interface {
-	// Close closes the hakeeper client.
-	Close() error
+	basicHAKeeperClient
 	// SendLogHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// Log store.
@@ -204,19 +204,19 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 }
 
 func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
-	hb pb.CNStoreHeartbeat) error {
+	hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
-			return err
+			return pb.CommandBatch{}, err
 		}
-		err := c.client.sendCNHeartbeat(ctx, hb)
+		result, err := c.client.sendCNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
 		if c.isRetryableError(err) {
 			continue
 		}
-		return err
+		return result, err
 	}
 }
 
@@ -413,13 +413,12 @@ func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, 
 	return *resp.CheckerState, nil
 }
 
-func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {
+func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
 		CNHeartbeat: &hb,
 	}
-	_, err := c.sendHeartbeat(ctx, req)
-	return err
+	return c.sendHeartbeat(ctx, req)
 }
 
 func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, batch uint64) (uint64, error) {

@@ -16,6 +16,8 @@ package task
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,22 +28,29 @@ import (
 )
 
 type Scheduler struct {
-	ctx    context.Context
-	logger *zap.Logger
+	ctx               context.Context
+	logger            *zap.Logger
+	cfg               hakeeper.Config
+	taskServiceGetter func() taskservice.TaskService
 
-	taskservice.TaskService
-	cfg hakeeper.Config
+	mu struct {
+		sync.RWMutex
+		started bool
+		ctx     context.Context
+		cancel  context.CancelFunc
+		wg      *sync.WaitGroup
+	}
 }
 
-func NewTaskScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) *Scheduler {
+func NewTaskScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper.Config) *Scheduler {
 	cfg.Fill()
-	return &Scheduler{
-		ctx:    context.Background(),
-		logger: logutil.GetGlobalLogger().Named("hakeeper"),
-
-		TaskService: taskService,
-		cfg:         cfg,
+	s := &Scheduler{
+		ctx:               context.Background(),
+		logger:            logutil.GetGlobalLogger().Named("hakeeper"),
+		taskServiceGetter: taskServiceGetter,
+		cfg:               cfg,
 	}
+	return s
 }
 
 func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
@@ -60,8 +69,52 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
+func (s *Scheduler) StartScheduleCronTask() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.started {
+		return
+	}
+	s.mu.started = true
+	s.mu.ctx, s.mu.cancel = context.WithCancel(context.Background())
+	s.mu.wg = &sync.WaitGroup{}
+	s.mu.wg.Add(1)
+	go func(ctx context.Context) {
+		defer s.mu.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ts := s.getTaskService()
+				if ts != nil {
+					ts.StartScheduleCronTask()
+					return
+				}
+				time.Sleep(time.Millisecond * 100)
+			}
+		}
+	}(s.mu.ctx)
+}
+
+func (s *Scheduler) StopScheduleCronTask() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.mu.started {
+		return
+	}
+	s.mu.started = false
+	s.mu.cancel()
+	s.mu.wg.Wait()
+}
+
 func (s *Scheduler) queryRunningTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+	ts := s.getTaskService()
+	if ts == nil {
+		return nil
+	}
+
+	tasks, err := ts.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 	if err != nil {
 		s.logger.Error("query running tasks error")
 		return nil
@@ -70,7 +123,12 @@ func (s *Scheduler) queryRunningTasks() []task.Task {
 }
 
 func (s *Scheduler) queryCreatedTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	ts := s.getTaskService()
+	if ts == nil {
+		return nil
+	}
+
+	tasks, err := ts.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	if err != nil {
 		s.logger.Error("query created tasks error")
 		return nil
@@ -79,14 +137,18 @@ func (s *Scheduler) queryCreatedTasks() []task.Task {
 }
 
 func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
+	ts := s.getTaskService()
+	if ts == nil {
+		return
+	}
+
 	for _, t := range tasks {
 		runner := orderedCN.min()
 		if runner == "" {
 			s.logger.Info("no CN available")
 			return
 		}
-		err := s.Allocate(s.ctx, t, runner)
-		if err != nil {
+		if err := ts.Allocate(s.ctx, t, runner); err != nil {
 			s.logger.Error("allocating task error",
 				zap.Uint64("task-id", t.ID), zap.String("task-runner", runner))
 			return
@@ -116,4 +178,8 @@ func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
 	}
 
 	return orderedMap
+}
+
+func (s *Scheduler) getTaskService() taskservice.TaskService {
+	return s.taskServiceGetter()
 }

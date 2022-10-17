@@ -72,14 +72,30 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 	}
 }
 
-func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	taskStorage := taskservice.NewMemTaskStorage()
-	taskService := taskservice.NewTaskService(taskStorage, nil)
+func TestTaskServiceCanCreatedOnCN(t *testing.T) {
+	// initialize cluster
+	c, err := NewCluster(t, DefaultOptions().
+		WithCNServiceNum(1).
+		WithCNShardNum(1).
+		WithDNServiceNum(1).
+		WithDNShardNum(1).
+		WithLogServiceNum(3).
+		WithLogShardNum(1))
+	require.NoError(t, err)
 
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+}
+
+func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	cnSvcNum := 1
 	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum).
-		WithTaskStorage(taskStorage)
+		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -89,8 +105,15 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
+	taskService, ok := indexed.GetTaskService()
+	require.True(t, ok)
+
 	indexed.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
 			return nil
@@ -104,21 +127,15 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
 	err = c.Close()
 	require.NoError(t, err)
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
-	taskStorage := taskservice.NewMemTaskStorage()
-	taskService := taskservice.NewTaskService(taskStorage, nil)
-
 	cnSvcNum := 2
 	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum).
-		WithTaskStorage(taskStorage)
+		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -128,14 +145,20 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
+
 	cn1.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
 			return nil
 		},
 	)
 
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 1)
 	cn2, err := c.GetCNServiceIndexed(1)
 	require.NoError(t, err)
 	cn2.GetTaskRunner().RegisterExecutor(0,
@@ -144,6 +167,9 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		},
 	)
 
+	taskService, ok := cn1.GetTaskService()
+	require.True(t, ok)
+
 	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 0})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
@@ -151,25 +177,18 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	uuid1 := waitTaskScheduled(t, ctx, taskService)
 
 	err = c.CloseCNService(uuid1)
 	require.NoError(t, err)
 
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel1()
-	waitTaskRescheduled(t, ctx1, taskService, uuid1)
+	waitTaskRescheduled(t, ctx, taskService, uuid1)
 
 	err = c.Close()
 	require.NoError(t, err)
 }
 
 func TestTaskRunner(t *testing.T) {
-	taskStorage := taskservice.NewMemTaskStorage()
-	taskService := taskservice.NewTaskService(taskStorage, nil)
-
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
@@ -179,8 +198,7 @@ func TestTaskRunner(t *testing.T) {
 
 	cnSvcNum := 1
 	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum).
-		WithTaskStorage(taskStorage)
+		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -190,10 +208,18 @@ func TestTaskRunner(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
 	indexed.GetTaskRunner().RegisterExecutor(1, taskExecutor)
+
+	taskService, ok := indexed.GetTaskService()
+	require.True(t, ok)
+
 	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 1})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
@@ -201,14 +227,10 @@ func TestTaskRunner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
 
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel1()
 	select {
-	case <-ctx1.Done():
+	case <-ctx.Done():
 		assert.FailNow(t, "task not running")
 	case i := <-ch:
 		t.Logf("task %d is completed", i)

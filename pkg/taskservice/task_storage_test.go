@@ -26,12 +26,17 @@ import (
 
 var (
 	storages = map[string]func(*testing.T) TaskStorage{
-		"mem": createMem,
+		"mem":     createMem,
+		"refresh": createRefresh,
 	}
 )
 
 func createMem(t *testing.T) TaskStorage {
 	return NewMemTaskStorage()
+}
+
+func createRefresh(t *testing.T) TaskStorage {
+	return newRefreshableTaskStorage(nil, func() (string, error) { return "", nil }, NewFixedTaskStorageFactory(NewMemTaskStorage()))
 }
 
 //func createMysql(t *testing.T) TaskStorage {
