@@ -155,7 +155,7 @@ func TestFSWriter_Write(t *testing.T) {
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS(etlFileServiceName, basedir, MB) // db root database.
+	localFs, err := fileservice.NewLocalFS(etlFileServiceName, basedir, mpool.MB) // db root database.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
