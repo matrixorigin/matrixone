@@ -23,6 +23,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path"
+	"strings"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,10 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
-	"io"
-	"path"
-	"strings"
-	"sync/atomic"
 )
 
 func String(arg any, buf *bytes.Buffer) {

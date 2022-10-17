@@ -63,7 +63,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	{
 		// do null value check
 		for i := range bat.Vecs {
-			if n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement {
+			if n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}

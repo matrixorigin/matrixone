@@ -125,6 +125,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for i, col := range node.TableDef.Cols {
+			col.Typ.Table = node.TableDef.Name
 			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
 				continue
 			}

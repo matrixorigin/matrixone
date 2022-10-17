@@ -1570,6 +1570,43 @@ func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	}
 }
 
+func setColLength(column *MysqlColumn, width int32) {
+	switch column.columnType {
+	case defines.MYSQL_TYPE_DECIMAL:
+		column.length = uint32(width)
+	case defines.MYSQL_TYPE_TINY:
+		column.length = 8
+	case defines.MYSQL_TYPE_SHORT:
+		column.length = 16
+	case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+		column.length = 32
+	case defines.MYSQL_TYPE_LONGLONG:
+		column.length = 64
+	case defines.MYSQL_TYPE_FLOAT:
+		column.length = 32
+	case defines.MYSQL_TYPE_DOUBLE:
+		column.length = 64
+	case defines.MYSQL_TYPE_VARCHAR:
+		column.length = uint32(width)
+	case defines.MYSQL_TYPE_STRING:
+		column.length = uint32(width)
+	case defines.MYSQL_TYPE_DATE:
+		column.length = 64
+	case defines.MYSQL_TYPE_DATETIME:
+		column.length = 64
+	case defines.MYSQL_TYPE_TIMESTAMP:
+		column.length = 64
+	case defines.MYSQL_TYPE_JSON:
+		column.length = 2147483647
+	}
+}
+
+func setColFlag(column *MysqlColumn) {
+	if column.auto_incr {
+		column.flag |= AUTO_INCREMENT_FLAG
+	}
+}
+
 // make the column information with the format of column definition41
 func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, cmd int) []byte {
 	space := HeaderOffset + 8*9 + //lenenc bytes of 8 fields

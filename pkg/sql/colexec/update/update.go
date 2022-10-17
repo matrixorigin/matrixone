@@ -106,7 +106,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 
 		for j := range tmpBat.Vecs {
-			if p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].AutoIncrement {
+			if p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].Typ.AutoIncr {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}

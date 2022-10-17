@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -262,7 +263,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 }
 
 func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.AutoIncrement {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInput("invalid default value")
 	}
 	if d.Default.Expr == nil {
