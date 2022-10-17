@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -387,4 +388,10 @@ func GetMetricViewWithLabels(tbl string, lbls []string) *export.View {
 		gView.content[tbl] = view
 	}
 	return view
+}
+
+func init() {
+	if export.RegisterTableDefine(SingleMetricTable) != nil {
+		panic(moerr.NewInternalError("metric table already registered"))
+	}
 }

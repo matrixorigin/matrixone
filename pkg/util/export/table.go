@@ -17,6 +17,7 @@ package export
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -84,6 +85,13 @@ type Table struct {
 
 func (tbl *Table) GetName() string {
 	return tbl.Table
+}
+func (tbl *Table) GetDatabase() string {
+	return tbl.Database
+}
+
+func (tbl *Table) GetIdentify() string {
+	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
 
 type TableOptions interface {
@@ -238,7 +246,7 @@ func (r *Row) Reset() {
 
 // GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0, else return "sys"
 func (r *Row) GetAccount() string {
-	if r.AccountIdx >= 0 {
+	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
 	}
 	return "sys"
@@ -329,4 +337,39 @@ func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
 	default:
 		panic(moerr.NewInternalError("unknown engine: %s", engine))
 	}
+}
+
+var gTable map[string]*Table
+var mux sync.Mutex
+
+// RegisterTableDefine return old one, if already registered
+var RegisterTableDefine = func(table *Table) *Table {
+	mux.Lock()
+	defer mux.Unlock()
+	if len(gTable) == 0 {
+		gTable = make(map[string]*Table)
+	}
+	id := table.GetIdentify()
+	old := gTable[id]
+	gTable[id] = table
+	return old
+}
+
+var GetAllTable = func() []*Table {
+	mux.Lock()
+	defer mux.Unlock()
+	tables := make([]*Table, 0, len(gTable))
+	for _, tbl := range gTable {
+		tables = append(tables, tbl)
+	}
+	return tables
+}
+
+func SetPathBuilder(pathBuilder string) error {
+	tables := GetAllTable()
+	bp := PathBuilderFactory(pathBuilder)
+	for _, tbl := range tables {
+		tbl.PathBuilder = bp
+	}
+	return nil
 }

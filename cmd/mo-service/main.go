@@ -252,19 +252,9 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	}
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
-	bp := export.PathBuilderFactory(SV.PathBuilder)
-	metric.SingleMetricTable.PathBuilder = bp
-	trace.SingleStatementTable.PathBuilder = bp
-	trace.SingleRowLogTable.PathBuilder = bp
-	if !bp.SupportAccountStrategy() {
-		metric.SingleMetricTable.AccountColumn = nil
-		trace.SingleStatementTable.AccountColumn = nil
-		trace.SingleRowLogTable.AccountColumn = nil
-	}
-	logutil.Debugf("use PathBuilder: %s", bp.GetName())
-
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		_ = export.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -299,7 +289,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	if SV.MergeCycle > 0 {
 		stopper.RunNamedTask("merge", func(ctx context.Context) {
 			merge, inited := export.NewMergeService(ctx,
-				export.WithDB(metric.MetricDBConst),
 				export.WithTable(metric.SingleMetricTable),
 				export.WithFileService(fs),
 				export.WithMinFilesMerge(1),

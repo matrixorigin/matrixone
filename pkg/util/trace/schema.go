@@ -319,3 +319,11 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	createCost = time.Since(instant)
 	return nil
 }
+
+func init() {
+	for _, tbl := range tables {
+		if old := export.RegisterTableDefine(tbl); old != nil {
+			panic(moerr.NewInternalError("table already registered: %s", old.GetIdentify()))
+		}
+	}
+}

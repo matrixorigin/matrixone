@@ -517,7 +517,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,,0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
 `,
 		},
 		{
@@ -543,8 +543,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,,0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,,,,,,0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
 `,
 		},
 		{
@@ -562,7 +562,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,,,0,
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,,,0,{}
 `,
 		},
 		{
@@ -588,8 +588,8 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,,,0,
-log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,,,0,
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,,,0,{}
+log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,,,0,{}
 `,
 		},
 		{
@@ -664,7 +664,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.000000,,,,,20101,internal error: test1,internal error: test1,,0,,,0,
+			want: `error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{}
 `,
 		},
 		{
@@ -676,8 +676,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.000000,,,,,20101,internal error: test1,internal error: test1,,0,,,0,
-error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.001001,,,,,20101,test2: internal error: test1,test2: internal error: test1,,0,,,0,
+			want: `error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,,,0,{}
+error_info,node_uuid,Standalone,0,0,,1970-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,,,0,{}
 `,
 		},
 	}
