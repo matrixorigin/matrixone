@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package external
+package common
 
-const NULL_FLAG = "\\N"
+import (
+	"bytes"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestTree(t *testing.T) {
+	tree := NewTree()
+	tree.AddSegment(1, 2, 3)
+	tree.AddBlock(4, 5, 6, 7)
+	t.Log(tree.String())
+	assert.Equal(t, 2, tree.TableCount())
+
+	var w bytes.Buffer
+	_, err := tree.WriteTo(&w)
+	assert.NoError(t, err)
+
+	tree2 := NewTree()
+	_, err = tree2.ReadFrom(&w)
+	assert.NoError(t, err)
+	t.Log(tree2.String())
+	assert.True(t, tree.Equal(tree2))
+}

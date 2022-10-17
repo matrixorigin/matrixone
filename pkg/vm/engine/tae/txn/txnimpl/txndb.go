@@ -52,7 +52,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.createEntry = e
 	return nil
 }
@@ -62,7 +62,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.dropEntry = e
 	return nil
 }
@@ -188,6 +188,19 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 	if hasNewTxnEntry {
 		err = table.SetDropEntry(meta)
 	}
+	return
+}
+
+func (db *txnDB) UnsafeGetRelation(id uint64) (relation handle.Relation, err error) {
+	meta, err := db.entry.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
 	return
 }
 
