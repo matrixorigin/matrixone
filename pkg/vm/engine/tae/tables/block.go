@@ -17,6 +17,8 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -56,8 +57,6 @@ type dataBlock struct {
 	common.ClosedState
 	meta         *catalog.BlockEntry
 	node         *appendableNode
-	file         file.Block
-	colObjects   map[int]file.ColumnBlock
 	bufMgr       base.INodeManager
 	scheduler    tasks.TaskScheduler
 	indexes      map[int]indexwrapper.Index
@@ -66,41 +65,27 @@ type dataBlock struct {
 	score        *statBlock
 	ckpTs        atomic.Value
 	appendFrozen bool
+	fs           *objectio.ObjectFS
 }
 
-func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
-	colCnt := len(meta.GetSchema().ColDefs)
+func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	schema := meta.GetSchema()
-	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
-	if err != nil {
-		panic(err)
-	}
-	colObjects := make(map[int]file.ColumnBlock)
-	for i := 0; i < colCnt; i++ {
-		if colBlk, err := blockFile.OpenColumn(i); err != nil {
-			panic(err)
-		} else {
-			colObjects[i] = colBlk
-			colBlk.Close()
-		}
-	}
 	var node *appendableNode
 	//var zeroV types.TS
 	block := &dataBlock{
-		RWMutex:    new(sync.RWMutex),
-		meta:       meta,
-		file:       blockFile,
-		colObjects: colObjects,
-		mvcc:       updates.NewMVCCHandle(meta),
-		scheduler:  scheduler,
-		indexes:    make(map[int]indexwrapper.Index),
-		bufMgr:     bufMgr,
+		RWMutex:   new(sync.RWMutex),
+		meta:      meta,
+		mvcc:      updates.NewMVCCHandle(meta),
+		scheduler: scheduler,
+		indexes:   make(map[int]indexwrapper.Index),
+		bufMgr:    bufMgr,
+		fs:        fs,
 	}
 	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
-		node = newNode(bufMgr, block, blockFile)
+		node = newNode(block)
 		block.node = node
 		// if this block is created to receive data, create mutable index first
 		for _, colDef := range schema.ColDefs {
@@ -166,10 +151,6 @@ func (blk *dataBlock) Close() {
 		_ = blk.node.Close()
 		blk.node = nil
 	}
-	if blk.file != nil {
-		_ = blk.file.Close()
-		blk.file = nil
-	}
 }
 
 func (blk *dataBlock) Destroy() (err error) {
@@ -181,28 +162,12 @@ func (blk *dataBlock) Destroy() (err error) {
 			return
 		}
 	}
-	for _, file := range blk.colObjects {
-		file.Close()
-	}
-	blk.colObjects = make(map[int]file.ColumnBlock)
 	for _, index := range blk.indexes {
 		if err = index.Destroy(); err != nil {
 			return
 		}
 	}
-	if blk.file != nil {
-		if err = blk.file.Close(); err != nil {
-			return
-		}
-		if err = blk.file.Destroy(); err != nil {
-			return
-		}
-	}
 	return
-}
-
-func (blk *dataBlock) GetBlockFile() file.Block {
-	return blk.file
 }
 
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
@@ -364,7 +329,11 @@ func (blk *dataBlock) Rows() int {
 	if metaLoc == "" {
 		return 0
 	}
-	return int(blk.file.ReadRows(metaLoc))
+	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
+	if err != nil {
+		panic(err)
+	}
+	return int(meta.GetRows())
 }
 
 // for replay
@@ -374,7 +343,11 @@ func (blk *dataBlock) GetRowsOnReplay() uint64 {
 	if metaLoc == "" {
 		return rows
 	}
-	fileRows := uint64(blk.file.ReadRows(metaLoc))
+	meta, err := blockio.DecodeMetaLocToMeta(metaLoc)
+	if err != nil {
+		panic(err)
+	}
+	fileRows := uint64(meta.GetRows())
 	if rows > fileRows {
 		return rows
 	}
@@ -556,7 +529,7 @@ func (blk *dataBlock) LoadColumnData(
 	metaLoc := blk.meta.GetMetaLoc()
 	id := blk.meta.AsCommonID()
 	id.Idx = uint16(colIdx)
-	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
+	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.fs, uint16(colIdx), metaLoc, def)
 }
 
 func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
@@ -568,7 +541,7 @@ func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err erro
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
 	for i := 0; i < 3; i++ {
-		vec, err := evictable.FetchDeltaData(nil, blk.bufMgr, blk.file, deltaloc, uint16(i), colTypes[i])
+		vec, err := evictable.FetchDeltaData(nil, blk.bufMgr, blk.fs, deltaloc, uint16(i), colTypes[i])
 		if err != nil {
 			return bat, err
 		}
@@ -903,4 +876,8 @@ func (blk *dataBlock) GetAppendNodeByRow(row uint32) txnif.AppendNode {
 }
 func (blk *dataBlock) GetDeleteNodeByRow(row uint32) txnif.DeleteNode {
 	return blk.mvcc.GetDeleteNodeByRow(row)
+}
+
+func (blk *dataBlock) GetFs() *objectio.ObjectFS {
+	return blk.fs
 }

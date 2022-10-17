@@ -16,6 +16,7 @@ package evictable
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -56,15 +56,17 @@ const (
 
 var StorageBackend BackendKind = Disk
 
-func NewColDataNode(mgr base.INodeManager, colDataKey, metaKey string, col file.ColumnBlock, metaloc string, colDef *catalog.ColDef, sid, bid uint64) (node *ColDataNode, err error) {
+func NewColDataNode(mgr base.INodeManager, colDataKey, metaKey string, fs *objectio.ObjectFS, col uint16, metaloc string, colDef *catalog.ColDef, id *common.ID) (node *ColDataNode, err error) {
 	node = &ColDataNode{
-		colDataKey:     colDataKey,
-		metaKey:        metaKey,
-		sid:            sid,
-		bid:            bid,
-		mgr:            mgr,
-		colDef:         colDef,
-		colMetaFactory: func() (base.INode, error) { return NewColumnMetaNode(mgr, metaKey, col, metaloc, colDef.Type), nil },
+		colDataKey: colDataKey,
+		metaKey:    metaKey,
+		sid:        id.SegmentID,
+		bid:        id.BlockID,
+		mgr:        mgr,
+		colDef:     colDef,
+		colMetaFactory: func() (base.INode, error) {
+			return NewColumnMetaNode(mgr, metaKey, fs, col, metaloc, colDef.Type), nil
+		},
 	}
 	// For disk, size is zero, do not cache, read directly when GetData
 	var size uint32 = 0
@@ -159,10 +161,10 @@ func (n *ColDataNode) onUnload() {
 	}
 }
 
-func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, col file.ColumnBlock, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {
+func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, fs *objectio.ObjectFS, col uint16, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {
 	colDataKey := EncodeColDataKey(id.Idx, metaloc)
 	factory := func() (base.INode, error) {
-		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id.Idx, metaloc), col, metaloc, colDef, id.SegmentID, id.BlockID)
+		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id.Idx, metaloc), fs, col, metaloc, colDef, id)
 	}
 	h, err := PinEvictableNode(mgr, colDataKey, factory)
 	if err != nil {

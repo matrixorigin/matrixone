@@ -16,6 +16,7 @@ package data
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -84,7 +84,6 @@ type Block interface {
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
-	GetBlockFile() file.Block
 
 	SetMaxCheckpointTS(ts types.TS)
 	GetMaxCheckpointTS() types.TS
@@ -99,4 +98,5 @@ type Block interface {
 	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
+	GetFs() *objectio.ObjectFS
 }
