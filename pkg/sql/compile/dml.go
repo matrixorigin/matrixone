@@ -92,9 +92,18 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
 		return 0, err
 	}
-	// do null value check
+	/**
+	Null value check:
+	There are two cases to validate for not null
+	1. Primary key
+	2. Not null
+
+	For auto_increment, follow the Mysql way instead of pg. That is, null values are allowed to be inserted.
+	Assume that there is no case like 'create table t (a int auto_increment not null)', if exists, ignore not null constraint
+	*/
 	for i := range bat.Vecs {
-		if p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement {
+		// check for case 1 and case 2
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}

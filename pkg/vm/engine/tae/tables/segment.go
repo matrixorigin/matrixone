@@ -20,8 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -30,35 +28,25 @@ import (
 type dataSegment struct {
 	common.ClosedState
 	meta      *catalog.SegmentEntry
-	file      file.Segment
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
 }
 
 func newSegment(meta *catalog.SegmentEntry,
-	factory file.SegmentFactory,
 	bufMgr base.INodeManager,
 	dir string) *dataSegment {
-	segFile := factory.Build(dir, meta.GetID(), meta.GetTable().GetID(), factory.(*blockio.ObjectFactory).Fs)
 	seg := &dataSegment{
 		meta:      meta,
-		file:      segFile,
 		bufMgr:    bufMgr,
 		scheduler: meta.GetScheduler(),
 	}
 	return seg
 }
 
-func (segment *dataSegment) GetSegmentFile() file.Segment {
-	return segment.file
-}
-
 func (segment *dataSegment) Destroy() (err error) {
 	if !segment.TryClose() {
 		return
 	}
-	segment.file.Close()
-	segment.file.Unref()
 	return
 }
 
