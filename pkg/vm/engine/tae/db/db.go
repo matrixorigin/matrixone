@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -62,7 +62,7 @@ type DB struct {
 
 	HeartBeatJobs *stopper.Stopper
 
-	FileFactory file.SegmentFactory
+	Fs *objectio.ObjectFS
 
 	DBLocker io.Closer
 

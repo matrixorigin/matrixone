@@ -16,13 +16,13 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math/rand"
+	"path"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -411,8 +411,10 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	SegmentFactory := blockio.NewObjectFactory(dir)
-	factory := tables.NewDataFactory(SegmentFactory, mutBufMgr, nil, dir)
+	serviceDir := path.Join(dir, "data")
+	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
+	fs := objectio.NewObjectFS(service, serviceDir)
+	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
