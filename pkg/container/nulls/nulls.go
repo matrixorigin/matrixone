@@ -28,6 +28,18 @@ type Nulls struct {
 	Np *bitmap.Bitmap
 }
 
+func (n *Nulls) Clone() *Nulls {
+	if n == nil {
+		return nil
+	}
+	if n.Np == nil {
+		return &Nulls{Np: nil}
+	}
+	return &Nulls{
+		Np: n.Np.Clone(),
+	}
+}
+
 // Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
 	if Ptr(n) == nil && Ptr(m) == nil {
@@ -106,9 +118,10 @@ func String(n *Nulls) string {
 }
 
 func TryExpand(n *Nulls, size int) {
-	if n.Np != nil {
-		n.Np.TryExpandWithSize(size)
+	if n.Np == nil {
+		n.Np = bitmap.New(0)
 	}
+	n.Np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
