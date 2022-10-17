@@ -30,7 +30,10 @@ func Prepare(_ *process.Process, _ any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
-	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
+	if bat := proc.Reg.InputBatch; bat != nil {
+		if len(bat.Zs) == 0 {
+			return false, nil
+		}
 		if err := ap.Func(ap.Data, bat); err != nil {
 			bat.Clean(proc.Mp())
 			return true, err

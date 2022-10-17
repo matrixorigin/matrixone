@@ -88,6 +88,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 	for _, tc := range tcs {
@@ -106,6 +107,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 

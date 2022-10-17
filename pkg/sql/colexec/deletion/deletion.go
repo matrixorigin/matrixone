@@ -74,7 +74,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
-				return false, err
+				return true, err
 			}
 			affectedRows += cnt
 
@@ -93,7 +93,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
-				return false, err
+				return true, err
 			}
 			affectedRows += uint64(batLen)
 

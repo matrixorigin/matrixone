@@ -62,8 +62,6 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		switch arg.ctr.state {
 		case Build:
 			if err = arg.ctr.build(proc, analyzer); err != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
 				arg.ctr.state = End
 				return true, err
 			}
@@ -72,8 +70,6 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			last := false
 			last, err = arg.ctr.probe(proc, analyzer)
 			if err != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
 				arg.ctr.state = End
 				return true, err
 			}
@@ -83,10 +79,6 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			}
 			return false, nil
 		case End:
-			if arg.ctr.hashTable != nil {
-				arg.ctr.hashTable.Free()
-				arg.ctr.hashTable = nil
-			}
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
