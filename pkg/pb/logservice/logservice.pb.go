@@ -225,6 +225,24 @@ func (HAKeeperUpdateType) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{4}
 }
 
+// HAKeeperState state transition diagram
+//
+//	          HAKeeperCreated
+//	                │
+//	                │ cluster init info set
+//	                ▼
+//	      HAKeeperBootstrapping
+//	                │
+//	                │ init schedule commands received
+//	                ▼
+//	HAKeeperBootstrapCommandsReceived
+//	                │
+//	                │
+//	    ┌───────────┴───────────┐
+//	    │ time out              │ bootstrap successfully
+//	    ▼                       ▼
+//
+// HAKeeperBootstrapFailed     HAKeeperRunning
 type HAKeeperState int32
 
 const (
@@ -259,6 +277,18 @@ func (HAKeeperState) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{5}
 }
 
+// TaskInitState state transition diagram
+//
+//	TaskInitNotStart
+//	       │
+//	       │ setTaskTableUser()
+//	       ▼
+//	TaskInitStarted
+//	       │
+//	  ┌────┴────┐
+//	  ▼         ▼
+//
+// TaskInitFailed     TaskInitCompleted
 type TaskInitState int32
 
 const (

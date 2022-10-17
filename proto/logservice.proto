@@ -259,6 +259,23 @@ enum HAKeeperUpdateType {
   TaskTableUserUpdate     = 9;
 }
 
+// HAKeeperState state transition diagram
+//               HAKeeperCreated
+//                     │
+//                     │ cluster init info set
+//                     ▼
+//           HAKeeperBootstrapping
+//                     │
+//                     │ init schedule commands received
+//                     ▼
+//     HAKeeperBootstrapCommandsReceived
+//                     │
+//                     │
+//         ┌───────────┴───────────┐
+//         │ time out              │ bootstrap successfully
+//         ▼                       ▼
+// HAKeeperBootstrapFailed     HAKeeperRunning
+//
 enum HAKeeperState {
   HAKeeperCreated                    = 0;
   HAKeeperBootstrapping              = 1;
@@ -267,6 +284,17 @@ enum HAKeeperState {
   HAKeeperRunning                    = 4;
 }
 
+// TaskInitState state transition diagram
+//        TaskInitNotStart
+//               │
+//               │ setTaskTableUser()
+//               ▼
+//        TaskInitStarted
+//               │
+//          ┌────┴────┐
+//          ▼         ▼
+// TaskInitFailed     TaskInitCompleted
+//
 enum TaskInitState {
   TaskInitNotStart  = 0;
   TaskInitStarted   = 1;
