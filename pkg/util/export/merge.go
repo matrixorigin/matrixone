@@ -18,14 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"path"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -124,10 +126,10 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		FSName:        ETLFileServiceName,
 		datetime:      time.Now(),
 		pathBuilder:   NewMetricLogPathBuilder(),
-		MaxFileSize:   128 * MB,
+		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 2,
-		FileCacheSize: PB, // disable it by set very large
+		FileCacheSize: mpool.PB, // disable it by set very large
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {

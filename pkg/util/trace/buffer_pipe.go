@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -556,7 +557,7 @@ func newBuffer2Sql(opts ...bufferOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
-		sizeThreshold:  10 * MB,
+		sizeThreshold:  10 * mpool.MB,
 		filterItemFunc: noopFilterItemFunc,
 		genBatchFunc:   noopGenBatchSQL,
 	}
