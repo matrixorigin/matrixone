@@ -222,6 +222,8 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 	}
 }
 
+var MakeTypeByPlan2Type = makeTypeByPlan2Type
+
 func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 	return types.Type{
 		Oid:       types.T(typ.Id),
