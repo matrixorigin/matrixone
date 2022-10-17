@@ -2,26 +2,3 @@ select cast('2020-02-01' as date) + NULL;
 select 1 + NULL;
 select NULL + 1;
 select NULL + cast('2020-02-01 00:00:00' as datetime);
-
-drop table if exists t1;
-CREATE TABLE t1(
-cint int,
-cfloat float,
-str1 VARCHAR(20),
-str2 CHAR(20)
-);
-
-INSERT INTO t1 values(7, 5.3, '1', '1');
-INSERT INTO t1 values(7, 5.3, '0', '0');
-INSERT INTO t1 values(7, 5.3, '12', '0');
-INSERT INTO t1 values(7, 5.3, '10', '10');
-INSERT INTO t1 values(7, 5.3, '8.5', '1.2');
-INSERT INTO t1 values(7, 5.3, '1.5', '6.5');
-INSERT INTO t1 values(7, 5.3, '12.5', '3');
-INSERT INTO t1 values(7, 5.3, 'a', '2');
-INSERT INTO t1 values(7, 5.3, 'a', 'b');
-INSERT INTO t1 values(7, 5.3, 'xc', 'df');
-INSERT INTO t1 values(7, 5.3, 'xc', '1');
-
-select str1+str2 from t1;
-drop table t1;

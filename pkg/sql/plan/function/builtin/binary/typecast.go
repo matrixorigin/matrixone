@@ -645,18 +645,6 @@ func BytesToFloat[T constraints.Float](xs []string, rs []T, isEmptyStringOrNull 
 	return rs, nil
 }
 
-func StringToFloat[T constraints.Float](xs []string, rs []T) []T {
-	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-	for i, s := range xs {
-		val, err := strconv.ParseFloat(s, bitSize)
-		if err != nil {
-			rs[i] = T(0)
-		}
-		rs[i] = T(val)
-	}
-	return rs
-}
-
 func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	for i, x := range xs {

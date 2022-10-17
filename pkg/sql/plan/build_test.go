@@ -48,7 +48,6 @@ func TestSingleSQL(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	outPutPlan(logicPlan, false, t)
-
 }
 
 //Test Query Node Tree
