@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -101,15 +100,15 @@ func (index *immutableIndex) Destroy() (err error) {
 	return
 }
 
-func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
+func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, idx uint16) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	metaLoc := entry.GetMetaLoc()
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = newZmReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
+	index.zmReader = newZmReader(blk.GetBufMgr(), colDef.Type, *id, blk.GetFs(), idx, metaLoc)
 
 	if colDef.IsPrimary() {
-		index.bfReader = newBfReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
+		index.bfReader = newBfReader(blk.GetBufMgr(), colDef.Type, *id, blk.GetFs(), idx, metaLoc)
 	}
 	return
 }
