@@ -24,8 +24,9 @@ var sysTenantID = prom.Labels{constTenantKey: "sys"}
 var initCollectors = []Collector{
 	// sql metric
 	StatementCounterFactory,
-	TransactionErrorsFactory,
 	StatementErrorsFactory,
+	TransactionCounterFactory,
+	TransactionErrorsFactory,
 	// server metric
 	ConnFactory,
 	// process metric

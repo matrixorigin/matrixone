@@ -525,6 +525,8 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
 		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+	case "generate_series":
+		return c.compileGenerateSeries(n, ss)
 	default:
 		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
@@ -540,6 +542,17 @@ func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope,
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
 			Arg: constructUnnest(n, c.ctx, externParam),
+		})
+	}
+	return ss, nil
+}
+
+func (c *Compile) compileGenerateSeries(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.GenerateSeries,
+			Idx: c.anal.curr,
+			Arg: constructGenerateSeries(n, c.ctx),
 		})
 	}
 	return ss, nil

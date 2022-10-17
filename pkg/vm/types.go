@@ -58,6 +58,8 @@ const (
 	HashBuild
 
 	Unnest
+
+	GenerateSeries
 )
 
 // Instruction contains relational algebra
