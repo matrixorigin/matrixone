@@ -300,4 +300,17 @@ update t1 set a = 2 where a = 1;
 select c is not null from t1;
 c is not null
 true
+drop table if exists t1;
+create table t1(a int, b varchar(20), index(a, b));
+insert into t1 values(1, '1');
+insert into t1 values(1, '1');
+insert into t1 values(2, '2');
+insert into t1 values(3, '3');
+update t1 set a = 2 where a = 1;
+select * from t1;
+a    b
+2    1
+2    1
+2    2
+3    3
 drop database if exists db1;

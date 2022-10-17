@@ -208,4 +208,15 @@ tae data: duplicate
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
-
+drop table if exists t1;
+create table t1(a int, b varchar(20), index(a, b));
+insert into t1 values(1, '1');
+insert into t1 values(1, '1');
+insert into t1 values(2, '2');
+insert into t1 values(3, '3');
+select * from t1;
+a    b
+1    1
+1    1
+2    2
+3    3

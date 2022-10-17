@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -263,7 +262,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
-	indexInfos := make([]*tree.UniqueIndex, 0)
+	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
+	indexInfos := make([]*tree.Index, 0)
+
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -351,40 +352,15 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				indexs = append(indexs, name)
 			}
 		case *tree.Index:
-			var idxType plan.IndexDef_IndexType
-			switch def.KeyType {
-			case tree.INDEX_TYPE_BSI:
-				idxType = plan.IndexDef_BSI
-			case tree.INDEX_TYPE_ZONEMAP:
-				idxType = plan.IndexDef_ZONEMAP
-			default:
-				idxType = plan.IndexDef_ZONEMAP //default
+			for _, keyPart := range def.KeyParts {
+				indexs = append(indexs, keyPart.ColName.Parts[0])
 			}
-
-			idxDef := &plan.IndexDef{
-				Typ:      idxType,
-				Name:     def.Name,
-				ColNames: make([]string, len(def.KeyParts)),
-			}
-
-			nameMap := map[string]bool{}
-			for i, key := range def.KeyParts {
-				name := key.ColName.Parts[0] // name of index column
-				if _, ok := nameMap[name]; ok {
-					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
-				}
-				idxDef.ColNames[i] = name
-				nameMap[name] = true
-				indexs = append(indexs, name)
-			}
-
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Idx{
-					Idx: idxDef,
-				},
-			})
-		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
+		case *tree.UniqueIndex:
+			for _, keyPart := range def.KeyParts {
+				indexs = append(indexs, keyPart.ColName.Parts[0])
+			}
+			uniqueIndexInfos = append(uniqueIndexInfos, def)
 		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI("table def: '%v'", def)
@@ -411,7 +387,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			})
 		} else {
 			pkeyName = util.BuildCompositePrimaryKeyColumnName(primaryKeys)
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, &ColDef{
+			pkeyCol := &ColDef{
 				Name: pkeyName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
@@ -423,7 +399,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					Expr:         nil,
 					OriginString: "",
 				},
-			})
+			}
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, pkeyCol)
+			colMap[pkeyName] = pkeyCol
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
@@ -437,17 +415,21 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported("text type in index")
-		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		if col, ok := colMap[str]; ok {
+			if col.Typ.Id == int32(types.T_blob) {
+				return moerr.NewNotSupported("text type in index")
+			}
+			if col.Typ.Id == int32(types.T_json) {
+				return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
+			}
+		} else {
+			return moerr.NewInvalidInput("column '%s' is not exist", str)
 		}
 	}
 
 	// build index table
-	if len(indexInfos) != 0 {
-		err := buildUniqueIndexTable(createTable, indexInfos, colMap, pkeyName)
+	if len(indexInfos) != 0 || len(uniqueIndexInfos) != 0 {
+		err := buildIndexTable(createTable, uniqueIndexInfos, indexInfos, colMap, pkeyName)
 		if err != nil {
 			return err
 		}
@@ -455,11 +437,12 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	return nil
 }
 
-func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string) error {
+func buildIndexTable(createTable *plan.CreateTable, uniqueIndexInfos []*tree.UniqueIndex, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string) error {
 	indexNumber := 0
 	def := &plan.ComputeIndexDef{}
-
-	for _, indexInfo := range indexInfos {
+	// if create same unique index, ignore it
+	uniqueNameCheck := make(map[string]bool)
+	for _, indexInfo := range uniqueIndexInfos {
 		indexTableName := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
 		tableDef := &TableDef{
 			Name: indexTableName,
@@ -467,15 +450,18 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		names := make([]string, 0)
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput("column '%s' is not exist", name)
-			}
 			names = append(names, name)
 		}
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
 			keyName = names[0]
+			if keyName == pkeyName {
+				continue
+			}
+			if _, ok := uniqueNameCheck[keyName]; ok {
+				continue
+			}
 			tableDef.Cols = append(tableDef.Cols, &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -498,6 +484,12 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			})
 		} else {
 			keyName = util.BuildCompositePrimaryKeyColumnName(names)
+			if keyName == pkeyName {
+				continue
+			}
+			if _, ok := uniqueNameCheck[keyName]; ok {
+				continue
+			}
 			tableDef.Cols = append(tableDef.Cols, &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -519,10 +511,98 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			})
 		}
+		//if pkeyName != "" {
+		//	tableDef.Cols = append(tableDef.Cols, &ColDef{
+		//		Name: pkeyName,
+		//		Alg:  plan.CompressType_Lz4,
+		//		Typ:  colMap[pkeyName].Typ,
+		//		Default: &plan.Default{
+		//			NullAbility:  false,
+		//			Expr:         nil,
+		//			OriginString: "",
+		//		},
+		//	})
+		//}
+		uniqueNameCheck[keyName] = true
 		def.Names = append(def.Names, indexInfo.Name)
 		def.TableNames = append(def.TableNames, indexTableName)
 		def.Uniques = append(def.Uniques, true)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
+		indexNumber++
+	}
+	for _, indexInfo := range indexInfos {
+		indexTableName := util.BuildIndexTableName(false, indexNumber, indexInfo.Name)
+		tableDef := &TableDef{
+			Name: indexTableName,
+		}
+		names := make([]string, 0)
+		for _, keyPart := range indexInfo.KeyParts {
+			name := keyPart.ColName.Parts[0]
+			names = append(names, name)
+		}
+
+		var keyName string
+		if len(indexInfo.KeyParts) == 1 {
+			keyName = names[0]
+			if keyName == pkeyName {
+				continue
+			}
+			if _, ok := uniqueNameCheck[keyName]; ok {
+				continue
+			}
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   colMap[keyName].Typ.Id,
+					Size: colMap[keyName].Typ.Size,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+		} else {
+			keyName = util.BuildCompositePrimaryKeyColumnName(names)
+			if keyName == pkeyName {
+				continue
+			}
+			if _, ok := uniqueNameCheck[keyName]; ok {
+				continue
+			}
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   int32(types.T_varchar),
+					Size: types.VarlenaSize,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+		}
+		//if pkeyName != "" {
+		//	tableDef.Cols = append(tableDef.Cols, &ColDef{
+		//		Name: pkeyName,
+		//		Alg:  plan.CompressType_Lz4,
+		//		Typ:  colMap[pkeyName].Typ,
+		//		Default: &plan.Default{
+		//			NullAbility:  false,
+		//			Expr:         nil,
+		//			OriginString: "",
+		//		},
+		//	})
+		//}
+		uniqueNameCheck[keyName] = true
+		def.Names = append(def.Names, indexInfo.Name)
+		def.TableNames = append(def.TableNames, indexTableName)
+		def.Uniques = append(def.Uniques, false)
+		createTable.IndexTables = append(createTable.IndexTables, tableDef)
+		indexNumber++
 	}
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_ComputeIndex{

@@ -154,4 +154,13 @@ insert into t1 values(1, 2);
 insert into t1 values(1, null);
 delete from t1 where a = 1;
 
+drop table if exists t1;
+create table t1(a int, b varchar(20), index(a, b));
+insert into t1 values(1, '1');
+insert into t1 values(1, '1');
+insert into t1 values(2, '2');
+insert into t1 values(3, '3');
+delete from t1 where a = 1;
+select * from t1;
+
 drop database if exists db1;
