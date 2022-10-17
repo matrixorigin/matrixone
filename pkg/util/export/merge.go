@@ -108,8 +108,6 @@ func WithMinFilesMerge(files int) MergeOption {
 	})
 }
 
-const ETLFileServiceName = "ETL"
-
 // serviceInited handle Merge as service
 var serviceInited uint32
 
@@ -123,7 +121,7 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool) {
 
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
-		FSName:        ETLFileServiceName,
+		FSName:        etlFileServiceName,
 		datetime:      time.Now(),
 		pathBuilder:   NewMetricLogPathBuilder(),
 		MaxFileSize:   128 * mpool.MB,

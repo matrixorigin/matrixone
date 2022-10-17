@@ -148,7 +148,7 @@ func TestFSWriter_Write(t *testing.T) {
 		ctx      context.Context
 		fs       fileservice.FileService
 		prefix   batchpipe.HasName
-		dir      string
+		database string
 		nodeUUID string
 		nodeType string
 	}
@@ -161,7 +161,7 @@ func TestFSWriter_Write(t *testing.T) {
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS("test", basedir, MB) // db root database.
+	localFs, err := fileservice.NewLocalFS(etlFileServiceName, basedir, MB) // db root database.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
@@ -176,7 +176,7 @@ func TestFSWriter_Write(t *testing.T) {
 				ctx:      context.Background(),
 				fs:       localFs,
 				prefix:   newDummy(1),
-				dir:      "system", // database name
+				database: "system",
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
 			},
@@ -193,7 +193,7 @@ func TestFSWriter_Write(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
 				WithName(tt.fields.prefix),
-				WithDatabase(tt.fields.dir),
+				WithDatabase(tt.fields.database),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
 			)
 			gotN, err := w.Write(tt.args.p)
