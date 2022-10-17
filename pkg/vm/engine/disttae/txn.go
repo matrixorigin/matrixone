@@ -319,6 +319,9 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 			}
 		}
 	}
+	if expr == nil {
+		return bats, nil
+	}
 	for i, bat := range bats {
 		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
 		if err != nil {
