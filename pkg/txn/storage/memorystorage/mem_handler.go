@@ -901,17 +901,19 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 			return err
 		}
 		indexLen := len(entries)
-		computeIndexDef := &engine.ComputeIndexDef{
-			Names:      make([]string, indexLen),
-			Uniques:    make([]bool, indexLen),
-			TableNames: make([]string, indexLen),
+		if indexLen > 0 {
+			computeIndexDef := &engine.ComputeIndexDef{
+				Names:      make([]string, indexLen),
+				Uniques:    make([]bool, indexLen),
+				TableNames: make([]string, indexLen),
+			}
+			for i, entry := range entries {
+				computeIndexDef.Names[i] = entry.Value.Name
+				computeIndexDef.Uniques[i] = entry.Value.Unique
+				computeIndexDef.TableNames[i] = entry.Value.TableName
+			}
+			resp.Defs = append(resp.Defs, computeIndexDef)
 		}
-		for i, entry := range entries {
-			computeIndexDef.Names[i] = entry.Value.Name
-			computeIndexDef.Uniques[i] = entry.Value.Unique
-			computeIndexDef.TableNames[i] = entry.Value.TableName
-		}
-		resp.Defs = append(resp.Defs, computeIndexDef)
 	}
 
 	// properties
