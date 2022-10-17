@@ -1091,11 +1091,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
-	/*
-		{
-			return c.cnList, nil
-		}
-	*/
 	var err error
 	var ranges [][]byte
 	var nodes engine.Nodes
@@ -1113,7 +1108,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 	if len(ranges) == 0 {
-		return nodes, nil
+		return c.cnList, nil
 	}
 	if len(ranges[0]) == 0 {
 		if c.info.Typ == plan2.ExecTypeTP {
