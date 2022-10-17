@@ -17,8 +17,6 @@ package service
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -58,9 +56,6 @@ const (
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
-
-	// default task configuration
-	defaultFetchInterval = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
@@ -94,11 +89,6 @@ type Options struct {
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
 		cnStoreTimeout  time.Duration
-	}
-
-	task struct {
-		taskStorage   taskservice.TaskStorage
-		FetchInterval time.Duration
 	}
 }
 
@@ -167,14 +157,6 @@ func (opt *Options) validate() {
 	}
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
-	}
-
-	// task configuration
-	if opt.task.taskStorage == nil {
-		opt.task.taskStorage = taskservice.NewMemTaskStorage()
-	}
-	if opt.task.FetchInterval == 0 {
-		opt.task.FetchInterval = defaultFetchInterval
 	}
 }
 
@@ -292,11 +274,6 @@ func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
 // WithLogHeartbeatInterval sets heartbeat interval fo log service.
 func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 	opt.log.heartbeatInterval = interval
-	return opt
-}
-
-func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
-	opt.task.taskStorage = storage
 	return opt
 }
 

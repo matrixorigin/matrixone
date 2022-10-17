@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -35,7 +36,12 @@ func (s *service) heartbeatTask(ctx context.Context) {
 	defer ticker.Stop()
 
 	s.logger.Info("CNStore heartbeat started")
-
+	sqlAddress := s.cfg.SQLAddress
+	if sqlAddress == "" {
+		sqlAddress = fmt.Sprintf("%s:%d",
+			s.cfg.Frontend.Host,
+			s.cfg.Frontend.Port)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -43,16 +49,26 @@ func (s *service) heartbeatTask(ctx context.Context) {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
-			err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
-				UUID:           s.cfg.UUID,
-				ServiceAddress: s.cfg.ListenAddress,
-				Role:           s.metadata.Role,
+			batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
+				UUID:               s.cfg.UUID,
+				ServiceAddress:     s.cfg.ServiceAddress,
+				SQLAddress:         sqlAddress,
+				Role:               s.metadata.Role,
+				TaskServiceCreated: s.GetTaskRunner() != nil,
 			})
 			cancel()
-
 			if err != nil {
 				s.logger.Error("send DNShard heartbeat request failed",
 					zap.Error(err))
+				break
+			}
+			for _, command := range batch.Commands {
+				if command.ServiceType != logservicepb.CNService {
+					panic(fmt.Sprintf("received a Non-CN Schedule Command: %s", command.ServiceType.String()))
+				}
+				if command.CreateTaskService != nil {
+					s.createTaskService(command.CreateTaskService)
+				}
 			}
 		}
 	}

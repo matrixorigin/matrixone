@@ -165,8 +165,3 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
 	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
 }
-
-func TestTaskStorage(t *testing.T) {
-	opt := DefaultOptions()
-	require.NotNil(t, opt.task.taskStorage)
-}

@@ -17,13 +17,9 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"go.uber.org/zap"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,13 +31,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 type Options func(*service)
@@ -50,7 +48,6 @@ func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 	options ...Options,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
@@ -72,7 +69,6 @@ func NewService(
 		cfg:         cfg,
 		metadataFS:  fs,
 		fileService: fileService,
-		taskService: taskService,
 	}
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
@@ -110,22 +106,6 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
-		taskservice.WithOptions(
-			cfg.TaskRunner.QueryLimit,
-			cfg.TaskRunner.Parallelism,
-			cfg.TaskRunner.MaxWaitTasks,
-			cfg.TaskRunner.FetchInterval.Duration,
-			cfg.TaskRunner.FetchTimeout.Duration,
-			cfg.TaskRunner.RetryInterval.Duration,
-			cfg.TaskRunner.HeartbeatInterval.Duration,
-		),
-	)
-	if err != nil {
-		return nil, err
-	}
-	srv.taskRunner = runner
-
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
 	}
@@ -137,6 +117,8 @@ func NewService(
 }
 
 func (s *service) Start() error {
+	s.initTaskServiceHolder()
+
 	err := s.runMoServer()
 	if err != nil {
 		return err
@@ -144,27 +126,26 @@ func (s *service) Start() error {
 	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
-	if err := s.taskRunner.Start(); err != nil {
-		return err
-	}
 	return s.server.Start()
 }
 
 func (s *service) Close() error {
-	err := s.serverShutdown(true)
-	if err != nil {
+	if err := s.stopFrontend(); err != nil {
 		return err
 	}
-	s.cancelMoServerFunc()
-	if err := s.taskRunner.Stop(); err != nil {
+	if err := s.stopTask(); err != nil {
 		return err
 	}
 	s.stopper.Stop()
 	return s.server.Close()
 }
 
-func (s *service) GetTaskRunner() taskservice.TaskRunner {
-	return s.taskRunner
+func (s *service) stopFrontend() error {
+	if err := s.serverShutdown(true); err != nil {
+		return err
+	}
+	s.cancelMoServerFunc()
+	return nil
 }
 
 func (s *service) acquireMessage() morpc.Message {

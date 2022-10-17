@@ -19,11 +19,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
@@ -141,12 +140,14 @@ type mysqlTaskStorage struct {
 	db *sql.DB
 }
 
-func NewMysqlTaskStorage(driver, dsn string) (TaskStorage, error) {
-	db, err := sql.Open(driver, dsn)
+func NewMysqlTaskStorage(dsn string) (TaskStorage, error) {
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		panic(err)
 	}
 
+	// TODO: Can not init here. Consider how many CNs are started and how many times they will be executed,
+	// the initialization logic needs to be moved to the initialization of HaKeeper
 	for _, s := range createSqls {
 		_, err = db.Exec(s)
 		if err != nil {

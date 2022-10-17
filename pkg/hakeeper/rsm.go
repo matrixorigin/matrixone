@@ -254,16 +254,25 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
-func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
-	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
+func (s *stateMachine) getCommandBatch(uuid string,
+	extraCommands ...pb.ScheduleCommand) sm.Result {
+	var batch pb.CommandBatch
+	var ok bool
+	if batch, ok = s.state.ScheduleCommands[uuid]; ok {
 		delete(s.state.ScheduleCommands, uuid)
-		data, err := batch.Marshal()
-		if err != nil {
-			panic(err)
-		}
-		return sm.Result{Data: data}
 	}
-	return sm.Result{}
+
+	batch.Commands = append(batch.Commands, extraCommands...)
+	if len(batch.Commands) == 0 {
+		return sm.Result{}
+	}
+
+	data, err := batch.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return sm.Result{Data: data}
+
 }
 
 func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
@@ -273,6 +282,9 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
+	if !hb.TaskServiceCreated {
+		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.CNService))
+	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -283,6 +295,9 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.DNState.Update(hb, s.state.Tick)
+	if !hb.TaskServiceCreated {
+		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.DNService))
+	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -293,7 +308,19 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	if !hb.TaskServiceCreated {
+		return s.getCommandBatch(hb.UUID, s.getCreateTaskCommand(pb.LogService))
+	}
 	return s.getCommandBatch(hb.UUID)
+}
+
+func (s *stateMachine) getCreateTaskCommand(sp pb.ServiceType) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		ServiceType: sp,
+		CreateTaskService: &pb.CreateTaskService{
+			TaskDatabase: "mo_task", // TODO: define the task database name as a const
+			User:         s.state.TaskTableUser,
+		}}
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -518,6 +545,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			UUID:           uuid,
 			Tick:           info.Tick,
 			ServiceAddress: info.ServiceAddress,
+			SQLAddress:     info.SQLAddress,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}

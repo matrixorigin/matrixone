@@ -38,9 +38,10 @@ enum NodeState {
 message CNStore {
   string          UUID           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
-  uint64          Tick           = 4;
-  NodeState       State          = 5;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
+  uint64          Tick           = 5;
+  NodeState       State          = 6;
 }
 
 message DNStore {
@@ -91,7 +92,9 @@ message LogReplicaInfo {
 message CNStoreHeartbeat {
   string          UUID           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
+  bool            TaskServiceCreated    = 5;
 }
 
 
@@ -114,6 +117,8 @@ message LogStoreHeartbeat {
   // replica running on the current LogStore, it may not be accurate or
   // update to date due to various reasons. 
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+  // TaskServiceCreated task service is created at the current log node
+  bool            TaskServiceCreated    = 6;
 };
 
 // DNShardInfo contains information of a launched DN shard. 
@@ -137,6 +142,7 @@ message DNStoreHeartbeat {
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+  bool            TaskServiceCreated = 4;
 };
 
 message RSMState {
@@ -314,18 +320,27 @@ message ShutdownStore {
 // ServiceType specifies type of service
 enum ServiceType {
   LogService = 0;
-  DnService  = 1;
+  DNService  = 1;
+  CNService  = 2;
 }
 
 // ScheduleCommand contains a shard schedule command.
 message ScheduleCommand {
   // UUID which store the ScheduleCommand is sent to
-  string UUID = 1;
-  bool Bootstrapping          = 2;
+  string            UUID            = 1;
+  bool              Bootstrapping   = 2;
+  ServiceType       ServiceType     = 3;
+  ConfigChange      ConfigChange    = 4;
+  ShutdownStore     ShutdownStore   = 5;
+  CreateTaskService CreateTaskService = 6;
+}
 
-  ConfigChange ConfigChange   = 3;
-  ServiceType ServiceType     = 4;
-  ShutdownStore ShutdownStore = 5;
+// CreateTaskService start task service at current node
+message CreateTaskService {
+  // User used to connect to the task database.
+  TaskTableUser User         = 1 [(gogoproto.nullable) = false];
+  // TaskDatabase task framework database.
+  string        TaskDatabase = 2;
 }
 
 message CommandBatch {
@@ -337,7 +352,8 @@ message CommandBatch {
 message CNStoreInfo {
   uint64          Tick           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
 }
 
 // CNState contains all CN details known to the HAKeeper.

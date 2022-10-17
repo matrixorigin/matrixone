@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -126,7 +125,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -162,7 +161,8 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 		}
-		require.NoError(t, c1.SendCNHeartbeat(ctx, hb))
+		_, err = c1.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
 
 		c2, err := NewDNHAKeeperClient(ctx, cfg)
 		require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestHAKeeperClientSendDNHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -264,7 +264,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -307,7 +307,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -319,7 +318,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -379,7 +377,7 @@ func TestSendCNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 		oldc := c.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+		_, err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
 		require.NoError(t, err)
 		require.True(t, oldc != c.client)
 	}

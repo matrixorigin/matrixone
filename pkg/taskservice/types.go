@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
@@ -157,6 +158,9 @@ type TaskService interface {
 	StartScheduleCronTask()
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
+
+	// GetStorage returns the task storage
+	GetStorage() TaskStorage
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to
@@ -205,4 +209,19 @@ type TaskStorage interface {
 	// This update must be transactional and needs to be done conditionally
 	// using CronTask.TriggerTimes and the task.Metadata.ID field.
 	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
+}
+
+// TaskServiceHolder create and hold the task service in the cn, dn and log node. Create
+// the TaskService from the heartbeat's CreateTaskService schedule command.
+type TaskServiceHolder interface {
+	// Close close the holder
+	Close() error
+	// Get returns the taskservice
+	Get() (TaskService, bool)
+	// Create create the taskservice
+	Create(command logservicepb.CreateTaskService) error
+}
+
+type TaskStorageFactory interface {
+	Create(address string) (TaskStorage, error)
 }
