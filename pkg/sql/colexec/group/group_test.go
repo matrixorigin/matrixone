@@ -116,6 +116,7 @@ func TestGroup(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

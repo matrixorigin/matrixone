@@ -44,6 +44,9 @@ type Argument struct {
 	ComputeIndexInfos  []*plan.ComputeIndexInfo
 }
 
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+}
+
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
@@ -123,9 +126,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	defer bat.Clean(proc.Mp())
 	{
-		// do null value check
 		for i := range bat.Vecs {
-			if n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement {
+			// Not-null check, for more information, please refer to the comments in func InsertValues
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].AutoIncrement) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
