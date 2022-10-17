@@ -22,16 +22,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	B = 1 << iota
-	KB
-	MB
-	GB
 )
 
 func TestLocalFSWriter(t *testing.T) {
@@ -44,7 +38,7 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
 	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), MB)
+	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
