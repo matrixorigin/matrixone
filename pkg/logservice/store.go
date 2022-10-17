@@ -435,15 +435,18 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 }
 
 func (l *store) addCNStoreHeartbeat(ctx context.Context,
-	hb pb.CNStoreHeartbeat) error {
+	hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetCNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.logger.Error("propose failed", zap.Error(err))
-		return handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
-	return nil
 }
 
 func (l *store) cnAllocateID(ctx context.Context,

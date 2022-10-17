@@ -373,7 +373,8 @@ func TestAddHeartbeat(t *testing.T) {
 		cnMsg := pb.CNStoreHeartbeat{
 			UUID: store.id(),
 		}
-		assert.NoError(t, store.addCNStoreHeartbeat(ctx, cnMsg))
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
+		assert.NoError(t, err)
 
 		dnMsg := pb.DNStoreHeartbeat{
 			UUID:   store.id(),
