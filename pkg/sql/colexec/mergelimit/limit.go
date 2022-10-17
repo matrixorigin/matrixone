@@ -38,23 +38,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
-	defer anal.Stop()
-	for {
-		switch ap.ctr.state {
-		case Eval:
-			ok, err := ap.ctr.eval(ap, proc, anal)
-			if err != nil {
-				return ok, err
-			}
-			if ok {
-				ap.ctr.state = End
-			}
-			return ok, err
-		default:
-			proc.SetInputBatch(nil)
-			return true, nil
-		}
-	}
+	ok, err := ap.ctr.eval(ap, proc, anal)
+	anal.Stop()
+	return ok, err
 }
 
 func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
@@ -77,7 +63,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 		if ap.ctr.seen >= ap.Limit {
 			proc.SetInputBatch(nil)
 			bat.Clean(proc.Mp())
-			return true, nil
+			return false, nil
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())
 		if newSeen < ap.Limit {
@@ -94,6 +80,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 			return false, nil
 		}
 	}
+	proc.SetInputBatch(nil)
 	return true, nil
 
 }
