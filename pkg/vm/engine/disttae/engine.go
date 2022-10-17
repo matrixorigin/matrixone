@@ -24,6 +24,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -33,8 +35,9 @@ import (
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	proc *process.Process,
 	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
@@ -43,13 +46,14 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	db := newDB(cli, cluster.DNStores)
-	if err := db.init(ctx, proc.Mp()); err != nil {
+	db := newDB(cluster.DNStores)
+	if err := db.init(ctx, mp); err != nil {
 		panic(err)
 	}
 	return &Engine{
 		db:                db,
-		proc:              proc,
+		mp:                mp,
+		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -74,7 +78,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, e.proc.Mp())
+		name, databaseId, e.mp)
 	if err != nil {
 		return err
 	}
@@ -139,7 +143,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.proc.Mp())
+	bat, err := genDropDatabaseTuple(id, name, e.mp)
 	if err != nil {
 		return err
 	}
@@ -162,8 +166,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
+	proc := process.New(
+		ctx,
+		e.mp,
+		e.cli,
+		op,
+		e.fs,
+	)
 	txn := &Transaction{
-		proc:           e.proc,
+		op:             op,
+		proc:           proc,
 		db:             e.db,
 		readOnly:       true,
 		meta:           op.Txn(),
@@ -178,15 +190,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
 		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
@@ -229,23 +241,20 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Nodes() (engine.Nodes, error) {
-	return nil, nil
-	/*
-		clusterDetails, err := e.getClusterDetails()
-		if err != nil {
-			return nil, err
-		}
+	clusterDetails, err := e.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
 
-		var nodes engine.Nodes
-		for _, store := range clusterDetails.CNStores {
-			nodes = append(nodes, engine.Node{
-				Mcpu: 10, // TODO
-				Id:   store.UUID,
-				Addr: store.ServiceAddress,
-			})
-		}
-		return nodes, nil
-	*/
+	var nodes engine.Nodes
+	for _, store := range clusterDetails.CNStores {
+		nodes = append(nodes, engine.Node{
+			Mcpu: 10, // TODO
+			Id:   store.UUID,
+			Addr: store.ServiceAddress,
+		})
+	}
+	return nodes, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {
@@ -269,7 +278,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.proc.Mp())
+			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
 	e.Lock()

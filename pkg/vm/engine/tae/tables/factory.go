@@ -15,46 +15,46 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type DataFactory struct {
-	fileFactory  file.SegmentFactory
 	appendBufMgr base.INodeManager
 	scheduler    tasks.TaskScheduler
 	dir          string
+	fs           *objectio.ObjectFS
 }
 
-func NewDataFactory(fileFactory file.SegmentFactory,
+func NewDataFactory(fs *objectio.ObjectFS,
 	appendBufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler,
 	dir string) *DataFactory {
 	return &DataFactory{
-		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
 		scheduler:    scheduler,
 		dir:          dir,
+		fs:           fs,
 	}
 }
 
 func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 	return func(meta *catalog.TableEntry) data.Table {
-		return newTable(meta, factory.fileFactory, factory.appendBufMgr)
+		return newTable(meta, factory.appendBufMgr)
 	}
 }
 
 func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 	return func(meta *catalog.SegmentEntry) data.Segment {
-		return newSegment(meta, factory.fileFactory, factory.appendBufMgr, factory.dir)
+		return newSegment(meta, factory.appendBufMgr, factory.dir)
 	}
 }
 
-func (factory *DataFactory) MakeBlockFactory(segFile file.Segment) catalog.BlockDataFactory {
+func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
-		return newBlock(meta, segFile, factory.appendBufMgr, factory.scheduler)
+		return newBlock(meta, factory.fs, factory.appendBufMgr, factory.scheduler)
 	}
 }

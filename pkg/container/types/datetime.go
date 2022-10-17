@@ -293,7 +293,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 		if !validDate(y, m, d) {
 			return 0, false
 		}
-	case DateTimeType:
+	case DateTimeType, TimeStampType:
 		if !validDatetime(y, m, d) {
 			return 0, false
 		}

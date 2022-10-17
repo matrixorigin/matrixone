@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -69,39 +67,24 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func makeColumnMetaForTest(idx uint16, typ types.T, min any, max any) *ColumnMeta {
+func makeZonemapForTest(idx uint16, typ types.T, min any, max any) [64]byte {
 	zm := index.NewZoneMap(typ.ToType())
 	_ = zm.Update(min)
 	_ = zm.Update(max)
 	buf, _ := zm.Marshal()
-	czm, _ := objectio.NewZoneMap(idx, buf)
 
-	bf := objectio.NewBloomFilter(0, 0, []byte{})
-	return &ColumnMeta{
-		typ: uint8(typ),
-		idx: 0,
-		alg: 0,
-		location: Extent{
-			id:         0,
-			offset:     0,
-			length:     0,
-			originSize: 0,
-		},
-		zoneMap:     czm,
-		bloomFilter: bf,
-		dummy:       [32]byte{},
-		checksum:    0,
-	}
+	var zmBuf [64]byte
+	copy(zmBuf[:], buf[:])
+	return zmBuf
 }
 
 func makeBlockMetaForTest() BlockMeta {
 	return BlockMeta{
-		header: BlockHeader{},
-		columns: []*ColumnMeta{
-			makeColumnMetaForTest(0, types.T_int64, int64(10), int64(100)),
-			makeColumnMetaForTest(1, types.T_int64, int64(20), int64(200)),
-			makeColumnMetaForTest(2, types.T_int64, int64(30), int64(300)),
-			makeColumnMetaForTest(3, types.T_int64, int64(1), int64(8)),
+		zonemap: [][64]byte{
+			makeZonemapForTest(0, types.T_int64, int64(10), int64(100)),
+			makeZonemapForTest(1, types.T_int64, int64(20), int64(200)),
+			makeZonemapForTest(2, types.T_int64, int64(30), int64(300)),
+			makeZonemapForTest(3, types.T_int64, int64(1), int64(8)),
 		},
 	}
 }
@@ -235,9 +218,8 @@ func TestNeedRead(t *testing.T) {
 	})
 }
 
-func TestWriteAndRead(t *testing.T) {
+func TestBlockWrite(t *testing.T) {
 	ctx := context.TODO()
-	bm := makeBlockMetaForTest()
 	testFs := testutil.NewFS()
 	inputBat := testutil.NewBatch([]types.Type{
 		types.T_int64.ToType(),
@@ -246,36 +228,9 @@ func TestWriteAndRead(t *testing.T) {
 		types.T_int64.ToType(),
 	}, true, 20, mpool.MustNewZero())
 
-	blks, err := blockWrite(ctx, bm, inputBat, testFs)
+	_, err := blockWrite(ctx, inputBat, testFs)
 	if err != nil {
 		t.Fatalf("err: %v", err)
-	}
-	// fmt.Printf("%v", blks)
-
-	extent := blks[0].GetExtent()
-	bm.localExtent.length = extent.Length()
-	bm.localExtent.offset = extent.Offset()
-	bm.localExtent.originSize = extent.OriginSize()
-
-	// bm.header.blockId
-	columns := []string{"a", "b", "c", "d"}
-	outputBat, err := blockRead(ctx, columns, bm, testFs, makeTableDefForTest(columns))
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	// fmt.Printf("%v", outputBat)
-	if len(inputBat.Vecs) != 4 || len(inputBat.Vecs) != len(outputBat.Vecs) {
-		t.Error("input not equal output: length not match")
-	}
-	cols1 := vector.MustTCols[int64](inputBat.Vecs[0])
-	cols2 := vector.MustTCols[int64](outputBat.Vecs[0])
-	if len(cols1) != 20 || len(cols1) != len(cols2) {
-		t.Error("input not equal output: vec[0]'s length not match")
-	}
-	for i := 0; i < len(cols1); i++ {
-		if cols1[i] != cols2[i] {
-			t.Errorf("input not equal output: vec[0][%d]'s value not match", i)
-		}
 	}
 }
 
