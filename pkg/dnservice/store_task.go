@@ -67,3 +67,12 @@ func (s *store) taskServiceCreated() bool {
 	defer s.task.RUnlock()
 	return s.task.serviceCreated
 }
+
+func (s *store) GetTaskService() (taskservice.TaskService, bool) {
+	s.task.RLock()
+	defer s.task.RUnlock()
+	if s.task.serviceHolder == nil {
+		return nil, false
+	}
+	return s.task.serviceHolder.Get()
+}

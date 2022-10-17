@@ -370,9 +370,11 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
+	if cb, err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
+	} else {
+		resp.CommandBatch = &cb
 	}
 
 	return resp

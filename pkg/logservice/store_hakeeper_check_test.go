@@ -672,7 +672,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 
 		cnUUID1 := uuid.New().String()
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
@@ -688,7 +688,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 
 		cnUUID2 := uuid.New().String()
 		cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "b"})
 		assert.NoError(t, err)
@@ -766,7 +766,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 
 		cnUUID1 := uuid.New().String()
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
@@ -787,7 +787,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
 				cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
-				err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+				_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 				assert.NoError(t, err)
 				state, err = store.getCheckerState()
 				require.NoError(t, err)

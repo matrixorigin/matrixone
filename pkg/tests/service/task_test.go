@@ -72,7 +72,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 	}
 }
 
-func TestTaskServiceCanCreatedOnCN(t *testing.T) {
+func TestTaskServiceCanCreate(t *testing.T) {
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions().
 		WithCNServiceNum(1).
@@ -87,9 +87,10 @@ func TestTaskServiceCanCreatedOnCN(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
