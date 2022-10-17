@@ -176,23 +176,13 @@ int_test INT NOT NULL,
 big BIGINT NOT NULL
 );
 INSERT INTO t1() VALUES(1, 2, 3, 4),(100, 101, 102, 103),(NULL, NULL, NULL, 204),(64,1,4564,46843);
+constraint violation: Column 'tiny' cannot be null
 SELECT * FROM t1 ORDER BY small DESC;
 tiny    small    int_test    big
-100    101    102    103
-1    2    3    4
-64    1    4564    46843
-0    0    0    204
 SELECT * FROM t1 WHERE tiny < 100 ORDER BY big ASC;
 tiny    small    int_test    big
-1    2    3    4
-0    0    0    204
-64    1    4564    46843
 SELECT * FROM t1 ORDER BY tiny ASC, small DESC, int_test ASC, big DESC;
 tiny    small    int_test    big
-0    0    0    204
-1    2    3    4
-64    1    4564    46843
-100    101    102    103
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 float_32 FLOAT,
