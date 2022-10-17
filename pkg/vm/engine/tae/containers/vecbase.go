@@ -128,6 +128,36 @@ func (base *vecBase[T]) String() string {
 	}
 	return s
 }
+func (base *vecBase[T]) PPString(num int) string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", base.GetType().String(), base.Length()))
+	limit := base.Length()
+	if num > 0 && num < limit {
+		limit = num
+	}
+	size := base.Length()
+	long := false
+	if size > limit {
+		long = true
+		size = limit
+	}
+	for i := 0; i < size; i++ {
+		if base.IsNull(i) {
+			_, _ = w.WriteString("null")
+			continue
+		}
+		if base.GetType().IsVarlen() {
+			_, _ = w.WriteString(fmt.Sprintf("%s, ", base.Get(i).([]byte)))
+		} else {
+			_, _ = w.WriteString(fmt.Sprintf("%v, ", base.Get(i)))
+		}
+	}
+	if long {
+		_, _ = w.WriteString("...")
+	}
+	_, _ = w.WriteString(")]")
+	return w.String()
+}
 
 func (base *vecBase[T]) Close() {
 	base.derived.releaseRoStorage()
