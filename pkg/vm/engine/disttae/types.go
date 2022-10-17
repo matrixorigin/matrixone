@@ -104,7 +104,6 @@ type Engine struct {
 type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
-	cli        client.TxnClient
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
 }
@@ -132,6 +131,7 @@ type Transaction struct {
 	// use for solving halloween problem
 	statementId uint64
 	meta        txn.TxnMeta
+	op          client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
