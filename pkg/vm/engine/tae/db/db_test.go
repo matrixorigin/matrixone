@@ -3629,7 +3629,7 @@ func TestWatchDirty(t *testing.T) {
 	assert.Zero(t, tbl)
 
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 100
+	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	appendCnt := 200
@@ -3640,7 +3640,7 @@ func TestWatchDirty(t *testing.T) {
 	tae.checkRowsByScan(1, false)
 
 	wg := &sync.WaitGroup{}
-	pool, _ := ants.NewPool(5)
+	pool, _ := ants.NewPool(3)
 	worker := func(i int) func() {
 		return func() {
 			txn, _ := tae.getRelation()
@@ -3703,9 +3703,12 @@ func TestWatchDirty(t *testing.T) {
 				// 10 zeros were found, can stop
 				return false, nil
 			}
+			t.Log("check consecutive zeros failed, wait more")
 		}
 		return true, nil
 	}))
+	// debug log
+	t.Logf("prevVal: %d, prevCount: %d, seen Dirty: %v", prevVal, prevCount, seenDirty)
 }
 
 func TestDirtyWatchRace(t *testing.T) {
