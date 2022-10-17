@@ -12,16 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package common
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"bytes"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-type Segment interface {
-	Base
-	Name() string
-	OpenBlock(id uint64, colCnt int) (Block, error)
-	String() string
-	GetFs() *objectio.ObjectFS
+func TestTree(t *testing.T) {
+	tree := NewTree()
+	tree.AddSegment(1, 2, 3)
+	tree.AddBlock(4, 5, 6, 7)
+	t.Log(tree.String())
+	assert.Equal(t, 2, tree.TableCount())
+
+	var w bytes.Buffer
+	_, err := tree.WriteTo(&w)
+	assert.NoError(t, err)
+
+	tree2 := NewTree()
+	_, err = tree2.ReadFrom(&w)
+	assert.NoError(t, err)
+	t.Log(tree2.String())
+	assert.True(t, tree.Equal(tree2))
 }

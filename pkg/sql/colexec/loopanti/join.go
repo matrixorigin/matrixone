@@ -52,9 +52,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -63,13 +60,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}
@@ -126,16 +121,17 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				break
 			}
 		}
-		defer vec.Free(proc.Mp())
 		if !matched && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
+					vec.Free(proc.Mp())
 					return err
 				}
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i])
 		}
+		vec.Free(proc.Mp())
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)

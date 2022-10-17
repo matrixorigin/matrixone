@@ -57,9 +57,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -68,14 +65,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
-					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}
@@ -131,11 +126,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if err != nil {
 			return err
 		}
-		defer vector.Clean(vec, proc.Mp())
-		bs := vec.Col.([]bool)
+		bs := vector.MustTCols[bool](vec)
 		if len(bs) == 1 {
 			if bs[0] {
 				if len(ctr.bat.Zs) > 1 {
+					vec.Free(proc.Mp())
 					return moerr.NewInternalError("scalar subquery returns more than 1 row")
 				}
 				unmatched = false
@@ -143,6 +138,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if rp.Rel != 0 {
 						if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
+							vec.Free(proc.Mp())
 							return err
 						}
 					}
@@ -152,6 +148,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			for j, b := range bs {
 				if b {
 					if !unmatched {
+						vec.Free(proc.Mp())
 						return moerr.NewInternalError("scalar subquery returns more than 1 row")
 					}
 					unmatched = false
@@ -159,6 +156,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if rp.Rel != 0 {
 							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
+								vec.Free(proc.Mp())
 								return err
 							}
 						}
@@ -171,11 +169,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				if rp.Rel != 0 {
 					if err := vector.UnionNull(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
+						vec.Free(proc.Mp())
 						return err
 					}
 				}
 			}
 		}
+		vec.Free(proc.Mp())
 	}
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {

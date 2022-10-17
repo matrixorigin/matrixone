@@ -2242,6 +2242,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	switch id {
 	case "unnest":
 		return builder.buildUnnest(tbl, ctx)
+	case "generate_series":
+		return builder.buildGenerateSeries(tbl, ctx)
 	default:
 		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
 	}

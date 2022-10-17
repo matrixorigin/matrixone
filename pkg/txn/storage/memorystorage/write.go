@@ -104,20 +104,20 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 }
 
 func handleWrite[
-Req any,
-Resp any,
+	Req any,
+	Resp any,
 ](
 	ctx context.Context,
 	meta txn.TxnMeta,
 	payload []byte,
 	fn func(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req Req,
-	resp *Resp,
-) (
-	err error,
-),
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req Req,
+		resp *Resp,
+	) (
+		err error,
+	),
 ) (
 	res []byte,
 	err error,

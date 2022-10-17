@@ -14,6 +14,8 @@
 
 package vm
 
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
+
 const (
 	Top = iota
 	Join
@@ -58,7 +60,14 @@ const (
 	HashBuild
 
 	Unnest
+
+	GenerateSeries
 )
+
+type InstructionArgument interface {
+	// Free release all memory allocated from mPool in an operator.
+	Free(proc *process.Process, pipelineFailed bool)
+}
 
 // Instruction contains relational algebra
 type Instruction struct {
@@ -67,7 +76,23 @@ type Instruction struct {
 	// Idx specified the anaylze information index.
 	Idx int
 	// Arg contains the operand of this instruction.
-	Arg any
+	Arg InstructionArgument
 }
 
 type Instructions []Instruction
+
+func (ins *Instruction) IsBrokenNode() bool {
+	switch ins.Op {
+	case Order, MergeOrder:
+		return true
+	case Limit, MergeLimit:
+		return true
+	case Offset, MergeOffset:
+		return true
+	case Group, MergeGroup:
+		return true
+	case Top, MergeTop:
+		return true
+	}
+	return false
+}

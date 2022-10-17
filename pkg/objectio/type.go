@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -45,14 +46,14 @@ type Reader interface {
 	// Read is to read columns data of a block from fileservice at one time
 	// extent is location of the block meta
 	// idxs is the column serial number of the data to be read
-	Read(extents Extent, idxs []uint16) (*fileservice.IOVector, error)
+	Read(extents Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(extent []Extent) ([]BlockObject, error)
+	ReadMeta(extent []Extent, m *mpool.MPool) ([]BlockObject, error)
 
 	// ReadIndex is the index data of the read columns
-	ReadIndex(extent Extent, idxs []uint16, dataType IndexDataType) ([]IndexData, error)
+	ReadIndex(extent Extent, idxs []uint16, dataType IndexDataType, m *mpool.MPool) ([]IndexData, error)
 }
 
 // BlockObject is a batch written to fileservice
@@ -78,10 +79,10 @@ type ColumnObject interface {
 	// GetData gets the data of ColumnObject
 	// Returns an IOVector, the caller needs to traverse the IOVector
 	// to get all the structures required for data generation
-	GetData() (*fileservice.IOVector, error)
+	GetData(m *mpool.MPool) (*fileservice.IOVector, error)
 
 	// GetIndex gets the index of ColumnObject
-	GetIndex(dataType IndexDataType) (IndexData, error)
+	GetIndex(dataType IndexDataType, m *mpool.MPool) (IndexData, error)
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta

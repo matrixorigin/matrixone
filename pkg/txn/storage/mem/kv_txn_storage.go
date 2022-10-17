@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -430,9 +431,16 @@ func (kv *KVTxnStorage) getWriteKeysLocked(txnMeta txn.TxnMeta) [][]byte {
 }
 
 func (kv *KVTxnStorage) saveLog(log *KVLog) (logservice.Lsn, error) {
-	return kv.logClient.Append(context.Background(), logservice.LogRecord{
-		Data: log.MustMarshal(),
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	data := log.MustMarshal()
+	record := kv.logClient.GetLogRecord(len(data))
+	if len(record.Data) == 0 {
+		record.Data = data
+	} else {
+		copy(record.Data[len(record.Data)-len(data):], data)
+	}
+	return kv.logClient.Append(ctx, record)
 }
 
 func (kv *KVTxnStorage) commitWithKVLogLocked(klog *KVLog) {

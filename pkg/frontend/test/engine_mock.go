@@ -9,7 +9,7 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
