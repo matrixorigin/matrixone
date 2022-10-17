@@ -1030,12 +1030,20 @@ var (
 			privilegeLevelDatabaseTable, privilegeLevelTable},
 	}
 
+	// the databases that can not operated by the real user
 	bannedCatalogDatabases = map[string]int8{
 		"mo_catalog":         0,
 		"information_schema": 0,
 		"system":             0,
 		"system_metrics":     0,
 		"mysql":              0,
+	}
+
+	// the privileges that can not be granted or revoked
+	bannedPrivileges = map[PrivilegeType]int8{
+		PrivilegeTypeCreateAccount: 0,
+		PrivilegeTypeAlterAccount:  0,
+		PrivilegeTypeDropAccount:   0,
 	}
 )
 
@@ -1217,6 +1225,16 @@ func getSqlForDeleteUser(userId int64) []string {
 		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
 		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
 	}
+}
+
+func isBannedDatabase(dbName string) bool {
+	_, ok := bannedCatalogDatabases[dbName]
+	return ok
+}
+
+func isBannedPrivilege(priv PrivilegeType) bool {
+	_, ok := bannedPrivileges[priv]
+	return ok
 }
 
 type specialTag int
@@ -2305,6 +2323,10 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		if err != nil {
 			goto handleFailed
 		}
+		if isBannedPrivilege(privType) {
+			err = moerr.NewInternalError("the privilege %s can not be granted", privType)
+			goto handleFailed
+		}
 		//check the match between the privilegeScope and the objectType
 		err = matchPrivilegeTypeWithObjectType(privType, objType)
 		if err != nil {
@@ -3257,7 +3279,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
 			}
-			if _, ok2 := bannedCatalogDatabases[dbName]; ok2 {
+			if ok2 := isBannedDatabase(dbName); ok2 {
 				return ok2
 			}
 		}
