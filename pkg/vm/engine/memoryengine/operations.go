@@ -39,7 +39,6 @@ const (
 	OpGetPrimaryKeys
 	OpGetTableDefs
 	OpGetHiddenKeys
-	//OpTruncate
 	OpUpdate
 	OpWrite
 	OpNewTableIter
@@ -74,7 +73,6 @@ type WriteReqeust interface {
 		AddTableDefReq |
 		DelTableDefReq |
 		DeleteReq |
-		//TruncateReq |
 		UpdateReq |
 		WriteReq
 }
@@ -99,7 +97,6 @@ type Response interface {
 		GetPrimaryKeysResp |
 		GetTableDefsResp |
 		GetHiddenKeysResp |
-		//TruncateResp |
 		UpdateResp |
 		WriteResp |
 		NewTableIterResp |
