@@ -27,6 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	errNotReady = moerr.NewInvalidState("task store not ready")
+)
+
 type taskServiceHolder struct {
 	logger                     *zap.Logger
 	addressFactory             func() (string, error)
@@ -152,80 +156,122 @@ func (s *refreshableTaskStorage) Close() error {
 }
 
 func (s *refreshableTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
+	var v int
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.Add(ctx, tasks...)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.Add(ctx, tasks...)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) Update(ctx context.Context, tasks []task.Task, conditions ...Condition) (int, error) {
+	var v int
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.Update(ctx, tasks, conditions...)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.Update(ctx, tasks, conditions...)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) Delete(ctx context.Context, conditions ...Condition) (int, error) {
+	var v int
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.Delete(ctx, conditions...)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.Delete(ctx, conditions...)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) Query(ctx context.Context, conditions ...Condition) ([]task.Task, error) {
+	var v []task.Task
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.Query(ctx, conditions...)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.Query(ctx, conditions...)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {
+	var v int
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.AddCronTask(ctx, tasks...)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.AddCronTask(ctx, tasks...)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+	var v []task.CronTask
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.QueryCronTask(ctx)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.QueryCronTask(ctx)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, task task.Task) (int, error) {
+	var v int
+	var err error
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
-	n, err := s.mu.store.UpdateCronTask(ctx, cronTask, task)
+	if s.mu.store == nil {
+		err = errNotReady
+	} else {
+		v, err = s.mu.store.UpdateCronTask(ctx, cronTask, task)
+	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return n, err
+	return v, err
 }
 
 func (s *refreshableTaskStorage) maybeRefresh(lastAddress string) bool {
