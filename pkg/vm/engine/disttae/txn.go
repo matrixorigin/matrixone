@@ -319,6 +319,9 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 			}
 		}
 	}
+	if expr == nil {
+		return bats, nil
+	}
 	for i, bat := range bats {
 		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
 		if err != nil {
@@ -539,7 +542,7 @@ func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs file
 	if err != nil {
 		return nil, err
 	}
-	ioVec, err := reader.Read(extent, idxs)
+	ioVec, err := reader.Read(extent, idxs, nil)
 	if err != nil {
 		return nil, err
 	}

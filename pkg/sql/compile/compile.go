@@ -502,6 +502,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	ds := &Scope{Magic: Normal}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
@@ -524,6 +525,8 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
 		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+	case "generate_series":
+		return c.compileGenerateSeries(n, ss)
 	default:
 		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
@@ -539,6 +542,17 @@ func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope,
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
 			Arg: constructUnnest(n, c.ctx, externParam),
+		})
+	}
+	return ss, nil
+}
+
+func (c *Compile) compileGenerateSeries(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.GenerateSeries,
+			Idx: c.anal.curr,
+			Arg: constructGenerateSeries(n, c.ctx),
 		})
 	}
 	return ss, nil
@@ -931,6 +945,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		cnt++
 	}
 	rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, cnt, c.anal.Nodes())
+	if len(ss) > 0 {
+		rs.Proc.LoadTag = ss[0].Proc.LoadTag
+	}
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Merge,
 		Arg: &merge.Argument{},

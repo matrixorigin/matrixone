@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 )
@@ -33,13 +32,13 @@ type ZmReader struct {
 	colMetaFactory evictable.EvictableNodeFactory
 }
 
-func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.ColumnBlock, metaloc string) *ZmReader {
+func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, fs *objectio.ObjectFS, idx uint16, metaloc string) *ZmReader {
 	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
 	return &ZmReader{
 		metaKey: metaKey,
 		mgr:     mgr,
 		colMetaFactory: func() (base.INode, error) {
-			return evictable.NewColumnMetaNode(mgr, metaKey, col, metaloc, typ), nil
+			return evictable.NewColumnMetaNode(mgr, metaKey, fs, idx, metaloc, typ), nil
 		},
 	}
 }

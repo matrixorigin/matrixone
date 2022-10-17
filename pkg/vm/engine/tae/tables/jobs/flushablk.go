@@ -16,26 +16,27 @@ package jobs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type flushABlkTask struct {
 	*tasks.BaseTask
-	data  *containers.Batch
-	delta *containers.Batch
-	meta  *catalog.BlockEntry
-	file  file.Block
-	ts    types.TS
+	data   *containers.Batch
+	delta  *containers.Batch
+	meta   *catalog.BlockEntry
+	fs     *objectio.ObjectFS
+	blocks []objectio.BlockObject
+	ts     types.TS
 }
 
 func NewFlushABlkTask(
 	ctx *tasks.Context,
-	bf file.Block,
+	fs *objectio.ObjectFS,
 	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
@@ -45,7 +46,7 @@ func NewFlushABlkTask(
 		ts:    ts,
 		data:  data,
 		meta:  meta,
-		file:  bf,
+		fs:    fs,
 		delta: delta,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
@@ -55,23 +56,22 @@ func NewFlushABlkTask(
 func (task *flushABlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushABlkTask) Execute() error {
-	defer task.file.FreeWriter()
 	name := blockio.EncodeBlkName(task.meta.AsCommonID(), task.ts)
-	task.file.UpdateName(name)
-	block, err := task.file.WriteBatch(task.data, task.ts)
+	writer := blockio.NewWriter(task.fs, name)
+	block, err := writer.WriteBlock(task.data)
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, false); err != nil {
+	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta, task.data, false); err != nil {
 		return err
 	}
 
 	if task.delta != nil {
-		_, err := task.file.WriteBatch(task.delta, task.ts)
+		_, err := writer.WriteBlock(task.delta)
 		if err != nil {
 			return err
 		}
 	}
-	err = task.file.Sync()
+	task.blocks, err = writer.Sync()
 	return err
 }

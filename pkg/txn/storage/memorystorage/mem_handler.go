@@ -1273,7 +1273,13 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 
 func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(tx.Time); err != nil {
+	commitTS := meta.CommitTS
+	if commitTS.IsEmpty() {
+		commitTS = tx.Time.Timestamp
+	}
+	if err := tx.Commit(Time{
+		Timestamp: commitTS,
+	}); err != nil {
 		return err
 	}
 	return nil

@@ -60,6 +60,8 @@ const (
 	HashBuild
 
 	Unnest
+
+	GenerateSeries
 )
 
 type InstructionArgument interface {

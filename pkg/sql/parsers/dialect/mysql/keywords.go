@@ -514,5 +514,6 @@ func init() {
 		"secondary":                SECONDARY,
 		"unnest":                   UNNEST,
 		"reference":                REFERENCE,
+		"generate_series":          GENERATE_SERIES,
 	}
 }
