@@ -65,6 +65,15 @@ func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 	return ctx
 }
 
+func NewEmptyTxnCtx() *TxnCtx {
+	ctx := &TxnCtx{
+		Memo: txnif.NewTxnMemo(),
+	}
+	ctx.DoneCond = *sync.NewCond(ctx)
+	return ctx
+}
+
+func (ctx *TxnCtx) IsReplay() bool { return false }
 func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
 	return ctx.Memo
 }
@@ -79,9 +88,10 @@ func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	repr := fmt.Sprintf(
-		"ctx[%X][%s->%s][%s]",
+		"ctx[%X][%s->%s->%s][%s]",
 		ctx.ID,
 		ctx.StartTS.ToString(),
+		ctx.PrepareTS.ToString(),
 		ctx.CommitTS.ToString(),
 		txnif.TxnStrState(ctx.State),
 	)
@@ -193,9 +203,9 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return moerr.NewTxnNotActive("")
-	}
+	// if !ctx.CommitTS.Equal(txnif.UncommitTS) {
+	// 	return moerr.NewTxnNotActive("")
+	// }
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
 	ctx.State = txnif.TxnStatePreparing

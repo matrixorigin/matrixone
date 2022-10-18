@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -45,14 +46,14 @@ func (info *partialCkpInfo) IsAllCheckpointed() bool {
 
 func (info *partialCkpInfo) MergePartialCkpInfo(o *partialCkpInfo) {
 	if info.size != o.size {
-		panic("logic error")
+		panic(moerr.NewInternalError("logic error %d != %d", info.size, o.size))
 	}
 	info.ckps.Or(o.ckps)
 }
 
 func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo) {
 	if info.size != cmds.Size {
-		panic("logic error")
+		panic(moerr.NewInternalError("logic error %d != %d", info.size, cmds.Size))
 	}
 	for _, csn := range cmds.CommandIds {
 		info.ckps.Add(csn)

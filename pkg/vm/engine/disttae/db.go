@@ -23,13 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-func newDB(cli client.TxnClient, dnList []DNStore) *DB {
+func newDB(dnList []DNStore) *DB {
 	dnMap := make(map[string]int)
 	for i := range dnList {
 		dnMap[dnList[i].UUID] = i
 	}
 	db := &DB{
-		cli:        cli,
 		dnMap:      dnMap,
 		metaTables: make(map[string]Partitions),
 		tables:     make(map[[2]uint64]Partitions),
@@ -236,12 +235,8 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore,
+func (db *DB) Update(ctx context.Context, dnList []DNStore, op client.TxnOperator,
 	databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	op, err := db.cli.New()
-	if err != nil {
-		return err
-	}
 	db.Lock()
 	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
