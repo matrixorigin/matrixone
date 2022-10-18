@@ -12,16 +12,20 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/cn/local"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "S3"
+  [fileservice.s3]
+  endpoint = "endpoint"
+  bucket = "bucket"
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/cn"
+data-dir = "mo-data/cn/etl"
 
 [observability]
 disableTrace = true

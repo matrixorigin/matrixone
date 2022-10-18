@@ -10,19 +10,22 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
-
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/log/local"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "S3"
+  [fileservice.s3]
+  endpoint = "endpoint"
+  bucket = "bucket"
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/log"
+data-dir = "mo-data/log/etl"
 
 [logservice]
 deployment-id = 1
