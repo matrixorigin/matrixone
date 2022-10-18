@@ -256,13 +256,12 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("ReadOnly: %v\n", bat.Ro))
-	buf.WriteString(fmt.Sprintf("Cnt: %d\n", bat.Cnt))
-	buf.WriteString(fmt.Sprintf("Attr: %s\n", bat.Attrs))
+
 	for i, vec := range bat.Vecs {
-		buf.WriteString(fmt.Sprintf("vector %d :\n", i+1))
-		buf.WriteString(vec.String())
-		buf.WriteByte('\n')
+		buf.WriteString(fmt.Sprintf("%v\n", i))
+		if len(bat.Zs) > 0 {
+			buf.WriteString(fmt.Sprintf("\t%s\n", vec))
+		}
 	}
 	return buf.String()
 }

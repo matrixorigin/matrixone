@@ -113,6 +113,9 @@ var (
 	defaultDNReplicaID = 1
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
+
+	// defaultMergeCycle default: 0 sec, means disable merge as service
+	defaultMergeCycle = 0
 )
 
 // FrontendParameters of the frontend
@@ -380,6 +383,8 @@ type ObservabilityParameters struct {
 
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
+
+	MergeCycle int `toml:"mergeCycle"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -407,6 +412,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MetricGatherInterval <= 0 {
 		op.MetricGatherInterval = defaultMetricGatherInterval
+	}
+
+	if op.MergeCycle <= 0 {
+		op.MergeCycle = defaultMergeCycle
 	}
 }
 

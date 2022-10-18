@@ -16,13 +16,11 @@ package group
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -59,51 +57,4 @@ type Argument struct {
 	Exprs    []*plan.Expr // group Expressions
 	Types    []types.Type
 	Aggs     []agg.Aggregate // aggregations
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-		ctr.cleanAggVectors(mp)
-		ctr.cleanGroupVectors(mp)
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
-}
-
-func (ctr *container) cleanAggVectors(mp *mpool.MPool) {
-	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].needFree && ctr.aggVecs[i].vec != nil {
-			ctr.aggVecs[i].vec.Free(mp)
-			ctr.aggVecs[i].vec = nil
-		}
-	}
-}
-
-func (ctr *container) cleanGroupVectors(mp *mpool.MPool) {
-	for i := range ctr.groupVecs {
-		if ctr.groupVecs[i].needFree && ctr.groupVecs[i].vec != nil {
-			ctr.groupVecs[i].vec.Free(mp)
-			ctr.groupVecs[i].vec = nil
-		}
-	}
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
 }
