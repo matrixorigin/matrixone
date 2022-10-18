@@ -254,24 +254,16 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
-func (s *stateMachine) getCommandBatch(uuid string,
-	extraCommands ...pb.ScheduleCommand) sm.Result {
-	var batch pb.CommandBatch
-	var ok bool
-	if batch, ok = s.state.ScheduleCommands[uuid]; ok {
+func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
+	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		delete(s.state.ScheduleCommands, uuid)
+		data, err := batch.Marshal()
+		if err != nil {
+			panic(err)
+		}
+		return sm.Result{Data: data}
 	}
-
-	batch.Commands = append(batch.Commands, extraCommands...)
-	if len(batch.Commands) == 0 {
-		return sm.Result{}
-	}
-
-	data, err := batch.Marshal()
-	if err != nil {
-		panic(err)
-	}
-	return sm.Result{Data: data}
+	return sm.Result{}
 
 }
 

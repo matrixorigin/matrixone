@@ -127,19 +127,23 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 
 	err = taskService.Create(ctx, task.TaskMetadata{ID: "a", Executor: 0})
 	require.NoError(t, err)
+	i := 0
 	for {
 		select {
 		case <-ctx.Done():
 			require.FailNow(t, "failed to query tasks")
 		default:
 		}
+		t.Logf("iter %d", i)
 		tasks, err := taskService.QueryTask(ctx)
 		require.NoError(t, err)
 		if len(tasks) == 0 {
 			time.Sleep(time.Second)
+			i++
 			continue
 		}
 		require.Equal(t, 1, len(tasks))
+		t.Logf("task status: %s", tasks[0].Status)
 		break
 	}
 
