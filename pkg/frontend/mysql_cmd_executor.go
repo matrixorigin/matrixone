@@ -901,7 +901,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -976,7 +976,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(requestCtx, load, dbHandler, tableHandler, loadDb)
+	result, err := mce.LoadLoop(requestCtx, proc, load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -2153,7 +2153,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
-			err = mce.handleLoadData(requestCtx, st)
+			err = mce.handleLoadData(requestCtx, proc, st)
 			if err != nil {
 				goto handleFailed
 			}
