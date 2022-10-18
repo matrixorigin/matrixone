@@ -38,6 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	HASH_VALUE_FUN string = "hash_value"
+	MAX_RANGE_SIZE int64  = 200
+)
+
 func checkExprIsMonotonical(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -247,11 +252,96 @@ func getNewBlockName(accountId uint32) (string, error) {
 	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
 }
 
-// computeRange compute primaryKey range by Expr
+func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
+	args := []*plan.Expr{constExpr}
+	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
+	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
+	funExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&returnType),
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     funId,
+					ObjName: HASH_VALUE_FUN,
+				},
+				Args: args,
+			},
+		},
+	}
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	ret, err := colexec.EvalExpr(bat, nil, funExpr)
+	if err != nil {
+		return false, 0
+	}
+	list := vector.MustTCols[int64](ret)
+	return true, uint64(list[0])
+}
+
+// computeRangeByNonIntPk compute NonIntPk range Expr
+// only support function :["and", "="]
+// support eg: pk="a",  pk="a" and noPk > 200
+// unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
+func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funName := exprImpl.F.Func.ObjName
+		switch funName {
+		case "and":
+			canCompute, pkBytes := computeRangeByNonIntPk(exprImpl.F.Args[0], pkIdx)
+			if canCompute {
+				return canCompute, pkBytes
+			}
+			return computeRangeByNonIntPk(exprImpl.F.Args[1], pkIdx)
+
+		case "=":
+			var pkHashValue uint64
+			var ok bool
+			leftIsConstant := false
+			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_C:
+				ok, pkHashValue = getConstantExprHashValue(exprImpl.F.Args[0])
+				if !ok {
+					return false, 0
+				}
+				leftIsConstant = true
+			case *plan.Expr_Col:
+				if subExpr.Col.ColPos != pkIdx {
+					return false, 0
+				}
+			default:
+				return false, 0
+			}
+
+			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				if leftIsConstant {
+					return false, 0
+				}
+				return getConstantExprHashValue(exprImpl.F.Args[1])
+			case *plan.Expr_Col:
+				if !leftIsConstant {
+					return false, 0
+				}
+				if subExpr.Col.ColPos != pkIdx {
+					return false, 0
+				}
+				return true, pkHashValue
+			default:
+				return false, 0
+			}
+		}
+	}
+
+	return false, 0
+}
+
+// computeRangeByIntPk compute primaryKey range by Expr
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
+func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, [][2]int64) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -277,12 +367,12 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and", "or":
-			canCompute, leftRange := computeRange(exprImpl.F.Args[0], pkIdx)
+			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
-			canCompute, rightRange := computeRange(exprImpl.F.Args[1], pkIdx)
+			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
@@ -304,6 +394,11 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 				leftArg = typeColumn
@@ -335,6 +430,11 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 				}
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 
@@ -448,29 +548,32 @@ func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
 	return newRange
 }
 
+func getHashValue(buf []byte) uint64 {
+	buf = append([]byte{0}, buf...)
+	var states [3]uint64
+	if l := len(buf); l < 16 {
+		buf = append(buf, hashtable.StrKeyPadding[l:]...)
+	}
+	hashtable.BytesBatchGenHashStates(&buf, &states, 1)
+	return states[0]
+}
+
 func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
 	listLen := uint64(len(list))
 	if listLen == 1 || len(pkRange) == 0 {
 		return list
 	}
 
-	keys := make([]byte, 8)
-	var states [3]uint64
-
-	getHashValue := func(input int64) uint64 {
-		binary.LittleEndian.PutUint64(keys, uint64(input))
-		buf := append([]byte{0}, keys...)
-		if l := len(buf); l < 16 {
-			buf = append(buf, hashtable.StrKeyPadding[l:]...)
-		}
-		hashtable.BytesBatchGenHashStates(&buf, &states, 1)
-		return states[0]
-	}
-
 	listMap := make(map[uint64]struct{})
 	for _, r := range pkRange {
+		if r[1]-r[0] > MAX_RANGE_SIZE {
+			return list
+		}
+
 		for i := r[0]; i <= r[1]; i++ {
-			val := getHashValue(i)
+			keys := make([]byte, 8)
+			binary.LittleEndian.PutUint64(keys, uint64(i))
+			val := getHashValue(keys)
 			modVal := val % listLen
 			listMap[modVal] = struct{}{}
 			if len(listMap) == int(listLen) {

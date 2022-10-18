@@ -27,5 +27,8 @@ grant show databases,create database on account * to moadmin;
 revoke show databases,create database on account * from moadmin;
 revoke connect on account * from public;
 revoke show databases on account * from public;
+grant create account on account * to rolex;
+grant drop account on account * to rolex;
+grant alter account on account * to rolex;
 drop role rolex;
 drop user userx;
