@@ -67,7 +67,7 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func makeZonemapForTest(idx uint16, typ types.T, min any, max any) [64]byte {
+func makeZonemapForTest(typ types.T, min any, max any) [64]byte {
 	zm := index.NewZoneMap(typ.ToType())
 	_ = zm.Update(min)
 	_ = zm.Update(max)
@@ -81,10 +81,10 @@ func makeZonemapForTest(idx uint16, typ types.T, min any, max any) [64]byte {
 func makeBlockMetaForTest() BlockMeta {
 	return BlockMeta{
 		zonemap: [][64]byte{
-			makeZonemapForTest(0, types.T_int64, int64(10), int64(100)),
-			makeZonemapForTest(1, types.T_int64, int64(20), int64(200)),
-			makeZonemapForTest(2, types.T_int64, int64(30), int64(300)),
-			makeZonemapForTest(3, types.T_int64, int64(1), int64(8)),
+			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
+			makeZonemapForTest(types.T_int64, int64(20), int64(200)),
+			makeZonemapForTest(types.T_int64, int64(30), int64(300)),
+			makeZonemapForTest(types.T_int64, int64(1), int64(8)),
 		},
 	}
 }
@@ -541,6 +541,39 @@ func TestGetDNStore(t *testing.T) {
 				if r.UUID != result[j].UUID {
 					t.Fatalf("test getDNStore at cases[%d], result[%d] is not match", i, j)
 				}
+			}
+		}
+	})
+}
+
+func TestCheckIfDataInBlock(t *testing.T) {
+	meta := BlockMeta{
+		zonemap: [][64]byte{
+			makeZonemapForTest(types.T_int64, int64(10), int64(100)),
+			makeZonemapForTest(types.T_blob, []byte("a"), []byte("h")),
+			// makeZonemapForTest(types.T_varchar, "a", "h"),
+		},
+	}
+
+	type asserts = struct {
+		result bool
+		data   any
+		colIdx int
+		typ    types.Type
+	}
+
+	testCases := []asserts{
+		{true, int64(12), 0, types.T_int64.ToType()},   // 12 in [10, 100]
+		{false, int64(120), 0, types.T_int64.ToType()}, // 120 not in [10, 100]
+		{true, []byte("b"), 1, types.T_blob.ToType()},  // "b" in ["a", "h"]
+		{false, []byte("i"), 1, types.T_blob.ToType()}, // "i" not in ["a", "h"]
+	}
+
+	t.Run("test checkIfDataInBlock", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, _ := checkIfDataInBlock(testCase.data, meta, testCase.colIdx, testCase.typ)
+			if result != testCase.result {
+				t.Fatalf("test checkIfDataInBlock at cases[%d], result is not match", i)
 			}
 		}
 	})
