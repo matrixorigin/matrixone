@@ -48,7 +48,8 @@ type BlockAppender interface {
 		txn txnif.AsyncTxn,
 	) (int, error)
 	IsAppendable() bool
-	ReplayAppend(bat *containers.Batch) error
+	ReplayAppend(bat *containers.Batch,
+		txn txnif.AsyncTxn) (int, error)
 	Close()
 }
 
