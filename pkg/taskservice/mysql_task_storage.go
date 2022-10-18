@@ -173,7 +173,7 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 }
 
 func (m *mysqlTaskStorage) Close() error {
-	return nil
+	return m.db.Close()
 }
 
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
