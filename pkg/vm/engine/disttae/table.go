@@ -273,25 +273,6 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 	return nil
 }
 
-func (tbl *table) Truncate(ctx context.Context) (uint64, error) {
-	id, err := tbl.db.txn.idGen.AllocateID(ctx)
-	if err != nil {
-		return 0, err
-	}
-	bat, err := genTruncateTableTuple(id, tbl.db.databaseId,
-		genMetaTableName(tbl.tableId), tbl.db.databaseName, tbl.db.txn.proc.Mp())
-	if err != nil {
-		return 0, err
-	}
-	for i := range tbl.db.txn.dnStores {
-		if err := tbl.db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[i]); err != nil {
-			return 0, err
-		}
-	}
-	return 0, nil
-}
-
 func (tbl *table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }

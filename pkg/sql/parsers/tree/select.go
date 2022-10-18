@@ -330,11 +330,11 @@ func (node *JoinTableExpr) Format(ctx *FmtCtx) {
 	if node.Left != nil {
 		node.Left.Format(ctx)
 	}
-	if node.JoinType != "" {
+	if node.JoinType != "" && node.Right != nil {
 		ctx.WriteByte(' ')
 		ctx.WriteString(strings.ToLower(node.JoinType))
 	}
-	if node.JoinType != JOIN_TYPE_STRAIGHT {
+	if node.JoinType != JOIN_TYPE_STRAIGHT && node.Right != nil {
 		ctx.WriteByte(' ')
 		ctx.WriteString("join")
 	}

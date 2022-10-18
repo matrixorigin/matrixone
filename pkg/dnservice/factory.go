@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -134,5 +136,14 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
-	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock)
+	// tae's ScannerInterval's unit is millisecond, convert here. Fix later
+	ckpcfg := &options.CheckpointCfg{
+		ScannerInterval:    int64(s.cfg.Ckp.ScannerInterval.Duration / time.Millisecond),
+		ExecutionInterval:  int64(s.cfg.Ckp.ExecutionInterval.Duration / time.Millisecond),
+		FlushInterval:      int64(s.cfg.Ckp.FlushInterval.Duration / time.Millisecond),
+		ExecutionLevels:    s.cfg.Ckp.ExecutionLevels,
+		CatalogCkpInterval: int64(s.cfg.Ckp.CatalogCkpInterval.Duration / time.Millisecond),
+		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
+	}
+	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock, ckpcfg)
 }
