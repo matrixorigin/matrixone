@@ -70,6 +70,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			return false, nil
 
 		case end:
+			arg.ctr.freeContainer(proc)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -141,6 +142,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		analyze.Input(btc)
+		defer btc.Clean(proc.Mp())
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
@@ -192,7 +194,6 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
 					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
-						btc.Clean(proc.Mp())
 						return false, err
 					}
 				}
@@ -201,8 +202,20 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		analyze.Output(c.btc)
 		proc.SetInputBatch(c.btc)
-		c.btc = nil
-		btc.Clean(proc.Mp())
 		return false, nil
+	}
+}
+
+func (c *container) freeContainer(proc *process.Process) {
+	if c.cnts != nil {
+		for i := range c.cnts {
+			proc.Mp().PutSels(c.cnts[i])
+		}
+		c.cnts = nil
+	}
+
+	if c.hashTable != nil {
+		c.hashTable.Free()
+		c.hashTable = nil
 	}
 }

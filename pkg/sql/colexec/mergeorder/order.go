@@ -143,6 +143,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			} else {
 				if err := ctr.processBatch(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
+					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 				bat.Clean(proc.Mp())
@@ -223,7 +224,7 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		}
 		rbat.Zs = append(rbat.Zs, bat2.Zs[j:]...)
 	}
-	ctr.cleanBatch(proc.Mp())
+	ctr.bat.Clean(proc.Mp())
 	ctr.bat = rbat
 	return nil
 }
