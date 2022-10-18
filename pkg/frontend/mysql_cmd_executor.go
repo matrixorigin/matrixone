@@ -901,7 +901,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -2148,12 +2148,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
-			err = mce.handleLoadData(requestCtx, st)
+			err = mce.handleLoadData(requestCtx, proc, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2307,7 +2305,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
-		fromLoadData = cw.GetLoadTag()
 
 		runner = ret.(ComputationRunner)
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
