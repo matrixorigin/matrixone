@@ -288,6 +288,9 @@ func (s *service) initTaskRunner(ctx context.Context) error {
 		return err
 	}
 
+	// start taskService on CN
+	s.taskService.StartScheduleCronTask()
+
 	return nil
 }
 
