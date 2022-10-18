@@ -78,6 +78,27 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	return e
 }
 
+func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) *TableEntry {
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		schema.AcInfo.TenantID = txnCtx.GetTenantID()
+		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	schema.AcInfo.CreateAt = types.CurrentTimestamp()
+	e := &TableEntry{
+		TableBaseEntry: NewTableBaseEntry(tableId),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+	}
+	if dataFactory != nil {
+		e.tableData = dataFactory(e)
+	}
+	e.CreateWithTxn(txnCtx)
+	return e
+}
+
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
 		TableBaseEntry: NewTableBaseEntry(id),

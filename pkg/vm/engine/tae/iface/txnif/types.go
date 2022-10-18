@@ -217,6 +217,7 @@ type TxnStore interface {
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
+	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)
 	DropRelationByName(dbId uint64, name string) (handle.Relation, error)
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 

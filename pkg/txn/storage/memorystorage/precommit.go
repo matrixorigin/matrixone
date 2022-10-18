@@ -93,12 +93,14 @@ func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req 
 						return err
 					}
 				} else {
-					req := txnengine.TruncateReq{
-						TableID:      txnengine.ID(cmd.Id),
+					req := txnengine.TruncateRelationReq{
+						OldTableID:   txnengine.ID(cmd.Id),
 						DatabaseName: cmd.DatabaseName,
+						Name:         cmd.Name,
 					}
-					if err = m.HandleTruncate(ctx, meta, req,
-						new(txnengine.TruncateResp)); err != nil {
+
+					if err = m.HandleTruncateRelation(ctx, meta, req,
+						new(txnengine.TruncateRelationResp)); err != nil {
 						return err
 					}
 				}
