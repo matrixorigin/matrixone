@@ -58,7 +58,7 @@ func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
 	for _, backend := range testBackends {
 		t.Run(backend, func(t *testing.T) {
 			c, err := NewCluster(t,
-				getBasicClusterOptions(memKVTxnStorage))
+				getBasicClusterOptions(backend))
 			require.NoError(t, err)
 			c.Start()
 			defer c.Stop()
@@ -75,6 +75,30 @@ func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
 			checkRead(t, t2, key, "", nil, true)
 		})
 	}
+}
+
+func TestSingleShardWithCreateTable(t *testing.T) {
+	c, err := NewCluster(t,
+		getBasicClusterOptions(memTxnStorage))
+	require.NoError(t, err)
+	c.Start()
+	defer c.Stop()
+
+	cli := c.NewClient()
+
+	txn, err := cli.NewTxn()
+	require.NoError(t, err)
+	sqlTxn := txn.(SQLBasedTxn)
+
+	_, err = sqlTxn.ExecSQL("create database test_db")
+	require.NoError(t, err)
+	require.NoError(t, sqlTxn.Commit())
+
+	txn, err = cli.NewTxn()
+	require.NoError(t, err)
+	sqlTxn = txn.(SQLBasedTxn)
+	_, err = sqlTxn.ExecSQL("use test_db")
+	require.NoError(t, err)
 }
 
 func checkRead(t *testing.T, txn Txn, key string, expectValue string, expectError error, commit bool) {
