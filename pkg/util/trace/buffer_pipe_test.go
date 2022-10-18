@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -44,7 +45,7 @@ import (
 var buf = new(bytes.Buffer)
 var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
-var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * KB)}
+var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * mpool.KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
 
@@ -166,7 +167,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 	sc := SpanContextWithIDs(_1TraceID, _1SpanID)
 	defaultFields := fields{
 		Reminder:      batchpipe.NewConstantClock(15 * time.Second),
-		sizeThreshold: MB,
+		sizeThreshold: mpool.MB,
 	}
 	type args struct {
 		in  []IBuffer2SqlItem
@@ -477,7 +478,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: GB,
+				sizeThreshold: mpool.GB,
 				batchFunc:     nil,
 			},
 			want: true,
@@ -487,7 +488,7 @@ func Test_buffer2Sql_IsEmpty(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{&MOLog{}},
-				sizeThreshold: GB,
+				sizeThreshold: mpool.GB,
 				batchFunc:     nil,
 			},
 			want: false,
@@ -525,7 +526,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: GB,
+				sizeThreshold: mpool.GB,
 				batchFunc:     nil,
 			},
 			want: true,
@@ -535,7 +536,7 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{&MOLog{}},
-				sizeThreshold: GB,
+				sizeThreshold: mpool.GB,
 				batchFunc:     nil,
 			},
 			want: true,
@@ -575,7 +576,7 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: KB,
+				sizeThreshold: mpool.KB,
 				batchFunc:     nil,
 			},
 			isNilBuffer: true,
@@ -586,7 +587,7 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 			fields: fields{
 				Reminder:      batchpipe.NewConstantClock(time.Hour),
 				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: KB,
+				sizeThreshold: mpool.KB,
 				batchFunc:     genErrorBatchSql,
 			},
 			isNilBuffer: false,
@@ -600,7 +601,7 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
 					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
 				},
-				sizeThreshold: 512 * B,
+				sizeThreshold: 512 * 1, /*byte*/
 				batchFunc:     genErrorBatchSql,
 			},
 			isNilBuffer: false,
@@ -728,11 +729,11 @@ func Test_withSizeThreshold(t *testing.T) {
 		args args
 		want int64
 	}{
-		{name: "1  B", args: args{size: B}, want: 1},
-		{name: "1 KB", args: args{size: KB}, want: 1 << 10},
-		{name: "1 MB", args: args{size: MB}, want: 1 << 20},
-		{name: "1 GB", args: args{size: GB}, want: 1 << 30},
-		{name: "1.001 GB", args: args{size: GB + MB}, want: 1<<30 + 1<<20},
+		{name: "1  B", args: args{size: 1}, want: 1},
+		{name: "1 KB", args: args{size: mpool.KB}, want: 1 << 10},
+		{name: "1 MB", args: args{size: mpool.MB}, want: 1 << 20},
+		{name: "1 GB", args: args{size: mpool.GB}, want: 1 << 30},
+		{name: "1.001 GB", args: args{size: mpool.GB + mpool.MB}, want: 1<<30 + 1<<20},
 	}
 	buf := &buffer2Sql{}
 	for _, tt := range tests {
