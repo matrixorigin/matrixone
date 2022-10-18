@@ -59,6 +59,13 @@ type OperationHandler interface {
 		resp *GetPrimaryKeysResp,
 	) error
 
+	HandleGetTableColumns(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req GetTableColumnsReq,
+		resp *GetTableColumnsResp,
+	) error
+
 	HandleGetTableDefs(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -262,6 +269,11 @@ func handle(
 	case OpGetPrimaryKeys:
 		var r GetPrimaryKeysResp
 		err = handler.HandleGetPrimaryKeys(ctx, meta, req.(GetPrimaryKeysReq), &r)
+		ret = r
+
+	case OpGetTableColumns:
+		var r GetTableColumnsResp
+		err = handler.HandleGetTableColumns(ctx, meta, req.(GetTableColumnsReq), &r)
 		ret = r
 
 	case OpGetTableDefs:
