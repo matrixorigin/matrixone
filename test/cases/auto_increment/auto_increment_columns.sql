@@ -351,8 +351,9 @@ b int auto_increment
 insert into t10 values (10, 10);
 insert into t10 values (),(),();
 select * from t10 order by a;
+-- @bvt:issue#5538
 truncate table t10;
-
+-- @bvt:issue
 insert into t10 values ();
 select * from t10 order by a;
 

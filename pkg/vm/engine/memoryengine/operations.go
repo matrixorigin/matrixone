@@ -30,6 +30,7 @@ const (
 	OpDeleteDatabase
 	OpCreateRelation
 	OpDeleteRelation
+	OpTruncateRelation
 	OpOpenRelation
 	OpGetRelations
 	OpAddTableDef
@@ -39,7 +40,6 @@ const (
 	OpGetTableColumns
 	OpGetTableDefs
 	OpGetHiddenKeys
-	OpTruncate
 	OpUpdate
 	OpWrite
 	OpNewTableIter
@@ -71,10 +71,10 @@ type WriteReqeust interface {
 		DeleteDatabaseReq |
 		CreateRelationReq |
 		DeleteRelationReq |
+		TruncateRelationReq |
 		AddTableDefReq |
 		DelTableDefReq |
 		DeleteReq |
-		TruncateReq |
 		UpdateReq |
 		WriteReq
 }
@@ -90,6 +90,7 @@ type Response interface {
 		DeleteDatabaseResp |
 		CreateRelationResp |
 		DeleteRelationResp |
+		TruncateRelationResp |
 		OpenRelationResp |
 		GetRelationsResp |
 		AddTableDefResp |
@@ -99,7 +100,6 @@ type Response interface {
 		GetTableColumnsResp |
 		GetTableDefsResp |
 		GetHiddenKeysResp |
-		TruncateResp |
 		UpdateResp |
 		WriteResp |
 		NewTableIterResp |
@@ -165,7 +165,19 @@ type DeleteRelationReq struct {
 	Name         string
 }
 
+type TruncateRelationReq struct {
+	NewTableID   ID
+	OldTableID   ID
+	DatabaseID   ID
+	DatabaseName string
+	Name         string
+}
+
 type DeleteRelationResp struct {
+	ID ID
+}
+
+type TruncateRelationResp struct {
 	ID ID
 }
 
@@ -254,15 +266,15 @@ type GetHiddenKeysResp struct {
 	Attrs []*engine.Attribute
 }
 
-type TruncateReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-}
-
-type TruncateResp struct {
-	AffectedRows int64
-}
+//type TruncateReq struct {
+//	TableID      ID
+//	DatabaseName string
+//	TableName    string
+//}
+//
+//type TruncateResp struct {
+//	AffectedRows int64
+//}
 
 type UpdateReq struct {
 	TableID      ID

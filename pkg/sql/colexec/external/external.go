@@ -28,6 +28,10 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"math"
+	"strconv"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,9 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
-	"math"
-	"strconv"
-	"time"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -56,7 +57,7 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return err
 	}
 	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
@@ -65,7 +66,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}*/
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
-			param.End = true
+			param.Fileparam.End = true
 			return moerr.NewNotSupported("the jsonline format '%s' is not supported now", param.extern.JsonData)
 		}
 	}
@@ -74,29 +75,41 @@ func Prepare(proc *process.Process, arg any) error {
 	param.IgnoreLine = param.IgnoreLineTag
 	fileList, err := ReadDir(param.extern)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return err
 	}
 
 	if len(fileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
-		param.End = true
+		param.Fileparam.End = true
 	}
 	param.FileList = fileList
-	param.FileCnt = len(fileList)
+	param.extern.Filepath = ""
+	param.Fileparam.FileCnt = len(fileList)
 	return nil
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.End {
+	param.Fileparam.mu.Lock()
+	if param.Fileparam.End {
+		param.Fileparam.mu.Unlock()
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	param.extern.Filepath = param.FileList[param.FileIndex]
+	if param.extern.Filepath == "" {
+		if param.Fileparam.FileIndex >= len(param.FileList) {
+			param.Fileparam.mu.Unlock()
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+		param.extern.Filepath = param.FileList[param.Fileparam.FileIndex]
+		param.Fileparam.FileIndex++
+	}
+	param.Fileparam.mu.Unlock()
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return false, err
 	}
 	proc.SetInputBatch(bat)
@@ -326,10 +339,13 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 		plh.simdCsvReader.Close()
 		param.plh = nil
-		param.FileIndex++
-		if param.FileIndex >= param.FileCnt {
-			param.End = true
+		param.Fileparam.mu.Lock()
+		param.Fileparam.FileFin++
+		param.extern.Filepath = ""
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
 		}
+		param.Fileparam.mu.Unlock()
 	}
 	if param.IgnoreLine != 0 {
 		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
