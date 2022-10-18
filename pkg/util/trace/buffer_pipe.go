@@ -26,11 +26,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/uuid"
@@ -493,7 +495,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
-	opts := CommonCsvOptions
+	opts := export.CommonCsvOptions
 
 	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i)
 
@@ -555,7 +557,7 @@ func newBuffer2Sql(opts ...bufferOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
-		sizeThreshold:  10 * MB,
+		sizeThreshold:  10 * mpool.MB,
 		filterItemFunc: noopFilterItemFunc,
 		genBatchFunc:   noopGenBatchSQL,
 	}
