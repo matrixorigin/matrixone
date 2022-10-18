@@ -3631,7 +3631,7 @@ func TestWatchDirty(t *testing.T) {
 	assert.Zero(t, tbl)
 
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 20
+	schema.BlockMaxRows = 50
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	appendCnt := 200
@@ -3656,61 +3656,24 @@ func TestWatchDirty(t *testing.T) {
 		wg.Add(1)
 		pool.Submit(worker(i))
 	}
-
-	stopCh := make(chan int)
-	defer close(stopCh)
-	dirtyCountCh := make(chan int, 100)
-	go func() {
-		for {
-			select {
-			case <-stopCh:
-				close(dirtyCountCh)
-				return
-			default:
-			}
-			time.Sleep(5 * time.Millisecond)
-			watcher.Run()
-			_, _, blkCnt := watcher.DirtyCount()
-			dirtyCountCh <- blkCnt
-		}
-	}()
-
 	wg.Wait()
-	seenDirty := false
-	prevVal, prevCount := 0, 0
-	// wait for ch to produce consecutive zeros
-	assert.NoError(t, testutils.WaitChTimeout(20*time.Second, dirtyCountCh, func(count int, closed bool) (moveOn bool, err error) {
-		if closed {
-			return false, moerr.NewInternalError("unexpected close on chan")
-		}
-		if count > 0 {
-			seenDirty = true
-		}
 
-		if prevVal != count {
-			t.Logf("dirty count %d appears %d times", prevVal, prevCount)
-			prevVal, prevCount = count, 1
-		} else {
-			prevCount++
-		}
-
-		if seenDirty && count == 0 {
-			// expect that all following count is zero
-			sum := 0
-			for i := 0; i < 10; i++ {
-				c := <-dirtyCountCh
-				sum += c
+	timer := time.After(10 * time.Second)
+	for {
+		select {
+		case <-timer:
+			t.Errorf("timeout to wait zero")
+			return
+		default:
+			watcher.Run()
+			time.Sleep(5 * time.Millisecond)
+			_, _, blkCnt := watcher.DirtyCount()
+			// find block zero
+			if blkCnt == 0 {
+				return
 			}
-			if sum == 0 {
-				// 10 zeros were found, can stop
-				return false, nil
-			}
-			t.Log("check consecutive zeros failed, wait more")
 		}
-		return true, nil
-	}))
-	// debug log
-	t.Logf("prevVal: %d, prevCount: %d, seen Dirty: %v", prevVal, prevCount, seenDirty)
+	}
 }
 
 func TestDirtyWatchRace(t *testing.T) {
