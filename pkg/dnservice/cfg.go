@@ -76,6 +76,7 @@ type Config struct {
 		Storage struct {
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend string `toml:"backend"`
+			Name    string `toml:"name"`
 
 			// TAE tae storage configuration
 			TAE struct {
@@ -101,6 +102,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = taeStorageBackend
+	}
+	if c.Txn.Storage.Name == "" {
+		c.Txn.Storage.Name = localFileServiceName
 	}
 	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
 		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
