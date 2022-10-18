@@ -60,7 +60,8 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 		return nil, err
 	}
 	_, ok := db.txn.createTableMap[tbl.tableId]
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok)
+	columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok, columnLength)
 	if err != nil {
 		return nil, err
 	}
