@@ -24,14 +24,11 @@ import (
 
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -110,7 +107,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	defer txnCmd.Close()
-	replayer.OnReplayCmd(txnCmd, idxCtx)
+	replayer.OnReplayTxn(txnCmd, idxCtx, lsn)
 	if err != nil {
 		panic(err)
 	}
@@ -126,198 +123,21 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	}
 }
 
-func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
-	if idxCtx != nil && idxCtx.Size > 0 {
-		logutil.Debug("", common.OperationField("replay-cmd"),
-			common.OperandField(txncmd.Desc()),
-			common.AnyField("index", idxCtx.String()))
-	}
+func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index, lsn uint64) {
 	var err error
-	switch cmd := txncmd.(type) {
-	case *txnbase.TxnCmd:
-		idxCtx.Size = cmd.CmdSize
-		internalCnt := uint32(0)
-		txn := cmd.MakeTxn()
-		cmd.SetReplayTxn(txn)
-		replayer.OnTimeStamp(txn.GetPrepareTS())
-		for i, command := range cmd.Cmds {
-			_, ok := command.(*txnimpl.AppendCmd)
-			if ok {
-				internalCnt++
-				replayer.OnReplayCmd(command, nil)
-			} else {
-				idx := idxCtx.Clone()
-				idx.CSN = uint32(i) - internalCnt
-				replayer.OnReplayCmd(command, idx)
-			}
-		}
-		if !cmd.Is2PC() {
-			if err := txn.SetCommitTS(txn.GetPrepareTS()); err != nil {
-				panic(err)
-			}
-			if err := txn.Commit(); err != nil {
-				panic(err)
-			}
-		} else {
-			replayer.txns[txn.GetID()] = txn
-		}
-	case *catalog.EntryCommand:
-		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache)
-	case *txnimpl.AppendCmd:
-		replayer.db.onReplayAppendCmd(cmd, replayer)
-	case *updates.UpdateCmd:
-		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer)
-	}
-	if err != nil {
+	txnCmd := cmd.(*txnbase.TxnCmd)
+	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
+		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
+	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
 	}
-}
-
-func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
-	hasActive := false
-	for _, info := range cmd.Infos {
-		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
-		if err != nil {
+	if txn.Is2PC() {
+		if _, err = txn.Prepare(); err != nil {
 			panic(err)
 		}
-		id := info.GetDest()
-		blk, err := database.GetBlockEntryByID(id)
-		if err != nil {
+	} else {
+		if err = txn.Commit(); err != nil {
 			panic(err)
 		}
-		if !blk.IsActive() {
-			continue
-		}
-		if observer != nil {
-			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
-		}
-		if !blk.GetBlockData().GetMaxCheckpointTS().IsEmpty() {
-			continue
-		}
-		hasActive = true
-	}
-
-	if !hasActive {
-		return
-	}
-
-	var data *containers.Batch
-
-	for _, subTxnCmd := range cmd.Cmds {
-		switch subCmd := subTxnCmd.(type) {
-		case *txnbase.BatchCmd:
-			data = subCmd.Bat
-		case *txnbase.PointerCmd:
-			batEntry, err := db.Wal.LoadEntry(subCmd.Group, subCmd.Lsn)
-			if err != nil {
-				panic(err)
-			}
-			r := bytes.NewBuffer(batEntry.GetPayload())
-			txnCmd, _, err := txnbase.BuildCommandFrom(r)
-			if err != nil {
-				panic(err)
-			}
-			data = txnCmd.(*txnbase.BatchCmd).Bat
-			batEntry.Free()
-		}
-	}
-	if data != nil {
-		defer data.Close()
-	}
-
-	for _, info := range cmd.Infos {
-		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
-		if err != nil {
-			panic(err)
-		}
-		id := info.GetDest()
-		blk, err := database.GetBlockEntryByID(id)
-		if err != nil {
-			panic(err)
-		}
-		if !blk.IsActive() {
-			continue
-		}
-		if observer != nil {
-			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
-		}
-		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
-			continue
-		}
-		start := info.GetSrcOff()
-		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
-		bat.Compact()
-		defer bat.Close()
-		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
-	switch cmd.GetType() {
-	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd, idxCtx, observer)
-	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd, idxCtx, observer)
-	}
-	return
-}
-
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
-	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
-	if err != nil {
-		panic(err)
-	}
-	deleteNode := cmd.GetDeleteNode()
-	deleteNode.SetLogIndex(idxCtx)
-	if deleteNode.Is1PC() {
-		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
-			panic(err)
-		}
-	}
-	id := deleteNode.GetID()
-	blk, err := database.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	if !blk.IsActive() {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
-	blkData := blk.GetBlockData()
-	err = blkData.OnReplayDelete(deleteNode)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
-	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
-	if err != nil {
-		panic(err)
-	}
-	appendNode := cmd.GetAppendNode()
-	appendNode.SetLogIndex(idxCtx)
-	if appendNode.Is1PC() {
-		if _, err := appendNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
-			panic(err)
-		}
-	}
-	id := appendNode.GetID()
-	blk, err := database.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	if !blk.IsActive() {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
-	if appendNode.GetCommitTS().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
-		observer.OnStaleIndex(idxCtx)
-		return
-	}
-	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
-		panic(err)
 	}
 }

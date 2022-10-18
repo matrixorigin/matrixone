@@ -21,6 +21,9 @@ import (
 )
 
 func (txn *Txn) rollback1PC() (err error) {
+	if txn.IsReplay() {
+		panic(moerr.NewTAERollback("1pc txn %s should not be called here", txn.String()))
+	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		return moerr.NewTAERollback("unexpected txn status : %s", txnif.TxnStrState(state))
@@ -44,7 +47,7 @@ func (txn *Txn) rollback1PC() (err error) {
 	return txn.Err
 }
 
-func (txn *Txn) commit1PC() (err error) {
+func (txn *Txn) commit1PC(_ bool) (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
@@ -110,7 +113,7 @@ func (txn *Txn) rollback2PC() (err error) {
 	return txn.GetError()
 }
 
-func (txn *Txn) commit2PC() (err error) {
+func (txn *Txn) commit2PC(inRecovery bool) (err error) {
 	state := txn.GetTxnState(false)
 
 	switch state {
@@ -120,11 +123,15 @@ func (txn *Txn) commit2PC() (err error) {
 			panic(err)
 		}
 		txn.DoneWithErr(nil, false)
-		//Append a committed log entry into log service asynchronously
-		//     for checkpointing the committing log entry
-		_, err = txn.LogTxnState(false)
-		if err != nil {
-			panic(err)
+
+		// Skip logging if in recovery
+		if !inRecovery {
+			//Append a committed log entry into log service asynchronously
+			//     for checkpointing the committing log entry
+			_, err = txn.LogTxnState(false)
+			if err != nil {
+				panic(err)
+			}
 		}
 
 	//It's a 2PC transaction running on Participant.
@@ -135,10 +142,14 @@ func (txn *Txn) commit2PC() (err error) {
 			panic(err)
 		}
 		txn.DoneWithErr(nil, false)
-		//Append committed log entry ,and wait it synced.
-		_, err = txn.LogTxnState(true)
-		if err != nil {
-			panic(err)
+
+		// Skip logging if in recovery
+		if !inRecovery {
+			//Append committed log entry ,and wait it synced.
+			_, err = txn.LogTxnState(true)
+			if err != nil {
+				panic(err)
+			}
 		}
 
 	default:
