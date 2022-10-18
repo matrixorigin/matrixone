@@ -391,24 +391,24 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
-	var dstBatch *containers.Batch
-	if !metaNode.HasDropCommitted() {
-		dstBatch = b.blkMetaInsBatch
-		dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-		dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-		dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
-		dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
-		dstBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
-		dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
-	} else {
-		dstBatch = b.blkMetaDelBatch
+
+	insBatch := b.blkMetaInsBatch
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+
+	if metaNode.HasDropCommitted() {
 		if metaNode.DeletedAt.IsEmpty() {
 			panic(moerr.NewInternalError("no delete at time in a dropped entry"))
 		}
-		dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
+		delBatch := b.blkMetaDelBatch
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 	}
-
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 }
 
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
