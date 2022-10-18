@@ -71,7 +71,6 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		default:
 		}
 		if err := s.createInitTasks(ctx); err == nil {
-			s.logger.Info("init tasks created")
 			break
 		}
 		time.Sleep(time.Second)
@@ -80,13 +79,22 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 }
 
 func (s *Service) createInitTasks(ctx context.Context) error {
-	if err := s.store.taskScheduler.Create(ctx, task.TaskMetadata{
-		ID:       task.TaskCode_SystemInit.String(),
-		Executor: uint32(task.TaskCode_SystemInit),
-	}); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to create %s task.",
-			task.TaskCode_SystemInit.String()))
-		return err
+	initTasks := []task.TaskCode{
+		task.TaskCode_TraceInit,
+		task.TaskCode_MetricInit,
+		task.TaskCode_SysViewInit,
+		task.TaskCode_FrontendInit,
 	}
+
+	for _, init := range initTasks {
+		if err := s.store.taskScheduler.Create(ctx, task.TaskMetadata{
+			ID:       init.String(),
+			Executor: uint32(init),
+		}); err != nil {
+			s.logger.Error(fmt.Sprintf("failed to create %s task.", init.String()))
+			return err
+		}
+	}
+	s.logger.Info("init tasks created")
 	return nil
 }

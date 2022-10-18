@@ -15,9 +15,16 @@
 package cnservice
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -64,6 +71,7 @@ func (s *service) startTaskRunner() {
 		),
 	)
 
+	s.registerExecutors()
 	if err := s.task.runner.Start(); err != nil {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
@@ -92,4 +100,38 @@ func (s *service) stopTask() error {
 		return s.task.runner.Stop()
 	}
 	return nil
+}
+
+func (s *service) registerExecutors() {
+	if s.task.runner == nil {
+		return
+	}
+
+	pu := config.NewParameterUnit(&s.cfg.Frontend, nil, nil, nil)
+	s.cfg.Frontend.SetDefaultValues()
+	pu.FileService = s.fileService
+	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(pu)
+	}
+
+	executors := map[task.TaskCode]func(context.Context, func() ie.InternalExecutor) error{
+		task.TaskCode_TraceInit:   trace.InitSchema,
+		task.TaskCode_MetricInit:  metric.InitSchema,
+		task.TaskCode_SysViewInit: sysview.InitSchema,
+		task.TaskCode_FrontendInit: func(moServerCtx context.Context, _ func() ie.InternalExecutor) error {
+			frontend.InitServerVersion(pu.SV.MoVersion)
+			return frontend.InitSysTenant(moServerCtx)
+		},
+	}
+
+	for code, exec := range executors {
+		s.task.runner.RegisterExecutor(uint32(code),
+			func(ctx context.Context, task task.Task) error {
+				if err := exec(moServerCtx, ieFactory); err != nil {
+					panic(err)
+				}
+				return nil
+			})
+	}
 }

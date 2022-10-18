@@ -34,10 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -228,24 +224,6 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
-
-	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu)
-	}
-	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	frontend.InitServerVersion(pu.SV.MoVersion)
-	err := frontend.InitSysTenant(moServerCtx)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func (s *service) runMoServer() error {
