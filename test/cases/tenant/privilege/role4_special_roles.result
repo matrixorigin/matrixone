@@ -42,5 +42,11 @@ internal error: the privilege can not be revoked from the role moadmin
 revoke connect on account * from public;
 internal error: the privilege connect can not be revoked from the role public
 revoke show databases on account * from public;
+grant create account on account * to rolex;
+internal error: the privilege create account can not be granted
+grant drop account on account * to rolex;
+internal error: the privilege drop account can not be granted
+grant alter account on account * to rolex;
+internal error: the privilege alter account can not be granted
 drop role rolex;
 drop user userx;

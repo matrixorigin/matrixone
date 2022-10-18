@@ -59,7 +59,8 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 		},
 		arg: &Argument{
 			Es: &ExternalParam{
-				Ctx: ctx,
+				Ctx:       ctx,
+				Fileparam: &ExternalFileparam{},
 			},
 		},
 		cancel:   cancel,
@@ -88,7 +89,7 @@ func Test_Prepare(t *testing.T) {
 			err := Prepare(tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(param.extern, convey.ShouldNotBeNil)
-			convey.So(param.End, convey.ShouldBeTrue)
+			convey.So(param.Fileparam.End, convey.ShouldBeTrue)
 			extern := &tree.ExternParam{
 				Filepath: "",
 				Tail: &tree.TailParameter{
@@ -106,7 +107,7 @@ func Test_Prepare(t *testing.T) {
 			err = Prepare(tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(param.FileList, convey.ShouldBeNil)
-			convey.So(param.FileCnt, convey.ShouldEqual, 0)
+			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
 			extern.Format = "test"
 			json_byte, err = json.Marshal(extern)
@@ -130,7 +131,7 @@ func Test_Prepare(t *testing.T) {
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldBeNil)
 				convey.So(param.FileList, convey.ShouldResemble, []string{"/"})
-				convey.So(param.FileCnt, convey.ShouldEqual, 1)
+				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 1)
 
 				extern.JsonData = "test"
 				json_byte, err = json.Marshal(extern)
@@ -157,18 +158,18 @@ func Test_Call(t *testing.T) {
 				JsonData:    tcs.jsondata,
 			}
 			param.extern = extern
-			param.End = false
+			param.Fileparam.End = false
 			param.FileList = []string{"abc.txt"}
 			end, err := Call(1, tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
-			param.End = false
+			param.Fileparam.End = false
 			end, err = Call(1, tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
 
-			param.End = true
+			param.Fileparam.End = true
 			end, err = Call(1, tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end, convey.ShouldBeTrue)

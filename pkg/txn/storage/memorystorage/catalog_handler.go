@@ -313,6 +313,18 @@ func (c *CatalogHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnM
 	return c.upstream.HandleDeleteRelation(ctx, meta, req, resp)
 }
 
+func (c *CatalogHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateRelationReq, resp *memoryengine.TruncateRelationResp) (err error) {
+	if _, ok := c.sysRelationIDs[req.OldTableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.Name,
+		)
+	}
+	return c.upstream.HandleTruncateRelation(ctx, meta, req, resp)
+}
+
 func (c *CatalogHandler) HandleDestroy(ctx context.Context) error {
 	return c.upstream.HandleDestroy(ctx)
 }
@@ -340,6 +352,10 @@ func (c *CatalogHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMet
 
 func (c *CatalogHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableDefsReq, resp *memoryengine.GetTableDefsResp) (err error) {
 	return c.upstream.HandleGetTableDefs(ctx, meta, req, resp)
+}
+
+func (c *CatalogHandler) HandleGetTableColumns(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableColumnsReq, resp *memoryengine.GetTableColumnsResp) (err error) {
+	return c.upstream.HandleGetTableColumns(ctx, meta, req, resp)
 }
 
 func (c *CatalogHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetHiddenKeysReq, resp *memoryengine.GetHiddenKeysResp) (err error) {
@@ -551,18 +567,6 @@ func (c *CatalogHandler) HandleRollback(ctx context.Context, meta txn.TxnMeta) e
 
 func (c *CatalogHandler) HandleStartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	c.upstream.HandleStartRecovery(ctx, ch)
-}
-
-func (c *CatalogHandler) HandleTruncate(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) (err error) {
-	if _, ok := c.sysRelationIDs[req.TableID]; ok {
-		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewInternalError(
-			"read only, db %v, table %v",
-			req.DatabaseName,
-			req.TableName,
-		)
-	}
-	return c.upstream.HandleTruncate(ctx, meta, req, resp)
 }
 
 func (c *CatalogHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) (err error) {

@@ -12,17 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package trace
+package export
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
+
+type CsvOptions struct {
+	FieldTerminator rune // like: ','
+	EncloseRune     rune // like: '"'
+	Terminator      rune // like: '\n'
+}
+
+var CommonCsvOptions = &CsvOptions{
+	FieldTerminator: ',',
+	EncloseRune:     '"',
+	Terminator:      '\n',
+}
 
 type Column struct {
 	Name    string
@@ -54,7 +65,7 @@ type Table struct {
 	Engine           string
 	Comment          string
 	TableOptions     TableOptions
-	PathBuilder      export.PathBuilder
+	PathBuilder      PathBuilder
 
 	AccountColumn *Column
 }
@@ -67,7 +78,7 @@ type TableOptions interface {
 	FormatDdl(ddl string) string
 	// GetCreateOptions return option for `create {option}table`, which should end with ' '
 	GetCreateOptions() string
-	GetTableOptions(export.PathBuilder) string
+	GetTableOptions(PathBuilder) string
 }
 
 func (tbl *Table) ToCreateSql(ifNotExists bool) string {
@@ -233,6 +244,6 @@ var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
 
-func (o NoopTableOptions) FormatDdl(ddl string) string               { return ddl }
-func (o NoopTableOptions) GetCreateOptions() string                  { return "" }
-func (o NoopTableOptions) GetTableOptions(export.PathBuilder) string { return "" }
+func (o NoopTableOptions) FormatDdl(ddl string) string        { return ddl }
+func (o NoopTableOptions) GetCreateOptions() string           { return "" }
+func (o NoopTableOptions) GetTableOptions(PathBuilder) string { return "" }

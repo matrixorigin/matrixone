@@ -270,7 +270,10 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err = InitGeneralTenant(ctx, tenant, &tree.CreateAccount{
+		ses := newSes(nil)
+		ses.tenant = tenant
+
+		err = InitGeneralTenant(ctx, ses, &tree.CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
@@ -578,6 +581,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("create/drop/alter account fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3477,15 +3481,15 @@ func Test_determineDML(t *testing.T) {
 				}
 			}
 			for _, entry := range priv.entries {
-				if entry.peTyp == privilegeEntryTypeGeneral {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.peTyp == privilegeEntryTypeMulti {
-					for _, mi := range entry.mEntry.privs {
-						tempEntry := privilegeEntriesMap[mi.pt]
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
 						tempEntry.tableName = mi.tableName
-						tempEntry.peTyp = privilegeEntryTypeGeneral
-						tempEntry.mEntry = nil
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
 						makeSql(tempEntry)
 					}
 				}
@@ -3570,15 +3574,15 @@ func Test_determineDML(t *testing.T) {
 			}
 
 			for _, entry := range priv.entries {
-				if entry.peTyp == privilegeEntryTypeGeneral {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.peTyp == privilegeEntryTypeMulti {
-					for _, mi := range entry.mEntry.privs {
-						tempEntry := privilegeEntriesMap[mi.pt]
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
 						tempEntry.tableName = mi.tableName
-						tempEntry.peTyp = privilegeEntryTypeGeneral
-						tempEntry.mEntry = nil
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
 						makeSql(tempEntry)
 					}
 				}
@@ -3656,15 +3660,15 @@ func Test_determineDML(t *testing.T) {
 			}
 
 			for _, entry := range priv.entries {
-				if entry.peTyp == privilegeEntryTypeGeneral {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.peTyp == privilegeEntryTypeMulti {
-					for _, mi := range entry.mEntry.privs {
-						tempEntry := privilegeEntriesMap[mi.pt]
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
 						tempEntry.tableName = mi.tableName
-						tempEntry.peTyp = privilegeEntryTypeGeneral
-						tempEntry.mEntry = nil
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
 						makeSql(tempEntry)
 					}
 				}
