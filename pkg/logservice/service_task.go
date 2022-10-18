@@ -35,6 +35,9 @@ func (s *Service) initTaskHolder() {
 	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, func() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
+		if s.haClient == nil {
+			return "", nil
+		}
 		details, err := s.haClient.GetClusterDetails(ctx)
 		if err != nil {
 			return "", err

@@ -453,7 +453,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 					if len(cb.Commands) > 0 {
 						cmd := cb.Commands[0]
 						if cmd.ServiceType == pb.DNService {
-							if cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
+							if cmd.ConfigChange != nil && cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
 								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
 								dnRepaired = true
 							}
@@ -484,6 +484,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			if completed {
 				for _, s := range services[:3] {
 					s.store.taskScheduler.StopScheduleCronTask()
+					_ = s.task.holder.Close()
 				}
 				return
 			}

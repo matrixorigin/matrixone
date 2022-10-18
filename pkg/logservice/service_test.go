@@ -234,7 +234,7 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 			},
 		}
 		resp := s.handleCNHeartbeat(ctx, req)
-		assert.Nil(t, resp.CommandBatch)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
