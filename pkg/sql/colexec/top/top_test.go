@@ -82,7 +82,6 @@ func TestTop(t *testing.T) {
 		}
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

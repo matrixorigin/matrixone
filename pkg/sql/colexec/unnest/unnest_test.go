@@ -143,7 +143,6 @@ func TestString(t *testing.T) {
 
 func TestUnnest(t *testing.T) {
 	for i, ut := range utc {
-		nb0 := ut.proc.Mp().CurrNB()
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
 			err := Prepare(ut.proc, ut.arg)
 			require.Nil(t, err)
@@ -154,7 +153,6 @@ func TestUnnest(t *testing.T) {
 				require.Nil(t, err)
 				require.False(t, end)
 				require.NotNil(t, ut.proc.InputBatch())
-				ut.proc.Reg.InputBatch.Clean(ut.proc.Mp())
 				ut.proc.SetInputBatch(nil)
 				end, err = Call(0, ut.proc, ut.arg)
 				require.Nil(t, err)
@@ -171,24 +169,17 @@ func TestUnnest(t *testing.T) {
 				require.False(t, end)
 				require.Nil(t, err)
 				require.NotNil(t, ut.proc.InputBatch())
-				ut.proc.Reg.InputBatch.Clean(ut.proc.Mp())
 			}
-			ut.proc.SetInputBatch(nil)
+			ut.proc.Reg.InputBatch = nil
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.True(t, end)
 		})
-		if ut.proc.InputBatch() != nil {
-			ut.proc.Reg.InputBatch.Clean(ut.proc.Mp())
-		}
-		ut.arg.Free(ut.proc, false)
-		require.Equal(t, nb0, ut.proc.Mp().CurrNB())
 	}
 }
 
 func makeTestBatch1(json string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"src"})
-	bat.Cnt = 1
 	bat.Vecs[0] = vector.New(types.Type{
 		Oid: types.T_varchar,
 	})
@@ -202,7 +193,6 @@ func makeTestBatch1(json string, proc *process.Process) (*batch.Batch, error) {
 
 func makeTestBatch2(jsons []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
-	bat.Cnt = 1
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.New(types.Type{
 			Oid:   types.T_json,

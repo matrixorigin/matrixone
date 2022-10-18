@@ -72,10 +72,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 func callByStr(param *Param, proc *process.Process) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
-		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer bat.Clean(proc.Mp())
 	json, err := types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
 	if err != nil {
 		return false, err
@@ -89,13 +87,11 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 		return false, err
 	}
 	rbat := batch.New(false, param.Attrs)
-	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
 	rbat, err = makeBatch(rbat, ures, param, proc)
 	if err != nil {
-		rbat.Clean(proc.Mp())
 		return false, err
 	}
 	rbat.InitZsOne(len(ures))
@@ -106,10 +102,8 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 func callByCol(param *Param, proc *process.Process) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
-		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer bat.Clean(proc.Mp())
 	if len(bat.Vecs) != 1 {
 		return false, moerr.NewInvalidArg("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
 	}
@@ -122,7 +116,6 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 		return false, err
 	}
 	rbat := batch.New(false, param.Attrs)
-	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
@@ -136,7 +129,6 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 		}
 		rbat, err = makeBatch(rbat, ures, param, proc)
 		if err != nil {
-			rbat.Clean(proc.Mp())
 			return false, err
 		}
 		rows += len(ures)
@@ -179,9 +171,10 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 	return bat, nil
 }
 func dupType(typ *plan.Type) types.Type {
-	return types.New(
-		types.T(typ.Id),
-		typ.Width,
-		typ.Size,
-		typ.Precision)
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Width:     typ.Width,
+		Size:      typ.Size,
+		Precision: typ.Precision,
+	}
 }

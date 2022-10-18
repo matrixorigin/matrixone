@@ -16,7 +16,6 @@ package unnest
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Param struct {
@@ -34,10 +33,6 @@ type Param struct {
 type Argument struct {
 	Es *Param
 }
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-}
-
 type ExternalParam struct {
 	ColName string
 	Path    string
