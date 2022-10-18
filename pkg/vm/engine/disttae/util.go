@@ -591,3 +591,12 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
 
 	return returnList
 }
+
+func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
+	zm := index.NewZoneMap(typ)
+	err := zm.Unmarshal(meta.zonemap[colIdx][:])
+	if err != nil {
+		return false, err
+	}
+	return zm.Contains(data), nil
+}
