@@ -110,10 +110,6 @@ func (rel *baseRelation) Delete(_ context.Context, _ *batch.Batch, _ string) err
 	return nil
 }
 
-func (rel *baseRelation) Truncate(_ context.Context) (uint64, error) {
-	return 0, nil
-}
-
 func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [][]byte) ([]engine.Reader, error) {
 	var rds []engine.Reader
 

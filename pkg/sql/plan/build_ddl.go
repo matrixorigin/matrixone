@@ -532,6 +532,42 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
+func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
+	truncateTable := &plan.TruncateTable{}
+
+	truncateTable.Database = string(stmt.Name.SchemaName)
+	if truncateTable.Database == "" {
+		truncateTable.Database = ctx.DefaultDatabase()
+	}
+	truncateTable.Table = string(stmt.Name.ObjectName)
+	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if isView {
+			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+				Definition: &plan.DataDefinition_TruncateTable{
+					TruncateTable: truncateTable,
+				},
+			},
+		},
+	}, nil
+}
+
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	dropTable := &plan.DropTable{
 		IfExists: stmt.IfExists,
