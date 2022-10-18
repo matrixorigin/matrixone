@@ -342,6 +342,10 @@ func (c *CatalogHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMet
 	return c.upstream.HandleGetTableDefs(ctx, meta, req, resp)
 }
 
+func (c *CatalogHandler) HandleGetTableColumns(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableColumnsReq, resp *memoryengine.GetTableColumnsResp) (err error) {
+	return c.upstream.HandleGetTableColumns(ctx, meta, req, resp)
+}
+
 func (c *CatalogHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetHiddenKeysReq, resp *memoryengine.GetHiddenKeysResp) (err error) {
 	return c.upstream.HandleGetHiddenKeys(ctx, meta, req, resp)
 }

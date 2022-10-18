@@ -822,6 +822,38 @@ func (m *MemHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMeta, r
 	return nil
 }
 
+func (m *MemHandler) HandleGetTableColumns(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableColumnsReq, resp *memoryengine.GetTableColumnsResp) error {
+	tx := m.getTx(meta)
+
+	_, err := m.relations.Get(tx, req.TableID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// the caller expects no error if table not exist
+		//resp.ErrTableNotFound.ID = req.TableID
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var attrRows []*AttributeRow
+	if err := m.iterRelationAttributes(
+		tx, req.TableID,
+		func(_ ID, row *AttributeRow) error {
+			attrRows = append(attrRows, row)
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+	sort.Slice(attrRows, func(i, j int) bool {
+		return attrRows[i].Order < attrRows[j].Order
+	})
+	for _, row := range attrRows {
+		resp.Attrs = append(resp.Attrs, &row.Attribute)
+	}
+	return nil
+}
+
 func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableDefsReq, resp *memoryengine.GetTableDefsResp) error {
 	tx := m.getTx(meta)
 
