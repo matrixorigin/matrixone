@@ -22,16 +22,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	B = 1 << iota
-	KB
-	MB
-	GB
 )
 
 func TestLocalFSWriter(t *testing.T) {
@@ -44,7 +38,7 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
 	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), MB)
+	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), mpool.MB)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
@@ -148,7 +142,7 @@ func TestFSWriter_Write(t *testing.T) {
 		ctx      context.Context
 		fs       fileservice.FileService
 		prefix   batchpipe.HasName
-		dir      string
+		database string
 		nodeUUID string
 		nodeType string
 	}
@@ -161,7 +155,7 @@ func TestFSWriter_Write(t *testing.T) {
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS("test", basedir, MB) // db root database.
+	localFs, err := fileservice.NewLocalFS(etlFileServiceName, basedir, mpool.MB) // db root database.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
@@ -176,7 +170,7 @@ func TestFSWriter_Write(t *testing.T) {
 				ctx:      context.Background(),
 				fs:       localFs,
 				prefix:   newDummy(1),
-				dir:      "system", // database name
+				database: "system",
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
 			},
@@ -193,9 +187,8 @@ func TestFSWriter_Write(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := NewFSWriter(tt.fields.ctx, tt.fields.fs,
 				WithName(tt.fields.prefix),
-				WithDatabase(tt.fields.dir),
+				WithDatabase(tt.fields.database),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
-				WithFileServiceName(""),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {

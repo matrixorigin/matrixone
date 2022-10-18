@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "show profiles",
+		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}
 )
 

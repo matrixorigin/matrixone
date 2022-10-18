@@ -364,18 +364,22 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 	for _, node := range mvccNodes {
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		b.appendBlkMeta(e, metaNode)
+		if metaNode.MetaLoc != "" {
+			b.appendBlkMeta(e, metaNode)
+		}
 	}
 
-	if e.IsAppendable() {
-		if latestCommittedNode.MetaLoc != "" {
-			// appendable block has been flushed, no need to collect data
-			return true
-		}
-	} else {
-		if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
-			// non-appendable block has newer delta data on s3, no need to collect data
-			return true
+	if latestCommittedNode != nil {
+		if e.IsAppendable() {
+			if latestCommittedNode.MetaLoc != "" {
+				// appendable block has been flushed, no need to collect data
+				return true
+			}
+		} else {
+			if latestCommittedNode.DeltaLoc != "" && latestCommittedNode.GetEnd().GreaterEq(b.end) {
+				// non-appendable block has newer delta data on s3, no need to collect data
+				return true
+			}
 		}
 	}
 	return false
@@ -391,8 +395,6 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_CreateAt).Append(metaNode.CreatedAt)
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeleteAt).Append(metaNode.DeletedAt)
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 
