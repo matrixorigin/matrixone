@@ -44,6 +44,9 @@ func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntr
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
 	return
 }
+func (store *NoopTxnStore) CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (rel handle.Relation, err error) {
+	return
+}
 func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }

@@ -88,7 +88,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' {
+	if s[4] == '-' || s[4] == '/' {
 		var num int64
 		var unum uint64
 		strArr := strings.Split(s, " ")
@@ -96,7 +96,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		// solve year/month/day
-		front := strings.Split(strArr[0], "-")
+		front := strings.Split(strArr[0], s[4:5])
 		if len(front) != 3 {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
