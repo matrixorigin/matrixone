@@ -305,6 +305,14 @@ func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Rel
 	return db.CreateRelation(def)
 }
 
+func (store *txnStore) CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (relation handle.Relation, err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return
+	}
+	return db.CreateRelationWithTableId(tableId, def)
+}
+
 func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation handle.Relation, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
