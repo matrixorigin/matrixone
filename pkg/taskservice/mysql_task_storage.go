@@ -236,6 +236,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if err != nil {
 		return 0, err
 	}
+	fmt.Println("rows affected:", affected)
 
 	return int(affected), nil
 }
@@ -328,12 +329,17 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 }
 
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
-	conn, err := m.db.Conn(ctx)
+	db, err := sql.Open("mysql", m.dsn)
 	if err != nil {
 		return nil, err
 	}
+	//conn, err := m.db.Conn(ctx)
+	//if err != nil {
+	//	return nil, err
+	//}
 	defer func() {
-		_ = conn.Close()
+		//	_ = conn.Close()
+		_ = db.Close()
 	}()
 
 	c := conditions{}
@@ -350,7 +356,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	}
 	query += buildLimitClause(c)
 
-	rows, err := conn.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return

@@ -33,11 +33,10 @@ func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservic
 			assert.FailNow(t, "task not allocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO(),
-				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+			tasks, err := taskService.QueryTask(context.TODO())
 			require.NoError(t, err)
 
-			if len(tasks) == 1 {
+			if len(tasks) == 1 && tasks[0].TaskRunner != "" {
 				t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
 				return tasks[0].TaskRunner
 			}
@@ -109,6 +108,9 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	// start the cluster
 	err = c.Start()
 	require.NoError(t, err)
+	defer func(c Cluster) {
+		_ = c.Close()
+	}(c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -148,8 +150,6 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	}
 
 	waitTaskScheduled(t, ctx, taskService)
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
@@ -174,7 +174,12 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn1.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
-			select {}
+			for {
+				select {
+				default:
+					time.Sleep(1 * time.Second)
+				}
+			}
 		},
 	)
 
@@ -183,7 +188,12 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	require.NoError(t, err)
 	cn2.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
-			return nil
+			for {
+				select {
+				default:
+					time.Sleep(1 * time.Second)
+				}
+			}
 		},
 	)
 
@@ -228,7 +238,7 @@ func TestTaskRunner(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
