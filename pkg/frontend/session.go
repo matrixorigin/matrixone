@@ -241,6 +241,11 @@ func (bgs *BackgroundSession) Close() {
 	}
 }
 
+// GetBackgroundExec generates a background executor
+func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
+}
+
 func (ses *Session) GetIsInternal() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1593,9 +1598,11 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
-func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
-	rsset := make([]ExecResult, len(values))
-	for i, value := range values {
+// getResultSet extracts the result set
+func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
+	results := bh.GetExecResultSet()
+	rsset := make([]ExecResult, len(results))
+	for i, value := range results {
 		if er, ok := value.(ExecResult); ok {
 			rsset[i] = er
 		} else {
@@ -1614,7 +1621,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	if err != nil {
 		return nil, err
 	}
-	rsset := bh.GetExecResultSet()
+
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1628,7 +1635,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	//	}
 	//}
 
-	return convertIntoResultSet(rsset)
+	return getResultSet(bh)
 }
 
 type BackgroundHandler struct {
