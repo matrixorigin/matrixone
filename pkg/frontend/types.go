@@ -150,6 +150,10 @@ type ExecResult interface {
 	GetInt64(rindex, cindex uint64) (int64, error)
 }
 
+func execResultArrayHasData(arr []ExecResult) bool {
+	return len(arr) != 0 && arr[0].GetRowCount() != 0
+}
+
 // BackgroundExec executes the sql in background session without network output.
 type BackgroundExec interface {
 	Close()
