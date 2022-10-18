@@ -340,8 +340,8 @@ var SingleMetricTable = &export.Table{
 	PrimaryKeyColumn: []export.Column{},
 	Engine:           export.ExternalTableEngine,
 	Comment:          `metric data`,
-	PathBuilder:      export.NewDBTablePathBuilder(),
-	AccountColumn:    nil,
+	PathBuilder:      export.NewAccountDatePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
 }
 
 func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {

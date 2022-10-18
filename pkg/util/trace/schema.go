@@ -94,7 +94,7 @@ var (
 		PrimaryKeyColumn: []export.Column{stmtIDCol},
 		Engine:           export.ExternalTableEngine,
 		Comment:          "record each statement and stats info",
-		PathBuilder:      export.NewMetricLogPathBuilder(),
+		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,
 	}
 
@@ -142,7 +142,7 @@ var (
 		PrimaryKeyColumn: nil,
 		Engine:           export.ExternalTableEngine,
 		Comment:          "read merge data from log, error, span",
-		PathBuilder:      export.NewMetricLogPathBuilder(),
+		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
 	}
 

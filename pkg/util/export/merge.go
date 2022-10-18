@@ -43,7 +43,7 @@ type Merge struct {
 	FS          fileservice.FileService // see WithFileService
 	FSName      string                  // see WithFileServiceName, cooperate with FS
 	datetime    time.Time               // see Main
-	pathBuilder PathBuilder             // const as NewMetricLogPathBuilder()
+	pathBuilder PathBuilder             // const as NewAccountDatePathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
 	MaxFileSize int64 // see WithMaxFileSize
@@ -123,7 +123,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
 		FSName:        etlFileServiceName,
 		datetime:      time.Now(),
-		pathBuilder:   NewMetricLogPathBuilder(),
+		pathBuilder:   NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 2,
