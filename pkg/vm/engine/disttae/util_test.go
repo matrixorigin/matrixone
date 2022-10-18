@@ -351,6 +351,39 @@ func TestComputeRangeByIntPk(t *testing.T) {
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(20),
 		})},
+		// a > 20 and b < 1  is equal a > 20
+		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(1, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(1),
+			}),
+		})},
+		// 1 < b and a > 20   is equal a > 20
+		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest("<", []*plan.Expr{
+				plan2.MakePlan2Int64ConstExprWithType(1),
+				makeColExprForTest(1, types.T_int64),
+			}),
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+		})},
+		// a > 20 or b < 1  false.
+		{false, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("or", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(1, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(1),
+			}),
+		})},
 		// a = 20
 		{true, [][2]int64{{20, 20}}, makeFunctionExprForTest("=", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
@@ -427,7 +460,7 @@ func TestComputeRangeByIntPk(t *testing.T) {
 
 	t.Run("test computeRangeByIntPk", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := computeRangeByIntPk(testCase.expr, 0)
+			result, data := computeRangeByIntPk(testCase.expr, 0, "")
 			if result != testCase.result {
 				t.Fatalf("test computeRangeByIntPk at cases[%d], get result is different with expected", i)
 			}

@@ -341,7 +341,7 @@ func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRangeByIntPk(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
+func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, [][2]int64) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -367,12 +367,12 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and", "or":
-			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx)
+			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
-			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx)
+			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
@@ -394,6 +394,11 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 				leftArg = typeColumn
@@ -425,6 +430,11 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 				}
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 

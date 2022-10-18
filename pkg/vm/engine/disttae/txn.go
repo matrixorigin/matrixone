@@ -537,7 +537,7 @@ func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attr
 
 	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
-		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex)
+		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
 		if !canComputeRange {
 			return list
 		}
