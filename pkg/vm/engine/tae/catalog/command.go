@@ -291,12 +291,12 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 }
 
 func (cmd *EntryCommand) String() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
 	return s
 }
 
 func (cmd *EntryCommand) VerboseString() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
 	switch cmd.cmdType {
 	case CmdUpdateTable, CmdLogTable:
 		s = fmt.Sprintf("%s;Schema=%v", s, cmd.Table.schema.String())
