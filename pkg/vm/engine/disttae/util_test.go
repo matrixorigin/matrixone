@@ -565,8 +565,8 @@ func TestCheckIfDataInBlock(t *testing.T) {
 	testCases := []asserts{
 		{true, int64(12), 0, types.T_int64.ToType()},   // 12 in [10, 100]
 		{false, int64(120), 0, types.T_int64.ToType()}, // 120 not in [10, 100]
-		{true, []byte("b"), 0, types.T_blob.ToType()},  // "b" in ["a", "h"]
-		{false, []byte("i"), 0, types.T_blob.ToType()}, // "i" not in ["a", "h"]
+		{true, []byte("b"), 1, types.T_blob.ToType()},  // "b" in ["a", "h"]
+		{false, []byte("i"), 1, types.T_blob.ToType()}, // "i" not in ["a", "h"]
 	}
 
 	t.Run("test checkIfDataInBlock", func(t *testing.T) {
