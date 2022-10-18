@@ -70,13 +70,19 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	SetDefaultSpanContext(&sc)
 	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
+	if GetTracerProvider().multiTable {
+		SingleRowLogTable.PathBuilder = export.NewDBTablePathBuilder()
+		SingleStatementTable.PathBuilder = export.NewDBTablePathBuilder()
+		SingleStatementTable.AccountColumn = nil
+	}
+
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
 		return nil, err
 	}
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
 	export.SetDefaultContextFunc(DefaultContext)
@@ -103,13 +109,11 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	case config.batchProcessMode == InternalExecutor:
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
 		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker(defaultOptions...))
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker(defaultOptions...))
 	case config.batchProcessMode == FileService:
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		export.Register(&MOLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))

@@ -208,7 +208,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			mustExec(sql)
 		}
 	} else {
-		optFactory := trace.GetOptionFactory(export.ExternalTableEngine)
+		optFactory := export.GetOptionFactory(export.ExternalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -340,13 +340,8 @@ var SingleMetricTable = &export.Table{
 	PrimaryKeyColumn: []export.Column{},
 	Engine:           export.ExternalTableEngine,
 	Comment:          `metric data`,
-	TableOptions:     trace.GetOptionFactory(export.ExternalTableEngine)(MetricDBConst, `metric`),
 	PathBuilder:      export.NewDBTablePathBuilder(),
 	AccountColumn:    nil,
-}
-
-type ViewWhereCondition struct {
-	Table string
 }
 
 func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
@@ -355,7 +350,7 @@ func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
 		Table:       tbl,
 		OriginTable: SingleMetricTable,
 		Columns:     []export.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
-		Condition:   &ViewWhereCondition{Table: tbl},
+		Condition:   &export.ViewSingleCondition{Column: metricNameColumn, Table: tbl},
 	}
 	for _, opt := range opts {
 		opt.Apply(view)
@@ -373,10 +368,6 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 		}
 	}
 	return NewMetricView(tbl, options...)
-}
-
-func (tbl *ViewWhereCondition) String() string {
-	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
 }
 
 var gView struct {
