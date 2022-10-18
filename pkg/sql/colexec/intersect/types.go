@@ -17,7 +17,6 @@ package intersect
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -49,16 +48,4 @@ type container struct {
 
 	// process bucket mark
 	inBuckets []uint8
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr.hashTable != nil {
-		ctr.hashTable.Free()
-		ctr.hashTable = nil
-	}
-	if ctr.btc != nil {
-		ctr.btc.Clean(proc.Mp())
-		ctr.btc = nil
-	}
 }
