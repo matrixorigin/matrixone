@@ -411,8 +411,9 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
+	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
-	fs := objectio.NewObjectFS(service)
+	fs := objectio.NewObjectFS(service, serviceDir)
 	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))

@@ -22,6 +22,7 @@ import (
 
 type ObjectFS struct {
 	Service fileservice.FileService
+	Dir     string
 }
 
 func TmpNewFileservice(dir string) fileservice.FileService {
@@ -38,9 +39,10 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 	return service
 }
 
-func NewObjectFS(service fileservice.FileService) *ObjectFS {
+func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 	fs := &ObjectFS{
 		Service: service,
+		Dir:     dir,
 	}
 	return fs
 }
