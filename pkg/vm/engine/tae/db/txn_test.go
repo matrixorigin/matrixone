@@ -718,12 +718,13 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(func(_ txnif.AsyncTxn) error {
+	txn.SetApplyCommitFn(func(txn txnif.AsyncTxn) error {
 		wg.Add(1)
 		go scanNames()
 		time.Sleep(time.Millisecond * 10)
 		val.Store(1)
-		return nil
+		store := txn.GetStore()
+		return store.ApplyCommit()
 	})
 	schema2 := catalog.MockSchemaAll(13, 12)
 	_, _ = db.CreateRelation(schema2)
@@ -739,7 +740,8 @@ func TestTxn9(t *testing.T) {
 		go scanCol()
 		time.Sleep(time.Millisecond * 10)
 		val.Store(1)
-		return nil
+		store := txn.GetStore()
+		return store.ApplyCommit()
 	}
 
 	txn, _ = tae.StartTxn(nil)

@@ -15,11 +15,9 @@
 package mergetop
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -42,21 +40,6 @@ type Argument struct {
 	Limit int64               // Limit store the number of mergeTop-operator
 	ctr   *container          // ctr stores the attributes needn't do Serialization work
 	Fs    []*plan.OrderBySpec // Fs store the order information
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

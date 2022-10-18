@@ -160,6 +160,14 @@ func (kop *sqlTxn) Write(key, value string) error {
 	return kop.update(key, value)
 }
 
+func (kop *sqlTxn) ExecSQL(sql string) (sql.Result, error) {
+	return kop.txn.Exec(sql)
+}
+
+func (kop *sqlTxn) ExecSQLQuery(sql string) (*sql.Rows, error) {
+	return kop.txn.Query(sql)
+}
+
 func (kop *sqlTxn) insert(key, value string) error {
 	res, err := kop.txn.Exec(fmt.Sprintf("insert into txn_test_kv(kv_key, kv_value) values('%s', '%s')", key, value))
 	if err != nil {

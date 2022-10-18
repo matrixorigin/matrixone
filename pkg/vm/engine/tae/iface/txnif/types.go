@@ -18,7 +18,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
@@ -41,6 +40,7 @@ type Txn2PC interface {
 type TxnReader interface {
 	RLock()
 	RUnlock()
+	IsReplay() bool
 	Is2PC() bool
 	GetID() string
 	GetCtx() []byte
@@ -71,7 +71,6 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
-	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {
@@ -94,6 +93,9 @@ type TxnChanger interface {
 	SetCommitTS(cts types.TS) error
 	SetParticipants(ids []uint64) error
 	SetError(error)
+
+	CommittingInRecovery() error
+	CommitInRecovery() error
 }
 
 type TxnWriter interface {
