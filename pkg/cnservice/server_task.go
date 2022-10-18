@@ -108,6 +108,8 @@ func (s *service) registerExecutors() {
 	}
 
 	pu := config.NewParameterUnit(&s.cfg.Frontend, nil, nil, nil)
+	pu.StorageEngine = s.storeEngine
+	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)

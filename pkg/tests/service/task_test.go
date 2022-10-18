@@ -58,7 +58,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 			tasks, err := taskService.QueryTask(context.TODO(),
 				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 			require.NoError(t, err)
-			require.Equal(t, 1, len(tasks))
+			require.Equal(t, 4, len(tasks))
 			if tasks[0].TaskRunner == uuid {
 				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
 				time.Sleep(1 * time.Second)
@@ -162,38 +162,17 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 1)
 	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	cn1.GetTaskRunner().RegisterExecutor(0,
-		func(ctx context.Context, task task.Task) error {
-			for {
-				time.Sleep(1 * time.Second)
-			}
-		},
-	)
-
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 1)
-	cn2, err := c.GetCNServiceIndexed(1)
-	require.NoError(t, err)
-	cn2.GetTaskRunner().RegisterExecutor(0,
-		func(ctx context.Context, task task.Task) error {
-			for {
-				time.Sleep(1 * time.Second)
-
-			}
-		},
-	)
-
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
-
-	err = taskService.Create(ctx, task.TaskMetadata{ID: "a", Executor: 0})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(ctx,
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	require.NoError(t, err)
-	require.Equal(t, 1, len(tasks))
+	require.Equal(t, 4, len(tasks))
 
 	uuid1 := waitTaskScheduled(t, ctx, taskService)
 

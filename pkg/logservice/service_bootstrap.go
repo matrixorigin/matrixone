@@ -91,8 +91,7 @@ func (s *Service) createInitTasks(ctx context.Context) error {
 			ID:       init.String(),
 			Executor: uint32(init),
 		}); err != nil {
-			s.logger.Error(fmt.Sprintf("failed to create %s task.", init.String()))
-			return err
+			s.logger.Error(fmt.Sprintf("failed to create %s task.", init.String()), zap.Error(err))
 		}
 	}
 	s.logger.Info("init tasks created")
