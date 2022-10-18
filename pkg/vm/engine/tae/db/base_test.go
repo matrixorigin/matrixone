@@ -16,9 +16,6 @@ package db
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"strings"
 	"sync"
 	"testing"
 
