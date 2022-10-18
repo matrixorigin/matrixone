@@ -47,6 +47,7 @@ func TestInsertWithNulls(t *testing.T) {
 
 	require.Equal(t, []string{"a", "b", "c"}, vector.GetStrVectorValues(idx.dict.GetUnique()))
 	require.Equal(t, []uint16{1, 2, 0, 1, 3, 0, 3, 2, 1, 0}, vector.MustTCols[uint16](idx.poses))
+	require.Equal(t, [][]int64{{2, 5, 9}, {0, 3, 8}, {1, 7}, {4, 6}}, idx.sels[:4])
 }
 
 func TestEncode(t *testing.T) {

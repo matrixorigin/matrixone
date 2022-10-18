@@ -162,6 +162,7 @@ func (ctr *container) indexBuild() error {
 		}
 		ctr.sels[bucket] = append(ctr.sels[bucket], int64(k))
 	}
+	//ctr.sels = ctr.idx.GetSels()[1:]
 	return nil
 }
 

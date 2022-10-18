@@ -16,6 +16,7 @@ package index
 
 import (
 	"errors"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index/dict"
@@ -39,6 +40,9 @@ type LowCardinalityIndex struct {
 	// The position of `null` value is 0.
 	poses *vector.Vector
 
+	sels  [][]int64
+	rowid int64
+
 	ref int
 }
 
@@ -57,8 +61,14 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		m:     m,
 		dict:  d,
 		poses: vector.New(types.T_uint16.ToType()),
+		sels:  make([][]int64, math.MaxUint16+2),
+		rowid: 0,
 		ref:   1,
 	}, nil
+}
+
+func (idx *LowCardinalityIndex) GetSels() [][]int64 {
+	return idx.sels
 }
 
 func (idx *LowCardinalityIndex) GetPoses() *vector.Vector {
@@ -122,6 +132,14 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 			return err
 		}
 	}
+
+	for i, ip := range ips {
+		if len(idx.sels[ip]) == 0 {
+			idx.sels[ip] = make([]int64, 0, 64)
+		}
+		idx.sels[ip] = append(idx.sels[ip], idx.rowid+int64(i))
+	}
+	idx.rowid += int64(len(ips))
 	return vector.AppendFixed(idx.poses, ips, idx.m)
 }
 

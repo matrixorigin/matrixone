@@ -331,6 +331,19 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 }
 
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
+	//nulls := ctr.idx.GetSels()[0]
+	//sels := ctr.idx.GetSels()[1:]
+	//groups := make([]int64, 0)
+	//for i, sel := range sels {
+	//	if len(sel) > 0 {
+	//		groups = append(groups, sel[0])
+	//		ctr.bat.Zs = append(ctr.bat.Zs, 0)
+	//		for _, v := range sel {
+	//			ctr.bat.Zs[i] += bat.Zs[v]
+	//		}
+	//	}
+	//}
+
 	groups := make([]int64, 0)
 	nulls := make([]int64, 0)
 	sels := make([][]int64, math.MaxUint16+1)
