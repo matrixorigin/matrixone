@@ -1650,6 +1650,10 @@ func normalizeNamesOfUsers(users []*tree.User) error {
 // doSwitchRole accomplishes the Use Role and Use Secondary Role statement
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	var err error
+	var sql string
+	var erArray []ExecResult
+	var roleId int64
+
 	account := ses.GetTenantInfo()
 
 	if sr.SecondaryRole {
@@ -1669,10 +1673,6 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		//step1 : check the role exists or not;
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
-		var sql string
-		var erArray []ExecResult
-
-		var roleId int64
 
 		err = bh.Exec(ctx, "begin;")
 		if err != nil {
