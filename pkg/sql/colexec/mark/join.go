@@ -76,6 +76,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				if ctr.mp != nil {
+					ctr.mp.Free()
+				}
 				return true, err
 			}
 			ctr.state = Probe
@@ -83,6 +86,16 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				ctr.freeBuildEqVec(proc)
+				if ctr.nullWithBatch != nil {
+					ctr.nullWithBatch.Clean(proc.Mp())
+				}
+				if ctr.mp != nil {
+					ctr.mp.Free()
+				}
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp())
+				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -91,11 +104,26 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
+					if ctr.mp != nil {
+						ctr.mp.Free()
+					}
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
+					ctr.freeBuildEqVec(proc)
+					if ctr.nullWithBatch != nil {
+						ctr.nullWithBatch.Clean(proc.Mp())
+					}
 					ctr.state = End
+					if ctr.mp != nil {
+						ctr.mp.Free()
+					}
+					if ctr.bat != nil {
+						ctr.bat.Clean(proc.Mp())
+					}
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}
@@ -182,7 +210,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.cleanEvalVectors(proc.Mp())
+	defer ctr.freeProbeEqVec(proc)
 	count := bat.Length()
 	itr := ctr.mp.Map().NewIterator()
 	mSels := ctr.mp.Sels()
@@ -277,6 +305,11 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+			for j := 0; j < i; j++ {
+				if ctr.evecs[j].needFree {
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
+				}
+			}
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -297,6 +330,11 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+			for j := 0; j < i; j++ {
+				if ctr.evecs[j].needFree {
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
+				}
+			}
 			return err
 		}
 		ctr.buildEqVec[i] = vec
@@ -312,6 +350,22 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 	return nil
 }
 
+func (ctr *container) freeProbeEqVec(proc *process.Process) {
+	for i := range ctr.evecs {
+		if ctr.evecs[i].needFree {
+			ctr.evecs[i].vec.Free(proc.Mp())
+		}
+	}
+}
+
+func (ctr *container) freeBuildEqVec(proc *process.Process) {
+	for i := range ctr.buildEqEvecs {
+		if ctr.buildEqEvecs[i].needFree {
+			ctr.buildEqEvecs[i].vec.Free(proc.Mp())
+		}
+	}
+}
+
 // calculate the state of non-equal conditions for those tuples in JoinMap
 func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int64, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (resultType, error) {
 	if ap.Cond != nil {
@@ -325,7 +379,7 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int64, vals []uint6
 			if vec.Nsp.Contains(0) {
 				condState = condUnkown
 			}
-			bs := vector.MustTCols[bool](vec)
+			bs := vec.Col.([]bool)
 			if bs[0] {
 				condState = condTrue
 				vec.Free(proc.Mp())

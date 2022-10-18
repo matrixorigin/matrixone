@@ -214,10 +214,11 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
 	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		return err
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-		ctr.bat.Vecs[i].Free(proc.Mp())
+		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()

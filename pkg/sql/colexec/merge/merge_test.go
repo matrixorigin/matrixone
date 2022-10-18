@@ -92,7 +92,6 @@ func TestMerge(t *testing.T) {
 				}
 			}
 		}
-		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

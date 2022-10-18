@@ -100,7 +100,6 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		oldMpool := tc.proc.Mp().CurrNB()
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -114,9 +113,6 @@ func TestGroup(t *testing.T) {
 				}
 				break
 			}
-			if bat := tc.proc.InputBatch(); bat != nil {
-				bat.Clean(tc.proc.Mp())
-			}
 		}
 		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
@@ -126,8 +122,7 @@ func TestGroup(t *testing.T) {
 				}
 			}
 		}
-		tc.arg.Free(tc.proc, true)
-		require.Equal(t, oldMpool, tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
