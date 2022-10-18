@@ -342,7 +342,7 @@ var SingleMetricTable = &export.Table{
 	Comment:          `metric data`,
 	TableOptions:     trace.GetOptionFactory(export.ExternalTableEngine)(MetricDBConst, `metric`),
 	PathBuilder:      export.NewDBTablePathBuilder(),
-	AccountColumn:    &metricAccountColumn,
+	AccountColumn:    nil,
 }
 
 type ViewWhereCondition struct {
