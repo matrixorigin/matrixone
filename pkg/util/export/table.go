@@ -48,7 +48,12 @@ type Column struct {
 func (col *Column) ToCreateSql() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-	if len(col.Default) > 0 {
+	if col.Type == "JSON" {
+		sb.WriteString("NOT NULL ")
+		if len(col.Default) == 0 {
+			panic(moerr.NewNotSupported("json column need default in csv, but not in schema"))
+		}
+	} else if len(col.Default) > 0 {
 		sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
 	} else {
 		sb.WriteString("NOT NULL ")

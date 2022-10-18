@@ -70,7 +70,7 @@ type StatementInfo struct {
 }
 
 func (s *StatementInfo) GetName() string {
-	return MOStatementType
+	return SingleStatementTable.GetName()
 }
 
 func (s *StatementInfo) Size() int64 {

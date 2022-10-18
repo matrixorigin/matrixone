@@ -361,7 +361,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
-	case MOStatementType:
+	case MOStatementType, SingleStatementTable.GetName():
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
 	case MOSpanType:
