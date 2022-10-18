@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -69,7 +68,4 @@ type ParseLineHandler struct {
 	batchSize int
 	//simd csv
 	simdCsvLineArray [][]string
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

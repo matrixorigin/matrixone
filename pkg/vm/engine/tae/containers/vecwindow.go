@@ -159,6 +159,10 @@ func (win *vectorWindow[T]) String() string {
 	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
 	return s
 }
+func (win *vectorWindow[T]) PPString(num int) string {
+	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.PPString(num))
+	return s
+}
 func (win *vectorWindow[T]) Slice() any {
 	if win.ref.typ.IsVarlen() {
 		base := win.ref.Slice().(*Bytes)
