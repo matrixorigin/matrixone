@@ -236,7 +236,6 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if err != nil {
 		return 0, err
 	}
-	fmt.Println("rows affected:", affected)
 
 	return int(affected), nil
 }
