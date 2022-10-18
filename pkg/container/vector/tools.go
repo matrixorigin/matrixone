@@ -320,7 +320,16 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
 	// extend the null map
-	nulls.TryExpand(v.Nsp, newRows)
+	if v.IsScalar() {
+		if v.IsScalarNull() {
+			v.Nsp = nulls.NewWithSize(1)
+			nulls.Add(v.Nsp, 0)
+		} else {
+			v.Nsp = &nulls.Nulls{}
+		}
+	} else {
+		nulls.TryExpand(v.Nsp, newRows)
+	}
 	return nil
 }
 

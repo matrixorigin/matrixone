@@ -57,6 +57,12 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
+func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
+	colDefs := rel.handle.GetMeta().(*catalog.TableEntry).GetColDefs()
+	cols, _ := ColDefsToAttrs(colDefs)
+	return cols, nil
+}
+
 func (rel *baseRelation) Rows(context.Context) (int64, error) {
 	return rel.handle.Rows(), nil
 }
@@ -102,10 +108,6 @@ func (rel *baseRelation) Update(_ context.Context, _ *batch.Batch) error {
 
 func (rel *baseRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error {
 	return nil
-}
-
-func (rel *baseRelation) Truncate(_ context.Context) (uint64, error) {
-	return 0, nil
 }
 
 func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [][]byte) ([]engine.Reader, error) {
