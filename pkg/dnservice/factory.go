@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -145,5 +146,9 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		CatalogCkpInterval: int64(s.cfg.Ckp.CatalogCkpInterval.Duration / time.Millisecond),
 		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
 	}
-	return taestorage.NewTAEStorage(shard, factory, s.fileService, s.clock, ckpcfg)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.Name)
+	if err != nil {
+		return nil, err
+	}
+	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg)
 }
