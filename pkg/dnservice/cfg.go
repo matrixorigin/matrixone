@@ -33,11 +33,11 @@ var (
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
 
-	defaultScannerInterval    = int64(5000)          // millisecond
-	defaultExecutionInterval  = int64(2000)          // millisecond
-	defaultFlushInterval      = int64(1 * 60 * 1000) // millisecond
+	defaultScannerInterval    = time.Second * 5
+	defaultExecutionInterval  = time.Second * 2
+	defaultFlushInterval      = time.Second * 60
 	defaultExecutionLevels    = int16(30)
-	defaultCatalogCkpInterval = int64(30000) // millisecond
+	defaultCatalogCkpInterval = time.Second * 30
 	defaultCatalogUnCkpLimit  = int64(10)
 )
 
@@ -73,12 +73,12 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		ScannerInterval    int64 `toml:"scanner-interval"`
-		ExecutionInterval  int64 `toml:"execution-interval"`
-		FlushInterval      int64 `toml:"flush-interval"`
-		ExecutionLevels    int16 `toml:"execution-levels"`
-		CatalogCkpInterval int64 `toml:"catalog-ckp-interval"`
-		CatalogUnCkpLimit  int64 `toml:"catalog-unckp-limit"`
+		ScannerInterval    toml.Duration `toml:"scanner-interval"`
+		ExecutionInterval  toml.Duration `toml:"execution-interval"`
+		FlushInterval      toml.Duration `toml:"flush-interval"`
+		ExecutionLevels    int16         `toml:"execution-levels"`
+		CatalogCkpInterval toml.Duration `toml:"catalog-ckp-interval"`
+		CatalogUnCkpLimit  int64         `toml:"catalog-unckp-limit"`
 	}
 
 	// Txn transactions configuration
@@ -136,26 +136,23 @@ func (c *Config) Validate() error {
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
 	}
-	if c.Ckp.ScannerInterval == 0 {
-		c.Ckp.ScannerInterval = defaultScannerInterval
+	if c.Ckp.ScannerInterval.Duration == 0 {
+		c.Ckp.ScannerInterval.Duration = defaultScannerInterval
 	}
-	if c.Ckp.ExecutionInterval == 0 {
-		c.Ckp.ExecutionInterval = defaultExecutionInterval
+	if c.Ckp.ExecutionInterval.Duration == 0 {
+		c.Ckp.ExecutionInterval.Duration = defaultExecutionInterval
 	}
-	if c.Ckp.FlushInterval == 0 {
-		c.Ckp.FlushInterval = defaultFlushInterval
+	if c.Ckp.FlushInterval.Duration == 0 {
+		c.Ckp.FlushInterval.Duration = defaultFlushInterval
 	}
 	if c.Ckp.ExecutionLevels == 0 {
 		c.Ckp.ExecutionLevels = defaultExecutionLevels
 	}
-	if c.Ckp.CatalogCkpInterval == 0 {
-		c.Ckp.CatalogCkpInterval = defaultCatalogCkpInterval
+	if c.Ckp.CatalogCkpInterval.Duration == 0 {
+		c.Ckp.CatalogCkpInterval.Duration = defaultCatalogCkpInterval
 	}
 	if c.Ckp.CatalogUnCkpLimit == 0 {
 		c.Ckp.CatalogUnCkpLimit = defaultCatalogUnCkpLimit
-	}
-	if c.Ckp.ScannerInterval == 0 {
-		c.Ckp.ScannerInterval = defaultScannerInterval
 	}
 	return nil
 }
