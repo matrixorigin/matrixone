@@ -36,8 +36,9 @@ func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservic
 			tasks, err := taskService.QueryTask(context.TODO())
 			require.NoError(t, err)
 
-			if len(tasks) == 1 && tasks[0].TaskRunner != "" {
+			if len(tasks) != 0 && tasks[0].TaskRunner != "" {
 				t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+				t.Logf("num task: %d", len(tasks))
 				return tasks[0].TaskRunner
 			}
 			time.Sleep(300 * time.Millisecond)
