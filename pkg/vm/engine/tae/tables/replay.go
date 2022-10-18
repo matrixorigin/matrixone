@@ -122,6 +122,6 @@ func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
 	if err != nil {
 		return
 	}
-	err = appender.ReplayAppend(bat)
+	_, err = appender.ReplayAppend(bat, nil)
 	return
 }

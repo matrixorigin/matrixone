@@ -20,8 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -51,7 +49,8 @@ type OpTxn struct {
 	Op  OpType
 }
 
-func (txn *OpTxn) Is2PC() bool { return txn.Txn.Is2PC() }
+func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }
+func (txn *OpTxn) Is2PC() bool    { return txn.Txn.Is2PC() }
 func (txn *OpTxn) IsTryCommitting() bool {
 	return txn.Op == OpCommit || txn.Op == OpPrepare
 }
@@ -75,6 +74,7 @@ type Txn struct {
 	Err                      error
 	LSN                      uint64
 	TenantID, UserID, RoleID atomic.Uint32
+	isReplay                 bool
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -91,9 +91,29 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS,
 	return txn
 }
 
-func (txn *Txn) HandleCmd(entry *api.Entry) (err error) {
-	return
+func NewPersistedTxn(
+	mgr *TxnManager,
+	ctx *TxnCtx,
+	store txnif.TxnStore,
+	lsn uint64,
+	prepareCommitFn func(txnif.AsyncTxn) error,
+	prepareRollbackFn func(txnif.AsyncTxn) error,
+	applyCommitFn func(txnif.AsyncTxn) error,
+	applyRollbackFn func(txnif.AsyncTxn) error) *Txn {
+	return &Txn{
+		Mgr:               mgr,
+		TxnCtx:            ctx,
+		Store:             store,
+		isReplay:          true,
+		LSN:               lsn,
+		PrepareRollbackFn: prepareRollbackFn,
+		PrepareCommitFn:   prepareCommitFn,
+		ApplyRollbackFn:   applyRollbackFn,
+		ApplyCommitFn:     applyCommitFn,
+	}
 }
+func (txn *Txn) GetLsn() uint64 { return txn.LSN }
+func (txn *Txn) IsReplay() bool { return txn.isReplay }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
 
@@ -120,7 +140,8 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 
 // Prepare is used to pre-commit a 2PC distributed transaction.
 // Notice that once any error happened, we should rollback the txn.
-// TODO: 1. How to handle the case in which log service timed out?
+// TODO:
+//  1. How to handle the case in which log service timed out?
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
 func (txn *Txn) Prepare() (pts types.TS, err error) {
@@ -182,6 +203,14 @@ func (txn *Txn) Rollback() (err error) {
 // Notice that txn must commit successfully once committing message arrives, since Preparing
 // had already succeeded.
 func (txn *Txn) Committing() (err error) {
+	return txn.doCommitting(false)
+}
+
+func (txn *Txn) CommittingInRecovery() (err error) {
+	return txn.doCommitting(true)
+}
+
+func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFound()
 		return
@@ -196,11 +225,15 @@ func (txn *Txn) Committing() (err error) {
 	if err = txn.ToCommittingFinished(); err != nil {
 		panic(err)
 	}
-	//Make a committing log entry, flush and wait it synced.
-	//A log entry's payload contains txn id , commit timestamp and txn's state.
-	_, err = txn.LogTxnState(true)
-	if err != nil {
-		panic(err)
+
+	// Skip logging in recovery
+	if !inRecovery {
+		//Make a committing log entry, flush and wait it synced.
+		//A log entry's payload contains txn id , commit timestamp and txn's state.
+		_, err = txn.LogTxnState(true)
+		if err != nil {
+			panic(err)
+		}
 	}
 	err = txn.Err
 	return
@@ -210,6 +243,15 @@ func (txn *Txn) Committing() (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
+	return txn.doCommit(false)
+}
+
+// CommitInRecovery is called during recovery
+func (txn *Txn) CommitInRecovery() (err error) {
+	return txn.doCommit(true)
+}
+
+func (txn *Txn) doCommit(inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFound()
 		return
@@ -221,10 +263,10 @@ func (txn *Txn) Commit() (err error) {
 	}
 
 	if txn.Is2PC() {
-		return txn.commit2PC()
+		return txn.commit2PC(inRecovery)
 	}
 
-	return txn.commit1PC()
+	return txn.commit1PC(inRecovery)
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {
@@ -236,7 +278,7 @@ func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
-		//FIXME::??
+		// FIXME::??
 		txn.WaitGroup.Done()
 		return
 	}
@@ -251,9 +293,8 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 func (txn *Txn) PrepareCommit() (err error) {
 	logutil.Debugf("Prepare Commite %X", txn.ID)
 	if txn.PrepareCommitFn != nil {
-		if err = txn.PrepareCommitFn(txn); err != nil {
-			return
-		}
+		err = txn.PrepareCommitFn(txn)
+		return
 	}
 	err = txn.Store.PrepareCommit()
 	return err
@@ -265,6 +306,10 @@ func (txn *Txn) PreApplyCommit() (err error) {
 }
 
 func (txn *Txn) ApplyCommit() (err error) {
+	if txn.ApplyCommitFn != nil {
+		err = txn.ApplyCommitFn(txn)
+		return
+	}
 	defer func() {
 		//Get the lsn of ETTxnRecord entry in GroupC.
 		txn.LSN = txn.Store.GetLSN()
@@ -274,16 +319,15 @@ func (txn *Txn) ApplyCommit() (err error) {
 			txn.Store.Close()
 		}
 	}()
-	if txn.ApplyCommitFn != nil {
-		if err = txn.ApplyCommitFn(txn); err != nil {
-			return
-		}
-	}
 	err = txn.Store.ApplyCommit()
 	return
 }
 
 func (txn *Txn) ApplyRollback() (err error) {
+	if txn.ApplyRollbackFn != nil {
+		err = txn.ApplyRollbackFn(txn)
+		return
+	}
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()
 		if err == nil {
@@ -292,11 +336,6 @@ func (txn *Txn) ApplyRollback() (err error) {
 			txn.Store.Close()
 		}
 	}()
-	if txn.ApplyRollbackFn != nil {
-		if err = txn.ApplyRollbackFn(txn); err != nil {
-			return
-		}
-	}
 	err = txn.Store.ApplyRollback()
 	return
 }
@@ -308,9 +347,8 @@ func (txn *Txn) PrePrepare() error {
 func (txn *Txn) PrepareRollback() (err error) {
 	logutil.Debugf("Prepare Rollbacking %X", txn.ID)
 	if txn.PrepareRollbackFn != nil {
-		if err = txn.PrepareRollbackFn(txn); err != nil {
-			return
-		}
+		err = txn.PrepareRollbackFn(txn)
+		return
 	}
 	err = txn.Store.PrepareRollback()
 	return

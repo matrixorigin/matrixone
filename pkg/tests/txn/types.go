@@ -15,6 +15,8 @@
 package txn
 
 import (
+	"database/sql"
+
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -47,4 +49,13 @@ type Txn interface {
 	Read(key string) (string, error)
 	// Write write key
 	Write(key, value string) error
+}
+
+// SQLBasedTxn support exec raw sql Txn
+type SQLBasedTxn interface {
+	Txn
+	// ExecSQL exec sql, ddl/insert/update/delete
+	ExecSQL(sql string) (sql.Result, error)
+	// ExecSQLQuery exec query
+	ExecSQLQuery(sql string) (*sql.Rows, error)
 }

@@ -15,10 +15,8 @@
 package order
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type evalVector struct {
@@ -26,30 +24,13 @@ type evalVector struct {
 	vec      *vector.Vector
 }
 
-type container struct {
+type Container struct {
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
 	vecs      []evalVector // sorted list of attributes
 }
 
 type Argument struct {
-	ctr *container
+	ctr *Container
 	Fs  []*plan.OrderBySpec
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanEvalVectors(mp)
-	}
-}
-
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.vecs {
-		if ctr.vecs[i].needFree && ctr.vecs[i].vec != nil {
-			ctr.vecs[i].vec.Free(mp)
-			ctr.vecs[i].vec = nil
-		}
-	}
 }
