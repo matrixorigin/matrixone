@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,14 +30,14 @@ import (
 )
 
 type TxnCommitListener interface {
-	OnBeginPrePrepare(*OpTxn)
-	OnEndPrePrepare(*OpTxn)
+	OnBeginPrePrepare(txnif.AsyncTxn)
+	OnEndPrePrepare(txnif.AsyncTxn)
 }
 
 type NoopCommitListener struct{}
 
-func (bl *NoopCommitListener) OnBeginPrePrepare(op *OpTxn) {}
-func (bl *NoopCommitListener) OnEndPrePrepare(op *OpTxn)   {}
+func (bl *NoopCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {}
+func (bl *NoopCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn)   {}
 
 type batchTxnCommitListener struct {
 	listeners []TxnCommitListener
@@ -54,15 +53,15 @@ func (bl *batchTxnCommitListener) AddTxnCommitListener(l TxnCommitListener) {
 	bl.listeners = append(bl.listeners, l)
 }
 
-func (bl *batchTxnCommitListener) OnBeginPrePrepare(op *OpTxn) {
+func (bl *batchTxnCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
-		l.OnBeginPrePrepare(op)
+		l.OnBeginPrePrepare(txn)
 	}
 }
 
-func (bl *batchTxnCommitListener) OnEndPrePrepare(op *OpTxn) {
+func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
-		l.OnEndPrePrepare(op)
+		l.OnEndPrePrepare(txn)
 	}
 }
 
@@ -78,7 +77,6 @@ type TxnManager struct {
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
-	Active          *btree.BTreeG[types.TS]
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
 }
@@ -93,11 +91,8 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		Active: btree.NewBTreeG(func(a, b types.TS) bool {
-			return a.Less(b)
-		}),
-		Exception:      new(atomic.Value),
-		CommitListener: newBatchCommitListener(),
+		Exception:       new(atomic.Value),
+		CommitListener:  newBatchCommitListener(),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
@@ -112,28 +107,19 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 	return nil
 }
 
-func (mgr *TxnManager) StatActiveTxnCnt() int {
-	mgr.RLock()
-	defer mgr.RUnlock()
-	return mgr.Active.Len()
-}
-
-func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
-	mgr.RLock()
-	if len(mgr.IDMap) > 0 {
-		ts, _ = mgr.Active.Min()
-		ts = ts.Prev()
-	} else {
-		ts = mgr.TsAlloc.Alloc()
-	}
-	mgr.RUnlock()
-	return
-}
-
 func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 	mgr.RLock()
 	ts = mgr.TsAlloc.Alloc()
 	mgr.RUnlock()
+	return
+}
+
+// Note: Replay should always runs in a single thread
+func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	// TODO: idempotent check
+	mgr.IDMap[txn.GetID()] = txn
 	return
 }
 
@@ -153,7 +139,6 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.IDMap[string(txnId)] = txn
-	mgr.Active.Set(startTs)
 	return
 }
 
@@ -175,7 +160,6 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		txn = mgr.TxnFactory(mgr, store, id, ts, info)
 		store.BindTxn(txn)
 		mgr.IDMap[string(id)] = txn
-		mgr.Active.Set(ts)
 	}
 	return
 }
@@ -190,7 +174,6 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 		return
 	}
 	delete(mgr.IDMap, id)
-	mgr.Active.Delete(txn.GetStartTS())
 	return
 }
 
@@ -220,8 +203,8 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 		return
 	}
 
-	mgr.CommitListener.OnBeginPrePrepare(op)
-	defer mgr.CommitListener.OnEndPrePrepare(op)
+	mgr.CommitListener.OnBeginPrePrepare(op.Txn)
+	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
@@ -244,6 +227,15 @@ func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
+	// Replay txn is always prepared
+	if op.IsReplay() {
+		ts = op.Txn.GetPrepareTS()
+		if err := op.Txn.ToPreparingLocked(ts); err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	mgr.Lock()
 	defer mgr.Unlock()
 
@@ -277,9 +269,9 @@ func (mgr *TxnManager) onPrepare(op *OpTxn, ts types.TS) {
 		op.Txn.Unlock()
 		mgr.onPreparRollback(op.Txn)
 	} else {
-		//1.  Appending the data into appendableNode of block
+		// 1. Appending the data into appendableNode of block
 		// 2. Collect redo log,append into WalDriver
-		//TODO::need to handle the error,instead of panic for simplicity
+		// TODO::need to handle the error,instead of panic for simplicity
 		mgr.onPreApplyCommit(op.Txn)
 		if op.Txn.GetError() != nil {
 			panic(op.Txn.GetID())

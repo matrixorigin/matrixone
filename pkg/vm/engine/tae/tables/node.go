@@ -16,10 +16,8 @@ package tables
 
 import (
 	"bytes"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -28,16 +26,14 @@ import (
 )
 
 type appendableNode struct {
-	block     *dataBlock
-	data      *containers.Batch
-	rows      uint32
-	prefix    []byte
-	exception *atomic.Value
+	block  *dataBlock
+	data   *containers.Batch
+	rows   uint32
+	prefix []byte
 }
 
 func newNode(block *dataBlock) *appendableNode {
 	impl := new(appendableNode)
-	impl.exception = new(atomic.Value)
 	impl.block = block
 	impl.rows = 0
 	impl.prefix = block.meta.MakeKey()
@@ -125,10 +121,6 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 }
 
 func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		err = exception.(error)
-		return
-	}
 	node.block.RLock()
 	if node.data != nil {
 		bat, err = node.getMemoryDataLocked(minRow, maxRow)
@@ -145,10 +137,6 @@ func (node *appendableNode) GetColumnData(
 	maxRow uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		err = exception.(error)
-		return
-	}
 	node.block.RLock()
 	if node.data != nil {
 		vec, err = node.getMemoryColumnDataLocked(minRow, maxRow, colIdx, buffer)
@@ -168,11 +156,6 @@ func (node *appendableNode) Close() (err error) {
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
 	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
 	if left == 0 {
 		err = moerr.NewInternalError("not appendable")
@@ -209,11 +192,6 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 }
 
 func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTxn) (from int, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
 	schema := node.block.meta.GetSchema()
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {

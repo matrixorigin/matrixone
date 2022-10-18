@@ -187,6 +187,7 @@ func (vec *vector[T]) Allocated() int { return vec.impl.Allocated() }
 func (vec *vector[T]) GetAllocator() *mpool.MPool { return vec.stlvec.GetAllocator() }
 func (vec *vector[T]) GetType() types.Type        { return vec.typ }
 func (vec *vector[T]) String() string             { return vec.impl.String() }
+func (vec *vector[T]) PPString(num int) string    { return vec.impl.PPString(num) }
 func (vec *vector[T]) Close()                     { vec.impl.Close() }
 
 func (vec *vector[T]) cow() {
