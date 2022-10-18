@@ -53,6 +53,7 @@ type VectorView interface {
 	GetAllocator() *mpool.MPool
 	GetType() types.Type
 	String() string
+	PPString(num int) string
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
