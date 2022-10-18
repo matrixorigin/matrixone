@@ -52,6 +52,21 @@ use test03;
 drop view if exists v1;
 drop table if exists t1;
 create table t1(a int, b int);
+insert into t1 values(1,1);
 create view v1 as select * from t1;
 show full tables;
 show full tables from test03;
+
+-- @case
+-- @desc:test for sql injection in show statements
+-- @label:bvt
+show full tables from `1;drop table t1;`;
+show tables like `1;drop table t1;`;
+show full tables from "1;drop table t1;";
+show create database `1;drop table t1;`;
+show create table `1;drop table t1;`;
+show columns from `1;drop table t1;`;
+show table status from `1;drop table t1;`;
+show index from `1;drop table t1;`;
+show variables like `1;drop table t1;`;
+select * from t1;
