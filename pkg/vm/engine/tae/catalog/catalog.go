@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -44,7 +43,7 @@ import (
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
 	MakeSegmentFactory() SegmentDataFactory
-	MakeBlockFactory(segFile file.Segment) BlockDataFactory
+	MakeBlockFactory() BlockDataFactory
 }
 
 type Catalog struct {
@@ -133,7 +132,11 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+func (catalog *Catalog) ReplayCmd(
+	txncmd txnif.TxnCmd,
+	dataFactory DataFactory,
+	idxCtx *wal.Index,
+	observer wal.ReplayObserver) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -141,14 +144,14 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayBlock(cmd, dataFactory)
 	case CmdLogSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplaySegment(cmd, dataFactory, cache)
+		catalog.onReplaySegment(cmd, dataFactory)
 	case CmdLogTable:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayTable(cmd, dataFactory)
@@ -163,7 +166,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer)
 	case CmdUpdateBlock:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
@@ -310,8 +313,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	cmd *EntryCommand,
 	dataFactory DataFactory,
 	idx *wal.Index,
-	observer wal.ReplayObserver,
-	cache *bytes.Buffer) {
+	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	prepareTS := cmd.GetTs()
 	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
@@ -352,7 +354,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 }
 
-func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory, cache *bytes.Buffer) {
+func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -423,7 +425,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	}
 	cmd.Block.RWMutex = new(sync.RWMutex)
 	cmd.Block.segment = seg
-	cmd.Block.blkData = dataFactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
+	cmd.Block.blkData = dataFactory.MakeBlockFactory()(cmd.Block)
 	ts := cmd.Block.blkData.GetMaxCheckpointTS()
 	if observer != nil {
 		observer.OnTimeStamp(ts)

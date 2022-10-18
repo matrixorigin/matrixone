@@ -197,6 +197,12 @@ func (entry *TableEntry) GetSchema() *Schema {
 	return entry.schema
 }
 
+func (entry *TableEntry) GetColDefs() []*ColDef {
+	colDefs := entry.schema.ColDefs
+	colDefs = append(colDefs, entry.schema.PhyAddrKey)
+	return colDefs
+}
+
 func (entry *TableEntry) GetFullName() string {
 	if len(entry.fullName) == 0 {
 		entry.fullName = genTblFullName(entry.schema.AcInfo.TenantID, entry.schema.Name)

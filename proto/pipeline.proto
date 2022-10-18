@@ -26,220 +26,226 @@ option (gogoproto.protosizer_all) = true;
 import "plan.proto";
 
 message Message {
-    uint64  sid = 1;
-    uint64  cmd = 2;
-    bytes   err = 3;
-    bytes   data = 4;
-    bytes   proc_info_data = 5;
-    bytes   analyse = 6;
-    uint64  id = 7;
+  uint64  sid = 1;
+  uint64  cmd = 2;
+  bytes   err = 3;
+  bytes   data = 4;
+  bytes   proc_info_data = 5;
+  bytes   analyse = 6;
+  uint64  id = 7;
 }
 
 message Connector {
-    int32 pipeline_id = 1;
-    int32 connector_index = 2;
+  int32 pipeline_id = 1;
+  int32 connector_index = 2;
 }
 
 message Dispatch {
-    bool all = 1;
-    repeated Connector connector = 2;
+  bool all = 1;
+  repeated Connector connector = 2;
 }
 
 message Aggregate {
-    int32 op = 1;
-    bool dist = 2;
-    plan.Expr expr = 3;
+  int32 op = 1;
+  bool dist = 2;
+  plan.Expr expr = 3;
 }
 
 message Group {
-    bool need_eval = 1;
-    uint64 ibucket = 2;
-    uint64 nbucket = 3;
-    repeated plan.Expr  exprs = 4;
-    repeated plan.Type  types = 5;
-    repeated Aggregate  aggs = 6;
+  bool need_eval = 1;
+  uint64 ibucket = 2;
+  uint64 nbucket = 3;
+  repeated plan.Expr  exprs = 4;
+  repeated plan.Type  types = 5;
+  repeated Aggregate  aggs = 6;
 }
 
 message Join {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 rel_list = 3;
-    repeated int32 col_list = 4;
-    plan.Expr  expr = 5;
-    repeated plan.Type  types = 6;
-    repeated plan.Expr left_cond = 7;
-    repeated plan.Expr right_cond = 8;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  types = 6;
+  repeated plan.Expr left_cond = 7;
+  repeated plan.Expr right_cond = 8;
 }
 
 message AntiJoin{
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 result = 3;
-    plan.Expr  expr = 4;
-    repeated plan.Type  types = 5;
-    repeated plan.Expr left_cond = 6;
-    repeated plan.Expr right_cond = 7;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 result = 3;
+  plan.Expr  expr = 4;
+  repeated plan.Type  types = 5;
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
 }
 
 message InnerJoin {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 rel_list = 3;
-    repeated int32 col_list = 4;
-    plan.Expr  expr = 5;
-    repeated plan.Type  types = 6;
-    repeated plan.Expr left_cond = 7;
-    repeated plan.Expr right_cond = 8;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  types = 6;
+  repeated plan.Expr left_cond = 7;
+  repeated plan.Expr right_cond = 8;
 }
 
 message LeftJoin {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 rel_list = 3;
-    repeated int32 col_list = 4;
-    plan.Expr  expr = 5;
-    repeated plan.Type  types = 6;
-    repeated plan.Expr left_cond = 7;
-    repeated plan.Expr right_cond = 8;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  types = 6;
+  repeated plan.Expr left_cond = 7;
+  repeated plan.Expr right_cond = 8;
 }
 
 message SemiJoin {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 result = 3;
-    plan.Expr  expr = 4;
-    repeated plan.Type  types = 5;
-    repeated plan.Expr left_cond = 6;
-    repeated plan.Expr right_cond = 7;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 result = 3;
+  plan.Expr  expr = 4;
+  repeated plan.Type  types = 5;
+  repeated plan.Expr left_cond = 6;
+  repeated plan.Expr right_cond = 7;
 }
 
 message SingleJoin {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 rel_list = 3;
-    repeated int32 col_list = 4;
-    plan.Expr  expr = 5;
-    repeated plan.Type  types = 6;
-    repeated plan.Expr left_cond = 7;
-    repeated plan.Expr right_cond = 8;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 rel_list = 3;
+  repeated int32 col_list = 4;
+  plan.Expr  expr = 5;
+  repeated plan.Type  types = 6;
+  repeated plan.Expr left_cond = 7;
+  repeated plan.Expr right_cond = 8;
 }
 
 message MarkJoin {
-    uint64 ibucket = 1;
-    uint64 nbucket = 2;
-    repeated int32 result = 3;
-    repeated plan.Expr left_cond = 4;
-    repeated plan.Expr right_cond = 5;
-    repeated plan.Type types = 6;
-    plan.Expr cond = 7;
-    repeated plan.Expr on_list = 8;
-    bool output_null = 9;
-    bool output_mark = 10;
-    bool output_anyway = 11;
-    bool mark_meaning = 12;
+  uint64 ibucket = 1;
+  uint64 nbucket = 2;
+  repeated int32 result = 3;
+  repeated plan.Expr left_cond = 4;
+  repeated plan.Expr right_cond = 5;
+  repeated plan.Type types = 6;
+  plan.Expr cond = 7;
+  repeated plan.Expr on_list = 8;
+  bool output_null = 9;
+  bool output_mark = 10;
+  bool output_anyway = 11;
+  bool mark_meaning = 12;
 }
 
 message Product {
-    repeated int32 rel_list = 1;
-    repeated int32 col_list = 2;
-    repeated plan.Type  types = 3;
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  repeated plan.Type  types = 3;
 }
 
 message Unnest{
-    repeated string attrs = 1;
-    repeated plan.ColDef cols = 2;
-    bytes extern = 3;
+  repeated string attrs = 1;
+  repeated plan.ColDef cols = 2;
+  bytes extern = 3;
+}
+
+message GenerateSeries {
+  repeated string attrs = 1;
+  repeated plan.ColDef cols = 2;
 }
 
 message Instruction{
-    // Op specified the operator code of an instruction.
-    int32 op = 1;
-    // Idx specified the anaylze information index.
-    int32 idx = 2;
-    AntiJoin  anti = 3;
-    Connector   connect = 4;
-    Dispatch  dispatch = 5;
-    Group     agg = 6;
-    InnerJoin inner_join = 7;
-    LeftJoin  left_join = 8;
-    SemiJoin  semi_join = 9;
-    SingleJoin single_join = 10;
-    MarkJoin    mark_join = 11;
-    Join    join = 12;
-    Product    product = 13;
-    Unnest     unnest = 14;
-	  repeated plan.OrderBySpec order_by = 15;
-    repeated plan.Expr    project_list = 16;
-    plan.Expr    filter = 17;
-    uint64    limit = 18;
-    uint64    offset = 19;
+  // Op specified the operator code of an instruction.
+  int32 op = 1;
+  // Idx specified the anaylze information index.
+  int32 idx = 2;
+  AntiJoin  anti = 3;
+  Connector   connect = 4;
+  Dispatch  dispatch = 5;
+  Group     agg = 6;
+  InnerJoin inner_join = 7;
+  LeftJoin  left_join = 8;
+  SemiJoin  semi_join = 9;
+  SingleJoin single_join = 10;
+  MarkJoin    mark_join = 11;
+  Join    join = 12;
+  Product    product = 13;
+  Unnest     unnest = 14;
+  GenerateSeries generate_series = 15;
+  repeated plan.OrderBySpec order_by = 16;
+  repeated plan.Expr    project_list = 17;
+  plan.Expr    filter = 18;
+  uint64    limit = 19;
+  uint64    offset = 20;
 }
 
 message AnalysisList {
-    repeated plan.AnalyzeInfo list = 1;
+  repeated plan.AnalyzeInfo list = 1;
 }
 
 message Source {
-    string schema_name = 1;
-    string table_name = 2;
-    repeated string col_list = 3;
-    string    block = 4;
-    uint64    pushdown_id = 5;
-    string    pushdown_addr = 6;
+  string schema_name = 1;
+  string table_name = 2;
+  repeated string col_list = 3;
+  string    block = 4;
+  uint64    pushdown_id = 5;
+  string    pushdown_addr = 6;
 }
 
 message NodeInfo {
-    int32 mcpu = 1;
-    string id = 2;
-    string addr = 3;
-    repeated string payload = 4;
+  int32 mcpu = 1;
+  string id = 2;
+  string addr = 3;
+  repeated string payload = 4;
 }
 
 message ProcessLimitation {
-    int64 size = 1;
-    int64 batch_rows = 2;
-    int64 batch_size = 3;
-    int64 partition_rows = 4;
-    int64 reader_size = 5;
+  int64 size = 1;
+  int64 batch_rows = 2;
+  int64 batch_size = 3;
+  int64 partition_rows = 4;
+  int64 reader_size = 5;
 }
 
 message ProcessInfo {
-    string id = 1;
-    ProcessLimitation lim = 2;
-    int64 unix_time = 3;
-    string snapshot = 4;
-    SessionInfo session_info = 5;
-    repeated int32 analysis_node_list = 6;
+  string id = 1;
+  ProcessLimitation lim = 2;
+  int64 unix_time = 3;
+  string snapshot = 4;
+  SessionInfo session_info = 5;
+  repeated int32 analysis_node_list = 6;
 }
 
 message SessionInfo {
-    string user = 1;
-    string host = 2;
-    string role = 3;
-    uint64 connection_id = 4;
-    string database = 5;
-    string version = 6;
-    bytes  time_zone = 7;
+  string user = 1;
+  string host = 2;
+  string role = 3;
+  uint64 connection_id = 4;
+  string database = 5;
+  string version = 6;
+  bytes  time_zone = 7;
 }
 
 message Pipeline {
-    enum PipelineType{
-        Merge = 0;
-        Normal = 1;
-        Remote = 2;
-        Parallel = 3;
-    }
+  enum PipelineType{
+    Merge = 0;
+    Normal = 1;
+    Remote = 2;
+    Parallel = 3;
+  }
 
-    PipelineType pipeline_type =1;
-    int32 pipeline_id = 2;
-    plan.Plan qry = 3;
-    Source data_source = 4;
-    repeated Pipeline children = 5;
-    repeated Instruction instruction_list = 6;
+  PipelineType pipeline_type = 1;
+  int32 pipeline_id = 2;
+  plan.Plan qry = 3;
+  Source data_source = 4;
+  repeated Pipeline children = 5;
+  repeated Instruction instruction_list = 6;
 
-    bool is_end = 7;
-    bool is_join = 8;
-    NodeInfo node = 9;
-    int32 push_down_info = 10;
-    int32 children_count = 11;
+  bool is_end = 7;
+  bool is_join = 8;
+  NodeInfo node = 9;
+  int32 push_down_info = 10;
+  int32 children_count = 11;
 }

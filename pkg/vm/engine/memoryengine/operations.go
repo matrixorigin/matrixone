@@ -36,6 +36,7 @@ const (
 	OpDelTableDef
 	OpDelete
 	OpGetPrimaryKeys
+	OpGetTableColumns
 	OpGetTableDefs
 	OpGetHiddenKeys
 	OpTruncate
@@ -55,6 +56,7 @@ type ReadRequest interface {
 		OpenRelationReq |
 		GetRelationsReq |
 		GetPrimaryKeysReq |
+		GetTableColumnsReq |
 		GetTableDefsReq |
 		GetHiddenKeysReq |
 		NewTableIterReq |
@@ -94,6 +96,7 @@ type Response interface {
 		DelTableDefResp |
 		DeleteResp |
 		GetPrimaryKeysResp |
+		GetTableColumnsResp |
 		GetTableDefsResp |
 		GetHiddenKeysResp |
 		TruncateResp |
@@ -229,6 +232,14 @@ type GetPrimaryKeysResp struct {
 
 type GetTableDefsReq struct {
 	TableID ID
+}
+
+type GetTableColumnsReq struct {
+	TableID ID
+}
+
+type GetTableColumnsResp struct {
+	Attrs []*engine.Attribute
 }
 
 type GetTableDefsResp struct {

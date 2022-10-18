@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "show profiles",
+		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}
 )
 
@@ -1511,6 +1512,22 @@ var (
 		{
 			input:  `select * from unnest(t.a, "$.b", true) as f`,
 			output: `select * from unnest(t.a, $.b, true) as f`,
+		},
+		{
+			input:  `select * from generate_series('1', '10', '1')`,
+			output: `select * from generate_series(1, 10, 1)`,
+		},
+		{
+			input:  `select * from generate_series('1', '10', '1') g`,
+			output: `select * from generate_series(1, 10, 1) as g`,
+		},
+		{
+			input:  `select * from generate_series(1, 10, 1)`,
+			output: `select * from generate_series(1, 10, 1)`,
+		},
+		{
+			input:  `select * from generate_series(1, 10, 1) as g`,
+			output: `select * from generate_series(1, 10, 1) as g`,
 		},
 	}
 )

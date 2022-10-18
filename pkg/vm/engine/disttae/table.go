@@ -77,15 +77,16 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
 	if !ok {
-		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
+		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.txn.op, tbl.db.databaseId,
 			tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
 	}
+	ranges := make([][]byte, 0, 1)
+	ranges = append(ranges, []byte{})
 	if tbl.meta == nil {
-		return nil, nil
+		return ranges, nil
 	}
-	ranges := make([][]byte, 0, len(tbl.meta.blocks))
 	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
 		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
@@ -178,6 +179,17 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	defs = append(defs, pro)
 	return defs, nil
+
+}
+
+func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+	var attrs []*engine.Attribute
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			attrs = append(attrs, &attr.Attr)
+		}
+	}
+	return attrs, nil
 
 }
 
@@ -293,26 +305,36 @@ func (tbl *table) GetTableID(ctx context.Context) string {
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
-	rds := make([]engine.Reader, num)
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
 	}
+	if len(ranges) == 1 && len(ranges[0]) == 0 {
+		return tbl.newMergeReader(ctx, num, expr)
+	}
+	rds := make([]engine.Reader, num)
 	blks := make([]BlockMeta, len(ranges))
 	for i := range ranges {
 		blks[i] = blockUnmarshal(ranges[i])
 	}
+	ts := tbl.db.txn.meta.SnapshotTS
+	tableDef := tbl.getTableDef()
+
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
 				fs:       tbl.proc.FileService,
-				tableDef: tbl.getTableDef(),
+				tableDef: tableDef,
+				ts:       ts,
 				ctx:      ctx,
 				blks:     []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &blockReader{
-				ctx: ctx,
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
 			}
 		}
 		return rds, nil
@@ -324,13 +346,19 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				ctx:  ctx,
-				blks: blks[i*step:],
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
+				blks:     blks[i*step:],
 			}
 		} else {
 			rds[i] = &blockReader{
-				ctx:  ctx,
-				blks: blks[i*step : (i+1)*step],
+				fs:       tbl.proc.FileService,
+				tableDef: tableDef,
+				ts:       ts,
+				ctx:      ctx,
+				blks:     blks[i*step : (i+1)*step],
 			}
 		}
 	}
