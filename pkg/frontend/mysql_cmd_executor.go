@@ -1518,10 +1518,8 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
 	ses := mce.GetSession()
-	tenant := ses.GetTenantInfo()
-
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, tenant, ca)
+	return InitGeneralTenant(ctx, ses, ca)
 }
 
 // handleDropAccount drops a new user-level tenant
