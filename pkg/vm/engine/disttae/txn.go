@@ -520,30 +520,37 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 
 func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {
 	// get primay keys index(that was colPos in expr)
-	pkIndex := int32(-1)
+	var pk *engine.Attribute
 	for _, key := range priKeys {
 		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		if isCPkey {
 			continue
 		}
-		// if primary key is not int or uint, return all the list
-		if !key.Type.IsIntOrUint() {
-			return list
-		}
-
-		pkIndex = tableDef.Name2ColIndex[key.Name]
+		pk = key
 		break
 	}
 
 	// have no PrimaryKey, return all the list
-	if pkIndex == -1 {
+	if pk == nil {
 		return list
 	}
 
-	canComputeRange, pkRange := computeRange(expr, pkIndex)
-	if !canComputeRange {
-		return list
+	pkIndex := tableDef.Name2ColIndex[pk.Name]
+	if pk.Type.IsIntOrUint() {
+		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
+		if !canComputeRange {
+			return list
+		}
+
+		return getListByRange(list, pkRange)
+	} else {
+		canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+		if !canComputeRange {
+			return list
+		}
+		listLen := uint64(len(list))
+		idx := hashVal % listLen
+		return list[idx : idx+1]
 	}
 
-	return getListByRange(list, pkRange)
 }
