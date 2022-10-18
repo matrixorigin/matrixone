@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime/pprof"
 	"sort"
@@ -830,8 +831,8 @@ func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.D
 	if err != nil {
 		return err
 	}
-	if dump.MaxFileSize != 0 && dump.MaxFileSize < mpool.KB {
-		return moerr.NewInvalidInput("max file size must be larger than 1KB")
+	if dump.MaxFileSize != 0 && dump.MaxFileSize < mpool.MB {
+		return moerr.NewInvalidInput("max file size must be larger than 1MB")
 	}
 	if len(dump.Database) != 0 {
 		if err = mce.handleDumpDB(requestCtx, dump); err != nil {
@@ -863,63 +864,142 @@ func (mce *MysqlCmdExecutor) handleDumpDB(requestCtx context.Context, dump *tree
 	if err != nil {
 		return err
 	}
-	tblDDLs := make([]string, 0, len(tables))
+	params := make([]*dumpTable, 0, len(tables))
 	for _, tblName := range tables {
+		if strings.HasPrefix(tblName, "%!%") { //skip hidden table
+			continue
+		}
 		table, err := db.Relation(requestCtx, tblName)
 		if err != nil {
 			return err
 		}
-		tblDefs, err := table.TableDefs(requestCtx)
+		tableDefs, err := table.TableDefs(requestCtx)
 		if err != nil {
 			return err
 		}
-		tblDDL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (", tblName, tblName)
-		var viewDDL string
-		first := true
-		for _, tblDef := range tblDefs {
-			switch def := tblDef.(type) {
-			case *engine.AttributeDef:
-				if def.Attr.IsHidden || def.Attr.IsRowId {
-					continue
-				}
-				if !first {
-					tblDDL += ","
-				}
-				first = false
-				tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type)
-				if def.Attr.AutoIncrement {
-					tblDDL += " AUTO_INCREMENT"
-				}
-				if def.Attr.Default != nil {
-					if def.Attr.Default.NullAbility { //TODO support other case
-						tblDDL += fmt.Sprintf(" DEFAULT NULL")
-					}
-				}
-				if def.Attr.OnUpdate != nil { //TODO support on update
-					return moerr.NewNotSupported("on update")
-				}
-				if def.Attr.Comment != "" {
-					tblDDL += fmt.Sprintf(" COMMENT '%s'", def.Attr.Comment)
-				}
-
-			case *engine.CommentDef:
-				tblDDL += fmt.Sprintf(",\n  COMMENT '%s'", def.Comment)
-			case *engine.IndexTableDef:
-				tblDDL += fmt.Sprintf(",\n  %s `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`"))
-			case *engine.PrimaryIndexDef:
-				tblDDL += fmt.Sprintf(",\n  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
-			case *engine.ViewDef:
-				viewDDL = fmt.Sprintf("%s\n%s", viewDDL, def.View)
-			case *engine.ComputeIndexDef, *engine.PropertiesDef, *engine.PartitionDef:
-			default:
-				return moerr.NewInternalError("unsupported table def %T", tblDef)
-			}
+		attrs, tblDDL, viewDDL, err := getTableMeta(tblName, tableDefs)
+		if err != nil {
+			return err
 		}
-		tblDDL += "\n);\n" + viewDDL
-		tblDDLs = append(tblDDLs, tblDDL)
+		if len(viewDDL) != 0 {
+			params = append(params, &dumpTable{tblName, viewDDL, nil, attrs, true})
+		} else {
+			tblDDL += "\n);\n"
+			params = append(params, &dumpTable{tblName, tblDDL, table, attrs, false})
+		}
 	}
-	dumpDDL := dbDDL + strings.Join(tblDDLs, "\n")
-	fmt.Println("dumpDDL: ", dumpDDL)
+	err = mce.dumpDB2File(requestCtx, dump, dbDDL, params)
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) dumpDB2File(requestCtx context.Context, dump *tree.Dump, dbDDL string, params []*dumpTable) error {
+	ses := mce.GetSession()
+	//txnHandler := ses.GetTxnHandler()
+	var (
+		err                  error
+		f                    *os.File
+		fileNameWithWildcard string
+		multiFile            bool
+		//curFileSize          int64 = 0
+		//curFileName          string
+	)
+	//curFileName = dump.OutFile
+	exists, err := FileExists(dump.OutFile)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return moerr.NewFileAlreadyExists(dump.OutFile)
+	}
+
+	f, err = os.Create(dump.OutFile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			f.Close()
+			if multiFile {
+				path := filepath.Dir(dump.OutFile)
+				filename := filepath.Base(dump.OutFile)
+				base, extend := filename[:len(filename)-1], filename[len(filename)-1:]
+				fileNameWithWildcard = filepath.Join(path, base+"*"+extend)
+				matches, err := filepath.Glob(fileNameWithWildcard)
+				if err != nil {
+					return
+				}
+				for _, match := range matches {
+					os.RemoveAll(match)
+				}
+			}
+			os.RemoveAll(dump.OutFile)
+		}
+	}()
+	buf := new(bytes.Buffer)
+	_, err = buf.WriteString(dbDDL)
+	if err != nil {
+		return err
+	}
+	_, err = buf.WriteTo(f)
+	if err != nil {
+		return err
+	}
+	buf.Reset()
+	for _, param := range params {
+		if param.isView {
+			continue
+		}
+		_, err = buf.WriteString(param.ddl)
+		if err != nil {
+			return err
+		}
+		_, err = buf.WriteTo(f)
+		if err != nil {
+			return err
+		}
+		buf.Reset()
+		rds, err := param.rel.NewReader(requestCtx, 1, nil, nil)
+		if err != nil {
+			return err
+		}
+		for {
+			bat, err := rds[0].Read(param.attrs, nil, ses.Mp)
+			if err != nil {
+				return err
+			}
+			if bat == nil {
+				break
+			}
+
+			buf.WriteString("INSERT INTO ")
+			buf.WriteString(param.name)
+			buf.WriteString(" VALUES ")
+			//currentLineSize := buf.Len()
+			rbat, err := convertValueBat2Str(bat, ses.Mp)
+			if err != nil {
+				return err
+			}
+			for i := 0; i < rbat.Length(); i++ {
+				if i != 0 {
+					buf.WriteString(", ")
+				}
+				buf.WriteString("(")
+				for j := 0; j < rbat.VectorCount(); j++ {
+					if j != 0 {
+						buf.WriteString(", ")
+					}
+					buf.WriteString(rbat.GetVector(int32(j)).GetString(int64(i)))
+				}
+				buf.WriteString(")")
+			}
+			buf.WriteString(";\n")
+			_, err = buf.WriteTo(f)
+			if err != nil {
+				return err
+			}
+			buf.Reset()
+		}
+	}
 	return nil
 }
 
@@ -2487,7 +2567,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Dump,
 			*tree.Delete:
 			runBegin := time.Now()
 			/*

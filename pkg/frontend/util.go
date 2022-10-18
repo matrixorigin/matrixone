@@ -17,11 +17,18 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
 	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -465,3 +472,156 @@ func FileExists(path string) (bool, error) {
 	}
 	return false, err
 }
+
+func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string, string, error) {
+	var (
+		attrs   = make([]string, 0, len(tableDefs))
+		tblDDL  string
+		viewDDL string
+	)
+	first := true
+	for _, tblDef := range tableDefs {
+		switch def := tblDef.(type) {
+		case *engine.AttributeDef:
+			if def.Attr.IsHidden || def.Attr.IsRowId {
+				continue
+			}
+			attrs = append(attrs, def.Attr.Name)
+			if !first {
+				tblDDL += ","
+			}
+			first = false
+			tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type.String())
+			if def.Attr.AutoIncrement {
+				tblDDL += " AUTO_INCREMENT"
+			}
+			if def.Attr.Default != nil {
+				if def.Attr.Default.NullAbility { //TODO support other case
+					tblDDL += fmt.Sprintf(" DEFAULT NULL")
+				}
+			}
+			if def.Attr.OnUpdate != nil { //TODO support on update
+				return nil, "", "", moerr.NewNotSupported("on update")
+			}
+			if def.Attr.Comment != "" {
+				tblDDL += fmt.Sprintf(" COMMENT '%s'", def.Attr.Comment)
+			}
+
+		case *engine.CommentDef:
+			tblDDL += fmt.Sprintf(",\n  COMMENT '%s'", def.Comment)
+		case *engine.IndexTableDef:
+			tblDDL += fmt.Sprintf(",\n  %s `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`"))
+		case *engine.PrimaryIndexDef:
+			tblDDL += fmt.Sprintf(",\n  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
+		case *engine.ViewDef:
+			view := struct {
+				Stmt            string
+				DefaultDatabase string
+			}{}
+			if err := json.Unmarshal([]byte(def.View), &view); err != nil {
+				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
+			}
+			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n\nCREATE VIEW `%s` AS %s", tblName, tblName, view.Stmt)
+			break //TODO check
+		case *engine.ComputeIndexDef, *engine.PartitionDef: //TODO support
+			return nil, "", "", moerr.NewNotSupported("compute index, partition")
+		case *engine.PropertiesDef: //TODO support
+			fmt.Println(def)
+
+		default:
+			return nil, "", "", moerr.NewInternalError("unsupported table def %T", tblDef)
+		}
+	}
+	if len(viewDDL) == 0 {
+		tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (%s", tblName, tblName, tblDDL)
+	}
+	return attrs, tblDDL, viewDDL, nil
+}
+
+func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
+	var err error
+	rbat := batch.NewWithSize(bat.VectorCount())
+	rbat.InitZsOne(bat.Length())
+	defer func() {
+		if err != nil && rbat != nil {
+			rbat.Clean(mp)
+		}
+	}()
+	for i := 0; i < rbat.VectorCount(); i++ {
+		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
+		rs := make([]string, bat.Length())
+		switch bat.Vecs[i].Typ.Oid {
+		case types.T_int8:
+			xs := vector.MustTCols[int8](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int16:
+			xs := vector.MustTCols[int16](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int32:
+			xs := vector.MustTCols[int32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int64:
+			xs := vector.MustTCols[int64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+
+		case types.T_uint8:
+			xs := vector.MustTCols[uint8](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_uint16:
+			xs := vector.MustTCols[uint16](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_uint32:
+			xs := vector.MustTCols[uint32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+
+		case types.T_uint64:
+			xs := vector.MustTCols[uint64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_float32:
+			xs := vector.MustTCols[float32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_float64:
+			xs := vector.MustTCols[float64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_decimal64:
+			xs := vector.MustTCols[types.Decimal64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal64])
+		case types.T_decimal128:
+			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
+		case types.T_char, types.T_varchar, types.T_blob:
+			xs := vector.MustStrCols(bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
+		case types.T_json:
+			xs := vector.MustBytesCols(bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
+
+		case types.T_timestamp:
+			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Timestamp])
+		case types.T_datetime:
+			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
+		case types.T_date:
+			xs := vector.MustTCols[types.Date](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Date])
+		default:
+			err = moerr.NewNotSupported("type %v", bat.Vecs[i].Typ.String())
+		}
+		if err != nil {
+			return nil, err
+		}
+		for j := 0; j < len(rs); j++ {
+			err = rbat.Vecs[i].Append([]byte(rs[j]), false, mp)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	rbat.InitZsOne(bat.Length())
+	return rbat, nil
+}
+
+//func newDupFile()  {
+//
+//}
