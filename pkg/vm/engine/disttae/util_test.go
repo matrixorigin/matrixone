@@ -234,7 +234,104 @@ func TestBlockWrite(t *testing.T) {
 	}
 }
 
-func TestComputeRange(t *testing.T) {
+func TestComputeRangeByNonIntPk(t *testing.T) {
+	type asserts = struct {
+		result bool
+		data   uint64
+		expr   *plan.Expr
+	}
+
+	getHash := func(e *plan.Expr) uint64 {
+		_, ret := getConstantExprHashValue(e)
+		return ret
+	}
+
+	testCases := []asserts{
+		// a > "a"  false   only 'and', '=' function is supported
+		{false, 0, makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2StringConstExprWithType("a"),
+		})},
+		// a > coalesce("a")  false,  the second arg must be constant
+		{false, 0, makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeFunctionExprForTest("coalesce", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2StringConstExprWithType("a"),
+			}),
+		})},
+		// a = "abc"  true
+		{true, getHash(plan2.MakePlan2StringConstExprWithType("abc")),
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2StringConstExprWithType("abc"),
+			})},
+		// a = "abc" and b > 10  true
+		{true, getHash(plan2.MakePlan2StringConstExprWithType("abc")),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+			})},
+		// b > 10 and a = "aa"  true
+		{true, getHash(plan2.MakePlan2StringConstExprWithType("abc")),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+			})},
+		// a = "abc" or b > 10  false
+		{false, 0,
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+			})},
+		// a = "abc" or a > 10  false
+		{false, 0,
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+			})},
+	}
+
+	t.Run("test computeRangeByNonIntPk", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, data := computeRangeByNonIntPk(testCase.expr, 0)
+			if result != testCase.result {
+				t.Fatalf("test computeRangeByNonIntPk at cases[%d], get result is different with expected", i)
+			}
+			if result {
+				if data != testCase.data {
+					t.Fatalf("test computeRangeByNonIntPk at cases[%d], data is not match", i)
+				}
+			}
+		}
+	})
+}
+
+func TestComputeRangeByIntPk(t *testing.T) {
 	type asserts = struct {
 		result bool
 		data   [][2]int64
@@ -253,6 +350,39 @@ func TestComputeRange(t *testing.T) {
 		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(20),
+		})},
+		// a > 20 and b < 1  is equal a > 20
+		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(1, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(1),
+			}),
+		})},
+		// 1 < b and a > 20   is equal a > 20
+		{true, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest("<", []*plan.Expr{
+				plan2.MakePlan2Int64ConstExprWithType(1),
+				makeColExprForTest(1, types.T_int64),
+			}),
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+		})},
+		// a > 20 or b < 1  false.
+		{false, [][2]int64{{21, math.MaxInt64}}, makeFunctionExprForTest("or", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(20),
+			}),
+			makeFunctionExprForTest("<", []*plan.Expr{
+				makeColExprForTest(1, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(1),
+			}),
 		})},
 		// a = 20
 		{true, [][2]int64{{20, 20}}, makeFunctionExprForTest("=", []*plan.Expr{
@@ -328,19 +458,19 @@ func TestComputeRange(t *testing.T) {
 		})},
 	}
 
-	t.Run("test computeRange", func(t *testing.T) {
+	t.Run("test computeRangeByIntPk", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := computeRange(testCase.expr, 0)
+			result, data := computeRangeByIntPk(testCase.expr, 0, "")
 			if result != testCase.result {
-				t.Fatalf("test computeRange at cases[%d], get result is different with expected", i)
+				t.Fatalf("test computeRangeByIntPk at cases[%d], get result is different with expected", i)
 			}
 			if result {
 				if len(data) != len(testCase.data) {
-					t.Fatalf("test computeRange at cases[%d], data length is not match", i)
+					t.Fatalf("test computeRangeByIntPk at cases[%d], data length is not match", i)
 				}
 				for j, r := range testCase.data {
 					if r[0] != data[j][0] || r[1] != data[j][1] {
-						t.Fatalf("test computeRange at cases[%d], data[%d] is not match", i, j)
+						t.Fatalf("test computeRangeByIntPk at cases[%d], data[%d] is not match", i, j)
 					}
 				}
 			}
