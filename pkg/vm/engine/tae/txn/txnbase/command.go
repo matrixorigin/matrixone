@@ -165,9 +165,7 @@ func NewTxnCmd() *TxnCmd {
 func NewEmptyTxnCmd() *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(),
-		TxnCtx: &TxnCtx{
-			Memo: txnif.NewTxnMemo(),
-		},
+		TxnCtx:      NewEmptyTxnCtx(),
 	}
 }
 func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
@@ -240,15 +238,13 @@ func (c *TxnCmd) ApplyCommit() {
 func (c *TxnCmd) ApplyRollback() {
 	c.ComposedCmd.ApplyRollback()
 }
-func (c *TxnCmd) MakeTxn() txnif.AsyncTxn {
-	return NewReplayTxn(c.TxnCtx, c)
-}
 func (c *TxnCmd) SetReplayTxn(txn txnif.AsyncTxn) {
 	c.ComposedCmd.SetReplayTxn(txn)
 }
 func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Txn = txn
 	c.ID = txn.GetID()
+	c.StartTS = txn.GetStartTS()
 	c.PrepareTS = txn.GetPrepareTS()
 	c.Participants = txn.GetParticipants()
 	c.Memo = txn.GetMemo()
@@ -268,6 +264,11 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	//start ts
+	if err = binary.Write(w, binary.BigEndian, c.StartTS); err != nil {
+		return
+	}
+	n += types.TxnTsSize
 	//prepare ts
 	if err = binary.Write(w, binary.BigEndian, c.PrepareTS); err != nil {
 		return
@@ -303,12 +304,17 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	//prepare timestamp
+	// start timestamp
+	if err = binary.Read(r, binary.BigEndian, &c.StartTS); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	// prepare timestamp
 	if err = binary.Read(r, binary.BigEndian, &c.PrepareTS); err != nil {
 		return
 	}
 	n += types.TxnTsSize
-	//participants
+	// participants
 	num := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &num); err != nil {
 		return

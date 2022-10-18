@@ -94,11 +94,8 @@ func CollectCatalogStats(c *catalog.Catalog) *CatalogStats {
 }
 
 func CollectTxnStats(mgr *txnbase.TxnManager) *TxnStats {
-	return &TxnStats{
-		//MaxTS:  mgr.TsAlloc.Get(),
-		//MaxID:  mgr.IdAlloc.Get(),
-		SafeTS: mgr.StatSafeTS(),
-	}
+	// TODO
+	return &TxnStats{}
 }
 
 func CollectWalStats(w wal.Driver) *WalStats {
