@@ -59,6 +59,13 @@ type OperationHandler interface {
 		resp *GetPrimaryKeysResp,
 	) error
 
+	HandleGetTableColumns(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req GetTableColumnsReq,
+		resp *GetTableColumnsResp,
+	) error
+
 	HandleGetTableDefs(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -122,6 +129,13 @@ type OperationHandler interface {
 		resp *DeleteRelationResp,
 	) error
 
+	HandleTruncateRelation(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req TruncateRelationReq,
+		resp *TruncateRelationResp,
+	) error
+
 	HandleAddTableDef(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -141,13 +155,6 @@ type OperationHandler interface {
 		meta txn.TxnMeta,
 		req DeleteReq,
 		resp *DeleteResp,
-	) error
-
-	HandleTruncate(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		req TruncateReq,
-		resp *TruncateResp,
 	) error
 
 	HandleUpdate(
@@ -234,6 +241,11 @@ func handle(
 		err = handler.HandleDeleteRelation(ctx, meta, req.(DeleteRelationReq), &r)
 		ret = r
 
+	case OpTruncateRelation:
+		var r TruncateRelationResp
+		handler.HandleTruncateRelation(ctx, meta, req.(TruncateRelationReq), &r)
+		ret = r
+
 	case OpOpenRelation:
 		var r OpenRelationResp
 		err = handler.HandleOpenRelation(ctx, meta, req.(OpenRelationReq), &r)
@@ -264,6 +276,11 @@ func handle(
 		err = handler.HandleGetPrimaryKeys(ctx, meta, req.(GetPrimaryKeysReq), &r)
 		ret = r
 
+	case OpGetTableColumns:
+		var r GetTableColumnsResp
+		err = handler.HandleGetTableColumns(ctx, meta, req.(GetTableColumnsReq), &r)
+		ret = r
+
 	case OpGetTableDefs:
 		var r GetTableDefsResp
 		err = handler.HandleGetTableDefs(ctx, meta, req.(GetTableDefsReq), &r)
@@ -272,11 +289,6 @@ func handle(
 	case OpGetHiddenKeys:
 		var r GetHiddenKeysResp
 		err = handler.HandleGetHiddenKeys(ctx, meta, req.(GetHiddenKeysReq), &r)
-		ret = r
-
-	case OpTruncate:
-		var r TruncateResp
-		err = handler.HandleTruncate(ctx, meta, req.(TruncateReq), &r)
 		ret = r
 
 	case OpUpdate:

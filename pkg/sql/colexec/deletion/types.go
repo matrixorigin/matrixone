@@ -17,7 +17,6 @@ package deletion
 import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
@@ -28,6 +27,8 @@ type Argument struct {
 
 type DeleteCtx struct {
 	IsHideKey          bool
+	TableName          string
+	DbName             string
 	TableSource        engine.Relation
 	UseDeleteKey       string
 	CanTruncate        bool
@@ -35,7 +36,4 @@ type DeleteCtx struct {
 	ComputeIndexTables []engine.Relation
 	ComputeIndexInfos  []*plan2.ComputeIndexInfo
 	IndexAttrs         []string
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

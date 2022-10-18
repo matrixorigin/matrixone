@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package tree
 
-type container struct {
-	i int
+// truncate table statement
+type TruncateTable struct {
+	statementImpl
+	Name *TableName
 }
 
-type Argument struct {
-	ctr *container
+func NewTruncateTable(name *TableName) *TruncateTable {
+	return &TruncateTable{Name: name}
+}
+
+func (node *TruncateTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("truncate table")
+	ctx.WriteByte(' ')
+	node.Name.Format(ctx)
 }

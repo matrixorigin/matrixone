@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "show profiles",
+		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}
 )
 
@@ -94,6 +95,18 @@ var (
 		input: "select * from tables",
 	}, {
 		input: "update t1 set a = default",
+	}, {
+		input:  "truncate t1",
+		output: "truncate table t1",
+	}, {
+		input:  "truncate table t1",
+		output: "truncate table t1",
+	}, {
+		input:  "truncate db1.t1",
+		output: "truncate table db1.t1",
+	}, {
+		input:  "truncate table db1.t1",
+		output: "truncate table db1.t1",
 	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",

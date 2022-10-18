@@ -56,6 +56,9 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp())
+				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -64,12 +67,14 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal); err != nil {
 					ctr.state = End
+					proc.SetInputBatch(nil)
 					return true, err
 				}
 			}
@@ -128,7 +133,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if err != nil {
 			return err
 		}
-		bs := vector.MustTCols[bool](vec)
+		bs := vec.Col.([]bool)
 		if len(bs) == 1 {
 			if bs[0] {
 				for j := 0; j < len(ctr.bat.Zs); j++ {
@@ -137,13 +142,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if rp.Rel == 0 {
 							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						} else {
 							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						}
@@ -160,13 +163,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if rp.Rel == 0 {
 							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						} else {
 							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						}
@@ -175,7 +176,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vec.Free(proc.Mp())
+		vector.Clean(vec, proc.Mp())
 		if !matched {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {

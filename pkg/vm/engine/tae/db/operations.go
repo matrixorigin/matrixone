@@ -16,6 +16,7 @@ package db
 
 import (
 	"encoding/gob"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -37,6 +38,7 @@ func init() {
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
 	gob.Register(new(engine.PrimaryIndexDef))
+	gob.Register(new(engine.ComputeIndexDef))
 
 	// register vector column types
 	gob.Register([]bool{})

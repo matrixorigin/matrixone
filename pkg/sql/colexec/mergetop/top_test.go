@@ -88,9 +88,6 @@ func TestTop(t *testing.T) {
 				}
 				break
 			}
-			if bat := tc.proc.InputBatch(); bat != nil {
-				bat.Clean(tc.proc.Mp())
-			}
 		}
 		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
@@ -100,7 +97,6 @@ func TestTop(t *testing.T) {
 				}
 			}
 		}
-		tc.arg.Free(tc.proc, false)
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
 }

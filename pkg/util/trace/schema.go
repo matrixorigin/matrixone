@@ -117,7 +117,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		return nil
 	}
 
-	optFactory := GetOptionFactory(ExternalTableEngine)
+	optFactory := GetOptionFactory(export.ExternalTableEngine)
 
 	if err := mustExec(sqlCreateDBConst); err != nil {
 		return err
@@ -141,7 +141,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
-var _ TableOptions = (*CsvTableOptions)(nil)
+var _ export.TableOptions = (*CsvTableOptions)(nil)
 
 type CsvTableOptions struct {
 	Formatter string
@@ -171,29 +171,17 @@ func (o *CsvTableOptions) GetTableOptions(builder export.PathBuilder) string {
 	return ""
 }
 
-func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+func GetOptionFactory(engine string) func(db, tbl string) export.TableOptions {
 	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
 		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 	switch engine {
-	case NormalTableEngine:
-		return func(_, _ string) TableOptions { return NoopTableOptions{} }
-	case ExternalTableEngine:
-		return func(db, tbl string) TableOptions {
+	case export.NormalTableEngine:
+		return func(_, _ string) export.TableOptions { return export.NoopTableOptions{} }
+	case export.ExternalTableEngine:
+		return func(db, tbl string) export.TableOptions {
 			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
 		}
 	default:
 		panic(moerr.NewInternalError("unknown engine: %s", engine))
 	}
-}
-
-type CsvOptions struct {
-	FieldTerminator rune // like: ','
-	EncloseRune     rune // like: '"'
-	Terminator      rune // like: '\n'
-}
-
-var CommonCsvOptions = &CsvOptions{
-	FieldTerminator: ',',
-	EncloseRune:     '"',
-	Terminator:      '\n',
 }
