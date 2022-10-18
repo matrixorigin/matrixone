@@ -40,8 +40,6 @@ var (
 	constTimestampType  = types.Type{Oid: types.T_timestamp}
 )
 
-// EvalExpr return a vector corresponding to an expression.
-// if vector not one of batch's vectors. generate it.
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
 
@@ -110,17 +108,17 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			return nil, err
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
-		mp := make(map[*vector.Vector]struct{})
-		for i := range bat.Vecs {
-			mp[bat.Vecs[i]] = struct{}{}
-		}
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
 				if proc != nil {
+					mp := make(map[*vector.Vector]uint8)
+					for i := range bat.Vecs {
+						mp[bat.Vecs[i]] = 0
+					}
 					for j := 0; j < i; j++ {
 						if _, ok := mp[vs[j]]; !ok {
-							vs[j].Free(proc.Mp())
+							vector.Clean(vs[j], proc.Mp())
 						}
 					}
 				}
@@ -128,13 +126,20 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			}
 			vs[i] = v
 		}
-
-		vec, err = f.VecFn(vs, proc)
-		for i := range vs {
-			if _, ok := mp[vs[i]]; !ok {
-				vs[i].Free(proc.Mp())
+		defer func() {
+			if proc != nil {
+				mp := make(map[*vector.Vector]uint8)
+				for i := range bat.Vecs {
+					mp[bat.Vecs[i]] = 0
+				}
+				for i := range vs {
+					if _, ok := mp[vs[i]]; !ok {
+						vector.Clean(vs[i], proc.Mp())
+					}
+				}
 			}
-		}
+		}()
+		vec, err = f.VecFn(vs, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -209,16 +214,13 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			return nil, err
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
-		mp := make(map[*vector.Vector]struct{})
-		for i := range r.Vecs {
-			mp[r.Vecs[i]] = struct{}{}
-		}
-		for i := range s.Vecs {
-			mp[s.Vecs[i]] = struct{}{}
-		}
 		for i := range vs {
 			v, err := JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
 			if err != nil {
+				mp := make(map[*vector.Vector]uint8)
+				for i := range s.Vecs {
+					mp[s.Vecs[i]] = 0
+				}
 				for j := 0; j < i; j++ {
 					if _, ok := mp[vs[j]]; !ok {
 						vector.Clean(vs[j], proc.Mp())
@@ -228,12 +230,18 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			}
 			vs[i] = v
 		}
-		vec, err = f.VecFn(vs, proc)
-		for i := range vs {
-			if _, ok := mp[vs[i]]; !ok {
-				vector.Clean(vs[i], proc.Mp())
+		defer func() {
+			mp := make(map[*vector.Vector]uint8)
+			for i := range s.Vecs {
+				mp[s.Vecs[i]] = 0
 			}
-		}
+			for i := range vs {
+				if _, ok := mp[vs[i]]; !ok {
+					vector.Clean(vs[i], proc.Mp())
+				}
+			}
+		}()
+		vec, err = f.VecFn(vs, proc)
 		if err != nil {
 			return nil, err
 		}
