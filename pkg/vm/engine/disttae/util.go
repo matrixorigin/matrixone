@@ -40,7 +40,7 @@ import (
 
 const (
 	HASH_VALUE_FUN string = "hash_value"
-	MAX_RANGE_SIZE int    = 200
+	MAX_RANGE_SIZE int64  = 200
 )
 
 func checkExprIsMonotonical(expr *plan.Expr) bool {
@@ -566,6 +566,10 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
 
 	listMap := make(map[uint64]struct{})
 	for _, r := range pkRange {
+		if r[1]-r[0] > MAX_RANGE_SIZE {
+			return list
+		}
+
 		for i := r[0]; i <= r[1]; i++ {
 			keys := make([]byte, 8)
 			binary.LittleEndian.PutUint64(keys, uint64(i))
