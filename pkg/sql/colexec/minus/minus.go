@@ -58,6 +58,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
 			if err = arg.ctr.buildHashTable(proc, analyze, 1); err != nil {
+				arg.ctr.hashTable.Free()
 				arg.ctr.state = operatorEnd
 				return true, err
 			}
@@ -70,6 +71,8 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0)
 			if err != nil {
+				arg.ctr.bat.Clean(proc.Mp())
+				arg.ctr.hashTable.Free()
 				arg.ctr.state = operatorEnd
 				return true, err
 			}
@@ -80,6 +83,10 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			return false, nil
 		case operatorEnd:
 			// operator over.
+			if arg.ctr.hashTable != nil {
+				arg.ctr.hashTable.Free()
+				arg.ctr.hashTable = nil
+			}
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -181,7 +188,6 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Output(ctr.bat)
 		proc.SetInputBatch(ctr.bat)
-		ctr.bat = nil
 		bat.Clean(proc.Mp())
 		return false, nil
 	}

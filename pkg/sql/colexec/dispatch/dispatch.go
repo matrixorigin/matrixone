@@ -37,6 +37,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
+		for _, reg := range ap.Regs {
+			select {
+			case <-reg.Ctx.Done():
+			case reg.Ch <- nil:
+			}
+		}
 		return true, nil
 	}
 	vecs := ap.vecs[:0]
@@ -44,7 +50,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
-				return true, err
+				return false, err
 			}
 			vecs = append(vecs, vec)
 		}
@@ -86,5 +92,5 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			return false, nil
 		}
 	}
-	return false, nil
+	return true, nil
 }
