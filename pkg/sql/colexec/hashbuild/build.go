@@ -61,6 +61,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
 				ctr.state = End
+				ctr.mp.Free()
 				return true, err
 			}
 			ctr.state = End
@@ -69,9 +70,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				if ap.NeedHashMap {
 					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
+				proc.SetInputBatch(ctr.bat)
+				ctr.bat = nil
+			} else {
+				proc.SetInputBatch(nil)
 			}
-			proc.SetInputBatch(ctr.bat)
-			ctr.bat = nil
 			return true, nil
 		}
 	}
@@ -92,6 +95,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		anal.Alloc(int64(bat.Size()))
 		if ctr.bat, err = ctr.bat.Append(proc.Mp(), bat); err != nil {
 			bat.Clean(proc.Mp())
+			ctr.bat.Clean(proc.Mp())
 			return err
 		}
 		bat.Clean(proc.Mp())
@@ -102,7 +106,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err := ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc); err != nil {
 		return err
 	}
-	defer ctr.cleanEvalVectors(proc.Mp())
+	defer ctr.freeJoinCondition(proc)
 
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
@@ -138,6 +142,11 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
+			for j := 0; j < i; j++ {
+				if ctr.evecs[j].needFree {
+					vector.Clean(ctr.evecs[j].vec, proc.Mp())
+				}
+			}
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -151,4 +160,12 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		}
 	}
 	return nil
+}
+
+func (ctr *container) freeJoinCondition(proc *process.Process) {
+	for i := range ctr.evecs {
+		if ctr.evecs[i].needFree {
+			ctr.evecs[i].vec.Free(proc.Mp())
+		}
+	}
 }

@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,7 +41,13 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
-		bat := <-proc.Reg.MergeReceivers[ap.ctr.i].Ch
+		reg := proc.Reg.MergeReceivers[ap.ctr.i]
+		var bat *batch.Batch = nil
+		select {
+		case <-reg.Ctx.Done():
+		case bat = <-reg.Ch:
+		}
+
 		if bat == nil {
 			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:ap.ctr.i], proc.Reg.MergeReceivers[ap.ctr.i+1:]...)
 			if ap.ctr.i >= len(proc.Reg.MergeReceivers) {

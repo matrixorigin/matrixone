@@ -57,6 +57,12 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
+func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
+	colDefs := rel.handle.GetMeta().(*catalog.TableEntry).GetColDefs()
+	cols, _ := ColDefsToAttrs(colDefs)
+	return cols, nil
+}
+
 func (rel *baseRelation) Rows(context.Context) (int64, error) {
 	return rel.handle.Rows(), nil
 }

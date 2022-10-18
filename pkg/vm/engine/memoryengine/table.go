@@ -172,6 +172,27 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 	return resp.Attrs, nil
 }
 
+func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+
+	resps, err := DoTxnRequest[GetTableColumnsResp](
+		ctx,
+		t.txnOperator,
+		true,
+		t.engine.anyShard,
+		OpGetTableColumns,
+		GetTableColumnsReq{
+			TableID: t.id,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := resps[0]
+
+	return resp.Attrs, nil
+}
+
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resps, err := DoTxnRequest[GetTableDefsResp](

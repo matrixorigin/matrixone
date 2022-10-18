@@ -17,7 +17,6 @@ package external
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"sync/atomic"
 
@@ -61,7 +60,4 @@ type ParseLineHandler struct {
 	batchSize int
 	//simd csv
 	simdCsvLineArray [][]string
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

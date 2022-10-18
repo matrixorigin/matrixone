@@ -92,11 +92,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
+	db.TxnMgr.Start()
 
 	db.Replay(dataFactory)
 	db.Catalog.ReplayTableRows()
-
-	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
 

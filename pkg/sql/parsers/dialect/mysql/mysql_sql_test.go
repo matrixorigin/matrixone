@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "truncate db1.t1",
-		output: "truncate table db1.t1",
+		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
 	}
 )
 

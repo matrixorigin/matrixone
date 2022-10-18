@@ -182,6 +182,17 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
+func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+	var attrs []*engine.Attribute
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			attrs = append(attrs, &attr.Attr)
+		}
+	}
+	return attrs, nil
+
+}
+
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {

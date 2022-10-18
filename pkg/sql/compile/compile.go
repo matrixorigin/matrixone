@@ -695,7 +695,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = plan2.MakeTypeByPlan2Type(expr.Typ)
+		typs[i] = dupType(expr.Typ)
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
@@ -818,9 +818,6 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Top,
 			Idx: c.anal.curr,
@@ -838,9 +835,6 @@ func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Order,
 			Idx: c.anal.curr,
@@ -857,11 +851,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
-	}
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
@@ -873,9 +862,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Limit,
 			Idx: c.anal.curr,
@@ -891,20 +877,8 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func containBrokenNode(s *Scope) bool {
-	for i := range s.Instructions {
-		if s.Instructions[i].IsBrokenNode() {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
@@ -924,11 +898,6 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	rs := c.newScopeList(validScopeCount(ss))
 	j := 0
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			isEnd := ss[i].IsEnd
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-			ss[i].IsEnd = isEnd
-		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
@@ -1258,5 +1227,15 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return false, plan.Node_MARK
 	default:
 		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
+	}
+}
+
+func dupType(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
 	}
 }
