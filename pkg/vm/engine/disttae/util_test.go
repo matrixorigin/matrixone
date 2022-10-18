@@ -320,11 +320,11 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 		for i, testCase := range testCases {
 			result, data := computeRangeByNonIntPk(testCase.expr, 0)
 			if result != testCase.result {
-				t.Fatalf("test computeRangeByIntPk at cases[%d], get result is different with expected", i)
+				t.Fatalf("test computeRangeByNonIntPk at cases[%d], get result is different with expected", i)
 			}
 			if result {
 				if data != testCase.data {
-					t.Fatalf("test computeRangeByIntPk at cases[%d], data is not match", i)
+					t.Fatalf("test computeRangeByNonIntPk at cases[%d], data is not match", i)
 				}
 			}
 		}
