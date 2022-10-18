@@ -77,8 +77,6 @@ type tracerProviderConfig struct {
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
 	longQueryTime int64 //  WithLongQueryTime
-	// multiTable
-	multiTable bool // WithMultiTable
 
 	mux sync.RWMutex
 }
@@ -159,12 +157,6 @@ func WithExportInterval(secs int) tracerProviderOption {
 func WithLongQueryTime(secs float64) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longQueryTime = int64(float64(time.Second) * secs)
-	})
-}
-
-func WithMultiTable(multi bool) tracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.multiTable = multi
 	})
 }
 

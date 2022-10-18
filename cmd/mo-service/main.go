@@ -266,7 +266,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithFSWriterFactory(writerFactory),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.WithMultiTable(SV.MetricMultiTable),
 				trace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)

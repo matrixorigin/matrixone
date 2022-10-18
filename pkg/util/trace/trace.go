@@ -70,12 +70,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	SetDefaultSpanContext(&sc)
 	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
-	if GetTracerProvider().multiTable {
-		SingleRowLogTable.PathBuilder = export.NewDBTablePathBuilder()
-		SingleStatementTable.PathBuilder = export.NewDBTablePathBuilder()
-		SingleStatementTable.AccountColumn = nil
-	}
-
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
 		return nil, err
