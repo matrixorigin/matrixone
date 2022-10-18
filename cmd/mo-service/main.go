@@ -228,8 +228,12 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
-	ServerType := strings.ToUpper(cfg.ServiceType)
-	switch ServerType {
+	ServiceType := strings.ToUpper(cfg.ServiceType)
+	nodeRole := ServiceType
+	if *launchFile != "" {
+		nodeRole = "ALL"
+	}
+	switch ServiceType {
 	case cnServiceType:
 		// validate node_uuid
 		var uuidErr error
@@ -249,14 +253,14 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
+		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = trace.Init(ctx,
 				trace.WithMOVersion(SV.MoVersion),
-				trace.WithNode(UUID, ServerType),
+				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
@@ -278,7 +282,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory),
+		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
