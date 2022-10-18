@@ -122,14 +122,6 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	indexed.GetTaskRunner().RegisterExecutor(0,
-		func(ctx context.Context, task task.Task) error {
-			return nil
-		},
-	)
-
-	err = taskService.Create(ctx, task.TaskMetadata{ID: "a", Executor: 0})
-	require.NoError(t, err)
 	i := 0
 	for {
 		select {
@@ -145,7 +137,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 			i++
 			continue
 		}
-		require.Equal(t, 1, len(tasks))
+		require.Equal(t, 4, len(tasks))
 		t.Logf("task status: %s", tasks[0].Status)
 		break
 	}
@@ -176,10 +168,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	cn1.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
 			for {
-				select {
-				default:
-					time.Sleep(1 * time.Second)
-				}
+				time.Sleep(1 * time.Second)
 			}
 		},
 	)
@@ -190,10 +179,8 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	cn2.GetTaskRunner().RegisterExecutor(0,
 		func(ctx context.Context, task task.Task) error {
 			for {
-				select {
-				default:
-					time.Sleep(1 * time.Second)
-				}
+				time.Sleep(1 * time.Second)
+
 			}
 		},
 	)

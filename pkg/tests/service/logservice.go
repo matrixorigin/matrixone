@@ -62,6 +62,8 @@ type LogService interface {
 
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
+
+	CreateInitTasks() error
 }
 
 // logService wraps logservice.WrappedService.
@@ -137,6 +139,10 @@ func (ls *logService) StartHAKeeperReplica(
 
 func (ls *logService) GetTaskService() (taskservice.TaskService, bool) {
 	return ls.svc.GetTaskService()
+}
+
+func (ls *logService) CreateInitTasks() error {
+	return ls.svc.CreateInitTasks()
 }
 
 // logOptions is options for a log service.

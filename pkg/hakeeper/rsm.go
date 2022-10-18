@@ -297,15 +297,6 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) getCreateTaskCommand(sp pb.ServiceType) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		ServiceType: sp,
-		CreateTaskService: &pb.CreateTaskService{
-			TaskDatabase: "mo_task", // TODO: define the task database name as a const
-			User:         s.state.TaskTableUser,
-		}}
-}
-
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 	s.state.Tick++
 	return sm.Result{}

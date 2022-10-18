@@ -342,6 +342,15 @@ func (c *testCluster) Start() error {
 	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.mu.running = true
+
+	log, err := c.GetLogServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := log.CreateInitTasks(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
