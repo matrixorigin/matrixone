@@ -573,7 +573,7 @@ func TestCheckIfDataInBlock(t *testing.T) {
 		for i, testCase := range testCases {
 			result, _ := checkIfDataInBlock(testCase.data, meta, testCase.colIdx, testCase.typ)
 			if result != testCase.result {
-				t.Fatalf("test getDNStore at cases[%d], result is not match", i)
+				t.Fatalf("test checkIfDataInBlock at cases[%d], result is not match", i)
 			}
 		}
 	})
