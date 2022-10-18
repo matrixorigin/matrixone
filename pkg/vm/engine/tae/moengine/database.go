@@ -108,6 +108,18 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 	return err
 }
 
+func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
+	id uint64, defs []engine.TableDef) error {
+	schema, err := DefsToSchema(name, defs)
+	if err != nil {
+		return err
+	}
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 20
+	_, err = db.handle.CreateRelationWithID(schema, id)
+	return err
+}
+
 func (db *txnDatabase) Delete(_ context.Context, name string) error {
 	_, err := db.handle.DropRelationByName(name)
 	return err

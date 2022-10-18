@@ -279,7 +279,7 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabase(ctx, req.Name, txn)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
@@ -338,7 +338,7 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	err = db.CreateRelation(context.TODO(), req.Name, req.Defs)
+	err = db.CreateRelationWithID(context.TODO(), req.Name, req.RelationId, req.Defs)
 	if err != nil {
 		return
 	}

@@ -44,13 +44,21 @@ func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntr
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
 	return
 }
+
+func (store *NoopTxnStore) CreateRelationWithID(dbId uint64, tbId uint64, def any) (rel handle.Relation, err error) {
+	return
+}
+
 func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
 func (store *NoopTxnStore) GetRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error)  { return }
+func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error) { return }
+func (store *NoopTxnStore) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
+	return
+}
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
 func (store *NoopTxnStore) UnsafeGetDatabase(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err error) {

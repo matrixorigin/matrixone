@@ -673,6 +673,16 @@ func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry
 	return entry, err
 }
 
+func (catalog *Catalog) CreateDBEntryWithID(name string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+	var err error
+	catalog.Lock()
+	defer catalog.Unlock()
+	entry := NewDBEntryWithID(catalog, name, id, txn)
+	err = catalog.AddEntryLocked(entry, txn)
+
+	return entry, err
+}
+
 func (catalog *Catalog) CreateDBEntryByTS(name string, ts types.TS) (*DBEntry, error) {
 	entry := NewDBEntryByTS(catalog, name, ts)
 	err := catalog.AddEntryLocked(entry, nil)

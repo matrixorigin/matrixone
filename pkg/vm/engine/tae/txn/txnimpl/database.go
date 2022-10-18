@@ -109,6 +109,10 @@ func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) 
 	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)
 }
 
+func (db *txnDatabase) CreateRelationWithID(def any, id uint64) (rel handle.Relation, err error) {
+	return db.Txn.GetStore().CreateRelationWithID(db.txnDB.entry.ID, id, def)
+}
+
 func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
 }

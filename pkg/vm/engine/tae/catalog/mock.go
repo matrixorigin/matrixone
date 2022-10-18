@@ -137,6 +137,17 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	return
 }
 
+func (h *mockDBHandle) CreateRelationWithID(def any, id uint64) (rel handle.Relation, err error) {
+	schema := def.(*Schema)
+	tbl, err := h.entry.CreateTableEntryWithID(schema, id, h.Txn, nil)
+	if err != nil {
+		return nil, err
+	}
+	h.Txn.GetStore().AddTxnEntry(0, tbl)
+	rel = newMockTableHandle(h.catalog, h.Txn, tbl)
+	return
+}
+
 func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
 	panic("not implemented")
 }
@@ -178,6 +189,16 @@ type mockTxn struct {
 
 func (txn *mockTxn) CreateDatabase(name string) (handle.Database, error) {
 	entry, err := txn.catalog.CreateDBEntry(name, txn)
+	if err != nil {
+		return nil, err
+	}
+	txn.Store.AddTxnEntry(0, entry)
+	h := newMockDBHandle(txn.catalog, txn, entry)
+	return h, nil
+}
+
+func (txn *mockTxn) CreateDatabaseWithID(name string, id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntryWithID(name, id, txn)
 	if err != nil {
 		return nil, err
 	}
