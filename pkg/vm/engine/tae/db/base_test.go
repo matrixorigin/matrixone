@@ -210,17 +210,6 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 	wg.Wait()
 }
 
-func decodeSegName(name string) (uint64, error) {
-	if !strings.HasSuffix(name, ".seg") {
-		return 0, moerr.NewInternalError("blockio: segment name is illegal")
-	}
-	id, err := blockio.DecodeSegName(name)
-	if err != nil {
-		return 0, err
-	}
-	return id.SegmentID, err
-}
-
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
 	return
