@@ -41,6 +41,8 @@ const (
 	datetime6Type      = "datetime(6)"
 	bigintUnsignedType = "bigint unsigned"
 	stringType         = "varchar(1024)"
+
+	jsonColumnDEFAULT = "{}"
 )
 
 var (
@@ -61,7 +63,7 @@ var (
 	durationCol  = export.Column{Name: "duration", Type: bigintUnsignedType, Default: "0", Comment: "exec time, unit: ns"}
 	statusCol    = export.Column{Name: "status", Type: "varchar(32)", Default: "Running", Comment: "sql statement running status, enum: Running, Success, Failed"}
 	errorCol     = export.Column{Name: "error", Type: "TEXT", Default: "", Comment: "error message"}
-	execPlanCol  = export.Column{Name: "exec_plan", Type: "JSON", Default: "", Comment: "statement execution plan"}
+	execPlanCol  = export.Column{Name: "exec_plan", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "statement execution plan"}
 	rowsReadCol  = export.Column{Name: "rows_read", Type: bigintUnsignedType, Default: "0", Comment: "rows read total"}
 	bytesScanCol = export.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
 
@@ -104,7 +106,7 @@ var (
 	levelCol        = export.Column{Name: "level", Type: stringType, Comment: "log level, enum: debug, info, warn, error, panic, fatal"}
 	callerCol       = export.Column{Name: "caller", Type: stringType, Comment: "where it log, like: package/file.go:123"}
 	messageCol      = export.Column{Name: "message", Type: "TEXT", Comment: "log message"}
-	extraCol        = export.Column{Name: "extra", Type: "JSON", Comment: "log dynamic fields"}
+	extraCol        = export.Column{Name: "extra", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "log dynamic fields"}
 	errCodeCol      = export.Column{Name: "err_code", Type: stringType, Default: "0"}
 	stackCol        = export.Column{Name: "stack", Type: "varchar(4096)"}
 	spanIDCol       = export.Column{Name: "span_id", Type: spanIDType, Default: "0", Comment: "span uniq id"}
@@ -112,7 +114,7 @@ var (
 	spanNameCol     = export.Column{Name: "span_name", Type: stringType, Default: "", Comment: "span name, for example: step name of execution plan, function name in code, ..."}
 	startTimeCol    = export.Column{Name: "start_time", Type: datetime6Type, Default: ""}
 	endTimeCol      = export.Column{Name: "end_time", Type: datetime6Type, Default: ""}
-	resourceCol     = export.Column{Name: "resource", Type: "JSON", Default: "", Comment: "static resource information"}
+	resourceCol     = export.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
 
 	SingleRowLogTable = &export.Table{
 		Database: StatsDatabase,
