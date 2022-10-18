@@ -24,6 +24,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/multierr"
 )
 
 var (
@@ -154,7 +155,7 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 
 	for _, s := range createDB {
 		if _, err = db.Exec(s + dbname); err != nil {
-			return nil, err
+			return nil, multierr.Append(err, db.Close())
 		}
 	}
 
@@ -162,7 +163,7 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 	// the initialization logic needs to be moved to the initialization of HaKeeper
 	for _, s := range createSqls {
 		if _, err = db.Exec(s); err != nil {
-			return nil, err
+			return nil, multierr.Append(err, db.Close())
 		}
 	}
 
@@ -328,17 +329,12 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 }
 
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
-	db, err := sql.Open("mysql", m.dsn)
+	conn, err := m.db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	//conn, err := m.db.Conn(ctx)
-	//if err != nil {
-	//	return nil, err
-	//}
 	defer func() {
-		//	_ = conn.Close()
-		_ = db.Close()
+		_ = conn.Close()
 	}()
 
 	c := conditions{}
@@ -355,7 +351,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	}
 	query += buildLimitClause(c)
 
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := conn.QueryContext(ctx, query)
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return

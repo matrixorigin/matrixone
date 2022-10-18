@@ -180,6 +180,12 @@ func (s *Service) Close() (err error) {
 	if s.store != nil {
 		err = firstError(err, s.store.close())
 	}
+	s.task.RLock()
+	ts := s.task.holder
+	s.task.RUnlock()
+	if ts != nil {
+		err = firstError(err, ts.Close())
+	}
 	return err
 }
 

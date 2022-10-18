@@ -195,6 +195,7 @@ func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error
 }
 
 func (s *taskService) Close() error {
+	s.StopScheduleCronTask()
 	return s.store.Close()
 }
 
