@@ -250,14 +250,14 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 		// a > "a"  false   only 'and', '=' function is supported
 		{false, 0, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2StringConstExprWithType("aa"),
+			plan2.MakePlan2StringConstExprWithType("a"),
 		})},
 		// a > coalesce("a")  false,  the second arg must be constant
 		{false, 0, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeFunctionExprForTest("coalesce", []*plan.Expr{
 				makeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2StringConstExprWithType("abc"),
+				plan2.MakePlan2StringConstExprWithType("a"),
 			}),
 		})},
 		// a = "abc"  true
