@@ -102,6 +102,11 @@ func (db *txnDatabase) Truncate(_ context.Context, name string) error {
 	return err
 }
 
+func (db *txnDatabase) TruncateRelation(_ context.Context, name string) error {
+	_, err := db.handle.TruncateByName(name)
+	return err
+}
+
 func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []engine.TableDef) error {
 	schema, err := DefsToSchema(name, defs)
 	if err != nil {
