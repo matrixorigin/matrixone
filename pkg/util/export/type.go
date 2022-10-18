@@ -124,6 +124,8 @@ type PathBuilder interface {
 	ParsePath(path string) (CSVPath, error)
 	NewMergeFilename(timestampStart, timestampEnd string) string
 	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string
+	// SupportMergeSplit const. if false, not support SCV merge|split task
+	SupportMergeSplit() bool
 	// SupportAccountStrategy const
 	SupportAccountStrategy() bool
 	// GetName const
@@ -246,6 +248,7 @@ func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string,
 	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
 }
 
+func (m *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
 func (b *AccountDatePathBuilder) SupportAccountStrategy() bool { return true }
 func (b *AccountDatePathBuilder) GetName() string              { return "AccountDate" }
 
@@ -280,6 +283,7 @@ func (m *DBTablePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts 
 	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000")) + CsvExtension
 }
 
+func (m *DBTablePathBuilder) SupportMergeSplit() bool      { return false }
 func (m *DBTablePathBuilder) SupportAccountStrategy() bool { return false }
 func (m *DBTablePathBuilder) GetName() string              { return "DBTable" }
 
