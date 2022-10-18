@@ -1714,6 +1714,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}, ctx)
 
 	case *tree.JoinTableExpr:
+		if tbl.Right == nil {
+			return builder.buildTable(tbl.Left, ctx)
+		}
 		return builder.buildJoinTable(tbl, ctx)
 	case *tree.TableFunction:
 		return builder.buildTableFunction(tbl, ctx)
