@@ -294,6 +294,15 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 	return created, err
 }
 
+func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
+	e.Lock()
+	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
+	err = e.AddEntryLocked(created, txnCtx)
+	e.Unlock()
+
+	return created, err
+}
+
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	defer func() {
 		if err == nil {

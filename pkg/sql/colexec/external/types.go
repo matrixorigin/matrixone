@@ -16,9 +16,11 @@ package external
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
+	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -39,13 +41,19 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	End       bool
-	FileCnt   int
-	FileIndex int
+	Fileparam *ExternalFileparam
 	FileList  []string
 	batchSize int
 	reader    io.ReadCloser
 	records   [][]string
+}
+
+type ExternalFileparam struct {
+	End       bool
+	FileCnt   int
+	FileFin   int
+	FileIndex int
+	mu        sync.Mutex
 }
 
 type Argument struct {

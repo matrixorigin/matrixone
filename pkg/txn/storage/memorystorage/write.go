@@ -51,6 +51,12 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 			s.handler.HandleDeleteRelation,
 		)
 
+	case memoryengine.OpTruncateRelation:
+		return handleWrite(
+			ctx, txnMeta, payload,
+			s.handler.HandleTruncateRelation,
+		)
+
 	case memoryengine.OpAddTableDef:
 		return handleWrite(
 			ctx, txnMeta, payload,
@@ -69,11 +75,11 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 			s.handler.HandleDelete,
 		)
 
-	case memoryengine.OpTruncate:
-		return handleWrite(
-			ctx, txnMeta, payload,
-			s.handler.HandleTruncate,
-		)
+	//case memoryengine.OpTruncate:
+	//	return handleWrite(
+	//		ctx, txnMeta, payload,
+	//		s.handler.HandleTruncate,
+	//	)
 
 	case memoryengine.OpUpdate:
 		return handleWrite(
