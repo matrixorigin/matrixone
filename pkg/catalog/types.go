@@ -87,6 +87,7 @@ const (
 	BlockMeta_EntryState = "entry_state"
 	BlockMeta_MetaLoc    = "meta_loc"
 	BlockMeta_DeltaLoc   = "delta_loc"
+	BlockMeta_CommitTs   = "committs"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -163,6 +164,7 @@ const (
 	BLOCKMETA_ENTRYSTATE_IDX = 1
 	BLOCKMETA_METALOC_IDX    = 2
 	BLOCKMETA_DELTALOC_IDX   = 3
+	BLOCKMETA_COMMITTS_IDX   = 4
 )
 
 type BlockInfo struct {
@@ -170,6 +172,7 @@ type BlockInfo struct {
 	EntryState bool
 	MetaLoc    string
 	DeltaLoc   string
+	CommitTs   types.TS
 }
 
 // used for memengine and tae
@@ -270,6 +273,7 @@ var (
 		BlockMeta_EntryState,
 		BlockMeta_MetaLoc,
 		BlockMeta_DeltaLoc,
+		BlockMeta_CommitTs,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
@@ -325,6 +329,7 @@ var (
 		types.New(types.T_bool, 0, 0, 0),    // entry_state, true for appendable
 		types.New(types.T_varchar, 0, 0, 0), // meta_loc
 		types.New(types.T_varchar, 0, 0, 0), // delta_loc
+		types.New(types.T_TS, 0, 0, 0),      // committs
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
