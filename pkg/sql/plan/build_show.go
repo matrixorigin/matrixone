@@ -231,7 +231,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
-	if stmt.Full || stmt.Open {
+	if stmt.Open {
 		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
@@ -246,7 +246,11 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNoDB()
 	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+	var tableType string
+	if stmt.Full {
+		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
+	}
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

@@ -132,13 +132,9 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
+func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
 	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
-	zonemapList := make([][64]byte, columnLength)
-	idxs := make([]uint16, columnLength)
-	for i := 0; i < columnLength; i++ {
-		idxs[i] = uint16(i)
-	}
+	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
@@ -156,7 +152,7 @@ func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return nil, nil
+	return zonemapList, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
