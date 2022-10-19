@@ -302,19 +302,19 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.DropDatabase(ctx, req.Name, txn)
-	if err != nil {
-		return
-	}
 
 	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
+
+	if err = h.eng.DropDatabase(ctx, req.Name, txn); err != nil {
+		return
+	}
+
 	resp.ID = db.GetDatabaseID(ctx)
 	return
 }
