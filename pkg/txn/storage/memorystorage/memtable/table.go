@@ -16,7 +16,6 @@ package memtable
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -331,35 +330,11 @@ func getOrSetRowByKey[
 }
 
 func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
-	state := t.state.Load()
-	iter := state.indexes.Copy().Iter()
-	defer iter.Release()
-	pivot := &IndexEntry[K, V]{
-		Index: index,
-	}
-	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+	iter := t.NewIndexIter(tx, index)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
-		if index.Less(entry.Index) {
-			break
-		}
-		if entry.Index.Less(index) {
-			break
-		}
-
-		physicalRow := getRowByKey(state.rows, entry.Key)
-		if physicalRow == nil {
-			continue
-		}
-		currentVersion, err := physicalRow.readVersion(tx.Time, tx)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return nil, err
-		}
-		if currentVersion.ID == entry.VersionID {
-			entries = append(entries, entry)
-		}
+		entries = append(entries, entry)
 	}
 	return
 }
