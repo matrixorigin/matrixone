@@ -529,7 +529,7 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 					} else {
 						defaultStr = fmt.Sprintf("%v", defaultVaL)
 					}
-					tblDDL += "NOT NULL DEFAULT " + fmt.Sprintf("%v", defaultStr)
+					tblDDL += " NOT NULL DEFAULT " + fmt.Sprintf("%v", defaultStr)
 				}
 			}
 			if def.Attr.OnUpdate != nil {
@@ -572,15 +572,10 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 	return attrs, tblDDL, viewDDL, nil
 }
 
-func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
+func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
 	var err error
 	rbat := batch.NewWithSize(bat.VectorCount())
 	rbat.InitZsOne(bat.Length())
-	defer func() {
-		if err != nil && rbat != nil {
-			rbat.Clean(mp)
-		}
-	}()
 	for i := 0; i < rbat.VectorCount(); i++ {
 		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
 		rs := make([]string, bat.Length())
@@ -635,7 +630,7 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error
 
 		case types.T_timestamp:
 			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
-			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Timestamp])
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Precision)
 		case types.T_datetime:
 			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
@@ -708,14 +703,38 @@ func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, 
 		buf.Reset()
 		return
 	}
+	newFileSize = curFileSize + int64(buf.Len())
 	_, err = buf.WriteTo(f)
 	if err != nil {
 		return
 	}
 	buf.Reset()
-	return f, curFileIdx, curFileSize + int64(buf.Len()), nil
+	return f, curFileIdx, newFileSize, nil
 }
 
 func needQuote(p types.Type) bool {
 	return p.Oid == types.T_char || p.Oid == types.T_varchar || p.Oid == types.T_blob || p.Oid == types.T_json || p.Oid == types.T_timestamp || p.Oid == types.T_datetime || p.Oid == types.T_date || p.Oid == types.T_decimal64 || p.Oid == types.T_decimal128
+}
+
+func maybeAppendExtension(s string) string {
+	path := filepath.Dir(s)
+	filename := strings.Split(filepath.Base(s), ".")
+	if len(filename) == 1 {
+		filename = append(filename, "sql")
+	}
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	return filepath.Join(path, base+"."+extend)
+}
+
+func removeFile(s string, idx int64) {
+	if idx == 1 {
+		os.RemoveAll(s)
+		return
+	}
+	path := filepath.Dir(s)
+	filename := strings.Split(filepath.Base(s), ".")
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	for i := int64(1); i <= idx; i++ {
+		os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
+	}
 }

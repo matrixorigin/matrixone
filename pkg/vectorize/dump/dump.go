@@ -19,14 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+	"time"
 )
 
 type quotedTp interface {
-	types.Timestamp | types.Datetime | types.Date | types.Decimal | string
+	types.Datetime | types.Date | types.Decimal | string
 }
 
 type transTp interface {
-	[]byte | quotedTp
+	[]byte | quotedTp | types.Datetime
 }
 
 func ParseBool(xs []bool, nsp *nulls.Nulls, rs []string) ([]string, error) {
@@ -79,6 +80,18 @@ func ParseQuoted[T transTp](xs []T, nsp *nulls.Nulls, rs []string, fn func(dt T)
 			continue
 		}
 		v := fn(xs[i])
+		rs[i] = v
+	}
+	return rs, nil
+}
+
+func ParseTimeStamp(xs []types.Timestamp, nsp *nulls.Nulls, rs []string, loc *time.Location, precision int32) ([]string, error) {
+	for i := range xs {
+		if nsp.Contains(uint64(i)) {
+			rs[i] = "NULL"
+			continue
+		}
+		v := fmt.Sprintf("'%s'", xs[i].String2(loc, precision))
 		rs[i] = v
 	}
 	return rs, nil

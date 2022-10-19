@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"strconv"
 	"testing"
+	"time"
 )
 
 type Kase struct {
@@ -46,6 +47,7 @@ var (
 		types.T_decimal128.ToType(),
 		types.T_date.ToType(),
 		types.T_datetime.ToType(),
+		types.T_timestamp.ToType(),
 		types.T_varchar.ToType(),
 		types.T_char.ToType(),
 		types.T_json.ToType(),
@@ -65,6 +67,7 @@ var (
 		{"1.1", "2.2", "3.3", "4.4", "5.5"},
 		{"1.1", "2.2", "3.3", "4.4", "5.5"},
 		{"2021-01-01", "2021-01-02", "2021-01-03", "2021-01-04", "2021-01-05"},
+		{"2021-01-01 00:00:00", "2021-01-02 00:00:00", "2021-01-03 00:00:00", "2021-01-04 00:00:00", "2021-01-05 00:00:00"},
 		{"2021-01-01 00:00:00", "2021-01-02 00:00:00", "2021-01-03 00:00:00", "2021-01-04 00:00:00", "2021-01-05 00:00:00"},
 		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
 		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
@@ -328,6 +331,24 @@ func TestParser(t *testing.T) {
 				unquote := rs[i][1 : len(rs[i])-1]
 				require.Equal(t, xs[i].String(), unquote)
 			}
+		case types.T_timestamp:
+			xs := make([]types.Timestamp, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseTimestamp(time.Local, x, kase.tp.Precision)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseTimeStamp(xs, kase.ns, rs, time.Local, kase.tp.Precision)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String2(time.Local, kase.tp.Precision), unquote)
+			}
+
 		case types.T_varchar, types.T_char:
 			xs := make([]string, len(kase.xs))
 			copy(xs, kase.xs)

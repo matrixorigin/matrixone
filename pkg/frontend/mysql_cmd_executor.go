@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime/pprof"
 	"sort"
@@ -853,6 +852,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 
 func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.Dump) error {
 	var err error
+	dump.OutFile = maybeAppendExtension(dump.OutFile)
 	exists, err := fileExists(dump.OutFile)
 	if exists {
 		return moerr.NewFileAlreadyExists(dump.OutFile)
@@ -932,6 +932,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 		curFileSize int64 = 0
 		curFileIdx  int64 = 1
 		buf         *bytes.Buffer
+		rbat        *batch.Batch
 	)
 	f, err = createDumpFile(dump.OutFile)
 	if err != nil {
@@ -945,19 +946,10 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 			if buf != nil {
 				buf.Reset()
 			}
-			if curFileIdx > 1 {
-				path := filepath.Dir(dump.OutFile)
-				filename := strings.Split(filepath.Base(dump.OutFile), ".")
-				if len(filename) == 1 {
-					filename = append(filename, "sql")
-				}
-				base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
-				for i := int64(1); i <= curFileIdx; i++ {
-					os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
-				}
-			} else {
-				os.RemoveAll(dump.OutFile)
+			if rbat != nil {
+				rbat.Clean(ses.Mp)
 			}
+			removeFile(dump.OutFile, curFileIdx)
 		}
 	}()
 	buf = new(bytes.Buffer)
@@ -999,7 +991,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 			buf.WriteString("INSERT INTO ")
 			buf.WriteString(param.name)
 			buf.WriteString(" VALUES ")
-			rbat, err := convertValueBat2Str(bat, ses.Mp)
+			rbat, err = convertValueBat2Str(bat, ses.Mp, ses.timeZone)
 			if err != nil {
 				return err
 			}
