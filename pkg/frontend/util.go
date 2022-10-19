@@ -431,6 +431,9 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 		val := vec.GetBytes(0)
 		byteJson := types.DecodeJson(val)
 		return byteJson.String(), nil
+	case types.T_uuid:
+		val := vector.GetValueAt[types.Uuid](vec, 0)
+		return val.ToString(), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
@@ -637,6 +640,9 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) 
 		case types.T_date:
 			xs := vector.MustTCols[types.Date](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Date])
+		case types.T_uuid:
+			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		default:
 			err = moerr.NewNotSupported("type %v", bat.Vecs[i].Typ.String())
 		}
@@ -713,7 +719,7 @@ func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, 
 }
 
 func needQuote(p types.Type) bool {
-	return p.Oid == types.T_char || p.Oid == types.T_varchar || p.Oid == types.T_blob || p.Oid == types.T_json || p.Oid == types.T_timestamp || p.Oid == types.T_datetime || p.Oid == types.T_date || p.Oid == types.T_decimal64 || p.Oid == types.T_decimal128
+	return p.Oid == types.T_char || p.Oid == types.T_varchar || p.Oid == types.T_blob || p.Oid == types.T_json || p.Oid == types.T_timestamp || p.Oid == types.T_datetime || p.Oid == types.T_date || p.Oid == types.T_decimal64 || p.Oid == types.T_decimal128 || p.Oid == types.T_uuid
 }
 
 func maybeAppendExtension(s string) string {

@@ -96,6 +96,17 @@ func ParseTimeStamp(xs []types.Timestamp, nsp *nulls.Nulls, rs []string, loc *ti
 	}
 	return rs, nil
 }
+func ParseUuid(xs []types.Uuid, nsp *nulls.Nulls, rs []string) ([]string, error) {
+	for i := range xs {
+		if nsp.Contains(uint64(i)) {
+			rs[i] = "NULL"
+			continue
+		}
+		v := fmt.Sprintf("'%s'", xs[i].ToString())
+		rs[i] = v
+	}
+	return rs, nil
+}
 
 func DefaultParser[T quotedTp](t T) string {
 	ret := fmt.Sprint("'", t, "'")

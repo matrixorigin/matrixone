@@ -51,6 +51,7 @@ var (
 		types.T_varchar.ToType(),
 		types.T_char.ToType(),
 		types.T_json.ToType(),
+		types.T_uuid.ToType(),
 	}
 	vals = [][]string{
 		{"true", "false"},
@@ -72,6 +73,7 @@ var (
 		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
 		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
 		{"{\"a\":1}", "{\"a\":2}", "{\"a\":3}", "{\"a\":4}", "{\"a\":5}"},
+		{"00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004"},
 	}
 )
 
@@ -380,6 +382,24 @@ func TestParser(t *testing.T) {
 				unquote := rs[i][1 : len(rs[i])-1]
 				require.JSONEq(t, kase.xs[i], unquote)
 			}
+		case types.T_uuid:
+			xs := make([]types.Uuid, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseUuid(x)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseUuid(xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].ToString(), unquote)
+			}
+
 		default:
 			require.Fail(t, "unsupported type")
 		}
