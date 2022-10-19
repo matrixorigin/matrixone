@@ -78,7 +78,7 @@ type IDGenerator interface {
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, bat *api.Batch) error
+	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries []Entry) []BlockMeta
@@ -266,3 +266,7 @@ type Columns []column
 func (cols Columns) Len() int           { return len(cols) }
 func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
+
+func (a BlockMeta) Eq(b BlockMeta) bool {
+	return a.info.BlockID == b.info.BlockID
+}

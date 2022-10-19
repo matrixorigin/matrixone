@@ -130,8 +130,8 @@ func Test_Prepare(t *testing.T) {
 				param.CreateSql = string(json_byte)
 				err = Prepare(tcs.proc, tcs.arg)
 				convey.So(err, convey.ShouldBeNil)
-				convey.So(param.FileList, convey.ShouldBeNil)
-				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
+				convey.So(param.FileList, convey.ShouldResemble, []string{"/"})
+				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 1)
 
 				extern.JsonData = "test"
 				json_byte, err = json.Marshal(extern)
