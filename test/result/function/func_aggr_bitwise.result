@@ -238,3 +238,5 @@ drop table t1;
 SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
 BIT_AND(1)<BIT_AND(2)	BIT_AND(1)>BIT_OR(3)	BIT_AND(3)>BIT_XOR(5)
 true	false	false
+SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
+division by zero

@@ -306,3 +306,9 @@ tae data: duplicate
 select * from t6;
 col1    col2    col3
 drop table t6;
+create table t7 (a uuid);
+load data infile '$resources/load_data/uuid.csv' into table t7;
+select * from t7;
+a
+deec3a94-4653-11ed-940e-f6efd850eccd
+drop table t7;

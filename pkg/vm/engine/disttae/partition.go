@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+const (
+	index_PrimaryKey = "primary key"
+	index_BlockID    = "block id"
 )
 
 func NewPartition() *Partition {
@@ -45,8 +51,9 @@ func (r RowID) Less(than RowID) bool {
 type DataValue map[string]memtable.Nullable
 
 type DataRow struct {
-	rowID RowID
-	value DataValue
+	rowID   RowID
+	value   DataValue
+	indexes []memtable.Tuple
 }
 
 func (d *DataRow) Key() RowID {
@@ -58,7 +65,7 @@ func (d *DataRow) Value() DataValue {
 }
 
 func (d *DataRow) Indexes() []memtable.Tuple {
-	return nil
+	return d.indexes
 }
 
 var _ MVCC = new(Partition)
@@ -124,7 +131,7 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	return nil
 }
 
-func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
+func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
@@ -149,14 +156,44 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 		}
 		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
 
+		// check primary key
+		var primaryKey any
+		if primaryKeyIndex >= 0 {
+			primaryKey = memtable.ToOrdered(tuple[primaryKeyIndex])
+			entries, err := p.data.Index(tx, memtable.Tuple{
+				index_PrimaryKey,
+				primaryKey,
+			})
+			if err != nil {
+				return err
+			}
+			if len(entries) > 0 {
+				return moerr.NewDuplicate()
+			}
+		}
+
 		dataValue := make(DataValue)
 		for i := 2; i < len(tuple); i++ {
 			dataValue[bat.Attrs[i]] = tuple[i]
 		}
 
-		err := p.data.Insert(tx, &DataRow{
-			rowID: rowID,
-			value: dataValue,
+		// indexes
+		var indexes []memtable.Tuple
+		if primaryKey != nil {
+			indexes = append(indexes, memtable.Tuple{
+				index_PrimaryKey,
+				primaryKey,
+			})
+		}
+		indexes = append(indexes, memtable.Tuple{
+			index_BlockID,
+			memtable.ToOrdered(rowIDToBlockID(rowID)),
+		})
+
+		err = p.data.Insert(tx, &DataRow{
+			rowID:   rowID,
+			value:   dataValue,
+			indexes: indexes,
 		})
 		if err != nil {
 			return err
@@ -168,6 +205,28 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 	}
 
 	return nil
+}
+
+func rowIDToBlockID(rowID RowID) uint64 {
+	return types.DecodeUint64(rowID[:8]) //TODO use tae provided function
+}
+
+func (p *Partition) IterRowIDsByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64, fn func(rowID RowID) bool) {
+	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+		Timestamp: ts,
+	}, memtable.SnapshotIsolation)
+	iter := p.data.NewIndexIter(tx, memtable.Tuple{
+		index_BlockID,
+		memtable.ToOrdered(blockID),
+	})
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		rowID := entry.Key
+		if !fn(rowID) {
+			break
+		}
+	}
 }
 
 func (p *Partition) NewReader(
