@@ -188,11 +188,14 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			return nil, moerr.NewInvalidInput("cannot delete from view")
 		}
 	}
+	originMap := tf.baseNameMap
 	tf.baseNameMap = reverseMap(tf.baseNameMap)
 	for _, t := range tbs {
 		tblName := string(t.ObjectName)
 		if _, ok := tf.baseNameMap[tblName]; !ok {
-			return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+			if _, ok := originMap[tblName]; !ok {
+				return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+			}
 		}
 	}
 
