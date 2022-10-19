@@ -45,3 +45,39 @@ Grants for test@localhost
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
+create database if not exists test03;
+use test03;
+drop view if exists v1;
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(1,1);
+create view v1 as select * from t1;
+show full tables;
+tables_in_test03    table_type
+t1    BASE TABLE
+v1    VIEW
+show full tables from test03;
+tables_in_test03    table_type
+t1    BASE TABLE
+v1    VIEW
+show full tables from `1;drop table t1;`;
+invalid database 1;drop table t1;
+show tables like `1;drop table t1;`;
+invalid input: column 1;drop table t1; does not exist
+show full tables from "1;drop table t1;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 40 near " "1;drop table t1;";";
+show create database `1;drop table t1;`;
+invalid database 1;drop table t1;
+show create table `1;drop table t1;`;
+invalid database 1;drop table t1;
+show columns from `1;drop table t1;`;
+no such table test03.1;drop table t1;
+show table status from `1;drop table t1;`;
+invalid database 1;drop table t1;
+show index from `1;drop table t1;`;
+no such table test03.1;drop table t1;
+show variables like `1;drop table t1;`;
+Variable_name    Value
+select * from t1;
+a    b
+1    1
