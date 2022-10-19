@@ -231,7 +231,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		<-m.runningJobs
 	}()
 
-	if len(paths) < m.MinFilesMerge {
+	if len(paths) <= m.MinFilesMerge {
 		return moerr.NewInternalError("file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
 	}
 
@@ -551,8 +551,10 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 // MergeTaskCronExpr            s m h   d ...
 const MergeTaskCronExpr = MergeTaskCronExpr4Hour
-const MergeTaskCronExpr4Hour = "0 * */4 * * *"
+const MergeTaskCronExpr1Hour = "0 0 */1 * * *"
+const MergeTaskCronExpr4Hour = "0 0 */4 * * *"
 const MergeTaskCronExpr15Min = "0 */15 * * * *"
+const MergeTaskCronExpr15Sec = "*/15 * * * * *"
 const MergeTaskCronExprYesterday = "0 0 4 * * *"
 const MergeTaskToday = "today"
 const MergeTaskYesterday = "yesterday"
@@ -563,7 +565,7 @@ const ParamSeparator = " "
 // args like: "{db_tbl_name} [date, default: today]"
 var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
-		ID:       "ETL_merge_task",
+		ID:       path.Join("ETL_merge_task", path.Join(args...)),
 		Executor: uint32(id),
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 	}

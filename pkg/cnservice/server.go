@@ -286,6 +286,7 @@ func (s *service) initTaskRunner(ctx context.Context) (err error) {
 	// should init once in with schema-init.
 	tables := export.GetAllTable()
 	for _, tbl := range tables {
+		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
 		if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, tbl.GetIdentify()), export.MergeTaskCronExpr); err != nil {
 			return err
 		}
