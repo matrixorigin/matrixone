@@ -177,6 +177,11 @@ import (
     accountRole *tree.Role
     showType tree.ShowType
     joinTableExpr *tree.JoinTableExpr
+
+    indexHintType tree.IndexHintType
+    indexHintScope tree.IndexHintScope
+    indexHint *tree.IndexHint
+    indexHintList []*tree.IndexHint
 }
 
 %token LEX_ERROR
@@ -526,7 +531,7 @@ import (
 %type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
-%type <strs> index_name_and_type_opt
+%type <strs> index_name_and_type_opt index_name_list
 %type <str> index_name index_type key_or_index_opt key_or_index
 // type <str> mo_keywords
 %type <properties> properties_list
@@ -556,6 +561,11 @@ import (
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+
+%type <indexHintType> index_hint_type
+%type <indexHintScope> index_hint_scope
+%type <indexHint> index_hint
+%type <indexHintList> index_hint_list index_hint_list_opt
 
 %start start_command
 
@@ -3754,17 +3764,94 @@ as_opt:
 |   AS {}
 
 aliased_table_name:
-    table_name as_opt_id // index_hint_list
+    table_name as_opt_id index_hint_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
                 Alias: tree.Identifier($2),
             },
+            IndexHints: $3,
         }
     }
-// |   table_name PARTITION '(' partition_id_list ')' as_opt_id index_hint_list
 
+index_hint_list_opt:
+	{
+		$$ = nil
+	}
+|	index_hint_list
+
+index_hint_list:
+	index_hint
+	{
+		$$ = []*tree.IndexHint{$1}
+	}
+|	index_hint_list index_hint
+	{
+		$$ = append($1, $2)
+	}
+
+index_hint:
+	index_hint_type index_hint_scope '(' index_name_list ')'
+	{
+		$$ = &tree.IndexHint{
+			IndexNames: $4,
+			HintType: $1,
+			HintScope: $2,
+		}
+	}
+
+index_hint_type:
+	USE key_or_index
+	{
+		$$ = tree.HintUse
+	}
+|	IGNORE key_or_index
+	{
+		$$ = tree.HintIgnore
+	}
+|	FORCE key_or_index
+	{
+		$$ = tree.HintForce
+	}
+
+index_hint_scope:
+	{
+		$$ = tree.HintForScan
+	}
+|	FOR JOIN
+	{
+		$$ = tree.HintForJoin
+	}
+|	FOR ORDER BY
+	{
+		$$ = tree.HintForOrderBy
+	}
+|	FOR GROUP BY
+	{
+		$$ = tree.HintForGroupBy
+	}
+
+index_name_list:
+	{
+		$$ = nil
+	}
+|	ident
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' ident
+	{
+		$$ = append($1, $3)
+	}
+|	PRIMARY
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' PRIMARY
+	{
+		$$ = append($1, $3)
+	}
 
 as_opt_id:
     {
@@ -5574,7 +5661,7 @@ simple_expr:
     {
         $$ = $1
     }
-|     function_call_json
+|   function_call_json
     {
         $$ = $1
     }
