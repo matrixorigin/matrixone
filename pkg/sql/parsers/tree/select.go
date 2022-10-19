@@ -174,7 +174,7 @@ func NewLimit(o, c Expr) (*Limit, error) {
 	for _, expr := range exprs {
 		if expr != nil {
 			if val, ok := o.(*NumVal); !ok || val.ValType == P_int64 {
-				return nil, moerr.NewSyntaxError(fmt.Sprintf("%v is illegal", expr))
+				return nil, moerr.NewSyntaxError(fmt.Sprintf("'%v' is illegal", expr))
 			}
 		}
 	}
