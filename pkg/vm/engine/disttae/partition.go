@@ -34,6 +34,7 @@ import (
 const (
 	index_PrimaryKey = memtable.Text("primary key")
 	index_BlockID    = memtable.Text("block id")
+	index_Time_OP    = memtable.Text("time, op")
 )
 
 func NewPartition() *Partition {
@@ -48,13 +49,23 @@ func (r RowID) Less(than RowID) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
-type DataValue map[string]memtable.Nullable
+type DataValue struct {
+	op    Op
+	value map[string]memtable.Nullable
+}
 
 type DataRow struct {
 	rowID   RowID
 	value   DataValue
 	indexes []memtable.Tuple
 }
+
+type Op uint8
+
+const (
+	opInsert Op = iota + 1
+	opDelete
+)
 
 func (d *DataRow) Key() RowID {
 	return d.rowID
@@ -118,7 +129,22 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		}
 		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
 
-		err := p.data.Delete(tx, rowID)
+		// indexes
+		var indexes []memtable.Tuple
+		// time, op
+		indexes = append(indexes, memtable.Tuple{
+			index_Time_OP,
+			ts,
+			memtable.Uint(opDelete),
+		})
+
+		err := p.data.Upsert(tx, &DataRow{
+			rowID: rowID,
+			value: DataValue{
+				op: opDelete,
+			},
+			indexes: indexes,
+		})
 		if err != nil {
 			return err
 		}
@@ -172,25 +198,36 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 			}
 		}
 
-		dataValue := make(DataValue)
+		dataValue := DataValue{
+			op:    opInsert,
+			value: make(map[string]memtable.Nullable),
+		}
 		for i := 2; i < len(tuple); i++ {
-			dataValue[bat.Attrs[i]] = tuple[i]
+			dataValue.value[bat.Attrs[i]] = tuple[i]
 		}
 
 		// indexes
 		var indexes []memtable.Tuple
+		// primary key
 		if primaryKey != nil {
 			indexes = append(indexes, memtable.Tuple{
 				index_PrimaryKey,
 				primaryKey,
 			})
 		}
+		// block id
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 		})
+		// time, op
+		indexes = append(indexes, memtable.Tuple{
+			index_Time_OP,
+			ts,
+			memtable.Uint(opInsert),
+		})
 
-		err = p.data.Insert(tx, &DataRow{
+		err = p.data.Upsert(tx, &DataRow{
 			rowID:   rowID,
 			value:   dataValue,
 			indexes: indexes,
@@ -215,16 +252,53 @@ func (p *Partition) IterRowIDsByBlockID(ctx context.Context, ts timestamp.Timest
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	iter := p.data.NewIndexIter(tx, memtable.Tuple{
+	pivot := memtable.Tuple{
 		index_BlockID,
 		memtable.ToOrdered(blockID),
-	})
+	}
+	iter := p.data.NewIndexIter(tx, pivot, append(pivot, memtable.Min))
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
 		rowID := entry.Key
 		if !fn(rowID) {
 			break
+		}
+	}
+}
+
+func (p *Partition) IterDeletedRowIDs(ctx context.Context, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
+	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
+		Timestamp: ts,
+	}, memtable.SnapshotIsolation)
+	min := memtable.Tuple{
+		index_Time_OP,
+		types.TS{},
+	}
+	max := memtable.Tuple{
+		index_Time_OP,
+		types.TimestampToTS(ts),
+		memtable.Max,
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
+	defer iter.Close()
+	deleted := make(map[RowID]bool)
+	inserted := make(map[RowID]bool)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		rowID := entry.Key
+		switch Op(entry.Index[2].(memtable.Uint)) {
+		case opInsert:
+			inserted[rowID] = true
+		case opDelete:
+			deleted[rowID] = true
+		}
+	}
+	for rowID := range deleted {
+		if !inserted[rowID] {
+			if !fn(rowID) {
+				break
+			}
 		}
 	}
 }
