@@ -14,82 +14,111 @@
 
 package memtable
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 type Tuple []any
 
 var _ Ordered[Tuple] = Tuple{}
 
 func (t Tuple) Less(than Tuple) bool {
-	if len(t) < len(than) {
-		return true
-	}
-	if len(t) > len(than) {
-		return false
-	}
-	for i, key := range t {
-		switch key := key.(type) {
+	i := 0
+	for i < len(t) {
+		a := t[i]
+		if i >= len(than) {
+			return false
+		}
+		b := than[i]
+
+		// min, max
+		if a == Min {
+			return b != Min
+		}
+		if a == Max {
+			return false
+		}
+		if b == Min {
+			return false
+		}
+		if b == Max {
+			return a != Max
+		}
+
+		switch a := a.(type) {
 
 		case Text:
-			key2 := than[i].(Text)
-			if key.Less(key2) {
+			b := b.(Text)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case Bool:
-			key2 := than[i].(Bool)
-			if key.Less(key2) {
+			b := b.(Bool)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case Int:
-			key2 := than[i].(Int)
-			if key.Less(key2) {
+			b := b.(Int)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case Uint:
-			key2 := than[i].(Uint)
-			if key.Less(key2) {
+			b := b.(Uint)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case Float:
-			key2 := than[i].(Float)
-			if key.Less(key2) {
+			b := b.(Float)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case Bytes:
-			key2 := than[i].(Bytes)
-			if key.Less(key2) {
+			b := b.(Bytes)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
 				return false
 			}
 
 		case ID:
-			key2 := than[i].(ID)
-			if key.Less(key2) {
+			b := b.(ID)
+			if a.Less(b) {
 				return true
-			} else if key2.Less(key) {
+			} else if b.Less(a) {
+				return false
+			}
+
+		case types.TS:
+			b := b.(types.TS)
+			if a.Less(b) {
+				return true
+			} else if b.Less(a) {
 				return false
 			}
 
 		default:
-			panic(fmt.Sprintf("unknown key type: %T", key))
+			panic(fmt.Sprintf("unknown item type: %T %#v", a, a))
 		}
+
+		i++
 	}
-	// equal
-	return false
+
+	return i != len(than)
 }
