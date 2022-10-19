@@ -901,7 +901,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -976,7 +976,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(requestCtx, load, dbHandler, tableHandler, loadDb)
+	result, err := mce.LoadLoop(requestCtx, proc, load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -1518,10 +1518,8 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
 	ses := mce.GetSession()
-	tenant := ses.GetTenantInfo()
-
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, tenant, ca)
+	return InitGeneralTenant(ctx, ses, ca)
 }
 
 // handleDropAccount drops a new user-level tenant
@@ -2155,7 +2153,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
-			err = mce.handleLoadData(requestCtx, st)
+			err = mce.handleLoadData(requestCtx, proc, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2434,7 +2432,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-			*tree.Delete:
+			*tree.Delete, *tree.TruncateTable:
 			runBegin := time.Now()
 			/*
 				Step 1: Start
@@ -2563,7 +2561,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable,
 			*tree.Deallocate, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
@@ -2878,7 +2876,7 @@ func IsDDL(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView,
 		*tree.CreateDatabase, *tree.DropDatabase,
-		*tree.CreateIndex, *tree.DropIndex:
+		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
 		return true
 	}
 	return false

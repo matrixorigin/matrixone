@@ -370,10 +370,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	if err != nil {
 		return
 	}
-	tb, err := db.GetRelation(context.TODO(), req.Name)
-	if err != nil {
-		return
-	}
+
 	if req.IsDrop {
 		err = db.DropRelation(context.TODO(), req.Name)
 		if err != nil {
@@ -381,7 +378,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		}
 		return
 	}
-	_, err = tb.Truncate(context.TODO())
+	err = db.TruncateRelation(context.TODO(), req.Name)
 	return err
 }
 

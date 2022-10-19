@@ -24,8 +24,11 @@ create database d;
 use d;
 create table t(a int);
 grant create account on account * to role_r1;
+internal error: the privilege create account can not be granted
 grant drop account on account * to role_r1;
+internal error: the privilege drop account can not be granted
 grant alter account on account * to role_r1;
+internal error: the privilege alter account can not be granted
 grant create user on account * to role_r1;
 grant drop user on account * to role_r1;
 grant alter user on account * to role_r1;

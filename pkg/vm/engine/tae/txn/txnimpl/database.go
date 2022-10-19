@@ -109,8 +109,8 @@ func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) 
 	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)
 }
 
-func (db *txnDatabase) CreateRelationWithID(def any, id uint64) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().CreateRelationWithID(db.txnDB.entry.ID, id, def)
+func (db *txnDatabase) CreateRelationWithId(def any, tableId uint64) (rel handle.Relation, err error) {
+	return db.Txn.GetStore().CreateRelationWithTableId(db.txnDB.entry.ID, tableId, def)
 }
 
 func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) {
@@ -118,14 +118,16 @@ func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err
 }
 
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
-	old, err := db.DropRelationByName(name)
+	newTableId := db.txnDB.entry.GetCatalog().IDAlloctor.NextTable()
+
+	oldRel, err := db.DropRelationByName(name)
 	if err != nil {
 		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 		return
 	}
-	meta := old.GetMeta().(*catalog.TableEntry)
+	meta := oldRel.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
-	rel, err = db.CreateRelation(schema)
+	rel, err = db.CreateRelationWithId(schema, newTableId)
 	if err != nil {
 		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 	}

@@ -60,3 +60,11 @@ INSERT INTO t1() VALUES(1,'ronaldo','F'), (2,'kante','M'), (3,'noyer','F'),(4,'m
 INSERT INTO t2() VALUES(1,'ronaldo','American'), (2,'kante','Franch'), (3,'noyer','Germany'),(4,'modrici','UK');
 (SELECT * FROM t1 WHERE id BETWEEN 1 AND 2 ORDER BY name) UNION ALL (SELECT * FROM t2 WHERE nation BETWEEN 'A' AND 'F' ORDER BY id DESC);
 select * from (SELECT * FROM t1 UNION ALL SELECT * FROM t2) a where id > 1 and sex > 'F' order by id;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a uuid);
+create table t2(col1 uuid primary key, col2 int);
+insert into t2 values(uuid(),1);
+insert into t2 values(uuid(),0);
+insert into t2 values(uuid(),10);
+select count(*) from (select a from t1 union select col1 from t2) t;

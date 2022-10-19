@@ -78,8 +78,7 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	return e
 }
 
-func NewTableEntryWithID(db *DBEntry, tableId uint64, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
-	//id := db.catalog.NextTable()
+func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) *TableEntry {
 	if txnCtx != nil {
 		// Only in unit test, txnCtx can be nil
 		schema.AcInfo.TenantID = txnCtx.GetTenantID()

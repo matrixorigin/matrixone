@@ -62,8 +62,6 @@ type Relation interface {
 	//just for test
 	TableDefs(context.Context) ([]engine.TableDef, error)
 
-	Truncate(context.Context) (uint64, error)
-
 	GetRelationID(context.Context) uint64
 	//just for test
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
@@ -76,7 +74,8 @@ type Database interface {
 	GetRelation(context.Context, string) (Relation, error)
 
 	DropRelation(context.Context, string) error
-	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
+	CreateRelation(context.Context, string, []engine.TableDef) error // Create Table - (name, table define)
+	TruncateRelation(context.Context, string) error
 	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
 
 	GetDatabaseID(ctx context.Context) uint64

@@ -175,13 +175,13 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	return
 }
 
-func (db *txnDB) CreateRelationWithID(def any, tbId uint64) (relation handle.Relation, err error) {
+func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
 	if db.store.dataFactory != nil {
 		factory = db.store.dataFactory.MakeTableFactory()
 	}
-	meta, err := db.entry.CreateTableEntryWithID(schema, tbId, db.store.txn, factory)
+	meta, err := db.entry.CreateTableEntryWithTableId(schema, db.store.txn, factory, tableId)
 	if err != nil {
 		return
 	}

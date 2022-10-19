@@ -315,9 +315,9 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 	return created, err
 }
 
-func (e *DBEntry) CreateTableEntryWithID(schema *Schema, id uint64, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
+func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
 	e.Lock()
-	created = NewTableEntryWithID(e, id, schema, txnCtx, dataFactory)
+	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()
 

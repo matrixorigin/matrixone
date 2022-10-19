@@ -65,11 +65,16 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-
 	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
-	tbl.dnList = dnList
-	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
+	switch {
+	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_TABLES_ID:
+		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_COLUMNS_ID:
+		tbl.dnList = []int{0}
+	default:
+		tbl.dnList = dnList
 	}
 	dnStores := make([]DNStore, 0, len(dnList))
 	for _, i := range dnList {
@@ -77,8 +82,8 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
 	if !ok {
-		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.txn.op, tbl.db.databaseId,
-			tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.txn.op, tbl.primaryIdx,
+			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
 	}
@@ -182,6 +187,17 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 }
 
+func (tbl *table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+	var attrs []*engine.Attribute
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			attrs = append(attrs, &attr.Attr)
+		}
+	}
+	return attrs, nil
+
+}
+
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
@@ -260,25 +276,6 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 		}
 	}
 	return nil
-}
-
-func (tbl *table) Truncate(ctx context.Context) (uint64, error) {
-	id, err := tbl.db.txn.idGen.AllocateID(ctx)
-	if err != nil {
-		return 0, err
-	}
-	bat, err := genTruncateTableTuple(id, tbl.db.databaseId,
-		genMetaTableName(tbl.tableId), tbl.db.databaseName, tbl.db.txn.proc.Mp())
-	if err != nil {
-		return 0, err
-	}
-	for i := range tbl.db.txn.dnStores {
-		if err := tbl.db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[i]); err != nil {
-			return 0, err
-		}
-	}
-	return 0, nil
 }
 
 func (tbl *table) AddTableDef(ctx context.Context, def engine.TableDef) error {

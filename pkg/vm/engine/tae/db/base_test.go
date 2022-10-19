@@ -16,10 +16,6 @@ package db
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -211,20 +207,10 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 	wg.Wait()
 }
 
-func decodeSegName(name string) (uint64, error) {
-	if !strings.HasSuffix(name, ".seg") {
-		return 0, moerr.NewInternalError("blockio: segment name is illegal")
-	}
-	id, err := blockio.DecodeSegName(name)
-	if err != nil {
-		return 0, err
-	}
-	return id.SegmentID, err
-}
-
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := os.ReadDir(e.Fs.Dir)
+	return
+	/*files, err := os.ReadDir(e.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -236,12 +222,13 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 		}
 		names[id] = name
 	}
-	return
+	return*/
 }
 
 func getBlockFileNames(e *DB) (names []string) {
 	names = make([]string, 0)
-	files, err := os.ReadDir(e.Fs.Dir)
+	return
+	/*files, err := os.ReadDir(e.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -251,7 +238,7 @@ func getBlockFileNames(e *DB) (names []string) {
 			names = append(names, name)
 		}
 	}
-	return
+	return*/
 }
 
 func lenOfBats(bats []*containers.Batch) int {

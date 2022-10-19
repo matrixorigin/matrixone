@@ -21,11 +21,11 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 */
 
 import (
-	"encoding/binary"
 	"fmt"
 	"hash/fnv"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -128,12 +128,15 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
 		dbNode := node.(*catalog.DBMVCCNode)
 		if dbNode.HasDropCommitted() {
-			// delScehma is empty, it will just fill rowid / commit ts / abort
-			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
+			// delScehma is empty, it will just fill rowid / commit ts
+			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
+			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -144,6 +147,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
 		tblNode := node.(*catalog.TableMVCCNode)
 		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
@@ -160,19 +166,17 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			// fill common syscol fields for every user column
 			rowidVec := dstBatch.GetVectorByName(catalog.AttrRowID)
 			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
-			abortVec := dstBatch.GetVectorByName(catalog.AttrAborted)
 			tableID := entry.GetID()
-			commitTs, aborted := tblNode.GetEnd(), tblNode.IsAborted()
+			commitTs := tblNode.GetEnd()
 			for _, usercol := range entry.GetSchema().ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))))
 				commitVec.Append(commitTs)
-				abortVec.Append(aborted)
 			}
 		} else {
 			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
+				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
+				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			}
 		}
 	}
@@ -239,19 +243,18 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	fillDataRow func(e T, attr string, col containers.Vector),
 	rowid types.Rowid,
 	commitTs types.TS,
-	aborted bool,
 ) {
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
 	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
-	dstBatch.GetVectorByName(catalog.AttrAborted).Append(aborted)
 }
 
 func u64ToRowID(v uint64) types.Rowid {
 	var rowid types.Rowid
-	binary.BigEndian.PutUint64(rowid[:8], v)
+	bs := types.EncodeUint64(&v)
+	copy(rowid[0:], bs)
 	return rowid
 }
 
@@ -283,7 +286,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 		}
 		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
 	}
-	bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), false))
 	return bat
 }
 
@@ -364,7 +366,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 
 	for _, node := range mvccNodes {
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		if metaNode.MetaLoc != "" {
+		if metaNode.MetaLoc != "" && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}
@@ -386,21 +388,27 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 }
 
 func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MetadataMVCCNode) {
-	// for now, we treat all mvcc nodes as update operation. Only Insert
-	dstBatch := b.blkMetaInsBatch
-
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
 
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
-	dstBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+	insBatch := b.blkMetaInsBatch
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
 
-	dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
-	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
-	dstBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
+	if metaNode.HasDropCommitted() {
+		if metaNode.DeletedAt.IsEmpty() {
+			panic(moerr.NewInternalError("no delete at time in a dropped entry"))
+		}
+		delBatch := b.blkMetaDelBatch
+		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.DeletedAt)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+	}
 }
 
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
@@ -410,7 +418,6 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
-		// b.dataInsBatch.GetVectorByName(catalog.AttrRowID).Extend(insBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataInsBatch.Extend(insBatch)
 		// insBatch is freed, don't use anymore
 	}
@@ -419,7 +426,6 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
-		// b.dataDelBatch.GetVectorByName(catalog.AttrRowID).Extend(delBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
 	}
