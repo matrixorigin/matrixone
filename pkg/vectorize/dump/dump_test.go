@@ -351,7 +351,7 @@ func TestParser(t *testing.T) {
 				require.Equal(t, xs[i].String2(time.Local, kase.tp.Precision), unquote)
 			}
 
-		case types.T_varchar, types.T_char:
+		case types.T_varchar, types.T_char, types.T_blob:
 			xs := make([]string, len(kase.xs))
 			copy(xs, kase.xs)
 			xs = append(xs, xs[0])

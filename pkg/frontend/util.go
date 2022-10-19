@@ -492,9 +492,12 @@ func fileExists(path string) (bool, error) {
 
 func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string, string, error) {
 	var (
-		attrs   = make([]string, 0, len(tableDefs))
-		tblDDL  string
-		viewDDL string
+		attrs      = make([]string, 0, len(tableDefs))
+		tblDDL     string
+		viewDDL    string
+		commentDef string
+		pkDef      string
+		indexDefs  []string
 	)
 	first := true
 	for _, tblDef := range tableDefs {
@@ -549,11 +552,11 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			}
 
 		case *engine.CommentDef:
-			tblDDL += fmt.Sprintf(",\n  COMMENT '%s'", def.Comment)
+			tblDDL += fmt.Sprintf("  COMMENT '%s'", def.Comment)
 		case *engine.IndexTableDef:
-			tblDDL += fmt.Sprintf(",\n  %s `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`"))
+			indexDefs = append(indexDefs, fmt.Sprintf("  %s INDEX `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`")))
 		case *engine.PrimaryIndexDef:
-			tblDDL += fmt.Sprintf(",\n  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
+			pkDef = fmt.Sprintf("  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
 		case *engine.ViewDef:
 			view := struct {
 				Stmt            string
@@ -564,17 +567,32 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			}
 
 			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n%s;\n\n", tblName, view.Stmt)
-		case *engine.ComputeIndexDef, *engine.PartitionDef: //TODO support
-			return nil, "", "", moerr.NewNotSupported("compute index, partition")
-		case *engine.PropertiesDef: //TODO support
-			fmt.Println(def)
+		case *engine.ComputeIndexDef: //TODO support
+			for i := 0; i < len(def.Names); i++ {
+				ifUnique := ""
+				if def.Uniques[i] {
+					ifUnique = "UNIQUE "
+				}
+				index := fmt.Sprintf("  %sKEY `%s` (`%s`)", ifUnique, def.Names[i], def.TableNames)
+				indexDefs = append(indexDefs, index)
+			}
+		case *engine.PartitionDef:
+			//TODO support
 
+		case *engine.PropertiesDef:
+			//TODO support
 		default:
 			return nil, "", "", moerr.NewInternalError("unsupported table def %T", tblDef)
 		}
 	}
 	if len(viewDDL) == 0 {
 		tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (%s", tblName, tblName, tblDDL)
+	}
+	if pkDef != "" {
+		tblDDL += ",\n" + pkDef
+	}
+	for _, indexDef := range indexDefs {
+		tblDDL += ",\n" + indexDef
 	}
 	return attrs, tblDDL, viewDDL, nil
 }
