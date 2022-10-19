@@ -47,6 +47,7 @@ const (
 	MO_TABLE_ID_ACCOUNT_IDX       = 3
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
+	MO_PRIMARY_OFF                = 2
 )
 
 type DNStore = logservice.DNStore
@@ -212,11 +213,12 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	viewdef   string
-	comment   string
-	partition string
-	relKind   string
-	createSql string
+	primaryIdx int
+	viewdef    string
+	comment    string
+	partition  string
+	relKind    string
+	createSql  string
 }
 
 type column struct {
@@ -266,3 +268,7 @@ type Columns []column
 func (cols Columns) Len() int           { return len(cols) }
 func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
+
+func (a BlockMeta) Eq(b BlockMeta) bool {
+	return a.info.BlockID == b.info.BlockID
+}
