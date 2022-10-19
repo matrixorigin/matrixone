@@ -876,7 +876,7 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 	var (
 		db        engine.Database
 		err       error
-		showDbDDL bool = false
+		showDbDDL = false
 		dbDDL     string
 		tables    []string
 	)
@@ -921,8 +921,7 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 			params = append(params, &dumpTable{tblName, tblDDL, table, attrs, false})
 		}
 	}
-	err = mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
-	return nil
+	return mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
 }
 
 func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tree.Dump, dbDDL string, params []*dumpTable, showDbDDL bool) error {

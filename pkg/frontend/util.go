@@ -506,7 +506,7 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			}
 			if def.Attr.Default != nil {
 				if def.Attr.Default.NullAbility { //TODO support other case
-					tblDDL += fmt.Sprintf(" DEFAULT NULL")
+					tblDDL += " DEFAULT NULL"
 				}
 			}
 			if def.Attr.OnUpdate != nil { //TODO support on update
@@ -531,7 +531,6 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
 			}
 			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n\nCREATE VIEW `%s` AS %s;\n", tblName, tblName, view.Stmt)
-			break //TODO check
 		case *engine.ComputeIndexDef, *engine.PartitionDef: //TODO support
 			return nil, "", "", moerr.NewNotSupported("compute index, partition")
 		case *engine.PropertiesDef: //TODO support
