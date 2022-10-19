@@ -21,8 +21,6 @@ import (
 	"strconv"
 )
 
-//ignore varchar, char, text
-
 type quotedTp interface {
 	types.Timestamp | types.Datetime | types.Date | types.Decimal | string
 }
@@ -94,42 +92,3 @@ func JsonParser(dt []byte) string {
 	json := types.DecodeJson(dt)
 	return "'" + json.String() + "'"
 }
-
-//func ParseDate(xs []types.Date, nsp *nulls.Nulls, rs []string) ([]string, error) {
-//	for i := range xs {
-//		if nsp.Contains(uint64(i)) {
-//			rs[i] = "NULL"
-//			continue
-//		}
-//		rs[i] = xs[i].String()
-//	}
-//	return rs, nil
-//}
-
-//func ParseDateTime(xs []types.Datetime, nsp *nulls.Nulls, precision int32, rs []types.Datetime) ([]types.Datetime, error) {
-//	for i := range xs {
-//		if !nsp.Contains(uint64(i)) {
-//			field := xs[i]
-//			d, err := types.ParseDatetime(field, precision)
-//			if err != nil {
-//				return nil, moerr.NewInternalError("the input value '%v' is not datetime type for row %d", field, i)
-//			}
-//			rs[i] = d
-//		}
-//	}
-//	return rs, nil
-//}
-//
-//func ParseTimeStamp(xs []types.Timestamp, nsp *nulls.Nulls, precision int32, rs []types.Timestamp) ([]types.Timestamp, error) {
-//	for i := range xs {
-//		if !nsp.Contains(uint64(i)) {
-//			field := xs[i]
-//			d, err := types.ParseTimestamp(time.UTC, field, precision)
-//			if err != nil {
-//				return nil, moerr.NewInternalError("the input value '%v' is not timestamp type for row %d", field, i)
-//			}
-//			rs[i] = d
-//		}
-//	}
-//	return rs, nil
-//}

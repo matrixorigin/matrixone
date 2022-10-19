@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
@@ -426,6 +427,10 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 	case types.T_decimal128:
 		val := vector.GetValueAt[types.Decimal128](vec, 0)
 		return val.String(), nil
+	case types.T_json:
+		val := vec.GetBytes(0)
+		byteJson := types.DecodeJson(val)
+		return byteJson.String(), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
@@ -505,12 +510,32 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 				tblDDL += " AUTO_INCREMENT"
 			}
 			if def.Attr.Default != nil {
-				if def.Attr.Default.NullAbility { //TODO support other case
+				if def.Attr.Default.NullAbility {
 					tblDDL += " DEFAULT NULL"
+				} else {
+					bat := batch.NewWithSize(0)
+					bat.Zs = []int64{1}
+					vec, err := colexec.EvalExpr(bat, nil, def.Attr.Default.Expr)
+					if err != nil {
+						return nil, "", "", err
+					}
+					defaultVaL, err := getValueFromVector(vec)
+					if err != nil {
+						return nil, "", "", err
+					}
+					var defaultStr string
+					if needQuote(def.Attr.Type) {
+						defaultStr = fmt.Sprintf("'%s'", defaultVaL)
+					} else {
+						defaultStr = fmt.Sprintf("%v", defaultVaL)
+					}
+					tblDDL += "NOT NULL DEFAULT " + fmt.Sprintf("%v", defaultStr)
 				}
 			}
-			if def.Attr.OnUpdate != nil { //TODO support on update
-				return nil, "", "", moerr.NewNotSupported("on update")
+			if def.Attr.OnUpdate != nil {
+				if f, ok := def.Attr.OnUpdate.Expr.(*plan.Expr_F); ok { //? other type
+					tblDDL += " ON UPDATE " + f.F.GetFunc().GetObjName()
+				}
 			}
 			if def.Attr.Comment != "" {
 				tblDDL += fmt.Sprintf(" COMMENT '%s'", def.Attr.Comment)
@@ -530,7 +555,8 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			if err := json.Unmarshal([]byte(def.View), &view); err != nil {
 				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
 			}
-			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n\nCREATE VIEW `%s` AS %s;\n", tblName, tblName, view.Stmt)
+
+			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n%s;\n\n", tblName, view.Stmt)
 		case *engine.ComputeIndexDef, *engine.PartitionDef: //TODO support
 			return nil, "", "", moerr.NewNotSupported("compute index, partition")
 		case *engine.PropertiesDef: //TODO support
@@ -688,4 +714,8 @@ func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, 
 	}
 	buf.Reset()
 	return f, curFileIdx, curFileSize + int64(buf.Len()), nil
+}
+
+func needQuote(p types.Type) bool {
+	return p.Oid == types.T_char || p.Oid == types.T_varchar || p.Oid == types.T_blob || p.Oid == types.T_json || p.Oid == types.T_timestamp || p.Oid == types.T_datetime || p.Oid == types.T_date || p.Oid == types.T_decimal64 || p.Oid == types.T_decimal128
 }
