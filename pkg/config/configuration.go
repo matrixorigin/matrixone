@@ -117,8 +117,8 @@ var (
 	// defaultMergeCycle default: 0 sec, means disable merge as service
 	defaultMergeCycle = 0
 
-	// defaultPathBuilder
-	defaultPathBuilder = "DBTable"
+	// defaultPathBuilder, val in [DBTable, AccountDate]
+	defaultPathBuilder = "AccountDate"
 )
 
 // FrontendParameters of the frontend

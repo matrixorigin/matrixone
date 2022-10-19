@@ -452,6 +452,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 	opts := export.CommonCsvOptions
 
+	ts := util.Now()
 	row := i.GetRow()
 	for _, i := range in {
 		item, ok := i.(CsvFields)
@@ -475,6 +476,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 
 	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i,
+		export.WithTimestamp(ts),
 		export.WithPathBuilder(row.Table.PathBuilder))
 	return NewCSVRequest(writer, buf.String())
 }
