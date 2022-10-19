@@ -85,7 +85,10 @@ func consumerEntry(idx, primaryIdx int, ctx context.Context, db *DB, mvcc MVCC, 
 		if isMetaTable(e.TableName) {
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat)
 		}
-		return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat)
+		if primaryIdx >= 0 {
+			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat)
+		}
+		return mvcc.Insert(ctx, primaryIdx, e.Bat)
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)

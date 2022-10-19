@@ -951,6 +951,21 @@ func isMetaTable(name string) bool {
 
 func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
+	{
+		mp := make(map[uint64]catalog.BlockInfo) // block list
+		for i := range blockInfos {
+			if blk, ok := mp[blockInfos[i].BlockID]; ok &&
+				blk.CommitTs.Less(blockInfos[i].CommitTs) {
+				mp[blk.BlockID] = blockInfos[i]
+			} else {
+				mp[blk.BlockID] = blockInfos[i]
+			}
+		}
+		blockInfos = blockInfos[:0]
+		for _, blk := range mp {
+			blockInfos = append(blockInfos, blk)
+		}
+	}
 	metas := make([]BlockMeta, len(rows))
 
 	idxs := make([]uint16, columnLength)
