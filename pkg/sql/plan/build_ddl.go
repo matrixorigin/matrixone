@@ -52,7 +52,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Headings))
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
 			Name: query.Headings[idx],

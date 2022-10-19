@@ -161,6 +161,11 @@ func initTypeCheckRelated() {
 				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, t1, typ, typ})
 			}
 		}
+		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_date, types.T_timestamp, types.T_timestamp, types.T_timestamp})
+		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_timestamp, types.T_date, types.T_timestamp, types.T_timestamp})
+
+		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_datetime, types.T_timestamp, types.T_timestamp, types.T_timestamp})
+		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_timestamp, types.T_datetime, types.T_timestamp, types.T_timestamp})
 
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_uint64, types.T_int64, types.T_int64, types.T_int64})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_int64, types.T_uint64, types.T_int64, types.T_int64})
