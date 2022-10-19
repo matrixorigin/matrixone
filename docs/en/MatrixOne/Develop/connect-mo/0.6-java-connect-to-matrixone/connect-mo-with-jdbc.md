@@ -33,7 +33,6 @@ Prerequisite to understand Java Database Connectivity with MatrixOne, make sure 
 
 2. Add the downloaded connector into NetBeans. Select **Services > Databases > Drivers**, right click **MySQL(Connector/J driver)** and choose **Customize** in the Services sheet, click **Add**. add the *mysql-connector-java-8.0.31.jar*, enter *com.mysql.cj.jdbc.Driver* into Drive Class.
 
-
 3. Right click **MySQL(Connector/J driver)** and choose **Connect Using** to configure as following:
 
     - Host: 127.0.0.1
