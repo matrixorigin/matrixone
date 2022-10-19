@@ -469,6 +469,18 @@ func NewAttributeGeneratedAlways(e Expr, s bool) *AttributeGeneratedAlways {
 	}
 }
 
+type AttributeLowCardinality struct {
+	columnAttributeImpl
+}
+
+func (node *AttributeLowCardinality) Format(ctx *FmtCtx) {
+	ctx.WriteString("low_cardinality")
+}
+
+func NewAttributeLowCardinality() *AttributeLowCardinality {
+	return &AttributeLowCardinality{}
+}
+
 type KeyPart struct {
 	columnAttributeImpl
 	ColName   *UnresolvedName
@@ -1253,6 +1265,22 @@ func (node *TableOptionDelayKeyWrite) Format(ctx *FmtCtx) {
 
 func NewTableOptionDelayKeyWrite(v uint64) *TableOptionDelayKeyWrite {
 	return &TableOptionDelayKeyWrite{
+		Value: v,
+	}
+}
+
+type TableOptionLowCardinality struct {
+	tableOptionImpl
+	Value uint64
+}
+
+func (node *TableOptionLowCardinality) Format(ctx *FmtCtx) {
+	ctx.WriteString("low_cardinality = ")
+	ctx.WriteString(strconv.FormatUint(node.Value, 10))
+}
+
+func NewTableOptionLowCardinality(v uint64) *TableOptionLowCardinality {
+	return &TableOptionLowCardinality{
 		Value: v,
 	}
 }

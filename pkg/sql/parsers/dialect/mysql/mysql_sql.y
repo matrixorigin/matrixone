@@ -271,7 +271,7 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
 
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
@@ -4863,6 +4863,10 @@ table_option:
     {
         $$ = &tree.TableOptionProperties{Preperties: $3}
     }
+|   LOW_CARDINALITY equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionLowCardinality(uint64($3.(int64)))
+    }
 // |   INSERT_METHOD equal_opt insert_method_options
 
 properties_list:
@@ -5239,6 +5243,10 @@ column_attribute_elem:
             Exprs: es,
         }
         $$ = tree.NewAttributeOnUpdate(expr)
+    }
+|   LOW_CARDINALITY
+    {
+	$$ = tree.NewAttributeLowCardinality()
     }
 
 enforce:
@@ -7739,6 +7747,7 @@ non_reserved_keyword:
 |    HASH
 |    ENGINES
 |    TRIGGERS
+|   LOW_CARDINALITY
 
 func_not_keyword:
     DATE_ADD
