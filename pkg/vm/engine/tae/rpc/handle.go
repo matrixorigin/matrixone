@@ -371,7 +371,8 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	if _, err := db.GetRelation(ctx, req.Name); err != nil {
+	_, err = db.GetRelation(ctx, req.Name)
+	if err != nil {
 		return
 	}
 
