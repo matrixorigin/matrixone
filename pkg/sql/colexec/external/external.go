@@ -802,6 +802,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
+		case types.T_uuid:
+			cols := vector.MustTCols[types.Uuid](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseUuid(field)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not uuid type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
 		default:
 			return moerr.NewInternalError("the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
 		}
