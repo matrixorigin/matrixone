@@ -248,7 +248,7 @@ func rowIDToBlockID(rowID RowID) uint64 {
 	return types.DecodeUint64(rowID[:8]) //TODO use tae provided function
 }
 
-func (p *Partition) IterRowIDsByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64, fn func(rowID RowID) bool) {
+func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
@@ -260,11 +260,11 @@ func (p *Partition) IterRowIDsByBlockID(ctx context.Context, ts timestamp.Timest
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
-		rowID := entry.Key
-		if !fn(rowID) {
-			break
+		if err := p.data.Delete(tx, entry.Key); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
