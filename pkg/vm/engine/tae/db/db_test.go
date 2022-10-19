@@ -3262,7 +3262,7 @@ func TestLogtailBasic(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
-	fixedColCnt := 3 // __rowid + commit_time + aborted, the columns for a delBatch
+	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency
 	check_same_rows := func(bat *api.Batch, expect int) {
 		for i, vec := range bat.Vecs {
@@ -3330,18 +3330,18 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, 3, len(resp.Commands)) // insert meta, insert data and delete data
+	assert.Equal(t, 2, len(resp.Commands)) // insert data and delete data
 
 	// blk meta change
-	blkMetaEntry := resp.Commands[0]
-	assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
-	assert.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
-	check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
+	// blkMetaEntry := resp.Commands[0]
+	// assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
+	// assert.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
+	// check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
 
 	// check data change
-	insDataEntry := resp.Commands[1]
+	insDataEntry := resp.Commands[0]
 	assert.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
-	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile + aborted
+	assert.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
 	check_same_rows(insDataEntry.Bat, 99)                              // 99 rows, because the first write is excluded.
 	// test first user col, this is probably fragile, it depends on the details of MockSchema
 	// if something changes, delete this is okay.
@@ -3349,7 +3349,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	assert.NoError(t, err)
 
-	delDataEntry := resp.Commands[2]
+	delDataEntry := resp.Commands[1]
 	assert.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
 	assert.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
@@ -3631,7 +3631,7 @@ func TestWatchDirty(t *testing.T) {
 	assert.Zero(t, tbl)
 
 	schema := catalog.MockSchemaAll(1, 0)
-	schema.BlockMaxRows = 20
+	schema.BlockMaxRows = 50
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	appendCnt := 200
@@ -3656,61 +3656,24 @@ func TestWatchDirty(t *testing.T) {
 		wg.Add(1)
 		pool.Submit(worker(i))
 	}
-
-	stopCh := make(chan int)
-	defer close(stopCh)
-	dirtyCountCh := make(chan int, 100)
-	go func() {
-		for {
-			select {
-			case <-stopCh:
-				close(dirtyCountCh)
-				return
-			default:
-			}
-			time.Sleep(5 * time.Millisecond)
-			watcher.Run()
-			_, _, blkCnt := watcher.DirtyCount()
-			dirtyCountCh <- blkCnt
-		}
-	}()
-
 	wg.Wait()
-	seenDirty := false
-	prevVal, prevCount := 0, 0
-	// wait for ch to produce consecutive zeros
-	assert.NoError(t, testutils.WaitChTimeout(20*time.Second, dirtyCountCh, func(count int, closed bool) (moveOn bool, err error) {
-		if closed {
-			return false, moerr.NewInternalError("unexpected close on chan")
-		}
-		if count > 0 {
-			seenDirty = true
-		}
 
-		if prevVal != count {
-			t.Logf("dirty count %d appears %d times", prevVal, prevCount)
-			prevVal, prevCount = count, 1
-		} else {
-			prevCount++
-		}
-
-		if seenDirty && count == 0 {
-			// expect that all following count is zero
-			sum := 0
-			for i := 0; i < 10; i++ {
-				c := <-dirtyCountCh
-				sum += c
+	timer := time.After(10 * time.Second)
+	for {
+		select {
+		case <-timer:
+			t.Errorf("timeout to wait zero")
+			return
+		default:
+			watcher.Run()
+			time.Sleep(5 * time.Millisecond)
+			_, _, blkCnt := watcher.DirtyCount()
+			// find block zero
+			if blkCnt == 0 {
+				return
 			}
-			if sum == 0 {
-				// 10 zeros were found, can stop
-				return false, nil
-			}
-			t.Log("check consecutive zeros failed, wait more")
 		}
-		return true, nil
-	}))
-	// debug log
-	t.Logf("prevVal: %d, prevCount: %d, seen Dirty: %v", prevVal, prevCount, seenDirty)
+	}
 }
 
 func TestDirtyWatchRace(t *testing.T) {

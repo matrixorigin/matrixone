@@ -57,10 +57,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
-	// TODO:fileservice needs to be passed in as a parameter
 	serviceDir := path.Join(dirname, "data")
-	service := objectio.TmpNewFileservice(path.Join(dirname, "data"))
-	fs := objectio.NewObjectFS(service, serviceDir)
+	if opts.Fs == nil {
+		// TODO:fileservice needs to be passed in as a parameter
+		opts.Fs = objectio.TmpNewFileservice(path.Join(dirname, "data"))
+	}
+	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
 		Dir:         dirname,
@@ -92,11 +94,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
+	db.TxnMgr.Start()
 
 	db.Replay(dataFactory)
 	db.Catalog.ReplayTableRows()
-
-	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
 

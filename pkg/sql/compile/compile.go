@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -109,6 +110,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case TruncateTable:
+		return c.scope.TruncateTable(c)
 	case Deletion:
 		defer c.fillAnalyzeInfo()
 		affectedRows, err := c.scope.Delete(c)
@@ -168,6 +171,11 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return &Scope{
 				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_TRUNCATE_TABLE:
+			return &Scope{
+				Magic: TruncateTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
@@ -504,7 +512,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+func (c *Compile) ConstructScope() *Scope {
 	ds := &Scope{Magic: Normal}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	ds.Proc.LoadTag = true
@@ -515,12 +523,22 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
-	ss := []*Scope{ds}
-	for i := range ss {
+	return ds
+}
+
+func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+	mcpu := c.NumCPU()
+	if mcpu < 1 {
+		mcpu = 1
+	}
+	ss := make([]*Scope, mcpu)
+	fileparam := &external.ExternalFileparam{}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.ConstructScope()
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
 			Idx: c.anal.curr,
-			Arg: constructExternal(n, c.ctx),
+			Arg: constructExternal(n, c.ctx, fileparam),
 		})
 	}
 	return ss
@@ -688,7 +706,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		typs[i] = plan2.MakeTypeByPlan2Type(expr.Typ)
+		typs[i] = dupType(expr.Typ)
 	}
 	switch joinTyp {
 	case plan.Node_INNER:
@@ -811,9 +829,6 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Top,
 			Idx: c.anal.curr,
@@ -831,9 +846,6 @@ func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Order,
 			Idx: c.anal.curr,
@@ -850,11 +862,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
-	}
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
@@ -866,9 +873,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Limit,
 			Idx: c.anal.curr,
@@ -884,20 +888,8 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func containBrokenNode(s *Scope) bool {
-	for i := range s.Instructions {
-		if s.Instructions[i].IsBrokenNode() {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
@@ -917,11 +909,6 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	rs := c.newScopeList(validScopeCount(ss))
 	j := 0
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			isEnd := ss[i].IsEnd
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-			ss[i].IsEnd = isEnd
-		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
@@ -1251,5 +1238,15 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return false, plan.Node_MARK
 	default:
 		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
+	}
+}
+
+func dupType(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
 	}
 }

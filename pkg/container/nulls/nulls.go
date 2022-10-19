@@ -28,6 +28,18 @@ type Nulls struct {
 	Np *bitmap.Bitmap
 }
 
+func (n *Nulls) Clone() *Nulls {
+	if n == nil {
+		return nil
+	}
+	if n.Np == nil {
+		return &Nulls{Np: nil}
+	}
+	return &Nulls{
+		Np: n.Np.Clone(),
+	}
+}
+
 // Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
 	if Ptr(n) == nil && Ptr(m) == nil {
@@ -69,7 +81,7 @@ func New(n *Nulls, size int) {
 
 // Any returns true if any bit in the Nulls is set, otherwise it will return false.
 func Any(n *Nulls) bool {
-	if n.Np == nil {
+	if n == nil || n.Np == nil {
 		return false
 	}
 	return !n.Np.IsEmpty()
@@ -106,14 +118,15 @@ func String(n *Nulls) string {
 }
 
 func TryExpand(n *Nulls, size int) {
-	if n.Np != nil {
-		n.Np.TryExpandWithSize(size)
+	if n.Np == nil {
+		n.Np = bitmap.New(0)
 	}
+	n.Np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
-	if n.Np != nil {
+	if n.Any() {
 		return n.Np.Contains(row)
 	}
 	return false
@@ -122,6 +135,9 @@ func Contains(n *Nulls, row uint64) bool {
 func Add(n *Nulls, rows ...uint64) {
 	if len(rows) == 0 {
 		return
+	}
+	if n == nil {
+		n = &Nulls{}
 	}
 	if n.Np == nil {
 		n.Np = bitmap.New(int(rows[len(rows)-1]) + 1)
@@ -232,7 +248,7 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 }
 
 func (n *Nulls) Any() bool {
-	if n.Np == nil {
+	if n == nil || n.Np == nil {
 		return false
 	}
 	return !n.Np.IsEmpty()
@@ -248,7 +264,7 @@ func (n *Nulls) Set(row uint64) {
 }
 
 func (n *Nulls) Contains(row uint64) bool {
-	if n.Np != nil {
+	if n.Any() {
 		return n.Np.Contains(row)
 	}
 	return false

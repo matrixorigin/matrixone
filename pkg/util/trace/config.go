@@ -44,13 +44,6 @@ const (
 	MOErrorType     = "error"
 )
 
-const (
-	B int64 = 1 << (iota * 10)
-	KB
-	MB
-	GB
-)
-
 // tracerProviderConfig.
 type tracerProviderConfig struct {
 	// spanProcessors contains collection of SpanProcessors that are processing pipeline
