@@ -549,10 +549,13 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 	}
 }
 
-// MergeTaskCronExpr          s m h   d ...
+// MergeTaskCronExpr            s m h   d ...
+const MergeTaskCronExpr = MergeTaskCronExpr15Min
 const MergeTaskCronExpr4Hour = "0 * */4 * * *"
 const MergeTaskCronExpr15Min = "0 */15 * * * *"
-const MergeTaskCronExpr = MergeTaskCronExpr15Min
+
+// const MergeTaskCronExprYesterday = "0 0 8 * * *"
+const MergeTaskCronExprYesterday = "0 0 17 * * *"
 const MergeTaskToday = "today"
 const MergeTaskYesterday = "yesterday"
 const ParamSeparator = " "

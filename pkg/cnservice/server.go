@@ -284,8 +284,14 @@ func (s *service) initTaskRunner(ctx context.Context) error {
 		export.WithFileService(s.fileService),
 		export.WithMinFilesMerge(1),
 	))
-	if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, metric.SingleMetricTable.GetIdentify()), export.MergeTaskCronExpr); err != nil {
-		return err
+	tables := export.GetAllTable()
+	for _, tbl := range tables {
+		if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, tbl.GetIdentify()), export.MergeTaskCronExpr); err != nil {
+			return err
+		}
+		if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, tbl.GetIdentify(), export.MergeTaskYesterday), export.MergeTaskCronExprYesterday); err != nil {
+			return err
+		}
 	}
 
 	// start taskService on CN
