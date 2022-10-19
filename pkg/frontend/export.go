@@ -333,7 +333,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 					}
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_UUID:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
 			value, err := oq.mrs.GetValue(0, i)
 			if err != nil {
 				return err
@@ -373,6 +373,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			}
 			jsonStr := value.(bytejson.ByteJson).String()
 			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_UUID:
+			value, err := oq.mrs.GetString(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
