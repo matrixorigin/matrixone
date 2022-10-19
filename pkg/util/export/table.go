@@ -17,6 +17,7 @@ package export
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -72,6 +73,10 @@ type Table struct {
 
 func (tbl *Table) GetName() string {
 	return tbl.Table
+}
+
+func (tbl *Table) GetIdentify() string {
+	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
 
 type TableOptions interface {
@@ -247,3 +252,29 @@ type NoopTableOptions struct{}
 func (o NoopTableOptions) FormatDdl(ddl string) string        { return ddl }
 func (o NoopTableOptions) GetCreateOptions() string           { return "" }
 func (o NoopTableOptions) GetTableOptions(PathBuilder) string { return "" }
+
+var gTable map[string]*Table
+var mux sync.Mutex
+
+// RegisterTableDefine return old one, if already registered
+var RegisterTableDefine = func(table *Table) *Table {
+	mux.Lock()
+	defer mux.Unlock()
+	if len(gTable) == 0 {
+		gTable = make(map[string]*Table)
+	}
+	id := table.GetIdentify()
+	old := gTable[id]
+	gTable[id] = table
+	return old
+}
+
+var GetAllTable = func() []*Table {
+	mux.Lock()
+	defer mux.Unlock()
+	tables := make([]*Table, 0, len(gTable))
+	for _, tbl := range gTable {
+		tables = append(tables, tbl)
+	}
+	return tables
+}

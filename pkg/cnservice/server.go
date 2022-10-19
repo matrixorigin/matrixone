@@ -273,8 +273,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 
 const MergeTaskExecutor int = 1
 
-func (s *service) initTaskRunner(ctx context.Context) error {
-	var err error
+func (s *service) initTaskRunner(ctx context.Context) (err error) {
 	if s.taskRunner == nil {
 		return moerr.NewInternalError("TaskRunner is nil.")
 	}
@@ -284,6 +283,7 @@ func (s *service) initTaskRunner(ctx context.Context) error {
 		export.WithFileService(s.fileService),
 		export.WithMinFilesMerge(1),
 	))
+	// should init once in with schema-init.
 	tables := export.GetAllTable()
 	for _, tbl := range tables {
 		if err = s.taskService.CreateCronTask(ctx, export.MergeTaskMetadata(MergeTaskExecutor, tbl.GetIdentify()), export.MergeTaskCronExpr); err != nil {
@@ -295,7 +295,7 @@ func (s *service) initTaskRunner(ctx context.Context) error {
 	}
 
 	// start taskService on CN
-	s.taskService.StartScheduleCronTask()
+	//s.taskService.StartScheduleCronTask()
 
 	return nil
 }
