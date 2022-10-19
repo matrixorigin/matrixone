@@ -199,7 +199,8 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(genColumnPrimaryKey(col.tableId, col.name)),
+			false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ACCOUNT_ID_IDX
@@ -1018,4 +1019,8 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	bat.Vecs = append(vecs, bat.Vecs...)
 	bat.Attrs = append(attrs, bat.Attrs...)
 	return batch.BatchToProtoBatch(bat)
+}
+
+func genColumnPrimaryKey(tableId uint64, name string) string {
+	return fmt.Sprintf("%v-%v", tableId, name)
 }
