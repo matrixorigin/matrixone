@@ -248,7 +248,7 @@ func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string,
 	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
 }
 
-func (m *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
+func (b *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
 func (b *AccountDatePathBuilder) SupportAccountStrategy() bool { return true }
 func (b *AccountDatePathBuilder) GetName() string              { return "AccountDate" }
 

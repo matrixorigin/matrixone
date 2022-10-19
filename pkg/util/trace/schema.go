@@ -263,13 +263,6 @@ PRIMARY KEY (statement_id)
 )`
 )
 
-var initDDLs = []struct{ sqlPrefix, filePrefix string }{
-	{sqlCreateStatementInfoTable, MOStatementType},
-	{sqlCreateSpanInfoTable, MOSpanType},
-	{sqlCreateLogInfoTable, MOLogType},
-	{sqlCreateErrorInfoTable, MOErrorType},
-}
-
 var tables = []*export.Table{SingleStatementTable, SingleRowLogTable}
 var views = []*export.View{logView, errorView, spanView}
 
@@ -297,14 +290,6 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	}()
 	instant := time.Now()
 
-	//optFactory := export.GetOptionFactory(export.ExternalTableEngine)
-	//for _, ddl := range initDDLs {
-	//	opts := optFactory(StatsDatabase, ddl.filePrefix)
-	//	sql := opts.FormatDdl(ddl.sqlPrefix) + opts.GetTableOptions(nil)
-	//	if err := mustExec(sql); err != nil {
-	//		return err
-	//	}
-	//}
 	for _, tbl := range tables {
 		if err := mustExec(tbl.ToCreateSql(true)); err != nil {
 			return err
