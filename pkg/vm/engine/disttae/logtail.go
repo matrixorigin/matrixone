@@ -83,9 +83,9 @@ func consumerCheckPoint(ckpt string) error {
 func consumerEntry(idx int, ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
-			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, e.Bat)
+			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat) //TODO pass primary key index
 		}
-		return mvcc.Insert(ctx, e.Bat)
+		return mvcc.Insert(ctx, -1, e.Bat) //TODO pass primary key index
 	}
 	if isMetaTable(e.TableName) {
 		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)

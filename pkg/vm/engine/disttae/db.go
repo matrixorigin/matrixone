@@ -70,7 +70,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, ibat); err != nil {
+		if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 			bat.Clean(m)
 			return err
 		}
@@ -94,7 +94,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, ibat); err != nil {
+		if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 			bat.Clean(m)
 			return err
 		}
@@ -110,7 +110,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				bat.Clean(m)
 				return err
 			}
-			if err := part.Insert(ctx, ibat); err != nil {
+			if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 				bat.Clean(m)
 				return err
 			}
@@ -134,7 +134,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, ibat); err != nil {
+		if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 			bat.Clean(m)
 			return err
 		}
@@ -150,7 +150,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				bat.Clean(m)
 				return err
 			}
-			if err := part.Insert(ctx, ibat); err != nil {
+			if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 				bat.Clean(m)
 				return err
 			}
@@ -174,7 +174,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, ibat); err != nil {
+		if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 			bat.Clean(m)
 			return err
 		}
@@ -190,7 +190,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				bat.Clean(m)
 				return err
 			}
-			if err := part.Insert(ctx, ibat); err != nil {
+			if err := part.Insert(ctx, -1, ibat); err != nil { //TODO pass primary key index
 				bat.Clean(m)
 				return err
 			}
