@@ -382,7 +382,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		}
 		return
 	}
-	err = db.TruncateRelation(context.TODO(), req.Name)
+	err = db.TruncateRelation(context.TODO(), req.Name, req.NewId)
 	return err
 }
 
