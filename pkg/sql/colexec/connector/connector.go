@@ -48,8 +48,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return false, err
 			}
+			vector.Clean(bat.Vecs[i], proc.Mp())
 			bat.Vecs[i] = vec
 		}
 	}

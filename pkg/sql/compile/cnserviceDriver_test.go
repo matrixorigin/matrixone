@@ -2,6 +2,7 @@ package compile
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -47,58 +48,68 @@ import (
 
 func TestInstructionSerializationCover(t *testing.T) {
 	// ensure that encodeScope and decodeScope can reach every instruction types.
-	var instructions = []*vm.Instruction{
-		{Op: vm.Top, Arg: &top.Argument{}},
-		{Op: vm.Join, Arg: &join.Argument{}},
-		{Op: vm.Semi, Arg: &semi.Argument{}},
-		{Op: vm.Left, Arg: &left.Argument{}},
-		{Op: vm.Limit, Arg: &limit.Argument{}},
-		{Op: vm.Merge, Arg: &merge.Argument{}},
-		{Op: vm.Order, Arg: &order.Argument{}},
-		{Op: vm.Group, Arg: &group.Argument{}},
-		{Op: vm.Output, Arg: &output.Argument{}},
-		{Op: vm.Offset, Arg: &offset.Argument{}},
-		{Op: vm.Product, Arg: &product.Argument{}},
-		{Op: vm.Restrict, Arg: &restrict.Argument{}},
-		{Op: vm.Dispatch, Arg: &dispatch.Argument{}},
-		{Op: vm.Connector, Arg: &connector.Argument{}},
-		{Op: vm.Projection, Arg: &projection.Argument{}},
-		{Op: vm.Anti, Arg: &anti.Argument{}},
-		{Op: vm.Single, Arg: &single.Argument{}},
-		{Op: vm.Mark, Arg: &mark.Argument{}},
-		{Op: vm.LoopJoin, Arg: &loopjoin.Argument{}},
-		{Op: vm.LoopLeft, Arg: &loopleft.Argument{}},
-		{Op: vm.LoopSemi, Arg: &loopsemi.Argument{}},
-		{Op: vm.LoopAnti, Arg: &loopanti.Argument{}},
-		{Op: vm.LoopSingle, Arg: &loopsingle.Argument{}},
-		{Op: vm.MergeTop, Arg: &mergetop.Argument{}},
-		{Op: vm.MergeLimit, Arg: &mergelimit.Argument{}},
-		{Op: vm.MergeOrder, Arg: &mergeorder.Argument{}},
-		{Op: vm.MergeGroup, Arg: &mergegroup.Argument{}},
-		{Op: vm.MergeOffset, Arg: &mergeoffset.Argument{}},
-		{Op: vm.Deletion, Arg: &deletion.Argument{}},
-		{Op: vm.Insert, Arg: &insert.Argument{}},
-		{Op: vm.Update, Arg: &update.Argument{}},
-		{Op: vm.External, Arg: &external.Argument{}},
-		{Op: vm.Minus, Arg: &minus.Argument{}},
-		{Op: vm.Intersect, Arg: &intersect.Argument{}},
-		{Op: vm.IntersectAll, Arg: &intersectall.Argument{}},
-		{Op: vm.HashBuild, Arg: &hashbuild.Argument{}},
-		{Op: vm.Unnest, Arg: &unnest.Argument{}},
-		{Op: vm.GenerateSeries, Arg: &generate_series.Argument{}},
+	testCases := []struct {
+		instruction vm.Instruction
+		ignore      bool
+	}{
+		{instruction: vm.Instruction{Op: vm.Top, Arg: &top.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Join, Arg: &join.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.Semi, Arg: &semi.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.Left, Arg: &left.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.Limit, Arg: &limit.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Merge, Arg: &merge.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Order, Arg: &order.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Group, Arg: &group.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Output, Arg: &output.Argument{}}, ignore: true},
+		{instruction: vm.Instruction{Op: vm.Offset, Arg: &offset.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Product, Arg: &product.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Restrict, Arg: &restrict.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Dispatch, Arg: &dispatch.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Connector, Arg: &connector.Argument{}}, ignore: true},
+		{instruction: vm.Instruction{Op: vm.Projection, Arg: &projection.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Anti, Arg: &anti.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.Single, Arg: &single.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.Mark, Arg: &mark.Argument{Conditions: make([][]*plan.Expr, 2)}}},
+		{instruction: vm.Instruction{Op: vm.LoopJoin, Arg: &loopjoin.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.LoopLeft, Arg: &loopleft.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.LoopSemi, Arg: &loopsemi.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.LoopAnti, Arg: &loopanti.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.LoopSingle, Arg: &loopsingle.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeTop, Arg: &mergetop.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeLimit, Arg: &mergelimit.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeOrder, Arg: &mergeorder.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeGroup, Arg: &mergegroup.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.MergeOffset, Arg: &mergeoffset.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Deletion, Arg: &deletion.Argument{}}, ignore: true},
+		{instruction: vm.Instruction{Op: vm.Insert, Arg: &insert.Argument{}}, ignore: true},
+		{instruction: vm.Instruction{Op: vm.Update, Arg: &update.Argument{}}, ignore: true},
+		{instruction: vm.Instruction{Op: vm.External, Arg: &external.Argument{Es: &external.ExternalParam{}}}},
+		{instruction: vm.Instruction{Op: vm.Minus, Arg: &minus.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Intersect, Arg: &intersect.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.IntersectAll, Arg: &intersectall.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.HashBuild, Arg: &hashbuild.Argument{}}},
+		{instruction: vm.Instruction{Op: vm.Unnest, Arg: &unnest.Argument{Es: &unnest.Param{Extern: &unnest.ExternalParam{}}}}},
+		{instruction: vm.Instruction{Op: vm.GenerateSeries, Arg: &generate_series.Argument{Es: &generate_series.Param{}}}},
 	}
 	{
 		typeReached := make([]int, vm.LastInstructionOp)
-		for _, instruction := range instructions {
-			typeReached[instruction.Op]++
+		for _, tc := range testCases {
+			typeReached[tc.instruction.Op]++
 		}
 		for i, num := range typeReached {
 			require.Greater(t, num, 0, fmt.Sprintf("lack of serialization ut for instruction (op is %d)", i))
 		}
 	}
 
-	for _, instruction := range instructions {
-		_, encode, err := convertToPipelineInstruction(instruction, nil, 0)
+	for _, tc := range testCases {
+		if tc.ignore {
+			continue
+		}
+		_, encode, err := convertToPipelineInstruction(
+			&tc.instruction,
+			nil,
+			0,
+		)
 		require.NoError(t, err)
 		_, err = convertToVmInstruction(encode, nil)
 		require.NoError(t, err)
