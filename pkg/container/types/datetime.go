@@ -338,7 +338,7 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	return newDate, true
 }
 
-func (dt Datetime) ConvertToInterval(its string, secondDt Datetime) (int64, error) {
+func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, error) {
 	switch its {
 	case "microsecond":
 		return int64(dt - secondDt), nil
