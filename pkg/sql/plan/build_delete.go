@@ -189,6 +189,12 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		}
 	}
 	tf.baseNameMap = reverseMap(tf.baseNameMap)
+	for _, t := range tbs {
+		tblName := string(t.ObjectName)
+		if _, ok := tf.baseNameMap[tblName]; !ok {
+			return nil, moerr.NewInvalidInput("Unknown table '%v' in MULTI DELETE", tblName)
+		}
+	}
 
 	// find out use keys to delete
 	var err error
