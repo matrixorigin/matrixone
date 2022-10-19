@@ -60,13 +60,18 @@ const (
 	Unnest
 
 	GenerateSeries
+
+	// LastInstructionOp is not a true operator and must set at last.
+	// It was used by unit testing to ensure that
+	// all functions related to instructions can reach 100% coverage.
+	LastInstructionOp
 )
 
 // Instruction contains relational algebra
 type Instruction struct {
 	// Op specified the operator code of an instruction.
 	Op int
-	// Idx specified the anaylze information index.
+	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
 	Arg any
