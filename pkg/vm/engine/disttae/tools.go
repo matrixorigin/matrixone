@@ -971,13 +971,11 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 }
 
 func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
-	/* TODO
 	for i := range blks {
 		if blk.Eq(blks[i]) {
 			return true
 		}
 	}
-	*/
 	return false
 }
 
