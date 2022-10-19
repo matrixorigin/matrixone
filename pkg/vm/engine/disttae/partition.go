@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	index_PrimaryKey = "primary key"
-	index_BlockID    = "block id"
+	index_PrimaryKey = memtable.Text("primary key")
+	index_BlockID    = memtable.Text("block id")
 )
 
 func NewPartition() *Partition {
@@ -159,7 +159,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 		// check primary key
 		var primaryKey any
 		if primaryKeyIndex >= 0 {
-			primaryKey = memtable.ToOrdered(tuple[primaryKeyIndex])
+			primaryKey = memtable.ToOrdered(tuple[primaryKeyIndex].Value)
 			entries, err := p.data.Index(tx, memtable.Tuple{
 				index_PrimaryKey,
 				primaryKey,
