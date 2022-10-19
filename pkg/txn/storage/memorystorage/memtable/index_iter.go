@@ -29,17 +29,19 @@ type IndexIter[
 	rows     *btree.BTreeG[*PhysicalRow[K, V]]
 	readTime Time
 	tx       *Transaction
-	index    Tuple
+	min      Tuple
+	max      Tuple
 }
 
-func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, index Tuple) *IndexIter[K, V] {
+func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) *IndexIter[K, V] {
 	state := t.state.Load()
 	return &IndexIter[K, V]{
 		iter:     state.indexes.Copy().Iter(),
 		rows:     state.rows,
 		readTime: tx.Time,
 		tx:       tx,
-		index:    index,
+		min:      min,
+		max:      max,
 	}
 }
 
@@ -48,7 +50,7 @@ func (i *IndexIter[K, V]) First() bool {
 		return false
 	}
 	if !i.iter.Seek(&IndexEntry[K, V]{
-		Index: i.index,
+		Index: i.min,
 	}) {
 		return false
 	}
@@ -59,10 +61,10 @@ func (i *IndexIter[K, V]) seekToValid() bool {
 	for {
 		entry := i.iter.Item()
 		// check range
-		if i.index.Less(entry.Index) {
+		if entry.Index.Less(i.min) {
 			return false
 		}
-		if entry.Index.Less(i.index) {
+		if !entry.Index.Less(i.max) {
 			return false
 		}
 		// check physical row
