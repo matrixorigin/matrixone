@@ -114,3 +114,13 @@ id	name	sex
 3	noyer	Germany
 4	modrici	M
 4	modrici	UK
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a uuid);
+create table t2(col1 uuid primary key, col2 int);
+insert into t2 values(uuid(),1);
+insert into t2 values(uuid(),0);
+insert into t2 values(uuid(),10);
+select count(*) from (select a from t1 union select col1 from t2) t;
+count(*)
+3

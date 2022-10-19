@@ -152,6 +152,16 @@ func Test_sliceLikePure(t *testing.T) {
 			want:    []int64{0},
 			wantErr: false,
 		},
+		// 13. single char none wild card
+		{
+			name: "*",
+			args: args{
+				s:    []string{"abc", "*", "aca"},
+				expr: []byte("*"),
+			},
+			want:    []int64{1},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -326,6 +336,17 @@ func Test_pureLikePure(t *testing.T) {
 			args: args{
 				p:    []byte("wop23"),
 				expr: []byte("wop%23"),
+				rs:   make([]int64, 1),
+			},
+			want:    []int64{0},
+			wantErr: false,
+		},
+		// 14. single char none wild card
+		{
+			name: "*",
+			args: args{
+				p:    []byte("*"),
+				expr: []byte("*"),
 				rs:   make([]int64, 1),
 			},
 			want:    []int64{0},
@@ -511,6 +532,17 @@ func Test_sliceNullLikePure(t *testing.T) {
 				ns:   nulls.NewWithSize(0),
 			},
 			want:    []int64{0, 1, 2},
+			wantErr: false,
+		},
+		// 15. single char none wild card
+		{
+			name: "*",
+			args: args{
+				s:    []string{"abc", "*", "*a"},
+				expr: []byte("*"),
+				ns:   nulls.NewWithSize(0),
+			},
+			want:    []int64{1},
 			wantErr: false,
 		},
 	}
