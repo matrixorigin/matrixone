@@ -93,6 +93,10 @@ var (
 	CoalesceTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
 	}
+
+	CoalesceUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
+	}
 )
 
 // CoalesceTypeCheckFn is type check function for coalesce operator
