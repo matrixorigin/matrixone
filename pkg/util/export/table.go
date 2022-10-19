@@ -244,7 +244,8 @@ func (r *Row) Reset() {
 	}
 }
 
-// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0, else return "sys"
+// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
+// else return "sys"
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
