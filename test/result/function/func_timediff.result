@@ -42,7 +42,7 @@ datediff(date_add(20201011, interval(sin(1), day)), date_sub(20201231, interval(
 286
 SELECT TIMESTAMPDIFF(MONTH,'2003-02-01','2003-05-01');
 timestampdiff(month, 2003-02-01, 2003-05-01)
-2
+3
 SELECT TIMESTAMPDIFF(YEAR,'2002-05-01','2001-01-01');
 timestampdiff(year, 2002-05-01, 2001-01-01)
 -1

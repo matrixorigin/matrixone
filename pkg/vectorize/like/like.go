@@ -66,6 +66,14 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 		return rs, nil
 	}
 
+	// Opt Rule #3.1: single char, no wild card, so it is a simple compare eq.
+	if n == 1 && expr[0] != '_' && expr[0] != '%' {
+		for i, s := range xs {
+			rs[i] = isNotNull(ns, uint64(i)) && len(s) == 1 && s[0] == expr[0]
+		}
+		return rs, nil
+	}
+
 	// Opt Rule #4.  [_%]somethingInBetween[_%]
 	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character

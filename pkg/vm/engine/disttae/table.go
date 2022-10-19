@@ -65,11 +65,16 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-
 	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
-	tbl.dnList = dnList
-	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
+	switch {
+	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_TABLES_ID:
+		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_COLUMNS_ID:
+		tbl.dnList = []int{0}
+	default:
+		tbl.dnList = dnList
 	}
 	dnStores := make([]DNStore, 0, len(dnList))
 	for _, i := range dnList {
@@ -77,8 +82,8 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
 	if !ok {
-		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.txn.op, tbl.db.databaseId,
-			tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.txn.op, tbl.primaryIdx,
+			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
 	}

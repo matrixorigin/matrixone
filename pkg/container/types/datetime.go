@@ -338,26 +338,26 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	return newDate, true
 }
 
-func (dt Datetime) ConvertToInterval(its string) (int64, error) {
+func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, error) {
 	switch its {
 	case "microsecond":
-		return int64(dt), nil
+		return int64(dt - secondDt), nil
 	case "second":
-		return dt.sec(), nil
+		return (dt - secondDt).sec(), nil
 	case "minute":
-		return int64(dt) / (microSecsPerSec * secsPerMinute), nil
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerMinute), nil
 	case "hour":
-		return int64(dt) / (microSecsPerSec * secsPerHour), nil
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerHour), nil
 	case "day":
-		return int64(dt) / (microSecsPerSec * secsPerDay), nil
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerDay), nil
 	case "week":
-		return int64(dt) / (microSecsPerSec * secsPerWeek), nil
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerWeek), nil
 	case "month":
-		return dt.ConvertToMonth(), nil
+		return dt.ConvertToMonth(secondDt), nil
 	case "quarter":
-		return dt.ConvertToMonth() / 3, nil
+		return dt.ConvertToMonth(secondDt) / 3, nil
 	case "year":
-		return dt.ConvertToMonth() / 12, nil
+		return dt.ConvertToMonth(secondDt) / 12, nil
 	}
 	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
 }
@@ -366,12 +366,15 @@ func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
 	return int64((dt - secondDt) / microSecsPerSec)
 }
 
-func (dt Datetime) ConvertToMonth() int64 {
-	if dt < 0 {
-		dt = -dt
-		return -((int64(dt.Year())-1)*12 + int64(dt.Month()) - 1)
+func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
+
+	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
+	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
+
+	if dayDiff >= 0 {
+		return monthDiff
 	} else {
-		return (int64(dt.Year())-1)*12 + int64(dt.Month()) - 1
+		return monthDiff - 1
 	}
 }
 

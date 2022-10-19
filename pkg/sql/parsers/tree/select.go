@@ -444,8 +444,9 @@ func (node *AliasClause) Format(ctx *FmtCtx) {
 // the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr TableExpr
-	As   AliasClause
+	Expr       TableExpr
+	As         AliasClause
+	IndexHints []*IndexHint
 }
 
 func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
@@ -453,6 +454,14 @@ func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
 	if node.As.Alias != "" {
 		ctx.WriteString(" as ")
 		node.As.Format(ctx)
+	}
+	if node.IndexHints != nil {
+		prefix := " "
+		for _, hint := range node.IndexHints {
+			ctx.WriteString(prefix)
+			hint.Format(ctx)
+			prefix = " "
+		}
 	}
 }
 
@@ -499,4 +508,64 @@ func (node *From) Format(ctx *FmtCtx) {
 
 func NewFrom(t TableExprs) *From {
 	return &From{Tables: t}
+}
+
+type IndexHintType int
+
+const (
+	HintUse IndexHintType = iota + 1
+	HintIgnore
+	HintForce
+)
+
+type IndexHintScope int
+
+// Index hint scopes.
+const (
+	HintForScan IndexHintScope = iota + 1
+	HintForJoin
+	HintForOrderBy
+	HintForGroupBy
+)
+
+type IndexHint struct {
+	IndexNames []string
+	HintType   IndexHintType
+	HintScope  IndexHintScope
+}
+
+func (node *IndexHint) Format(ctx *FmtCtx) {
+	indexHintType := ""
+	switch node.HintType {
+	case HintUse:
+		indexHintType = "use index"
+	case HintIgnore:
+		indexHintType = "ignore index"
+	case HintForce:
+		indexHintType = "force index"
+	}
+
+	indexHintScope := ""
+	switch node.HintScope {
+	case HintForScan:
+		indexHintScope = ""
+	case HintForJoin:
+		indexHintScope = " for join"
+	case HintForOrderBy:
+		indexHintScope = " for order by"
+	case HintForGroupBy:
+		indexHintScope = " for group by"
+	}
+	ctx.WriteString(indexHintType)
+	ctx.WriteString(indexHintScope)
+	ctx.WriteString("(")
+	if node.IndexNames != nil {
+		for i, value := range node.IndexNames {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteString(value)
+		}
+	}
+	ctx.WriteString(")")
 }
