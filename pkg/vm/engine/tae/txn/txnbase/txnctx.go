@@ -37,6 +37,7 @@ func IDCtxToID(buf []byte) string {
 
 type TxnCtx struct {
 	sync.RWMutex
+	sync.WaitGroup
 	DoneCond                     sync.Cond
 	ID                           string
 	IDCtx                        []byte
@@ -44,6 +45,10 @@ type TxnCtx struct {
 	Info                         []byte
 	State                        txnif.TxnState
 	Participants                 []uint64
+
+	// Memo is not thread-safe
+	// It will be readonly when txn state is not txnif.TxnStateActive
+	Memo *txnif.TxnMemo
 }
 
 func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
@@ -54,9 +59,23 @@ func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 		PrepareTS: txnif.UncommitTS,
 		CommitTS:  txnif.UncommitTS,
 		Info:      info,
+		Memo:      txnif.NewTxnMemo(),
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
+}
+
+func NewEmptyTxnCtx() *TxnCtx {
+	ctx := &TxnCtx{
+		Memo: txnif.NewTxnMemo(),
+	}
+	ctx.DoneCond = *sync.NewCond(ctx)
+	return ctx
+}
+
+func (ctx *TxnCtx) IsReplay() bool { return false }
+func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
+	return ctx.Memo
 }
 
 func (ctx *TxnCtx) Is2PC() bool { return len(ctx.Participants) > 1 }
@@ -69,9 +88,10 @@ func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	repr := fmt.Sprintf(
-		"ctx[%X][%s->%s][%s]",
+		"ctx[%X][%s->%s->%s][%s]",
 		ctx.ID,
 		ctx.StartTS.ToString(),
+		ctx.PrepareTS.ToString(),
 		ctx.CommitTS.ToString(),
 		txnif.TxnStrState(ctx.State),
 	)
@@ -183,9 +203,9 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return moerr.NewTxnNotActive("")
-	}
+	// if !ctx.CommitTS.Equal(txnif.UncommitTS) {
+	// 	return moerr.NewTxnNotActive("")
+	// }
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
 	ctx.State = txnif.TxnStatePreparing
@@ -277,6 +297,3 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 func (ctx *TxnCtx) ToUnknownLocked() {
 	ctx.State = txnif.TxnStateUnknown
 }
-
-// MockSetCommitTSLocked is for testing
-func (ctx *TxnCtx) MockSetCommitTSLocked(ts types.TS) { ctx.CommitTS = ts }

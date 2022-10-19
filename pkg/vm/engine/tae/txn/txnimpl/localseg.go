@@ -178,7 +178,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)
-		seg.table.store.dirtyMemo.recordBlk(seg.table.entry.GetDB().ID, id)
+		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
 		appended += toAppend
@@ -205,6 +205,11 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	for {
 		h := seg.appendable
 		n := h.GetNode().(*insertNode)
+		space := n.GetSpace()
+		if space == 0 {
+			seg.registerInsertNode()
+			n = h.GetNode().(*insertNode)
+		}
 		toAppend := n.PrepareAppend(data, offset)
 		size := compute.EstimateSize(data, offset, toAppend)
 		logutil.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
@@ -216,7 +221,6 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 			logutil.Info(seg.table.store.nodesMgr.String())
 			break
 		}
-		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
@@ -230,9 +234,6 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		}
 		offset += appended
 		seg.rows += appended
-		if space == 0 {
-			seg.registerInsertNode()
-		}
 		if offset >= length {
 			break
 		}

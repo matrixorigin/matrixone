@@ -95,6 +95,31 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+func (db *database) Truncate(ctx context.Context, name string) error {
+	newId, err := db.txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+
+	oldId, err := db.txn.getTableId(ctx, db.databaseId, name)
+	if err != nil {
+		return err
+	}
+
+	bat, err := genTruncateTableTuple(newId, db.databaseId,
+		genMetaTableName(oldId), db.databaseName, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	for i := range db.txn.dnStores {
+		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
 	accountId, userId, roleId := getAccessInfo(ctx)

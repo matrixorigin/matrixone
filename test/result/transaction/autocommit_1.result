@@ -10,17 +10,17 @@ SELECT @@session.autocommit;
 @@autocommit
 0
 SET @@session.autocommit=OFF;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 0
 SET @@session.autocommit=ON;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 0
 SET @@session.autocommit=foo;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 0
@@ -164,22 +164,22 @@ drop table if exists t3;
 create table t3(a int);
 insert into t3 values (10),(20),(30);
 set @@autocommit=ON;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=OFF;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=1;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=0;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
@@ -188,22 +188,22 @@ drop table if exists tab3;
 create table tab3 (a int, b varchar(25));
 insert into tab3 values (10, 'aa'),(20, 'bb'),(30, 'cc');
 set @@autocommit=ON;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=OFF;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=1;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=0;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 commit;
 select * from tab3;
 a	b
@@ -282,22 +282,22 @@ drop database if exists test_xx;
 begin;
 create database test_xx;
 SET @@session.autocommit=1;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1
 SET @@session.autocommit= 0;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1
 SET @@session.autocommit=OFF;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1
 SET @@session.autocommit=ON;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1
@@ -400,11 +400,11 @@ start transaction;
 create table t5(a int);
 insert into t5 values(10),(20),(30);
 drop table t5;
-Only CREATE of DDL is supported in transactions
+internal error: Only CREATE of DDL is supported in transactions
 start transaction;
 insert into t5 values(100),(2000),(3000);
 set @autocommit=0;
-Uncommitted transaction exists. Please commit or rollback first.
+internal error: Uncommitted transaction exists. Please commit or rollback first.
 begin;
 select * from t5;
 a
@@ -515,7 +515,7 @@ a
 500
 1000
 drop table t7;
-Only CREATE of DDL is supported in transactions
+internal error: Only CREATE of DDL is supported in transactions
 commit;
 drop table t7;
 create table t8(a int);

@@ -13,7 +13,7 @@ pull_request_rules:
       - "check-success=UT Test on Ubuntu/x64"
       # - "check-success=UT Test on Darwin/x86"
       - "check-success=UT Test on Linux/Arm"
-      - "check-success=BVT Test on Ubuntu/x64"
+      - "check-success=BVT Test on Linux/x64"
       - "check-success=BVT Test on Linux/Arm"
       # - "check-success=BVT Test on Darwin/x86"
       - "check-success=SCA Test on Ubuntu/x64"  

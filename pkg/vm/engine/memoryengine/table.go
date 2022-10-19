@@ -172,6 +172,27 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 	return resp.Attrs, nil
 }
 
+func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+
+	resps, err := DoTxnRequest[GetTableColumnsResp](
+		ctx,
+		t.txnOperator,
+		true,
+		t.engine.anyShard,
+		OpGetTableColumns,
+		GetTableColumnsReq{
+			TableID: t.id,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := resps[0]
+
+	return resp.Attrs, nil
+}
+
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resps, err := DoTxnRequest[GetTableDefsResp](
@@ -193,31 +214,31 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return resp.Defs, nil
 }
 
-func (t *Table) Truncate(ctx context.Context) (uint64, error) {
-
-	resps, err := DoTxnRequest[TruncateResp](
-		ctx,
-		t.txnOperator,
-		false,
-		t.engine.allShards,
-		OpTruncate,
-		TruncateReq{
-			TableID:      t.id,
-			DatabaseName: t.databaseName,
-			TableName:    t.tableName,
-		},
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	var affectedRows int64
-	for _, resp := range resps {
-		affectedRows += resp.AffectedRows
-	}
-
-	return uint64(affectedRows), nil
-}
+//func (t *Table) Truncate(ctx context.Context) (uint64, error) {
+//
+//	resps, err := DoTxnRequest[TruncateResp](
+//		ctx,
+//		t.txnOperator,
+//		false,
+//		t.engine.allShards,
+//		OpTruncate,
+//		TruncateReq{
+//			TableID:      t.id,
+//			DatabaseName: t.databaseName,
+//			TableName:    t.tableName,
+//		},
+//	)
+//	if err != nil {
+//		return 0, err
+//	}
+//
+//	var affectedRows int64
+//	for _, resp := range resps {
+//		affectedRows += resp.AffectedRows
+//	}
+//
+//	return uint64(affectedRows), nil
+//}
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 

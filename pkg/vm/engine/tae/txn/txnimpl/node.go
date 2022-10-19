@@ -342,11 +342,13 @@ func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
+		opts := new(containers.Options)
+		opts.Capacity = int(txnbase.MaxNodeRows)
 		n.data = containers.BuildBatch(
 			schema.AllNames(),
 			schema.AllTypes(),
 			schema.AllNullables(),
-			int(txnbase.MaxNodeRows))
+			opts)
 	}
 
 	from := uint32(n.data.Length())

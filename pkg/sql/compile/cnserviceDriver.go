@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -751,6 +752,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cols:   t.Es.Cols,
 			Extern: dt,
 		}
+	case *generate_series.Argument:
+		in.GenerateSeries = &pipeline.GenerateSeries{
+			Attrs: t.Es.Attrs,
+			Cols:  t.Es.Cols,
+		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -958,6 +964,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				Attrs:  opr.Unnest.Attrs,
 				Cols:   opr.Unnest.Cols,
 				Extern: param,
+			},
+		}
+	case vm.GenerateSeries:
+		v.Arg = &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs: opr.GenerateSeries.Attrs,
+				Cols:  opr.GenerateSeries.Cols,
 			},
 		}
 	default:
