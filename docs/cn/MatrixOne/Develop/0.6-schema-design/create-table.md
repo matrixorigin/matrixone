@@ -74,7 +74,6 @@ CREATE TABLE `modatabase`.`users` (
 
 MatrixOne 支持许多其他的列数据类型，包含 整数、浮点数、时间等，参见[数据类型](../../Reference/Data-Types/data-types.md)。
 
-
 **创建一个复杂表**
 
 创建一张 *books* 表，这张表将是 *modatabase* 数据的核心。它包含书的 唯一标识、名称、库存、价格、出版时间 字段。
