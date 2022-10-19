@@ -3019,15 +3019,27 @@ limit_opt:
 limit_clause:
     LIMIT expression
     {
-        $$ = &tree.Limit{Count: $2}
+        limit, err := &tree.NewLimit(nil, $2)
+        if err != nil {
+        	yylex.Error(err..Error())
+        }
+        return limit
     }
 |   LIMIT expression ',' expression
     {
-        $$ = &tree.Limit{Offset: $2, Count: $4}
+        limit, err := &tree.NewLimit($2, $4)
+        if err != nil {
+		yylex.Error(err..Error())
+	}
+	return limit
     }
 |   LIMIT expression OFFSET expression
     {
-        $$ = &tree.Limit{Offset: $4, Count: $2}
+        limit, err := &tree.NewLimit($4, $2)
+        if err != nil {
+		yylex.Error(err..Error())
+	}
+	return limit
     }
 
 order_by_opt:

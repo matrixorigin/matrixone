@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 )
 
@@ -168,11 +169,19 @@ func (node *Limit) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewLimit(o, c Expr) *Limit {
+func NewLimit(o, c Expr) (*Limit, error) {
+	exprs := []Expr{o, c}
+	for _, expr := range exprs {
+		if expr != nil {
+			if val, ok := o.(*NumVal); !ok || val.ValType == P_int64 {
+				return nil, moerr.NewSyntaxError(fmt.Sprintf("%v is illegal", expr))
+			}
+		}
+	}
 	return &Limit{
 		Offset: o,
 		Count:  c,
-	}
+	}, nil
 }
 
 // the parenthesized SELECT/UNION/VALUES statement.
