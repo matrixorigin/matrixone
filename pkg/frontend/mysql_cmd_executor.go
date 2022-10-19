@@ -2508,7 +2508,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return retErr
 				}
 
-			case *tree.PrepareStmt, *tree.PrepareString:
+			case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err2 = mce.ses.protocol.SendPrepareResponse(prepareStmt); err2 != nil {
 						trace.EndStatement(requestCtx, err2)
@@ -2516,18 +2516,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
-				} else {
-					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-					if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
-						trace.EndStatement(requestCtx, err2)
-						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
-						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-						return retErr
-					}
-				}
-
-			case *tree.Deallocate:
-				if mce.ses.Cmd == int(COM_QUERY) {
+				} else if mce.ses.Cmd == int(COM_QUERY) {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
 						trace.EndStatement(requestCtx, err2)
