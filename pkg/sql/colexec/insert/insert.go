@@ -70,20 +70,21 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 		b.Clean(proc.Mp())
 	}
 	err := n.TargetTable.Write(ctx, bat)
+	bat.Clean(proc.Mp())
 	n.Affected += uint64(len(bat.Zs))
 	return err
 }
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
 	if proc.TxnClient == nil {
-		panic("must set txn client")
+		return nil, moerr.NewInternalError("must set txn client")
 	}
 	txn, err = proc.TxnClient.New()
 	if err != nil {
 		return nil, err
 	}
 	if ctx == nil {
-		panic("context should not be nil")
+		return nil, moerr.NewInternalError("context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -101,7 +102,7 @@ func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 		return nil
 	}
 	if ctx == nil {
-		panic("context should not be nil")
+		return moerr.NewInternalError("context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,
@@ -121,7 +122,7 @@ func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) erro
 		return nil
 	}
 	if ctx == nil {
-		panic("context should not be nil")
+		return moerr.NewInternalError("context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,

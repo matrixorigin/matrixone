@@ -249,6 +249,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
+		vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -799,6 +800,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_uuid:
+			cols := vector.MustTCols[types.Uuid](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseUuid(field)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not uuid type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}
