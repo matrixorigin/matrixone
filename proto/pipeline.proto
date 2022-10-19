@@ -156,6 +156,27 @@ message GenerateSeries {
   repeated plan.ColDef cols = 2;
 }
 
+message HashBuild {
+  bool need_expr = 1;
+  bool need_hash = 2;
+  uint64 ibucket = 3;
+  uint64 nbucket = 4;
+  repeated plan.Type types = 5;
+  repeated plan.Expr conds = 6;
+}
+
+message ExternalName2ColIndex {
+  string name = 1;
+  int32 index = 2;
+}
+
+message ExternalScan {
+  repeated string attrs = 1;
+  repeated plan.ColDef cols = 2;
+  repeated ExternalName2ColIndex name2_col_index = 3;
+  string create_sql = 4;
+}
+
 message Instruction{
   // Op specified the operator code of an instruction.
   int32 op = 1;
@@ -174,11 +195,13 @@ message Instruction{
   Product    product = 13;
   Unnest     unnest = 14;
   GenerateSeries generate_series = 15;
-  repeated plan.OrderBySpec order_by = 16;
-  repeated plan.Expr    project_list = 17;
-  plan.Expr    filter = 18;
-  uint64    limit = 19;
-  uint64    offset = 20;
+  HashBuild hash_build = 16;
+  ExternalScan external_scan = 17;
+  repeated plan.OrderBySpec order_by = 18;
+  repeated plan.Expr    project_list = 19;
+  plan.Expr    filter = 20;
+  uint64    limit = 21;
+  uint64    offset = 22;
 }
 
 message AnalysisList {
