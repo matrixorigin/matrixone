@@ -52,31 +52,21 @@ func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	start := time.Now()
 	ts, _ := cn.GetTaskService()
 	for {
-		if time.Since(start) > time.Minute*2 {
-			logger.Error("#######2 gogogogogogog")
-		}
 		tasks, err := ts.QueryTask(ctx,
 			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
 		if err != nil {
-			// TODO: delete
-			logger.Error("#######1 query task failed", zap.Error(err))
 			continue
 		}
-		// TODO: delete
-		logger.Error("#######1 query completed task", zap.Int("count", len(tasks)))
 		n := 0
 		for _, t := range tasks {
-			logger.Error("#######1 completed task", zap.Any("task", t))
 			if t.Metadata.Executor == uint32(task.TaskCode_FrontendInit) {
 				n++
 			} else if t.Metadata.Executor == uint32(task.TaskCode_SysViewInit) {
 				n++
 			}
 		}
-		logger.Error("#######1 match result", zap.Int("match", n))
 		if n == 2 {
 			break
 		}

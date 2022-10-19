@@ -139,18 +139,16 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	if err != nil {
 		panic(err)
 	}
-	_, err = strconv.Atoi(port)
+	p, err := strconv.Atoi(port)
 	if err != nil {
 		panic(err)
 	}
 	cfg := &cnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getCNListenAddress(index),
-		// SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
-		SQLAddress: "127.0.0.1:12345",
+		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
 		Frontend: config.FrontendParameters{
-			// Port: int64(p),
-			Port: 12345,
+			Port: int64(p),
 		},
 	}
 

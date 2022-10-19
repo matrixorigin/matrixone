@@ -37,13 +37,13 @@ var (
 	createSqls = []string{
 		`create table if not exists sys_async_task (
 			task_id                     int primary key auto_increment,
-			task_metadata_id            varchar(16) unique not null,
+			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),
-			task_parent_id              varchar(16),
+			task_parent_id              varchar(50),
 			task_status                 int,
-			task_runner                 varchar(16),
+			task_runner                 varchar(50),
 			task_epoch                  int,
 			last_heartbeat              bigint,
 			result_code                 int null,
@@ -52,7 +52,7 @@ var (
 			end_at                      bigint)`,
 		`create table if not exists sys_cron_task (
 			cron_task_id				int primary key auto_increment,
-    		task_metadata_id            varchar(16) unique not null,
+    		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option 		varchar(1000),
@@ -154,6 +154,9 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 		return nil, err
 	}
 
+	db.SetConnMaxIdleTime(time.Second * 10)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(2)
 	for _, s := range createDB {
 		if _, err = db.Exec(s + dbname); err != nil {
 			return nil, multierr.Append(err, db.Close())
@@ -168,9 +171,6 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 		}
 	}
 
-	db.SetConnMaxIdleTime(time.Second * 10)
-	db.SetMaxOpenConns(2)
-	db.SetMaxIdleConns(1)
 	return &mysqlTaskStorage{
 		dsn: dsn,
 		db:  db,
@@ -258,8 +258,13 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 	for _, cond := range condition {
 		cond(&c)
 	}
-
 	where := buildWhereClause(c)
+
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+
 	var update string
 	if where != "" {
 		update = updateAsyncTask + " and " + where
@@ -268,40 +273,52 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 	}
 	n := 0
 	for _, t := range tasks {
-		execResult := &task.ExecuteResult{}
-		if t.ExecuteResult != nil {
-			execResult.Code = t.ExecuteResult.Code
-			execResult.Error = t.ExecuteResult.Error
-		}
+		err := func() error {
+			execResult := &task.ExecuteResult{}
+			if t.ExecuteResult != nil {
+				execResult.Code = t.ExecuteResult.Code
+				execResult.Error = t.ExecuteResult.Error
+			}
 
-		j, err := json.Marshal(t.Metadata.Options)
+			j, err := json.Marshal(t.Metadata.Options)
+			if err != nil {
+				return err
+			}
+
+			exec, err := tx.ExecContext(ctx, update,
+				t.Metadata.Executor,
+				t.Metadata.Context,
+				string(j),
+				t.ParentTaskID,
+				t.Status,
+				t.TaskRunner,
+				t.Epoch,
+				t.LastHeartbeat,
+				execResult.Code,
+				execResult.Error,
+				t.CreateAt,
+				t.CompletedAt,
+				t.ID,
+			)
+			if err != nil {
+				return err
+			}
+			affected, err := exec.RowsAffected()
+			if err != nil {
+				return nil
+			}
+			n += int(affected)
+			return nil
+		}()
 		if err != nil {
+			if e := tx.Rollback(); e != nil {
+				return 0, e
+			}
 			return 0, err
 		}
-
-		exec, err := conn.ExecContext(ctx, update,
-			t.Metadata.Executor,
-			t.Metadata.Context,
-			string(j),
-			t.ParentTaskID,
-			t.Status,
-			t.TaskRunner,
-			t.Epoch,
-			t.LastHeartbeat,
-			execResult.Code,
-			execResult.Error,
-			t.CreateAt,
-			t.CompletedAt,
-			t.ID,
-		)
-		if err != nil {
-			return 0, err
-		}
-		affected, err := exec.RowsAffected()
-		if err != nil {
-			return 0, nil
-		}
-		n += int(affected)
+	}
+	if err = tx.Commit(); tx != nil {
+		return 0, err
 	}
 	return n, nil
 }
@@ -355,22 +372,15 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	}
 	query += buildLimitClause(c)
 
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer func(rows *sql.Rows) {
-		_ = tx.Commit()
+	defer func() {
 		_ = rows.Close()
-	}(rows)
+	}()
 
 	tasks := make([]task.Task, 0)
-
 	for rows.Next() {
 		var t task.Task
 		var codeOption sql.NullInt32

@@ -61,8 +61,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
-	// TODO: delete
-	s.logger.Error("####### query tasks", zap.Int("created", len(createdTasks)),
+	s.logger.Debug("task schdule query tasks", zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(runningTasks) == 0 && len(createdTasks) == 0 {
 		return
@@ -80,16 +79,14 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 	if ts == nil {
 		return moerr.NewInternalError("failed to get task service")
 	}
-	// TODO: delete
-	s.logger.Error("####### try to create task", zap.Int("created", len(tasks)))
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
 		return err
 	}
-	// TODO: delete
-	s.logger.Error("####### new task created", zap.Int("created", len(tasks)))
+	s.logger.Debug("new tasks created", zap.Int("created", len(tasks)))
 	v, err := ts.GetStorage().Query(ctx)
-	// TODO: delete
-	s.logger.Error("####### new task created, query", zap.Int("count", len(v)), zap.Error(err))
+	if len(v) == 0 && err == nil {
+		panic("created tasks cannot read")
+	}
 	return nil
 }
 
@@ -160,6 +157,7 @@ func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 			s.logger.Warn("no CN available")
 			return
 		}
+
 		if err := ts.Allocate(s.ctx, t, runner); err != nil {
 			s.logger.Error("allocating task error",
 				zap.Uint64("task-id", t.ID),
