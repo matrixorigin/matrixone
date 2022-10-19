@@ -2561,8 +2561,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable,
-			*tree.Deallocate, *tree.Use,
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
@@ -2572,7 +2571,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				return retErr
 			}
 
-		case *tree.PrepareStmt, *tree.PrepareString:
+		case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
 			if ses.GetCmd() == int(COM_STMT_PREPARE) {
 				if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(prepareStmt); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
@@ -2580,7 +2579,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
-			} else {
+			} else if ses.GetCmd() == int(COM_QUERY) {
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
