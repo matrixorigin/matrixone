@@ -367,7 +367,14 @@ func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
 }
 
 func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
-	return (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
+	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
+	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
+
+	if dayDiff > 0 {
+		return monthDiff
+	} else {
+		return monthDiff - 1
+	}
 }
 
 func (dt Datetime) MicroSec() int64 {
