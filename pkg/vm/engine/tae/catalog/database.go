@@ -317,6 +317,10 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 
 func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
 	e.Lock()
+	//Deduplicate for tableId
+	if _, ok := e.entries[tableId]; !ok {
+		return nil, moerr.NewDuplicate()
+	}
 	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()

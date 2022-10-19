@@ -102,7 +102,7 @@ func (db *txnDatabase) Truncate(_ context.Context, name string) error {
 	return err
 }
 
-func (db *txnDatabase) TruncateRelation(_ context.Context, name string) error {
+func (db *txnDatabase) TruncateRelation(_ context.Context, name string, id uint64) error {
 	_, err := db.handle.TruncateByName(name)
 	return err
 }

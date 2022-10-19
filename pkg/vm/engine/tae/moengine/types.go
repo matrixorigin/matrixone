@@ -74,8 +74,9 @@ type Database interface {
 	GetRelation(context.Context, string) (Relation, error)
 
 	DropRelation(context.Context, string) error
-	CreateRelation(context.Context, string, []engine.TableDef) error // Create Table - (name, table define)
-	TruncateRelation(context.Context, string) error
+	TruncateRelation(context.Context, string, uint64) error
+
+	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
 	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
 
 	GetDatabaseID(ctx context.Context) uint64

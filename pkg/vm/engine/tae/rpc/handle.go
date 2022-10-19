@@ -371,6 +371,10 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
+	if _, err := db.GetRelation(ctx, req.Name); err != nil {
+		return
+	}
+
 	if req.IsDrop {
 		err = db.DropRelation(context.TODO(), req.Name)
 		if err != nil {

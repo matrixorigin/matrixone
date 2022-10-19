@@ -677,6 +677,9 @@ func (catalog *Catalog) CreateDBEntryWithID(name string, id uint64, txn txnif.As
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
+	if _, ok := catalog.entries[id]; !ok {
+		return nil, moerr.NewDuplicate()
+	}
 	entry := NewDBEntryWithID(catalog, name, id, txn)
 	err = catalog.AddEntryLocked(entry, txn)
 

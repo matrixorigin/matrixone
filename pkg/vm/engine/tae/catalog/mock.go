@@ -139,7 +139,7 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 
 func (h *mockDBHandle) CreateRelationWithID(def any, id uint64) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
-	tbl, err := h.entry.CreateTableEntryWithID(schema, id, h.Txn, nil)
+	tbl, err := h.entry.CreateTableEntryWithTableId(schema, h.Txn, nil, id)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +150,10 @@ func (h *mockDBHandle) CreateRelationWithID(def any, id uint64) (rel handle.Rela
 
 func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
 	panic("not implemented")
+}
+
+func (h *mockDBHandle) TruncateWithID(name string, newTableId uint64) (rel handle.Relation, err error) {
+	panic(moerr.NewNYI("Pls implement me!!"))
 }
 
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
