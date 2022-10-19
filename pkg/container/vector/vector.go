@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"reflect"
 	"unsafe"
 
@@ -397,6 +398,9 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 }
 
 func (v *Vector) TryExpandNulls(n int) {
+	if v.Nsp == nil {
+		v.Nsp = &nulls.Nulls{Np: bitmap.New(0)}
+	}
 	nulls.TryExpand(v.Nsp, n)
 }
 
@@ -834,7 +838,7 @@ func SetVectorLength(v *Vector, n int) {
 func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 	to := Vector{
 		Typ: v.Typ,
-		Nsp: v.Nsp, // XXX: dude, you do not dup this?
+		Nsp: v.Nsp.Clone(),
 	}
 
 	var err error
@@ -1358,7 +1362,18 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		}
 	}
 
+	getUnionCount := func(flags []uint8) int {
+		var numAdd = 0
+		for _, flg := range flags {
+			if flg > 0 {
+				numAdd++
+			}
+		}
+		return numAdd
+	}
+
 	if nulls.Any(w.Nsp) {
+		v.TryExpandNulls(int(oldLen) + getUnionCount(flags))
 		for idx, flg := range flags {
 			if flg > 0 {
 				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
@@ -1367,6 +1382,10 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 				// Advance oldLen regardless if it is null
 				oldLen += 1
 			}
+		}
+	} else {
+		if nulls.Any(v.Nsp) {
+			nulls.TryExpand(v.Nsp, getUnionCount(flags))
 		}
 	}
 
