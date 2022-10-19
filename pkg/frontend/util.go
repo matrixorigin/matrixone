@@ -508,7 +508,11 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 				tblDDL += ","
 			}
 			first = false
-			tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type.String())
+			if types.IsDecimal(def.Attr.Type.Oid) { // after decimal type fix, remove this
+				tblDDL += fmt.Sprintf("\n  `%s` DECIMAL", def.Attr.Name)
+			} else {
+				tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type.String())
+			}
 			if def.Attr.AutoIncrement {
 				tblDDL += " AUTO_INCREMENT"
 			}
