@@ -40,7 +40,7 @@ type Argument struct {
 	DB                 engine.Database
 	TableID            string
 	CPkeyColDef        *plan.ColDef
-	DBName 			   string
+	DBName             string
 	TableName          string
 	ComputeIndexTables []engine.Relation
 	ComputeIndexInfos  []*plan.ComputeIndexInfo
@@ -94,7 +94,7 @@ func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client
 		return nil, err
 	}
 	return txn, nil
-} 
+}
 
 func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 	if txn == nil {
@@ -136,7 +136,7 @@ func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) erro
 	return err
 }
 
-func GetNewRelation(n *Argument, txn client.TxnOperator, proc *process.Process, ctx context.Context) (engine.Relation, error){
+func GetNewRelation(n *Argument, txn client.TxnOperator, proc *process.Process, ctx context.Context) (engine.Relation, error) {
 	dbHandler, err := n.Engine.Database(ctx, n.DBName, txn)
 	if err != nil {
 		return nil, err

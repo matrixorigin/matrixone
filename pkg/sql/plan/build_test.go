@@ -740,6 +740,10 @@ func TestDdl(t *testing.T) {
 		"drop table if exists tpch.tbl_not_exist",
 		"drop table if exists db_not_exist.tbl",
 		"drop view v1",
+		"truncate nation",
+		"truncate tpch.nation",
+		"truncate table nation",
+		"truncate table tpch.nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

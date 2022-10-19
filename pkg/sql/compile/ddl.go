@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,6 +104,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
+}
+
+// Truncation operations cannot be performed if the session holds an active table lock.
+func (s *Scope) TruncateTable(c *Compile) error {
+	tqry := s.Plan.GetDdl().GetTruncateTable()
+	dbName := tqry.GetDatabase()
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := tqry.GetTable()
+	var rel engine.Relation
+	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		return err
+	}
+	err = dbSource.Truncate(c.ctx, tblName)
+	if err != nil {
+		return err
+	}
+	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Scope) DropTable(c *Compile) error {

@@ -12,28 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deletion
+package tree
 
-import (
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-type Argument struct {
-	Ts           uint64
-	DeleteCtxs   []*DeleteCtx
-	AffectedRows uint64
+// truncate table statement
+type TruncateTable struct {
+	statementImpl
+	Name *TableName
 }
 
-type DeleteCtx struct {
-	IsHideKey          bool
-	TableName          string
-	DbName             string
-	TableSource        engine.Relation
-	UseDeleteKey       string
-	CanTruncate        bool
-	ColIndex           int32
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan2.ComputeIndexInfo
-	IndexAttrs         []string
+func NewTruncateTable(name *TableName) *TruncateTable {
+	return &TruncateTable{Name: name}
+}
+
+func (node *TruncateTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("truncate table")
+	ctx.WriteByte(' ')
+	node.Name.Format(ctx)
 }

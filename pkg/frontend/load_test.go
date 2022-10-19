@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -578,6 +579,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			},
 			ThreadInfo: &ThreadInfo{},
 		}
+		proc := &process.Process{}
 		field := [][]string{{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "8", "9"}}
 		Oid := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16,
 			types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_char, types.T_date, types.T_datetime}
@@ -588,14 +590,14 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
 		}
 		var force = false
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
 		row2colChoose = false
 		handler.lineIdx = 1
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
 		handler.maxFieldCnt = 0
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
 		row2colChoose = true
 		handler.ignoreFieldError = false
@@ -605,7 +607,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			}
 			// XXX Vecs[0]?   What are we testing?
 			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
-			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
+			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
 		}
 
 		row2colChoose = false
@@ -616,7 +618,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			}
 			// XXX Vecs[0]?   What are we testing?
 			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
-			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
+			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
 		}
 	})
 }
