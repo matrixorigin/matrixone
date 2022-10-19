@@ -15,319 +15,352 @@
 package dump
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"math"
+	"github.com/stretchr/testify/require"
 	"strconv"
+	"testing"
 )
+
+type Kase struct {
+	tp types.Type
+	xs []string
+	ns *nulls.Nulls
+}
 
 var (
-	cols = []*plan.ColDef{
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_bool),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_int8),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_int16),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_int32),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_int64),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_uint8),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_uint16),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_uint32),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_uint64),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_float32),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_float64),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_varchar),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_json),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_date),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_datetime),
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id:    int32(types.T_decimal64),
-				Width: 15,
-				Scale: 0,
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id:    int32(types.T_decimal128),
-				Width: 17,
-				Scale: 0,
-			},
-		},
-		{
-			Typ: &plan.Type{
-				Id: int32(types.T_timestamp),
-			},
-		},
+	cases []*Kase
+	typs  = []types.Type{
+		types.T_bool.ToType(),
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_decimal128.ToType(),
+		types.T_date.ToType(),
+		types.T_datetime.ToType(),
+		types.T_varchar.ToType(),
+		types.T_char.ToType(),
+		types.T_json.ToType(),
 	}
-
-	tests = [][]string{
-		{"true", "false", "1", "0", "dad", "error"},
-		{"1.1", "2", "3", "4", "256", "error"},
-		{"1", "2.1", "3", "4", "999999999", "error"},
-		{"1", "2", "3", "4", strconv.Itoa(math.MaxInt64), "error"},
-		{"1", "2", "3", "4", "18446744073709551616", "error"},
-		{"1", "2.1", "3", "4", "255", "success"},
-		{"1", "2", "3", "4", "65535", "success"},
-		{"1", "2", "3", "4", "4294967295", "success"},
-		{"1", "2", "3", "4", "18446744073709551616", "error"},
-		{"1.1", "1.2", "1.3", "1.4", "1.5", "success"},
-		{"1.111", "1.2111", "1.31111", "1.411111", "1.5111111", "success"},
-		{"12121", "dafege", "success"},
-		{"{\"a\":1}", "{\"a\":2}", "{", "error"},
-		{"2020-09-07", "2020-09-08", "success"},
-		{"2020-09-07 00:00:00", "2020-09-08 00:00:00", "success"},
-		{"1.111", "1.2111", "success"},
-		{"1.111", "1.2111", "success"},
-		{"2020-09-07 00:00:00", "2020-09-08 00:00:00", "2020/1212/", "error"},
+	vals = [][]string{
+		{"true", "false"},
+		{"1", "127", "-128"},
+		{"1", "32767", "-32768"},
+		{"1", "2147483647", "-2147483648"},
+		{"1", "9223372036854775807", "-9223372036854775808"},
+		{"1", "255"},
+		{"1", "65535"},
+		{"1", "4294967295"},
+		{"1", "18446744073709551615"},
+		{"1.1", "3.412"},
+		{"1.1", "3.412"},
+		{"1.1", "2.2", "3.3", "4.4", "5.5"},
+		{"1.1", "2.2", "3.3", "4.4", "5.5"},
+		{"2021-01-01", "2021-01-02", "2021-01-03", "2021-01-04", "2021-01-05"},
+		{"2021-01-01 00:00:00", "2021-01-02 00:00:00", "2021-01-03 00:00:00", "2021-01-04 00:00:00", "2021-01-05 00:00:00"},
+		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
+		{"xsxs", "xsxwda", "dafafef", "fefefqw", "adeqf"},
+		{"{\"a\":1}", "{\"a\":2}", "{\"a\":3}", "{\"a\":4}", "{\"a\":5}"},
 	}
 )
 
-//func TestExternal(t *testing.T) {
-//	var err error
-//	for i, test := range tests {
-//		err = nil
-//		id := types.T(cols[i].Typ.Id)
-//		status := test[len(test)-1]
-//		test = test[:len(test)-1]
-//		switch id {
-//		case types.T_bool:
-//			rs := make([]bool, len(test))
-//			test, err = TrimSpace(test)
-//			require.Nil(t, err)
-//			nsp := ParseNullFlagNormal(test, []string{"true"})
-//
-//			InsertNsp(nsp, &nulls.Nulls{})
-//			rs, err = ParseBool(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_int8:
-//			rs := make([]int8, len(test))
-//			test, err = TrimSpace(test)
-//			require.Nil(t, err)
-//			ParseNullFlagNormal(test, []string{"1212"})
-//			rs, err = ParseInt8(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_int16:
-//			rs := make([]int16, len(test))
-//			rs, err = ParseInt16(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_int32:
-//			rs := make([]int32, len(test))
-//			rs, err = ParseInt32(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_int64:
-//			rs := make([]int64, len(test))
-//			rs, err = ParseInt64(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_uint8:
-//			rs := make([]uint8, len(test))
-//			rs, err = ParseUint8(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_uint16:
-//			rs := make([]uint16, len(test))
-//			rs, err = ParseUint16(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_uint32:
-//			rs := make([]uint32, len(test))
-//			rs, err = ParseUint32(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_uint64:
-//			rs := make([]uint64, len(test))
-//			rs, err = ParseUint64(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_float32:
-//			rs := make([]float32, len(test))
-//			rs, err = ParseFloat32(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_float64:
-//			rs := make([]float64, len(test))
-//			rs, err = ParseFloat64(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_decimal64:
-//			rs := make([]types.Decimal64, len(test))
-//			rs, err = ParseDecimal64(test, &nulls.Nulls{}, cols[i].Typ.Width, cols[i].Typ.Scale, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_decimal128:
-//			rs := make([]types.Decimal128, len(test))
-//			rs, err = ParseDecimal128(test, &nulls.Nulls{}, cols[i].Typ.Width, cols[i].Typ.Scale, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_char, types.T_varchar, types.T_blob:
-//			ParseNullFlagStrings(test, []string{"aad"})
-//			getNullFlag([]string{"aad"}, "aad")
-//			getNullFlag([]string{"aad"}, test[0])
-//			if status == "success" {
-//				require.Nil(t, err)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_json:
-//			rs := make([][]byte, len(test))
-//			rs, err = ParseJson(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_date:
-//			rs := make([]types.Date, len(test))
-//			rs, err = ParseDate(test, &nulls.Nulls{}, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_datetime:
-//			rs := make([]types.Datetime, len(test))
-//			rs, err = ParseDateTime(test, &nulls.Nulls{}, cols[i].Typ.Precision, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		case types.T_timestamp:
-//			rs := make([]types.Timestamp, len(test))
-//			rs, err = ParseTimeStamp(test, &nulls.Nulls{}, cols[i].Typ.Precision, rs)
-//			if status == "success" {
-//				require.Nil(t, err)
-//				require.NotNil(t, rs)
-//			} else {
-//				require.NotNil(t, err)
-//			}
-//		default:
-//			err = moerr.NewNotSupported("the value type %d is not support now", id)
-//			require.NotNil(t, err)
-//		}
-//	}
-//}
+func newTestCase(tp types.Type, xs []string) *Kase {
+	return &Kase{
+		tp: tp,
+		xs: xs,
+	}
+}
 
-//func TestTime(t *testing.T) {
-//	a := types.Datetime(191919191)
-//	s, e := timeParser(a)
-//	fmt.Println(s, e)
-//}
+func init() {
+	for i, typ := range typs {
+		cases = append(cases, newTestCase(typ, vals[i]))
+	}
+}
+
+func TestParser(t *testing.T) {
+	for _, kase := range cases {
+		rs := make([]string, len(kase.xs)+1)
+		var err error
+		switch kase.tp.Oid {
+		case types.T_bool:
+			xs := make([]bool, len(kase.xs))
+			for i, x := range kase.xs {
+				xs[i] = x == "true"
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseBool(xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatBool(xs[i]), rs[i])
+			}
+		case types.T_int8:
+			xs := make([]int8, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseInt(x, 10, 8)
+				require.Nil(t, err)
+				xs[i] = int8(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseSigned[int8](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatInt(int64(xs[i]), 10), rs[i])
+			}
+		case types.T_int16:
+			xs := make([]int16, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseInt(x, 10, 16)
+				require.Nil(t, err)
+				xs[i] = int16(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseSigned[int16](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatInt(int64(xs[i]), 10), rs[i])
+			}
+		case types.T_int32:
+			xs := make([]int32, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseInt(x, 10, 32)
+				require.Nil(t, err)
+				xs[i] = int32(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseSigned[int32](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatInt(int64(xs[i]), 10), rs[i])
+			}
+		case types.T_int64:
+			xs := make([]int64, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseInt(x, 10, 64)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseSigned[int64](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatInt(xs[i], 10), rs[i])
+			}
+		case types.T_uint8:
+			xs := make([]uint8, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseUint(x, 10, 8)
+				require.Nil(t, err)
+				xs[i] = uint8(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseUnsigned[uint8](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatUint(uint64(xs[i]), 10), rs[i])
+			}
+		case types.T_uint16:
+			xs := make([]uint16, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseUint(x, 10, 16)
+				require.Nil(t, err)
+				xs[i] = uint16(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseUnsigned[uint16](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatUint(uint64(xs[i]), 10), rs[i])
+			}
+		case types.T_uint32:
+			xs := make([]uint32, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseUint(x, 10, 32)
+				require.Nil(t, err)
+				xs[i] = uint32(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseUnsigned[uint32](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatUint(uint64(xs[i]), 10), rs[i])
+			}
+		case types.T_uint64:
+			xs := make([]uint64, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseUint(x, 10, 64)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseUnsigned[uint64](xs, kase.ns, rs)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatUint(uint64(xs[i]), 10), rs[i])
+			}
+		case types.T_float32:
+			xs := make([]float32, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseFloat(x, 32)
+				require.Nil(t, err)
+				xs[i] = float32(tmp)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseFloats[float32](xs, kase.ns, rs, 32)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatFloat(float64(xs[i]), 'f', -1, 32), rs[i])
+			}
+		case types.T_float64:
+			xs := make([]float64, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := strconv.ParseFloat(x, 64)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseFloats[float64](xs, kase.ns, rs, 64)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				require.Equal(t, strconv.FormatFloat(xs[i], 'f', -1, 64), rs[i])
+			}
+		case types.T_decimal64:
+			xs := make([]types.Decimal64, len(kase.xs))
+			for i, x := range kase.xs {
+				xs[i] = types.MustDecimal64FromString(x)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[types.Decimal64](xs, kase.ns, rs, DefaultParser[types.Decimal64])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String(), unquote)
+			}
+		case types.T_decimal128:
+			xs := make([]types.Decimal128, len(kase.xs))
+			for i, x := range kase.xs {
+				xs[i] = types.MustDecimal128FromString(x)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[types.Decimal128](xs, kase.ns, rs, DefaultParser[types.Decimal128])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String(), unquote)
+			}
+		case types.T_date:
+			xs := make([]types.Date, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseDate(x)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[types.Date](xs, kase.ns, rs, DefaultParser[types.Date])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String(), unquote)
+			}
+		case types.T_datetime:
+			xs := make([]types.Datetime, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseDatetime(x, kase.tp.Precision)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[types.Datetime](xs, kase.ns, rs, DefaultParser[types.Datetime])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String(), unquote)
+			}
+		case types.T_varchar, types.T_char:
+			xs := make([]string, len(kase.xs))
+			copy(xs, kase.xs)
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[string](xs, kase.ns, rs, DefaultParser[string])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i], unquote)
+			}
+		case types.T_json:
+			xs := make([][]byte, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseStringToByteJson(x)
+				require.Nil(t, err)
+				xs[i], err = tmp.Marshal()
+				require.Nil(t, err)
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[[]byte](xs, kase.ns, rs, JsonParser)
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.JSONEq(t, kase.xs[i], unquote)
+			}
+		default:
+			require.Fail(t, "unsupported type")
+		}
+	}
+}

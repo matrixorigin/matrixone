@@ -63,13 +63,13 @@ func ParseUnsigned[T types.UInts](xs []T, nsp *nulls.Nulls, rs []string) ([]stri
 	return rs, nil
 }
 
-func ParseFloats[T types.Floats](xs []T, nsp *nulls.Nulls, rs []string) ([]string, error) {
+func ParseFloats[T types.Floats](xs []T, nsp *nulls.Nulls, rs []string, bitsSize int) ([]string, error) {
 	for i := range xs {
 		if nsp.Contains(uint64(i)) {
 			rs[i] = "NULL"
 			continue
 		}
-		rs[i] = strconv.FormatFloat(float64(xs[i]), 'f', -1, 64) //TODO: precision
+		rs[i] = strconv.FormatFloat(float64(xs[i]), 'f', -1, bitsSize) //TODO: precision
 	}
 	return rs, nil
 }

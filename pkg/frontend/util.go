@@ -559,6 +559,9 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error
 		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
 		rs := make([]string, bat.Length())
 		switch bat.Vecs[i].Typ.Oid {
+		case types.T_bool:
+			xs := vector.MustTCols[bool](bat.Vecs[i])
+			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_int8:
 			xs := vector.MustTCols[int8](bat.Vecs[i])
 			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
@@ -587,10 +590,10 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error
 			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
 		case types.T_float32:
 			xs := vector.MustTCols[float32](bat.Vecs[i])
-			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 32)
 		case types.T_float64:
 			xs := vector.MustTCols[float64](bat.Vecs[i])
-			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 64)
 		case types.T_decimal64:
 			xs := vector.MustTCols[types.Decimal64](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal64])
