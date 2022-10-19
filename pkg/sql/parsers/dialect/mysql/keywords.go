@@ -515,5 +515,6 @@ func init() {
 		"unnest":                   UNNEST,
 		"reference":                REFERENCE,
 		"dump":                     DUMP,
+		"generate_series":          GENERATE_SERIES,
 	}
 }

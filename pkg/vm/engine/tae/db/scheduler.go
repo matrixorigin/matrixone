@@ -121,8 +121,9 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	return
 }
 
-func (s *taskScheduler) GetGCTS() types.TS {
-	return s.db.TxnMgr.StatSafeTS()
+// TODO: implement later
+func (s *taskScheduler) GetGCTS() (ts types.TS) {
+	return
 }
 
 func (s *taskScheduler) GetCheckpointTS() types.TS {

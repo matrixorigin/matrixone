@@ -155,8 +155,6 @@ type Relation interface {
 	// Delete(context.Context, *vector.Vector, string) error
 	Delete(context.Context, *batch.Batch, string) error
 
-	Truncate(context.Context) (uint64, error)
-
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 
@@ -164,6 +162,8 @@ type Relation interface {
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
+
+	TableColumns(ctx context.Context) ([]*Attribute, error)
 }
 
 type Reader interface {
@@ -177,6 +177,7 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
+	Truncate(context.Context, string) error
 }
 
 type Engine interface {

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -273,7 +274,7 @@ func (plh *ParseLineHandler) close() {
 /*
 alloc space for the batch
 */
-func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
+func makeBatch(handler *ParseLineHandler, proc *process.Process, id int) *PoolElement {
 	batchData := batch.New(true, handler.attrName)
 
 	//logutil.Infof("----- batchSize %d attrName %v",batchSize,handler.attrName)
@@ -283,7 +284,7 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 	//alloc space for vector
 	for i := 0; i < len(handler.attrName); i++ {
 		// XXX memory alloc, where is the proc.Mp?
-		vec := vector.PreAllocType(handler.cols[i].Attr.Type, batchSize, batchSize, nil)
+		vec := vector.PreAllocType(handler.cols[i].Attr.Type, batchSize, batchSize, proc.Mp())
 		batchData.Vecs[i] = vec
 	}
 
@@ -297,7 +298,7 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 /*
 Init ParseLineHandler
 */
-func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler) error {
+func initParseLineHandler(requestCtx context.Context, proc *process.Process, handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
@@ -352,7 +353,7 @@ func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler)
 
 	//allocate batch
 	for j := 0; j < cap(handler.simdCsvBatchPool); j++ {
-		batchData := makeBatch(handler, j)
+		batchData := makeBatch(handler, proc, j)
 		handler.simdCsvBatchPool <- batchData
 	}
 	return nil
@@ -533,6 +534,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	result := handler.result
 
 	//logutil.Infof("-----ignoreFieldError %v",handler.ignoreFieldError)
+	timeZone := handler.ses.GetTimeZone()
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
@@ -878,11 +880,11 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						json, err := types.ParseStringToByteJson(field)
 						if err != nil {
-							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, base+uint64(offset))
 						}
 						jsonBytes, err := types.EncodeJson(json)
 						if err != nil {
-							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, base+uint64(offset))
 						}
 						// XXX What about memory accounting?
 						vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
@@ -969,7 +971,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseTimestamp(handler.ses.timeZone, fs, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(timeZone, fs, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1038,7 +1040,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 
 			//put it into batch
 			vec := batchData.Vecs[colIdx]
-
+			vecAttr := batchData.Attrs[colIdx]
 			columnFLags[j] = 1
 
 			switch vec.Typ.Oid {
@@ -1401,7 +1403,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return err
+								return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, i)
 							}
 							result.Warnings++
 							//break
@@ -1410,7 +1412,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							logutil.Errorf("encode field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return err
+								return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", vec.Typ.String(), field, vecAttr, i)
 							}
 							result.Warnings++
 							//break
@@ -1517,7 +1519,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseTimestamp(handler.ses.timeZone, field, vec.Typ.Precision)
+						d, err := types.ParseTimestamp(timeZone, field, vec.Typ.Precision)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1657,7 +1659,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
-		tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
+		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
@@ -1801,7 +1803,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				// dbHandler := handler.dbHandler
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
-				tmpSes := NewBackgroundSession(ctx, initSes.Mp, initSes.Pu, gSysVariables)
+				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
@@ -1917,7 +1919,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, proc *process.Process, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	//begin:=  time.Now()
@@ -1944,33 +1946,33 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 
 	//processTime := time.Now()
 	process_block := time.Duration(0)
-
-	curBatchSize := int(ses.Pu.SV.BatchSizeInLoadData)
+	pu := ses.GetParameterUnit()
+	curBatchSize := int(pu.SV.BatchSizeInLoadData)
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart: SharePart{
 			load:             load,
 			lineIdx:          0,
 			simdCsvLineArray: make([][]string, curBatchSize),
-			storage:          ses.Pu.StorageEngine,
+			storage:          pu.StorageEngine,
 			dbHandler:        dbHandler,
 			tableHandler:     tableHandler,
 			tableName:        string(load.Table.Name()),
 			dbName:           dbName,
 			txnHandler:       ses.GetTxnHandler(),
 			ses:              ses,
-			oneTxnPerBatch:   !ses.Pu.SV.DisableOneTxnPerBatchDuringLoad,
+			oneTxnPerBatch:   !pu.SV.DisableOneTxnPerBatchDuringLoad,
 			lineCount:        0,
 			batchSize:        curBatchSize,
 			result:           result,
-			skipWriteBatch:   ses.Pu.SV.LoadDataSkipWritingBatch,
+			skipWriteBatch:   pu.SV.LoadDataSkipWritingBatch,
 			loadCtx:          requestCtx,
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
 	}
 
-	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())
+	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvBatchPool = make(chan *PoolElement, handler.simdCsvConcurrencyCountOfWriteBatch)
 	for i := 0; i < handler.simdCsvConcurrencyCountOfWriteBatch; i++ {
@@ -2007,7 +2009,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 	//release resources of handler
 	defer handler.close()
 
-	err = initParseLineHandler(requestCtx, handler)
+	err = initParseLineHandler(requestCtx, proc, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -2098,7 +2100,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 	}()
 
 	close := CloseFlag{}
-	var a = time.Duration(ses.Pu.SV.PrintLogInterVal)
+	var a = time.Duration(pu.SV.PrintLogInterVal)
 	go func() {
 		PrintThreadInfo(handler, &close, a)
 	}()

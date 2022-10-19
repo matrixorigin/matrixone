@@ -5,7 +5,7 @@ import "strconv"
 type Dump struct {
 	statementImpl
 	Database    Identifier
-	Table       *TableName
+	Tables      TableNames
 	OutFile     string
 	MaxFileSize int64
 }
@@ -16,9 +16,9 @@ func (node *Dump) Format(ctx *FmtCtx) {
 		ctx.WriteString(" database ")
 		ctx.WriteString(string(node.Database))
 	}
-	if node.Table != nil {
-		ctx.WriteString(" table ")
-		node.Table.Format(ctx)
+	if node.Tables != nil {
+		ctx.WriteString(" tables ")
+		node.Tables.Format(ctx)
 	}
 	if node.OutFile != "" {
 		ctx.WriteString(" into ")

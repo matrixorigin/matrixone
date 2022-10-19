@@ -53,6 +53,8 @@ type ComputationWrapper interface {
 	GetUUID() []byte
 
 	RecordExecPlan(ctx context.Context) error
+
+	GetLoadTag() bool
 }
 
 type ColumnInfo interface {
@@ -147,6 +149,10 @@ type ExecResult interface {
 	GetUint64(rindex, cindex uint64) (uint64, error)
 
 	GetInt64(rindex, cindex uint64) (int64, error)
+}
+
+func execResultArrayHasData(arr []ExecResult) bool {
+	return len(arr) != 0 && arr[0].GetRowCount() != 0
 }
 
 // BackgroundExec executes the sql in background session without network output.

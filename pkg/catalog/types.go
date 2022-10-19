@@ -85,10 +85,9 @@ const (
 
 	BlockMeta_ID         = "block_id"
 	BlockMeta_EntryState = "entry_state"
-	BlockMeta_CreateAt   = "create_at"
-	BlockMeta_DeleteAt   = "delete_at"
 	BlockMeta_MetaLoc    = "meta_loc"
 	BlockMeta_DeltaLoc   = "delta_loc"
+	BlockMeta_CommitTs   = "committs"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -163,19 +162,17 @@ const (
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
-	BLOCKMETA_CREATEAT_IDX   = 2
-	BLOCKMETA_DELETEAT_IDX   = 3
-	BLOCKMETA_METALOC_IDX    = 4
-	BLOCKMETA_DELTALOC_IDX   = 5
+	BLOCKMETA_METALOC_IDX    = 2
+	BLOCKMETA_DELTALOC_IDX   = 3
+	BLOCKMETA_COMMITTS_IDX   = 4
 )
 
 type BlockInfo struct {
 	BlockID    uint64
 	EntryState bool
-	CreateAt   types.TS
-	DeleteAt   types.TS
 	MetaLoc    string
 	DeltaLoc   string
+	CommitTs   types.TS
 }
 
 // used for memengine and tae
@@ -274,10 +271,9 @@ var (
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
 		BlockMeta_EntryState,
-		BlockMeta_CreateAt,
-		BlockMeta_DeleteAt,
 		BlockMeta_MetaLoc,
 		BlockMeta_DeltaLoc,
+		BlockMeta_CommitTs,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
@@ -331,10 +327,9 @@ var (
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),  // block_id
 		types.New(types.T_bool, 0, 0, 0),    // entry_state, true for appendable
-		types.New(types.T_TS, 0, 0, 0),      // create_at
-		types.New(types.T_TS, 0, 0, 0),      // delete_at
 		types.New(types.T_varchar, 0, 0, 0), // meta_loc
 		types.New(types.T_varchar, 0, 0, 0), // delta_loc
+		types.New(types.T_TS, 0, 0, 0),      // committs
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

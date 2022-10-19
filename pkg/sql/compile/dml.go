@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -38,13 +39,32 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
 	if arg.DeleteCtxs[0].CanTruncate {
-		for _, rel := range arg.DeleteCtxs[0].ComputeIndexTables {
-			_, err := rel.Truncate(c.ctx)
+		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, info := range arg.DeleteCtxs[0].ComputeIndexInfos {
+			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
-				return arg.AffectedRows, err
+				return 0, err
 			}
 		}
-		return arg.DeleteCtxs[0].TableSource.Truncate(c.ctx)
+
+		var rel engine.Relation
+		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
+			return 0, err
+		}
+		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
+		if err != nil {
+			return 0, err
+		}
+
+		err = colexec.MoveAutoIncrCol(arg.DeleteCtxs[0].TableName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+		if err != nil {
+			return 0, err
+		}
+		return 0, nil
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -92,9 +112,18 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
 		return 0, err
 	}
-	// do null value check
+	/**
+	Null value check:
+	There are two cases to validate for not null
+	1. Primary key
+	2. Not null
+
+	For auto_increment, follow the Mysql way instead of pg. That is, null values are allowed to be inserted.
+	Assume that there is no case like 'create table t (a int auto_increment not null)', if exists, ignore not null constraint
+	*/
 	for i := range bat.Vecs {
-		if p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement {
+		// check for case 1 and case 2
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
 
 func (r *emptyReader) Close() error {
@@ -37,7 +38,7 @@ func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*bat
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	return blockRead(r.ctx, cols, r.blks[0], r.fs, r.tableDef)
+	return blockio.BlockRead(r.ctx, cols, r.tableDef, r.blks[0].info.MetaLoc, r.blks[0].info.DeltaLoc, r.ts, r.fs, m)
 }
 
 func (r *mergeReader) Close() error {

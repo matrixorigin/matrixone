@@ -326,7 +326,9 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 type IndexRow struct {
 	ID         ID
 	RelationID ID
-	engine.IndexTableDef
+	Name       string
+	Unique     bool
+	TableName  string
 }
 
 func (i *IndexRow) Key() ID {

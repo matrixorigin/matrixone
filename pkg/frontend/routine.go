@@ -46,34 +46,66 @@ type Routine struct {
 	ses *Session
 	// TODO: the initialization and closure of application in goetty should be clear in 0.7
 	closeOnce sync.Once
+
+	mu sync.Mutex
+}
+
+func (routine *Routine) GetCancelRoutineFunc() context.CancelFunc {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
+	return routine.cancelRoutineFunc
+}
+
+func (routine *Routine) GetCancelRoutineCtx() context.Context {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
+	return routine.cancelRoutineCtx
 }
 
 func (routine *Routine) GetClientProtocol() Protocol {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	return routine.protocol
 }
 
 func (routine *Routine) GetCmdExecutor() CmdExecutor {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	return routine.executor
 }
 
 func (routine *Routine) getConnID() uint32 {
-	return routine.protocol.ConnectionID()
+	return routine.GetClientProtocol().ConnectionID()
 }
 
 func (routine *Routine) SetRoutineMgr(rtMgr *RoutineManager) {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	routine.routineMgr = rtMgr
 }
 
 func (routine *Routine) GetRoutineMgr() *RoutineManager {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	return routine.routineMgr
 }
 
 func (routine *Routine) SetSession(ses *Session) {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	routine.ses = ses
 }
 
 func (routine *Routine) GetSession() *Session {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
 	return routine.ses
+}
+
+func (routine *Routine) GetRequestChannel() chan *Request {
+	routine.mu.Lock()
+	defer routine.mu.Unlock()
+	return routine.requestChan
 }
 
 /*
@@ -84,6 +116,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var err error
 	var resp *Response
 	var counted bool
+	var requestChan = routine.GetRequestChannel()
 	//session for the connection
 	for {
 		quit := false
@@ -94,7 +127,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			if counted {
 				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
 			}
-		case req = <-routine.requestChan:
+		case req = <-requestChan:
 			if !counted {
 				counted = true
 				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Inc()
@@ -109,25 +142,26 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 
 		mgr := routine.GetRoutineMgr()
 
-		mpi := routine.protocol.(*MysqlProtocolImpl)
-		mpi.sequenceId = req.seq
+		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
+		mpi.SetSequenceID(req.seq)
 
 		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
-		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
+		executor := routine.GetCmdExecutor()
+		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
 		tenant := ses.GetTenantInfo()
 		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		ses.SetRequestContext(tenantCtx)
-		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
+		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
-		if resp, err = routine.executor.ExecRequest(tenantCtx, req); err != nil {
+		if resp, err = executor.ExecRequest(tenantCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
 
 		if resp != nil {
-			if err = routine.protocol.SendResponse(resp); err != nil {
+			if err = routine.GetClientProtocol().SendResponse(resp); err != nil {
 				logutil.Errorf("routine send response failed %v. error:%v ", resp, err)
 			}
 		}
@@ -145,17 +179,20 @@ When the io is closed, the Quit will be called.
 */
 func (routine *Routine) Quit() {
 	routine.closeOnce.Do(func() {
-		if routine.ses != nil {
-			routine.ses.Dispose()
+		ses := routine.GetSession()
+		if ses != nil {
+			ses.Dispose()
 		}
 		routine.notifyClose()
 
-		if routine.cancelRoutineFunc != nil {
-			routine.cancelRoutineFunc()
+		cancel := routine.GetCancelRoutineFunc()
+		if cancel != nil {
+			cancel()
 		}
 
-		if routine.protocol != nil {
-			routine.protocol.Quit()
+		proto := routine.GetClientProtocol()
+		if proto != nil {
+			proto.Quit()
 		}
 	})
 }
@@ -164,8 +201,9 @@ func (routine *Routine) Quit() {
 notify routine to quit
 */
 func (routine *Routine) notifyClose() {
-	if routine.executor != nil {
-		routine.executor.Close()
+	executor := routine.GetCmdExecutor()
+	if executor != nil {
+		executor.Close()
 	}
 }
 

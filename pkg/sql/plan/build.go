@@ -78,6 +78,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildCreateTable(stmt, ctx)
 	case *tree.DropTable:
 		return buildDropTable(stmt, ctx)
+	case *tree.TruncateTable:
+		return buildTruncateTable(stmt, ctx)
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:

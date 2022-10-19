@@ -22,10 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
-	"go/constant"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -35,7 +39,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -367,59 +370,65 @@ func WildcardMatch(pattern, target string) bool {
 
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
-	var value interface{}
-	var err error
 	switch v := e.(type) {
-	case *tree.NumVal:
-		switch v.ValType {
-		case tree.P_null:
-			value = nil
-		case tree.P_bool:
-			value = constant.BoolVal(v.Value)
-		case tree.P_char:
-			value = constant.StringVal(v.Value)
-		case tree.P_int64:
-			value, _ = constant.Int64Val(v.Value)
-		case tree.P_uint64:
-			value, _ = constant.Uint64Val(v.Value)
-		case tree.P_float64:
-			value, _ = constant.Float64Val(v.Value)
-		case tree.P_hexnum:
-			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
-			if err != nil {
-				return nil, err
-			}
-		case tree.P_bit:
-			value, _, err = types.ParseStringToDecimal128WithoutTable(v.String())
-			if err != nil {
-				return nil, err
-			}
-		default:
-			return nil, errorNumericTypeIsNotSupported
-		}
-	case *tree.UnaryExpr:
-		ival, err := GetSimpleExprValue(v.Expr)
+	case *tree.UnresolvedName:
+		// set @a = on, type of a is bool.
+		return v.Parts[0], nil
+	default:
+		binder := plan2.NewDefaultBinder(nil, nil, nil, nil)
+		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
-		if v.Op == tree.UNARY_MINUS {
-			switch iival := ival.(type) {
-			case float64:
-				value = -1 * iival
-			case int64:
-				value = -1 * iival
-			case uint64:
-				value = -1 * int64(iival)
-			default:
-				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
-			}
+		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+		bat := batch.NewWithSize(0)
+		bat.Zs = []int64{1}
+		vec, err := colexec.EvalExpr(bat, nil, planExpr)
+		if err != nil {
+			return nil, err
 		}
-	case *tree.UnresolvedName:
-		return v.Parts[0], nil
-	default:
-		return nil, errorComplicateExprIsNotSupported
+		return getValueFromVector(vec)
 	}
-	return value, nil
+}
+
+func getValueFromVector(vec *vector.Vector) (interface{}, error) {
+	if nulls.Any(vec.Nsp) {
+		return nil, nil
+	}
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return vector.GetValueAt[bool](vec, 0), nil
+	case types.T_int8:
+		return vector.GetValueAt[int8](vec, 0), nil
+	case types.T_int16:
+		return vector.GetValueAt[int16](vec, 0), nil
+	case types.T_int32:
+		return vector.GetValueAt[int32](vec, 0), nil
+	case types.T_int64:
+		return vector.GetValueAt[int64](vec, 0), nil
+	case types.T_uint8:
+		return vector.GetValueAt[uint8](vec, 0), nil
+	case types.T_uint16:
+		return vector.GetValueAt[uint16](vec, 0), nil
+	case types.T_uint32:
+		return vector.GetValueAt[uint32](vec, 0), nil
+	case types.T_uint64:
+		return vector.GetValueAt[uint64](vec, 0), nil
+	case types.T_float32:
+		return vector.GetValueAt[float32](vec, 0), nil
+	case types.T_float64:
+		return vector.GetValueAt[float64](vec, 0), nil
+	case types.T_char, types.T_varchar:
+		return vec.GetString(0), nil
+	case types.T_decimal64:
+		val := vector.GetValueAt[types.Decimal64](vec, 0)
+		return val.String(), nil
+	case types.T_decimal128:
+		val := vector.GetValueAt[types.Decimal128](vec, 0)
+		return val.String(), nil
+	default:
+		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
+	}
 }
 
 type statementStatus int
@@ -454,7 +463,7 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 }
 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(ses.Pu.SV.LengthOfQueryPrinted))
+	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
@@ -462,7 +471,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	}
 }
 
-func FileExists(path string) (bool, error) {
+func fileExists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if err == nil {
 		return true, nil
@@ -521,7 +530,7 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			if err := json.Unmarshal([]byte(def.View), &view); err != nil {
 				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
 			}
-			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n\nCREATE VIEW `%s` AS %s", tblName, tblName, view.Stmt)
+			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n\nCREATE VIEW `%s` AS %s;\n", tblName, tblName, view.Stmt)
 			break //TODO check
 		case *engine.ComputeIndexDef, *engine.PartitionDef: //TODO support
 			return nil, "", "", moerr.NewNotSupported("compute index, partition")
@@ -622,6 +631,59 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch, error
 	return rbat, nil
 }
 
-//func newDupFile()  {
-//
-//}
+func genDumpFileName(outfile string, idx int64) string {
+	path := filepath.Dir(outfile)
+	filename := strings.Split(filepath.Base(outfile), ".")
+	if len(filename) == 1 {
+		filename = append(filename, "sql")
+	}
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	return filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, idx, extend))
+}
+
+func createDumpFile(filename string) (*os.File, error) {
+	exists, err := fileExists(filename)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, moerr.NewFileAlreadyExists(filename)
+	}
+
+	ret, err := os.Create(filename)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
+	if dump.MaxFileSize > 0 && int64(buf.Len()) > dump.MaxFileSize {
+		err = moerr.NewInternalError("dump: data in db is too large,please set a larger max_file_size")
+		return
+	}
+	if dump.MaxFileSize > 0 && curFileSize+int64(buf.Len()) > dump.MaxFileSize {
+		f.Close()
+		if curFileIdx == 1 {
+			os.Rename(dump.OutFile, genDumpFileName(dump.OutFile, curFileIdx))
+		}
+		newFileIdx = curFileIdx + 1
+		newFileSize = int64(buf.Len())
+		ret, err = createDumpFile(genDumpFileName(dump.OutFile, newFileIdx))
+		if err != nil {
+			return
+		}
+		_, err = buf.WriteTo(ret)
+		if err != nil {
+			return
+		}
+		buf.Reset()
+		return
+	}
+	_, err = buf.WriteTo(f)
+	if err != nil {
+		return
+	}
+	buf.Reset()
+	return f, curFileIdx, curFileSize + int64(buf.Len()), nil
+}

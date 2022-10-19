@@ -12,29 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package common
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"io"
+	"bytes"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/stretchr/testify/assert"
 )
 
-var (
-	ErrInvalidParam = moerr.NewInternalError("tae: invalid param")
-	ErrInvalidName  = moerr.NewInternalError("tae: invalid name")
-)
+func TestTree(t *testing.T) {
+	tree := NewTree()
+	tree.AddSegment(1, 2, 3)
+	tree.AddBlock(4, 5, 6, 7)
+	t.Log(tree.String())
+	assert.Equal(t, 2, tree.TableCount())
 
-type Base interface {
-	common.IRef
-	io.Closer
-	Fingerprint() *common.ID
-}
+	var w bytes.Buffer
+	_, err := tree.WriteTo(&w)
+	assert.NoError(t, err)
 
-type SegmentFactory interface {
-	Build(dir string, id, tableId uint64, fs *objectio.ObjectFS) Segment
-	EncodeName(id uint64) string
-	DecodeName(name string) (id uint64, err error)
+	tree2 := NewTree()
+	_, err = tree2.ReadFrom(&w)
+	assert.NoError(t, err)
+	t.Log(tree2.String())
+	assert.True(t, tree.Equal(tree2))
 }

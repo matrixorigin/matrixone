@@ -17,9 +17,12 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -206,6 +209,54 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 	}
 }
 
+// initUser for initialization or something special
+type initUser struct {
+	account  *TenantInfo
+	password []byte
+}
+
+var (
+	specialUser atomic.Value
+)
+
+// SetSpecialUser saves the user for initialization
+// !!!NOTE: userName must not contain Colon ':'
+func SetSpecialUser(userName string, password []byte) {
+	acc := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          userName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        math.MaxUint32,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	user := &initUser{
+		account:  acc,
+		password: password,
+	}
+
+	specialUser.Store(user)
+}
+
+// isSpecialUser checks the user is the one for initialization
+func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
+	user := getSpecialUser()
+	if user != nil && user.account.GetUser() == userName {
+		return true, user.password, user.account
+	}
+	return false, nil, nil
+}
+
+// getSpecialUser loads the user for initialization
+func getSpecialUser() *initUser {
+	value := specialUser.Load()
+	if value == nil {
+		return nil
+	}
+	return value.(*initUser)
+}
+
 const (
 // createMoUserIndex      = 0
 // createMoAccountIndex = 1
@@ -372,6 +423,7 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeRoleWGO
 	PrivilegeTypeValues
+	PrivilegeTypeDump
 )
 
 type PrivilegeScope uint8
@@ -505,6 +557,8 @@ func (pt PrivilegeType) String() string {
 		return "execute"
 	case PrivilegeTypeValues:
 		return "values"
+	case PrivilegeTypeDump:
+		return "dump"
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -581,6 +635,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeValues:
 		return PrivilegeScopeTable
+	case PrivilegeTypeDump:
+		return PrivilegeScopeDatabase
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -979,12 +1035,20 @@ var (
 			privilegeLevelDatabaseTable, privilegeLevelTable},
 	}
 
+	// the databases that can not operated by the real user
 	bannedCatalogDatabases = map[string]int8{
 		"mo_catalog":         0,
 		"information_schema": 0,
 		"system":             0,
 		"system_metrics":     0,
 		"mysql":              0,
+	}
+
+	// the privileges that can not be granted or revoked
+	bannedPrivileges = map[PrivilegeType]int8{
+		PrivilegeTypeCreateAccount: 0,
+		PrivilegeTypeAlterAccount:  0,
+		PrivilegeTypeDropAccount:   0,
 	}
 )
 
@@ -1168,6 +1232,16 @@ func getSqlForDeleteUser(userId int64) []string {
 	}
 }
 
+func isBannedDatabase(dbName string) bool {
+	_, ok := bannedCatalogDatabases[dbName]
+	return ok
+}
+
+func isBannedPrivilege(priv PrivilegeType) bool {
+	_, ok := bannedPrivileges[priv]
+	return ok
+}
+
 type specialTag int
 
 const (
@@ -1214,18 +1288,18 @@ const (
 	privilegeEntryTypeMulti                      //multi privileges take effect together
 )
 
-// multiItem is the item for the multi entry
-type multiItem struct {
-	pt        PrivilegeType
-	role      *tree.Role
-	users     []*tree.User
-	dbName    string
-	tableName string
+// privilegeItem is the item for in the compound entry
+type privilegeItem struct {
+	privilegeTyp PrivilegeType
+	role         *tree.Role
+	users        []*tree.User
+	dbName       string
+	tableName    string
 }
 
-// multiEntry is the entry for the privilege entry type multi
-type multiEntry struct {
-	privs []multiItem
+// compoundEntry is the entry has multi privilege items
+type compoundEntry struct {
+	items []privilegeItem
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
@@ -1238,10 +1312,10 @@ type privilegeEntry struct {
 	objId           int
 	withGrantOption bool
 	//for object type table
-	databaseName string
-	tableName    string
-	peTyp        privilegeEntryType
-	mEntry       *multiEntry
+	databaseName      string
+	tableName         string
+	privilegeEntryTyp privilegeEntryType
+	compound          *compoundEntry
 }
 
 var (
@@ -1374,6 +1448,7 @@ const (
 	userType
 )
 
+// verifiedRole holds the role info that has been checked
 type verifiedRole struct {
 	typ         verifiedRoleType
 	name        string
@@ -1384,7 +1459,7 @@ type verifiedRole struct {
 // verifyRoleFunc gets result set from mo_role_grant or mo_user_grant
 func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, typ verifiedRoleType) (*verifiedRole, error) {
 	var err error
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var roleId int64
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -1392,14 +1467,13 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 		return nil, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		roleId, err = rsset[0].GetInt64(0, 0)
+	if execResultArrayHasData(erArray) {
+		roleId, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1411,7 +1485,7 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 // userIsAdministrator checks the user is the administrator
 func userIsAdministrator(ctx context.Context, bh BackgroundExec, userId int64, account *TenantInfo) (bool, error) {
 	var err error
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var sql string
 	if account.IsSysTenant() {
 		sql = getSqlForRoleOfUser(userId, moAdminRoleName)
@@ -1425,13 +1499,12 @@ func userIsAdministrator(ctx context.Context, bh BackgroundExec, userId int64, a
 		return false, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+	if execResultArrayHasData(erArray) {
 		return true, nil
 	}
 	return false, nil
@@ -1582,6 +1655,10 @@ func normalizeNamesOfUsers(users []*tree.User) error {
 // doSwitchRole accomplishes the Use Role and Use Secondary Role statement
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	var err error
+	var sql string
+	var erArray []ExecResult
+	var roleId int64
+
 	account := ses.GetTenantInfo()
 
 	if sr.SecondaryRole {
@@ -1599,13 +1676,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		}
 
 		//step1 : check the role exists or not;
-		pu := ses.Pu
-		bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
-		var sql string
-		var rsset []ExecResult
-		var results []interface{}
-		var roleId int64
 
 		err = bh.Exec(ctx, "begin;")
 		if err != nil {
@@ -1619,13 +1691,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			roleId, err = rsset[0].GetInt64(0, 0)
+		if execResultArrayHasData(erArray) {
+			roleId, err = erArray[0].GetInt64(0, 0)
 			if err != nil {
 				goto handleFailed
 			}
@@ -1642,12 +1713,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 			goto handleFailed
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
-		if len(rsset) == 0 || rsset[0].GetRowCount() == 0 {
+
+		if !execResultArrayHasData(erArray) {
 			err = moerr.NewInternalError("the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
 			goto handleFailed
 		}
@@ -1679,13 +1750,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var err error
 	var sql string
-	var rsset []ExecResult
-	var results []interface{}
+	var erArray []ExecResult
+
 	var deleteCtx context.Context
 	var accountId int64
 	var hasAccount = true
@@ -1708,14 +1778,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		goto handleFailed
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		goto handleFailed
 	}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		accountId, err = rsset[0].GetInt64(0, 0)
+	if execResultArrayHasData(erArray) {
+		accountId, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1774,8 +1843,8 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1840,8 +1909,8 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -1912,9 +1981,8 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		return err
 	}
 
-	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
@@ -2013,7 +2081,7 @@ handleFailed:
 func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbName, tableName string) (int64, error) {
 	var err error
 	var sql string
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var id int64
 	if isDb {
 		sql = getSqlForCheckDatabase(dbName)
@@ -2026,14 +2094,13 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return 0, err
 	}
 
-	results := bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return 0, err
 	}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		id, err = rsset[0].GetInt64(0, 0)
+	if execResultArrayHasData(erArray) {
+		id, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			return 0, err
 		}
@@ -2177,7 +2244,7 @@ func matchPrivilegeTypeWithObjectType(privType PrivilegeType, objType objectType
 // doGrantPrivilege accomplishes the GrantPrivilege statement
 func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) error {
 	var err error
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
 	var objType objectType
@@ -2189,9 +2256,8 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		return err
 	}
 
-	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//Get primary keys
@@ -2218,15 +2284,14 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			goto handleFailed
 		}
 
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
 
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-				roleId, err = rsset[0].GetInt64(j, 0)
+		if execResultArrayHasData(erArray) {
+			for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
+				roleId, err = erArray[0].GetInt64(j, 0)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2252,6 +2317,10 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	for i, priv := range gp.Privileges {
 		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
 		if err != nil {
+			goto handleFailed
+		}
+		if isBannedPrivilege(privType) {
+			err = moerr.NewInternalError("the privilege %s can not be granted", privType)
 			goto handleFailed
 		}
 		//check the match between the privilegeScope and the objectType
@@ -2283,8 +2352,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 
-			results := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2292,9 +2360,9 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			//choice 1 : update the record
 			//choice 2 : inset new record
 			choice := 1
-			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-				for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-					_, err = rsset[0].GetInt64(j, 0)
+			if execResultArrayHasData(erArray) {
+				for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
+					_, err = erArray[0].GetInt64(j, 0)
 					if err != nil {
 						goto handleFailed
 					}
@@ -2348,9 +2416,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
+
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2506,7 +2574,7 @@ func verifySpecialRolesInGrant(account *TenantInfo, from, to *verifiedRole) erro
 
 // doGrantRole accomplishes the GrantRole statement
 func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var err error
 	var withGrantOption int64
 	err = normalizeNamesOfRoles(gr.Roles)
@@ -2517,9 +2585,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	if err != nil {
 		return err
 	}
-	pu := ses.Pu
+
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -2602,22 +2670,21 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			goto handleFailed
 		}
 
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
 
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
+		if execResultArrayHasData(erArray) {
+			for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
 				//column grantedId
-				grantedId, err = rsset[0].GetInt64(j, 0)
+				grantedId, err = erArray[0].GetInt64(j, 0)
 				if err != nil {
 					goto handleFailed
 				}
 
 				//column granteeId
-				granteeId, err = rsset[0].GetInt64(j, 1)
+				granteeId, err = erArray[0].GetInt64(j, 1)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2668,8 +2735,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 				goto handleFailed
 			}
 
-			results := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2690,9 +2756,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			//choice 3: (roleId,userId) does not exist.
 			// Insert.
 			choice := 1
-			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-				for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-					withGrantOption, err = rsset[0].GetInt64(j, 2)
+			if execResultArrayHasData(erArray) {
+				for j := uint64(0); j < erArray[0].GetRowCount(); j++ {
+					withGrantOption, err = erArray[0].GetInt64(j, 2)
 					if err != nil {
 						goto handleFailed
 					}
@@ -2768,26 +2834,26 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		} else {
 			typs = append(typs, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-			me1 := &multiEntry{
-				privs: []multiItem{
+			me1 := &compoundEntry{
+				items: []privilegeItem{
 					{PrivilegeTypeCreateUser, nil, nil, "", ""},
 					{PrivilegeTypeManageGrants, nil, nil, "", ""},
 				},
 			}
-			me2 := &multiEntry{
-				privs: []multiItem{
+			me2 := &compoundEntry{
+				items: []privilegeItem{
 					{PrivilegeTypeCreateUser, nil, nil, "", ""},
 					{PrivilegeTypeRoleWGO, st.Role, st.Users, "", ""},
 				},
 			}
 
 			entry1 := privilegeEntry{
-				peTyp:  privilegeEntryTypeMulti,
-				mEntry: me1,
+				privilegeEntryTyp: privilegeEntryTypeMulti,
+				compound:          me1,
 			}
 			entry2 := privilegeEntry{
-				peTyp:  privilegeEntryTypeMulti,
-				mEntry: me2,
+				privilegeEntryTyp: privilegeEntryTypeMulti,
+				compound:          me2,
 			}
 			extraEntries = append(extraEntries, entry1, entry2)
 		}
@@ -2929,9 +2995,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.TruncateTable:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Dump:
-		objType = objectTypeNone // TODO check
-		kind = privilegeKindNone
+		if st.Tables != nil {
+			objType = objectTypeTable
+			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		} else {
+			objType = objectTypeDatabase
+			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		}
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -3042,19 +3116,19 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	//multi privileges take effect together
 	entries := make([]privilegeEntry, 0, len(arr))
-	multiPrivs := make([]multiItem, 0, len(arr))
+	multiPrivs := make([]privilegeItem, 0, len(arr))
 	for _, tips := range arr {
-		multiPrivs = append(multiPrivs, multiItem{
-			pt:        tips.typ,
-			dbName:    tips.databaseName,
-			tableName: tips.tableName,
+		multiPrivs = append(multiPrivs, privilegeItem{
+			privilegeTyp: tips.typ,
+			dbName:       tips.databaseName,
+			tableName:    tips.tableName,
 		})
 
 		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
 
-	me := &multiEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{peTyp: privilegeEntryTypeMulti, mEntry: me})
+	me := &compoundEntry{multiPrivs}
+	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeMulti, compound: me})
 
 	//optional predefined privilege : tableAll, ownership
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -3166,12 +3240,12 @@ func getSqlForPrivilege2(ses *Session, roleId int64, entry privilegeEntry, pl pr
 
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds []int64, priv *privilege) (bool, error) {
-	var rsset []ExecResult
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege) (bool, error) {
+	var erArray []ExecResult
 	var sql string
 	var err error
 	var pls []privilegeLevelType
-	var results []interface{}
+
 	var yes bool
 	var operateCatalog bool
 	//there is no privilege needs, just approve
@@ -3191,13 +3265,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			if err != nil {
 				return false, err
 			}
-			results = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				return false, err
 			}
 
-			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			if execResultArrayHasData(erArray) {
 				return true, nil
 			}
 		}
@@ -3209,16 +3283,16 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
 			}
-			if _, ok2 := bannedCatalogDatabases[dbName]; ok2 {
+			if ok2 := isBannedDatabase(dbName); ok2 {
 				return ok2
 			}
 		}
 		return false
 	}
 
-	for _, roleId := range roleIds {
+	for _, roleId := range roleIds.Keys() {
 		for _, entry := range priv.entries {
-			if entry.peTyp == privilegeEntryTypeGeneral {
+			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 				pls, err = getPrivilegeLevelsOfObjectType(entry.objType)
 				if err != nil {
 					return false, err
@@ -3234,12 +3308,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if yes {
 					return true, nil
 				}
-			} else if entry.peTyp == privilegeEntryTypeMulti {
-				if entry.mEntry != nil {
+			} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				if entry.compound != nil {
 					allTrue := true
 					//multi privileges take effect together
-					for _, mi := range entry.mEntry.privs {
-						if mi.pt == PrivilegeTypeRoleWGO {
+					for _, mi := range entry.compound.items {
+						if mi.privilegeTyp == PrivilegeTypeRoleWGO {
 							//TODO: normalize the name
 							//TODO: simplify the logic
 							yes, err = determineUserCanGrantRolesToOthers(ctx, ses, []*tree.Role{mi.role})
@@ -3263,11 +3337,11 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								}
 							}
 						} else {
-							tempEntry := privilegeEntriesMap[mi.pt]
+							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
-							tempEntry.peTyp = privilegeEntryTypeGeneral
-							tempEntry.mEntry = nil
+							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+							tempEntry.compound = nil
 							pls, err = getPrivilegeLevelsOfObjectType(tempEntry.objType)
 							if err != nil {
 								return false, err
@@ -3301,24 +3375,26 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 // determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
 func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var yes bool
 	var err error
-	var results []interface{}
 	var roleB int64
-	var setVisited *btree.Set[int64]
-	var setRList []int64
 	var ret bool
 
-	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
-	pu := ses.Pu
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	//the set of roles the (k+1) th iteration during the execution
+	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
+	//the set of roles the k th iteration during the execution
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	//the set of roles visited by traversal algorithm
+	roleSetOfVisited := &btree.Set[int64]{}
 
 	//step 1: The Set R1 {default role id}
 	//The primary role (in use)
-	setR.Insert((int64)(tenant.GetDefaultRoleID()))
+	roleSetOfKthIteration.Insert((int64)(tenant.GetDefaultRoleID()))
 
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -3327,23 +3403,20 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 	//step 2: The Set R2 {the roleid granted to the userid}
 	//If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, tenant, setR)
+	err = loadAllSecondaryRoles(ctx, bh, tenant, roleSetOfKthIteration)
 	if err != nil {
 		goto handleFailed
 	}
 
-	setVisited = &btree.Set[int64]{}
-	setRList = make([]int64, 0, setR.Len())
-	//init setVisited = setR
-	setR.Scan(func(roleId int64) bool {
-		setVisited.Insert(roleId)
-		setRList = append(setRList, roleId)
+	//init RVisited = Rk
+	roleSetOfKthIteration.Scan(func(roleId int64) bool {
+		roleSetOfVisited.Insert(roleId)
 		return true
 	})
 
 	//Call the algorithm 2.
 	//If the result of the algorithm 2 is true, Then return true;
-	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, setRList, priv)
+	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv)
 	if err != nil {
 		goto handleFailed
 	}
@@ -3352,25 +3425,24 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 		goto handleSuccess
 	}
 	/*
-		step 3: !!!NOTE all roleid in setR has been processed by the algorithm 2.
-		setVisited is the set of all roleid that has been processed.
-		setVisited = setR;
+		step 3: !!!NOTE all roleid in Rk has been processed by the algorithm 2.
+		RVisited is the set of all roleid that has been processed.
+		RVisited = Rk;
 		For {
-			For roleA in setR {
+			For roleA in Rk {
 				Find the peer roleB in the table mo_role_grant(granted_id,grantee_id) with grantee_id = roleA;
-				If roleB is not in setVisited, Then add roleB into setR';
-					add roleB into setVisited;
+				If roleB is not in RVisited, Then add roleB into R(k+1);
+					add roleB into RVisited;
 			}
 
-			If setR' is empty, Then return false;
+			If R(k+1) is empty, Then return false;
 			//Call the algorithm 2.
 			If the result of the algorithm 2 is true, Then return true;
-			setR = setR';
-			setR' = {};
+			Rk = R(k+1);
+			R(k+1) = {};
 		}
 	*/
 	for {
-		setRPlus := make([]int64, 0, len(setRList))
 		quit := false
 		select {
 		case <-ctx.Done():
@@ -3381,8 +3453,10 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 			break
 		}
 
+		roleSetOfKPlusOneThIteration.Clear()
+
 		//get roleB of roleA
-		for _, roleA := range setRList {
+		for _, roleA := range roleSetOfKthIteration.Keys() {
 			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleA)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
@@ -3391,36 +3465,35 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 				goto handleFailed
 			}
 
-			results = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(results)
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
 
-			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-				for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-					roleB, err = rsset[0].GetInt64(i, 0)
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					roleB, err = erArray[0].GetInt64(i, 0)
 					if err != nil {
 						goto handleFailed
 					}
 
-					if !setVisited.Contains(roleB) {
-						setVisited.Insert(roleB)
-						setRPlus = append(setRPlus, roleB)
+					if !roleSetOfVisited.Contains(roleB) {
+						roleSetOfVisited.Insert(roleB)
+						roleSetOfKPlusOneThIteration.Insert(roleB)
 					}
 				}
 			}
 		}
 
 		//no more roleB, it is done
-		if len(setRPlus) == 0 {
+		if roleSetOfKPlusOneThIteration.Len() == 0 {
 			ret = false
 			goto handleSuccess
 		}
 
 		//Call the algorithm 2.
 		//If the result of the algorithm 2 is true, Then return true;
-		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, setRPlus, priv)
+		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3429,7 +3502,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 			ret = true
 			goto handleSuccess
 		}
-		setRList = setRPlus
+		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 	}
 
 handleSuccess:
@@ -3455,11 +3528,11 @@ const (
 )
 
 // loadAllSecondaryRoles loads all secondary roles
-func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *TenantInfo, Rc *btree.Set[int64]) error {
+func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *TenantInfo, roleSetOfCurrentUser *btree.Set[int64]) error {
 	var err error
 	var sql string
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	var roleId int64
 
 	if account.GetUseSecondaryRole() {
@@ -3470,19 +3543,18 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 			return err
 		}
 
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			return err
 		}
 
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-				roleId, err = rsset[0].GetInt64(i, 0)
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				roleId, err = erArray[0].GetInt64(i, 0)
 				if err != nil {
 					return err
 				}
-				Rc.Insert(roleId)
+				roleSetOfCurrentUser.Insert(roleId)
 			}
 		}
 	}
@@ -3499,26 +3571,30 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 		return false, err
 	}
 
-	pu := ses.Pu
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var vr *verifiedRole
 	var ret = true
 	var granted bool
-	var Rt *btree.Set[int64]
+	//the temporal set of roles during the execution
+	var tempRoleSet *btree.Set[int64]
 	var sql string
-	RkPlusOne := &btree.Set[int64]{}
-	Rk := &btree.Set[int64]{}
-	Rc := &btree.Set[int64]{}
-	RVisited := &btree.Set[int64]{}
+	//the set of roles the (k+1) th iteration during the execution
+	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
+	//the set of roles the k th iteration during the execution
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	//the set of roles of the current user that executes this statement or function
+	roleSetOfCurrentUser := &btree.Set[int64]{}
+	//the set of roles visited by traversal algorithm
+	roleSetOfVisited := &btree.Set[int64]{}
 	verifiedFromRoles := make([]*verifiedRole, len(fromRoles))
 
 	//step 1 : add the primary role
-	Rc.Insert(int64(account.GetDefaultRoleID()))
+	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -3541,14 +3617,14 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 
 	//step 2: The Set R2 {the roleid granted to the userid}
 	//If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, account, Rc)
+	err = loadAllSecondaryRoles(ctx, bh, account, roleSetOfCurrentUser)
 	if err != nil {
 		goto handleFailed
 	}
 
 	for _, role := range verifiedFromRoles {
 		//if it is the role in use, do the check
-		if Rc.Contains(role.id) {
+		if roleSetOfCurrentUser.Contains(role.id) {
 			//check the direct relation between role and user
 			granted, err = isRoleGrantedToUserWGO(ctx, bh, role.id, int64(account.GetUserID()))
 			if err != nil {
@@ -3559,28 +3635,28 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 			}
 		}
 
-		Rk.Clear()
-		RVisited.Clear()
-		Rk.Insert(role.id)
+		roleSetOfKthIteration.Clear()
+		roleSetOfVisited.Clear()
+		roleSetOfKthIteration.Insert(role.id)
 
 		riResult := goOn
 		//It is kind of level traversal
-		for Rk.Len() != 0 && riResult == goOn {
-			RkPlusOne.Clear()
-			for _, ri := range Rk.Keys() {
-				Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
+		for roleSetOfKthIteration.Len() != 0 && riResult == goOn {
+			roleSetOfKPlusOneThIteration.Clear()
+			for _, ri := range roleSetOfKthIteration.Keys() {
+				tempRoleSet, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, roleSetOfVisited, roleSetOfKPlusOneThIteration)
 				if err != nil {
 					goto handleFailed
 				}
 
-				if setIsIntersected(Rt, Rc) {
+				if setIsIntersected(tempRoleSet, roleSetOfCurrentUser) {
 					riResult = successDone
 					break
 				}
 			}
 
 			//swap Rk,R(k+1)
-			Rk, RkPlusOne = RkPlusOne, Rk
+			roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 		}
 
 		if riResult != successDone {
@@ -3610,8 +3686,8 @@ handleFailed:
 // Algorithm 1
 func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, UserId int64) (bool, error) {
 	var err error
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	sql := getSqlForCheckUserGrantWGO(roleId, UserId)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -3619,13 +3695,12 @@ func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, User
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
 
-	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
+	if execResultArrayHasData(erArray) {
 		return true, nil
 	}
 
@@ -3636,8 +3711,8 @@ func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, User
 // Algorithm 2
 func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, roleId int64, RVisited, RkPlusOne *btree.Set[int64]) (*btree.Set[int64], error) {
 	var err error
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
 	sql := getSqlForCheckRoleGrantWGO(roleId)
@@ -3647,15 +3722,14 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 		return nil, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
-		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-			id, err = rsset[0].GetInt64(i, 0)
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err = erArray[0].GetInt64(i, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -3776,8 +3850,8 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 // The algorithm 3
 func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
 	var err error
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
 	sql := getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
@@ -3786,15 +3860,15 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	if err != nil {
 		return nil, err
 	}
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
-		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-			id, err = rsset[0].GetInt64(i, 0)
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err = erArray[0].GetInt64(i, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -3823,24 +3897,28 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
-	pu := ses.Pu
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var ret = true
 	var privType PrivilegeType
-	var Rt *btree.Set[int64]
-	var Rp *btree.Set[int64]
-	RkPlusOne := &btree.Set[int64]{}
-	Rk := &btree.Set[int64]{}
-	RVisited := &btree.Set[int64]{}
-	// the roles that the user using
-	Rc := &btree.Set[int64]{}
+	//the temporal set of roles during the execution
+	var tempRoleSet *btree.Set[int64]
+	//the set of roles that the privilege granted to with WGO=true
+	var roleSetOfPrivilegeGrantedToWGO *btree.Set[int64]
+	//the set of roles the (k+1) th iteration during the execution
+	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
+	//the set of roles the k th iteration during the execution
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	//the set of roles visited by traversal algorithm
+	roleSetOfVisited := &btree.Set[int64]{}
+	//the set of roles of the current user that executes this statement or function
+	roleSetOfCurrentUser := &btree.Set[int64]{}
 
-	Rc.Insert(int64(account.GetDefaultRoleID()))
+	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -3850,7 +3928,7 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 
 	//step 2: The Set R2 {the roleid granted to the userid}
 	//If the user uses the all secondary roles, the secondary roles needed to be loaded
-	err = loadAllSecondaryRoles(ctx, bh, account, Rc)
+	err = loadAllSecondaryRoles(ctx, bh, account, roleSetOfCurrentUser)
 	if err != nil {
 		goto handleFailed
 	}
@@ -3862,38 +3940,38 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 		}
 
 		//call the algorithm 3.
-		Rp, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
 		if err != nil {
 			goto handleFailed
 		}
 
-		if setIsIntersected(Rp, Rc) {
+		if setIsIntersected(roleSetOfPrivilegeGrantedToWGO, roleSetOfCurrentUser) {
 			continue
 		}
 
 		riResult := goOn
-		for _, rx := range Rp.Keys() {
-			Rk.Clear()
-			RVisited.Clear()
-			Rk.Insert(rx)
+		for _, rx := range roleSetOfPrivilegeGrantedToWGO.Keys() {
+			roleSetOfKthIteration.Clear()
+			roleSetOfVisited.Clear()
+			roleSetOfKthIteration.Insert(rx)
 
 			//It is kind of level traversal
-			for Rk.Len() != 0 && riResult == goOn {
-				RkPlusOne.Clear()
-				for _, ri := range Rk.Keys() {
-					Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
+			for roleSetOfKthIteration.Len() != 0 && riResult == goOn {
+				roleSetOfKPlusOneThIteration.Clear()
+				for _, ri := range roleSetOfKthIteration.Keys() {
+					tempRoleSet, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, roleSetOfVisited, roleSetOfKPlusOneThIteration)
 					if err != nil {
 						goto handleFailed
 					}
 
-					if setIsIntersected(Rt, Rc) {
+					if setIsIntersected(tempRoleSet, roleSetOfCurrentUser) {
 						riResult = successDone
 						break
 					}
 				}
 
 				//swap Rk,R(k+1)
-				Rk, RkPlusOne = RkPlusOne, Rk
+				roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 			}
 
 			if riResult == successDone {
@@ -4069,8 +4147,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
-	var results []interface{}
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var err error
 	var tableNames []string
 	var tableName string
@@ -4082,18 +4159,16 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	if len(results) != 1 {
-		return false, moerr.NewInternalError("it must have result set")
-	}
-
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
+	if len(erArray) != 1 {
+		return false, moerr.NewInternalError("it must have result set")
+	}
 
-	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		_, err = rsset[0].GetString(i, 0)
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		_, err = erArray[0].GetString(i, 0)
 		if err != nil {
 			return false, err
 		}
@@ -4106,18 +4181,16 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	if len(results) != 1 {
-		return false, moerr.NewInternalError("it must have result set")
-	}
-
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
+	if len(erArray) != 1 {
+		return false, moerr.NewInternalError("it must have result set")
+	}
 
-	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		tableName, err = rsset[0].GetString(i, 0)
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		tableName, err = erArray[0].GetString(i, 0)
 		if err != nil {
 			return false, err
 		}
@@ -4300,8 +4373,8 @@ func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, ten
 
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit, userName string) (bool, error) {
 	var sqlForCheckTenant string
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	var err error
 	sqlForCheckTenant = getSqlForCheckTenant(userName)
 	bh.ClearExecResultSet()
@@ -4310,23 +4383,23 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.P
 		return false, err
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		return false, err
 	}
 
-	if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+	if execResultArrayHasData(erArray) {
 		return true, nil
 	}
 	return false, nil
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
 	var newTenant *TenantInfo
+	tenant := ses.GetTenantInfo()
 	pu := config.GetParameterUnit(ctx)
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
@@ -4407,8 +4480,8 @@ handleFailed:
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
 	var err error
 	var initMoAccount string
-	var results []interface{}
-	var rsset []ExecResult
+
+	var erArray []ExecResult
 	var newTenantID int64
 	var newUserId int64
 	var comment = ""
@@ -4457,14 +4530,13 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		goto handleFailed
 	}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
+	erArray, err = getResultSet(bh)
 	if err != nil {
 		goto handleFailed
 	}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		newTenantID, err = rsset[0].GetInt64(0, 0)
+	if execResultArrayHasData(erArray) {
+		newTenantID, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4612,12 +4684,12 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 	defer mpool.DeleteMPool(mp)
 
 	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
-	rsset, err := executeSQLInBackgroundSession(ctx, mp, pu, sqlForCheckUser)
+	erArray, err := executeSQLInBackgroundSession(ctx, mp, pu, sqlForCheckUser)
 	if err != nil {
 		return false, err
 	}
 
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+	if !execResultArrayHasData(erArray) {
 		return false, nil
 	}
 
@@ -4628,10 +4700,9 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
 	var exists int
-	var rsset []ExecResult
+	var erArray []ExecResult
 	var newUserId int64
 	var host string
-	var values []interface{}
 	var newRoleId int64
 	var status string
 
@@ -4671,16 +4742,16 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(erArray) {
 			err = moerr.NewInternalError("there is no role %s", cu.Role.UserName)
 			goto handleFailed
 		}
-		newRoleId, err = rsset[0].GetInt64(0, 0)
+		newRoleId, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4718,13 +4789,13 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
 		exists = 0
-		if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+		if execResultArrayHasData(erArray) {
 			exists = 1
 		}
 
@@ -4736,12 +4807,12 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			if err != nil {
 				goto handleFailed
 			}
-			values = bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(values)
+
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
-			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+			if execResultArrayHasData(erArray) {
 				exists = 2
 			}
 		}
@@ -4797,17 +4868,16 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			goto handleFailed
 		}
 
-		values = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(values)
+		erArray, err = getResultSet(bh)
 		if err != nil {
 			goto handleFailed
 		}
 
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(erArray) {
 			err = moerr.NewInternalError("get the id of user %s failed", user.Username)
 			goto handleFailed
 		}
-		newUserId, err = rsset[0].GetInt64(0, 0)
+		newUserId, err = erArray[0].GetInt64(0, 0)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4847,7 +4917,7 @@ handleFailed:
 func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
 	var exists int
-	var rsset []ExecResult
+	var erArray []ExecResult
 	err = normalizeNamesOfRoles(cr.Roles)
 	if err != nil {
 		return err
@@ -4867,6 +4937,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	}
 
 	for _, r := range cr.Roles {
+		exists = 0
 		if isPredefinedRole(r.UserName) {
 			exists = 3
 		} else {
@@ -4877,12 +4948,12 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			if err != nil {
 				goto handleFailed
 			}
-			values := bh.GetExecResultSet()
-			rsset, err = convertIntoResultSet(values)
+
+			erArray, err = getResultSet(bh)
 			if err != nil {
 				goto handleFailed
 			}
-			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+			if execResultArrayHasData(erArray) {
 				exists = 1
 			}
 
@@ -4894,12 +4965,12 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 				if err != nil {
 					goto handleFailed
 				}
-				values = bh.GetExecResultSet()
-				rsset, err = convertIntoResultSet(values)
+
+				erArray, err = getResultSet(bh)
 				if err != nil {
 					goto handleFailed
 				}
-				if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+				if execResultArrayHasData(erArray) {
 					exists = 2
 				}
 			}

@@ -176,6 +176,7 @@ import (
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
     showType tree.ShowType
+    joinTableExpr *tree.JoinTableExpr
 }
 
 %token LEX_ERROR
@@ -329,6 +330,9 @@ import (
 // JSON table function
 %token <str> UNNEST
 
+// table function
+%token <str> GENERATE_SERIES
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -342,7 +346,7 @@ import (
 
 %type <statement> stmt
 %type <statements> stmt_list
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -373,8 +377,9 @@ import (
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
-%type <tableExprs> table_references table_name_wild_list
-%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
+%type <tableExprs> table_name_wild_list
+%type <joinTableExpr>  table_references join_table
+%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
@@ -583,6 +588,7 @@ stmt:
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
+|   truncate_table_stmt
 |   explain_stmt
 |   prepare_stmt
 |   deallocate_stmt
@@ -617,15 +623,16 @@ dump_stmt:
 	$$ = &tree.Dump{
 	    Database: tree.Identifier($3),
 	    OutFile: $5,
-	    MaxFileSize: $6,
+	    MaxFileSize: int64($6),
 	}
     }
-|   DUMP TABLE table_name INTO STRING max_file_size_opt
+|   DUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
     {
 	$$ = &tree.Dump{
-	    Table: $3,
-	    OutFile: $5,
-	    MaxFileSize: $6,
+	    Database: tree.Identifier($3),
+	    Tables: $5,
+	    OutFile: $7,
+	    MaxFileSize: int64($8),
 	}
     }
 
@@ -1769,7 +1776,7 @@ update_no_with_stmt:
     {
         // Multiple-table syntax
         $$ = &tree.Update{
-            Tables: $4,
+            Tables: tree.TableExprs{$4},
             Exprs: $6,
             Where: $7,
         }
@@ -2408,6 +2415,16 @@ unresolved_object_name:
         $$ = tree.SetUnresolvedObjectName(3, [3]string{$5, $3, $1})
     }
 
+truncate_table_stmt:
+    TRUNCATE table_name
+    {
+    	$$ = tree.NewTruncateTable($2)
+    }
+|   TRUNCATE TABLE table_name
+    {
+	$$ = tree.NewTruncateTable($3)
+    }
+
 drop_stmt:
     drop_ddl_stmt
 
@@ -2538,7 +2555,7 @@ delete_without_using_stmt:
         $$ = &tree.Delete{
             Tables: $5,
             Where: $8,
-            TableRefs: $7,
+            TableRefs: tree.TableExprs{$7},
         }
     }
 
@@ -2551,7 +2568,7 @@ delete_with_using_stmt:
         $$ = &tree.Delete{
             Tables: $6,
             Where: $9,
-            TableRefs: $8,
+            TableRefs: tree.TableExprs{$8},
         }
     }
 
@@ -3361,18 +3378,22 @@ from_clause:
     FROM table_references
     {
         $$ = &tree.From{
-            Tables: $2,
+            Tables: tree.TableExprs{$2},
         }
     }
 
 table_references:
     escaped_table_reference
-    {
-        $$ = tree.TableExprs{$1}
+   	{
+   		if t, ok := $1.(*tree.JoinTableExpr); ok {
+   			$$ = t
+   		} else {
+   			$$ = &tree.JoinTableExpr{Left: $1, Right: nil, JoinType: tree.JOIN_TYPE_CROSS}
+   		}
     }
 |   table_references ',' escaped_table_reference
     {
-        $$ = append($1, $3)
+        $$ = &tree.JoinTableExpr{Left: $1, Right: $3, JoinType: tree.JOIN_TYPE_CROSS}
     }
 
 escaped_table_reference:
@@ -3381,6 +3402,9 @@ escaped_table_reference:
 table_reference:
     table_factor
 |   join_table
+	{
+		$$ = $1
+	}
 
 join_table:
     table_reference inner_join table_factor join_condition_opt
@@ -3401,7 +3425,6 @@ join_table:
             Cond: $4,
         }
     }
-// right: table_reference
 |   table_reference outer_join table_factor join_condition
     {
         $$ = &tree.JoinTableExpr{
@@ -3566,7 +3589,10 @@ table_factor:
             $$ = $1
         }
     }
-// |   '(' table_references ')'
+|   '(' table_references ')'
+	{
+		$$ = $2
+	}
 
 derived_table:
     '(' select_no_parens ')'
@@ -3735,6 +3761,17 @@ table_function:
                 Exprs: exprs,
                 Type: tree.FUNC_TYPE_TABLE,
             },
+	}
+    }
+|   GENERATE_SERIES '(' expression_list ')'
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: $3,
+		Type: tree.FUNC_TYPE_TABLE,
+	    },
 	}
     }
 
@@ -7706,6 +7743,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|	STREAM
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
@@ -7765,6 +7803,7 @@ func_not_keyword:
 |   SYSTEM_USER
 |   TRANSLATE
 |   UNNEST
+|   GENERATE_SERIES
 
 not_keyword:
     ADDDATE

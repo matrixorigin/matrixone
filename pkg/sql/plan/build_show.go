@@ -311,6 +311,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	dbName := stmt.DbName
 	if stmt.DbName == "" {
 		dbName = ctx.DefaultDatabase()
+		stmt.DbName = dbName
 		if dbName == "" {
 			return nil, moerr.NewNoDB()
 		}

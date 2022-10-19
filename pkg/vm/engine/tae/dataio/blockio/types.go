@@ -30,7 +30,7 @@ const (
 )
 
 func EncodeBlkName(id *common.ID, ts types.TS) (name string) {
-	basename := fmt.Sprintf("%d-%d-%d.%s.%s", id.TableID, id.SegmentID, id.BlockID, ts.ToString(), BlockExt)
+	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, BlockExt)
 	return basename
 }
 
@@ -95,25 +95,44 @@ func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows u
 	return metaLoc
 }
 
-func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
+func EncodeBlkMetaLocWithObject(
+	id *common.ID,
+	extent objectio.Extent,
+	rows uint32,
+	blocks []objectio.BlockObject) (string, error) {
+	size, err := GetObjectSizeWithBlocks(blocks)
+	if err != nil {
+		return "", err
+	}
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
+		EncodeBlkName(id, types.TS{}),
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		rows,
+		size,
+	)
+	return metaLoc, nil
+}
+
+func EncodeSegMetaLocWithObject(
+	id *common.ID,
+	extent objectio.Extent,
+	rows uint32,
+	blocks []objectio.BlockObject) (string, error) {
+	size, err := GetObjectSizeWithBlocks(blocks)
+	if err != nil {
+		return "", err
+	}
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d:%d",
 		EncodeSegName(id),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),
 		rows,
+		size,
 	)
-	return metaLoc
-}
-
-func EncodeBlkDeltaLoc(id *common.ID, ts types.TS, extent objectio.Extent) string {
-	deltaLoc := fmt.Sprintf("%s:%d_%d_%d",
-		EncodeBlkName(id, ts),
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-	)
-	return deltaLoc
+	return metaLoc, nil
 }
 
 func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
@@ -140,22 +159,19 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	return name, extent, uint32(rows)
 }
 
-func DecodeDeltaLoc(metaLoc string) (string, objectio.Extent) {
-	info := strings.Split(metaLoc, ":")
-	name := info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
-	if err != nil {
-		panic(any(err))
+func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
+	objectSize := uint32(0)
+	for _, block := range blocks {
+		meta := block.GetMeta()
+		header := meta.GetHeader()
+		count := header.GetColumnCount()
+		for i := 0; i < int(count); i++ {
+			col, err := block.GetColumn(uint16(i))
+			if err != nil {
+				return 0, err
+			}
+			objectSize += col.GetMeta().GetLocation().Length()
+		}
 	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
-	return name, extent
+	return objectSize, nil
 }
