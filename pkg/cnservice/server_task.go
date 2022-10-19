@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -60,6 +61,7 @@ func (s *service) startTaskRunner() {
 
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,
 		ts,
+		taskservice.WithRunnerLogger(s.logger),
 		taskservice.WithOptions(
 			s.cfg.TaskRunner.QueryLimit,
 			s.cfg.TaskRunner.Parallelism,

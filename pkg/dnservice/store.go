@@ -196,6 +196,12 @@ func (s *store) Close() error {
 		}
 		return true
 	})
+	s.task.RLock()
+	ts := s.task.serviceHolder
+	s.task.RUnlock()
+	if ts != nil {
+		err = ts.Close()
+	}
 	return err
 }
 

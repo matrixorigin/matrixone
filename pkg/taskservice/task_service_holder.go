@@ -146,6 +146,7 @@ func (s *refreshableTaskStorage) Close() error {
 	var err error
 	s.mu.Lock()
 	if s.mu.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.mu.closed = true
@@ -346,7 +347,7 @@ func NewMySQLBasedTaskStorageFactory(username, password, database string) TaskSt
 }
 
 func (f *mysqlBasedStorageFactory) Create(address string) (TaskStorage, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=5s&writeTimeout=5s&timeout=5s",
 		f.username,
 		f.password,
 		address,

@@ -88,14 +88,17 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	logger := logutil.GetGlobalLogger().Named("LogService").With(zap.String("uuid", cfg.UUID))
 
 	service := &Service{
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
-		logger:      logger,
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	logger := logutil.Adjust(service.logger).Named("LogService").With(zap.String("uuid", cfg.UUID))
+	service.logger = logger
 
 	store, err := newLogStore(cfg, service.getTaskService, logger)
 	if err != nil {
@@ -137,9 +140,7 @@ func NewService(
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
-	for _, opt := range opts {
-		opt(service)
-	}
+
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store

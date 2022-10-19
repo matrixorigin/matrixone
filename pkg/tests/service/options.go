@@ -17,6 +17,7 @@ package service
 import (
 	"time"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -63,6 +64,7 @@ type Options struct {
 	hostAddr    string
 	rootDataDir string
 	logLevel    zapcore.Level
+	logger      *zap.Logger
 
 	initial struct {
 		dnServiceNum  int
@@ -233,6 +235,12 @@ func (opt Options) WithHostAddress(host string) Options {
 // WithLogLevel sets log level.
 func (opt Options) WithLogLevel(lvl zapcore.Level) Options {
 	opt.logLevel = lvl
+	return opt
+}
+
+// WithLogger sets logger.
+func (opt Options) WithLogger(logger *zap.Logger) Options {
+	opt.logger = logger
 	return opt
 }
 

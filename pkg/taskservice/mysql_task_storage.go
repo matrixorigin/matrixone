@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -167,6 +168,9 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 		}
 	}
 
+	db.SetConnMaxIdleTime(time.Second * 10)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
 	return &mysqlTaskStorage{
 		dsn: dsn,
 		db:  db,

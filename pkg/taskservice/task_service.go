@@ -81,17 +81,27 @@ func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error
 }
 
 func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata) error {
-	now := time.Now().UnixMilli()
 	values := make([]task.Task, 0, len(tasks))
 	for _, v := range tasks {
-		values = append(values, task.Task{
-			Metadata: v,
-			Status:   task.TaskStatus_Created,
-			CreateAt: now,
-		})
+		values = append(values, newTaskFromMetadata(v))
 	}
-	_, err := s.store.Add(ctx, values...)
-	return err
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Error("create task timeout")
+			return errNotReady
+		default:
+			if _, err := s.store.Add(ctx, values...); err != nil {
+				if err == errNotReady {
+					time.Sleep(300 * time.Millisecond)
+					continue
+				}
+				return err
+			}
+			return nil
+		}
+	}
 }
 
 func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadata, cronExpr string) error {

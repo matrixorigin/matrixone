@@ -16,9 +16,10 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"math/rand"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -34,7 +35,7 @@ func (s *store) initTaskHolder() {
 	}
 
 	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.logger, func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		details, err := s.hakeeperClient.GetClusterDetails(ctx)
 		if err != nil {

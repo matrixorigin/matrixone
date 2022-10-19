@@ -33,7 +33,8 @@ func (s *Service) initTaskHolder() {
 	}
 
 	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.Background(),
+			time.Second*5)
 		defer cancel()
 		if s.haClient == nil {
 			return "", nil

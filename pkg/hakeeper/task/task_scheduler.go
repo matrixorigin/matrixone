@@ -16,10 +16,10 @@ package task
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -45,11 +45,11 @@ type scheduler struct {
 
 var _ hakeeper.TaskScheduler = (*scheduler)(nil)
 
-func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper.Config) hakeeper.TaskScheduler {
+func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper.Config, logger *zap.Logger) hakeeper.TaskScheduler {
 	cfg.Fill()
 	s := &scheduler{
 		ctx:               context.Background(),
-		logger:            logutil.GetGlobalLogger().Named("hakeeper"),
+		logger:            logutil.Adjust(logger),
 		taskServiceGetter: taskServiceGetter,
 		cfg:               cfg,
 	}
@@ -61,7 +61,10 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
-	if runningTasks == nil && createdTasks == nil {
+	// TODO: delete
+	s.logger.Info("query tasks", zap.Int("created", len(createdTasks)),
+		zap.Int("running", len(runningTasks)))
+	if len(runningTasks) == 0 && len(createdTasks) == 0 {
 		return
 	}
 	orderedCN := getCNOrdered(runningTasks, workingCN)
@@ -72,14 +75,21 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
-func (s *scheduler) Create(ctx context.Context, metadata task.TaskMetadata) error {
+func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
 	ts := s.getTaskService()
 	if ts == nil {
 		return moerr.NewInternalError("failed to get task service")
 	}
-	if err := ts.Create(ctx, metadata); err != nil {
+	// TODO: delete
+	s.logger.Info("try to create task", zap.Int("created", len(tasks)))
+	if err := ts.CreateBatch(ctx, tasks); err != nil {
 		return err
 	}
+	// TODO: delete
+	s.logger.Info("new task created", zap.Int("created", len(tasks)))
+	v, err := ts.GetStorage().Query(ctx)
+	// TODO: delete
+	s.logger.Info("new task created, query", zap.Int("count", len(v)), zap.Error(err))
 	return nil
 }
 

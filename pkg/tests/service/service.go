@@ -279,12 +279,10 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	c := &testCluster{
 		t:       t,
+		logger:  logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}
-	c.logger = logutil.Adjust(c.logger).With(
-		zap.String("tests", "service"),
-	)
 
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
@@ -1365,6 +1363,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
+		opt = append(opt, logservice.WithLogger(c.logger))
 		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 

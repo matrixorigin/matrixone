@@ -16,13 +16,20 @@ package logservice
 
 import (
 	"context"
-	"fmt"
-	"go.uber.org/zap"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/zap"
+)
+
+var (
+	initTaskCodes = []task.TaskCode{
+		task.TaskCode_TraceInit,
+		task.TaskCode_MetricInit,
+		task.TaskCode_SysViewInit,
+		task.TaskCode_FrontendInit,
+	}
 )
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
@@ -79,20 +86,16 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 }
 
 func (s *Service) createInitTasks(ctx context.Context) error {
-	initTasks := []task.TaskCode{
-		task.TaskCode_TraceInit,
-		task.TaskCode_MetricInit,
-		task.TaskCode_SysViewInit,
-		task.TaskCode_FrontendInit,
-	}
-
-	for _, init := range initTasks {
-		if err := s.store.taskScheduler.Create(ctx, task.TaskMetadata{
+	var tasks []task.TaskMetadata
+	for _, init := range initTaskCodes {
+		tasks = append(tasks, task.TaskMetadata{
 			ID:       init.String(),
 			Executor: uint32(init),
-		}); err != nil {
-			s.logger.Error(fmt.Sprintf("failed to create %s task.", init.String()), zap.Error(err))
-		}
+		})
+	}
+	if err := s.store.taskScheduler.Create(ctx, tasks); err != nil {
+		s.logger.Error("failed to create init tasks", zap.Error(err))
+		return err
 	}
 	s.logger.Info("init tasks created")
 	return nil
