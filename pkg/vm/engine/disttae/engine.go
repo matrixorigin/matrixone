@@ -161,6 +161,30 @@ func (e *Engine) hasConflict(txn *Transaction) bool {
 	return false
 }
 
+// hasDuplicate used to detect if a transaction on a cn has duplicate.
+func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
+	for i := range txn.writes {
+		for _, e := range txn.writes[i] {
+			if e.bat.Length() == 0 {
+				continue
+			}
+			key := genTableKey(ctx, e.tableName, e.databaseId)
+			v, ok := txn.tableMap.Load(key)
+			if !ok {
+				continue
+			}
+			tbl := v.(*table)
+			if tbl.meta == nil {
+				continue
+			}
+			if tbl.primaryIdx == -1 {
+				continue
+			}
+		}
+	}
+	return false
+}
+
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	cluster, err := e.getClusterDetails()
 	if err != nil {
@@ -216,6 +240,9 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	}
 	if e.hasConflict(txn) {
 		return moerr.NewTxnWriteConflict("write conflict")
+	}
+	if e.hasDuplicate(ctx, txn) {
+		return moerr.NewDuplicate()
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {

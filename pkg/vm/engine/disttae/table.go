@@ -65,11 +65,16 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-
 	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
-	tbl.dnList = dnList
-	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
+	switch {
+	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_TABLES_ID:
+		tbl.dnList = []int{0}
+	case tbl.tableId == catalog.MO_COLUMNS_ID:
+		tbl.dnList = []int{0}
+	default:
+		tbl.dnList = dnList
 	}
 	dnStores := make([]DNStore, 0, len(dnList))
 	for _, i := range dnList {

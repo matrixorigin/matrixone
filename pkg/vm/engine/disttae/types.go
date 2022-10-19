@@ -212,11 +212,12 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	viewdef   string
-	comment   string
-	partition string
-	relKind   string
-	createSql string
+	primaryIdx int
+	viewdef    string
+	comment    string
+	partition  string
+	relKind    string
+	createSql  string
 }
 
 type column struct {

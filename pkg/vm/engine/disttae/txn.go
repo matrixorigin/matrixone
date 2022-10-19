@@ -60,6 +60,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		return nil, nil, err
 	}
 	tbl := new(table)
+	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
 	tbl.viewdef = string(row[catalog.MO_TABLES_VIEWDEF_IDX].([]byte))
 	tbl.relKind = string(row[catalog.MO_TABLES_RELKIND_IDX].([]byte))
@@ -75,7 +76,10 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	cols := getColumnsFromRows(rows)
 	defs := make([]engine.TableDef, 0, len(cols))
 	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
-	for _, col := range cols {
+	for i, col := range cols {
+		if col.constraintType == catalog.SystemColPKConstraint {
+			tbl.primaryIdx = i
+		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
 	return tbl, defs, nil
