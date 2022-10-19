@@ -355,19 +355,19 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	}
 	query += buildLimitClause(c)
 
-	rows, err := conn.QueryContext(ctx, query)
-	defer func(rows *sql.Rows) {
-		if rows == nil {
-			return
-		}
-		err := rows.Close()
-		if err != nil {
-			return
-		}
-	}(rows)
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
+
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func(rows *sql.Rows) {
+		_ = tx.Commit()
+		_ = rows.Close()
+	}(rows)
 
 	tasks := make([]task.Task, 0)
 

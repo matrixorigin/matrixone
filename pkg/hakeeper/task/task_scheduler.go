@@ -62,7 +62,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	// TODO: delete
-	s.logger.Info("query tasks", zap.Int("created", len(createdTasks)),
+	s.logger.Error("####### query tasks", zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(runningTasks) == 0 && len(createdTasks) == 0 {
 		return
@@ -81,15 +81,15 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 		return moerr.NewInternalError("failed to get task service")
 	}
 	// TODO: delete
-	s.logger.Info("try to create task", zap.Int("created", len(tasks)))
+	s.logger.Error("####### try to create task", zap.Int("created", len(tasks)))
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
 		return err
 	}
 	// TODO: delete
-	s.logger.Info("new task created", zap.Int("created", len(tasks)))
+	s.logger.Error("####### new task created", zap.Int("created", len(tasks)))
 	v, err := ts.GetStorage().Query(ctx)
 	// TODO: delete
-	s.logger.Info("new task created, query", zap.Int("count", len(v)), zap.Error(err))
+	s.logger.Error("####### new task created, query", zap.Int("count", len(v)), zap.Error(err))
 	return nil
 }
 

@@ -139,16 +139,18 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	if err != nil {
 		panic(err)
 	}
-	p, err := strconv.Atoi(port)
+	_, err = strconv.Atoi(port)
 	if err != nil {
 		panic(err)
 	}
 	cfg := &cnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getCNListenAddress(index),
-		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
+		// SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
+		SQLAddress: "127.0.0.1:12345",
 		Frontend: config.FrontendParameters{
-			Port: int64(p),
+			// Port: int64(p),
+			Port: 12345,
 		},
 	}
 
@@ -156,6 +158,7 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 
 	cfg.Engine.Type = cnservice.EngineMemory
+	cfg.TaskRunner.Parallelism = 4
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.
