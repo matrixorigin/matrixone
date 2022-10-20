@@ -109,7 +109,7 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 	}
 
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
-		genMetaTableName(oldId), db.databaseName, db.txn.proc.Mp())
+		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}

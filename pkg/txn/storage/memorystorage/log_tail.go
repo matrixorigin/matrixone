@@ -67,7 +67,7 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 	}
 
 	// attributes
-	attrs, err := m.attributes.Index(tx, Tuple{
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID,
 		tableID,
 	})
@@ -75,14 +75,18 @@ func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req
 		return err
 	}
 	attrsMap := make(map[string]*AttributeRow)
-	insertNames := make([]string, 0, len(attrs))
-	deleteNames := make([]string, 0, len(attrs))
-	for _, attr := range attrs {
-		attrsMap[attr.Value.Name] = attr.Value
-		if !attr.Value.IsRowId {
-			insertNames = append(insertNames, attr.Value.Name)
-			if attr.Value.Primary {
-				deleteNames = append(deleteNames, attr.Value.Name)
+	insertNames := make([]string, 0, len(entries))
+	deleteNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		attrsMap[attr.Name] = attr
+		if !attr.IsRowId {
+			insertNames = append(insertNames, attr.Name)
+			if attr.Primary {
+				deleteNames = append(deleteNames, attr.Name)
 			}
 		}
 	}

@@ -59,7 +59,7 @@ func initTypeCheckRelated() {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_datetime, types.T_timestamp,
-		types.T_char, types.T_varchar, types.T_blob,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_decimal64, types.T_decimal128,
 	}
 	numbers := []types.T{ // numbers without decimal
@@ -69,7 +69,7 @@ func initTypeCheckRelated() {
 	ints := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64}
 	uints := []types.T{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64}
 	floats := []types.T{types.T_float32, types.T_float64}
-	strings := []types.T{types.T_char, types.T_varchar, types.T_blob}
+	strings := []types.T{types.T_char, types.T_varchar, types.T_blob, types.T_text}
 	decimals := []types.T{types.T_decimal64, types.T_decimal128}
 
 	// init binaryTable
@@ -385,6 +385,7 @@ func initTypeCheckRelated() {
 		types.T_char:       {types.T_varchar, types.T_int64},
 		types.T_varchar:    {types.T_char, types.T_int64},
 		types.T_blob:       {types.T_blob},
+		types.T_text:       {types.T_text},
 		types.T_decimal64:  {types.T_decimal128, types.T_float64},
 		types.T_decimal128: {types.T_float64},
 		types.T_date:       {types.T_datetime},

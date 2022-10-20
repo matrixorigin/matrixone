@@ -56,6 +56,10 @@ func testDatabase(
 			LogicalTime:  1,
 		},
 	}
+	defer func() {
+		err := s.Commit(ctx, txnMeta)
+		assert.Nil(t, err)
+	}()
 
 	// open database
 	{
@@ -128,7 +132,11 @@ func testDatabase(
 					memoryengine.GetDatabasesReq{},
 				)
 				assert.Nil(t, err)
-				assert.Equal(t, 0, len(resp.Names))
+				for _, name := range resp.Names {
+					if name == "foo" {
+						t.Fatal()
+					}
+				}
 			}
 		}()
 	}
@@ -651,6 +659,46 @@ func testDatabase(
 		assert.Nil(t, err)
 		assert.Nil(t, resp.Batch)
 	}
+
+	t.Run("duplicated db", func(t *testing.T) {
+		tx1 := txn.TxnMeta{
+			ID:     []byte("1"),
+			Status: txn.TxnStatus_Active,
+			SnapshotTS: timestamp.Timestamp{
+				PhysicalTime: 1,
+				LogicalTime:  1,
+			},
+		}
+		tx2 := txn.TxnMeta{
+			ID:     []byte("1"),
+			Status: txn.TxnStatus_Active,
+			SnapshotTS: timestamp.Timestamp{
+				PhysicalTime: 1,
+				LogicalTime:  1,
+			},
+		}
+		{
+			resp, err := testWrite[memoryengine.CreateDatabaseResp](
+				ctx, t, s, tx1,
+				memoryengine.OpCreateDatabase,
+				memoryengine.CreateDatabaseReq{
+					Name: "bar",
+				},
+			)
+			assert.Nil(t, err)
+			assert.NotEmpty(t, resp.ID)
+		}
+		{
+			_, err := testWrite[memoryengine.CreateDatabaseResp](
+				ctx, t, s, tx2,
+				memoryengine.OpCreateDatabase,
+				memoryengine.CreateDatabaseReq{
+					Name: "bar",
+				},
+			)
+			assert.NotNil(t, err)
+		}
+	})
 
 }
 
