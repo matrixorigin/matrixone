@@ -79,7 +79,7 @@ type IDGenerator interface {
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch) error
+	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries []Entry) []BlockMeta

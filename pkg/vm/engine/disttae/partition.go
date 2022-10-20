@@ -55,9 +55,10 @@ type DataValue struct {
 }
 
 type DataRow struct {
-	rowID   RowID
-	value   DataValue
-	indexes []memtable.Tuple
+	rowID         RowID
+	value         DataValue
+	indexes       []memtable.Tuple
+	uniqueIndexes []memtable.Tuple
 }
 
 type Op uint8
@@ -77,6 +78,10 @@ func (d *DataRow) Value() DataValue {
 
 func (d *DataRow) Indexes() []memtable.Tuple {
 	return d.indexes
+}
+
+func (d *DataRow) UniqueIndexes() []memtable.Tuple {
+	return d.uniqueIndexes
 }
 
 var _ MVCC = new(Partition)
@@ -157,7 +162,8 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	return nil
 }
 
-func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batch) error {
+func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
+	b *api.Batch, needCheck bool) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
@@ -193,7 +199,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 			if err != nil {
 				return err
 			}
-			if len(entries) > 0 {
+			if len(entries) > 0 && needCheck {
 				return moerr.NewDuplicate()
 			}
 		}
@@ -245,7 +251,8 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
-	return types.DecodeUint64(rowID[:8]) //TODO use tae provided function
+	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
+	return id
 }
 
 func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
