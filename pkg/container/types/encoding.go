@@ -323,7 +323,7 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
@@ -370,7 +370,7 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(TS))
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val.([]byte)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))

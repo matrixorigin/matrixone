@@ -1009,6 +1009,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_client"),
 		Default:           "utf8mb4",
 	},
+	"character_set_server": {
+		Name:              "character_set_server",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_server"),
+		Default:           "utf8mb4",
+	},
+	"character_set_database": {
+		Name:              "character_set_database",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_database"),
+		Default:           "utf8mb4",
+	},
 	"character_set_connection": {
 		Name:              "character_set_connection",
 		Scope:             ScopeBoth,

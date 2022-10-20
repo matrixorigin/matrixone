@@ -21,8 +21,6 @@ import (
 )
 
 func TestSingleDDLPartition(t *testing.T) {
-	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;"
-
 	//sql := `CREATE TABLE k1 (
 	//			id INT NOT NULL PRIMARY KEY,
 	//			name VARCHAR(20)
@@ -39,17 +37,10 @@ func TestSingleDDLPartition(t *testing.T) {
 	//		PARTITION BY KEY()
 	//		PARTITIONS 2;`
 
-	//sql := `CREATE TABLE k1 (
-	//			id INT NOT NULL,
-	//			name VARCHAR(20),
-	//			UNIQUE KEY (id)
-	//		)
-	//		PARTITION BY KEY()
-	//		PARTITIONS 2;`
-
 	sql := `CREATE TABLE k1 (
 				id INT NOT NULL,
-				name VARCHAR(20)
+				name VARCHAR(20),
+				UNIQUE KEY (id)
 			)
 			PARTITION BY KEY()
 			PARTITIONS 2;`

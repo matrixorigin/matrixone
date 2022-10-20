@@ -52,6 +52,7 @@ message Const {
 		bool defaultval = 14;
 		bool updateVal = 15;
 	}
+	bool isBin = 16;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
