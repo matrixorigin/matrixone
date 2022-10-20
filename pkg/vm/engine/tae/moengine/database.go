@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -120,7 +121,8 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 
 func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
 	id uint64, defs []engine.TableDef) error {
-	schema, err := DefsToSchema(name, defs)
+	// schema, err := DefsToSchema(name, defs)
+	schema, err := HandleDefsToSchema(name, defs)
 	if err != nil {
 		return err
 	}
