@@ -116,7 +116,7 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 		}
 		return newCompare(rowidAscCompare, rowidCopy, nullsLast)
 
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return &strCompare{
 			desc:      desc,
 			nullsLast: nullsLast,

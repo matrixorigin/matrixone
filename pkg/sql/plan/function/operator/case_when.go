@@ -110,8 +110,12 @@ var (
 		return cwGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
 	}
 
-	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	CaseWhenBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwString(vs, proc, types.Type{Oid: types.T_blob})
+	}
+
+	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_text})
 	}
 )
 

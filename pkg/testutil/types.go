@@ -39,7 +39,8 @@ var (
 	dateType       = types.T_date.ToType()
 	datetimeType   = types.T_datetime.ToType()
 	timestampType  = types.T_timestamp.ToType()
-	textType       = types.T_blob.ToType()
+	blobType       = types.T_blob.ToType()
+	textType       = types.T_text.ToType()
 	uuidType       = types.T_uuid.ToType()
 )
 

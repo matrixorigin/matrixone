@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -395,7 +396,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
