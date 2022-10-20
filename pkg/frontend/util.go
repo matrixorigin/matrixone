@@ -685,9 +685,6 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) 
 func genDumpFileName(outfile string, idx int64) string {
 	path := filepath.Dir(outfile)
 	filename := strings.Split(filepath.Base(outfile), ".")
-	if len(filename) == 1 {
-		filename = append(filename, "sql")
-	}
 	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
 	return filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, idx, extend))
 }
