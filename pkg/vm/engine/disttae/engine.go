@@ -165,6 +165,9 @@ func (e *Engine) hasConflict(txn *Transaction) bool {
 func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
 	for i := range txn.writes {
 		for _, e := range txn.writes[i] {
+			if e.typ == DELETE {
+				continue
+			}
 			if e.bat.Length() == 0 {
 				continue
 			}
@@ -214,15 +217,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_TABLES_REL_ID_IDX,
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_TABLES_REL_ID_IDX,
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_TABLES_REL_ID_IDX,
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
