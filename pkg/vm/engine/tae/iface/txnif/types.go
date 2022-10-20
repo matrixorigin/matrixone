@@ -68,6 +68,7 @@ type TxnHandle interface {
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
 	CreateDatabase(name string) (handle.Database, error)
+	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
@@ -222,6 +223,7 @@ type TxnStore interface {
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 
 	CreateDatabase(name string) (handle.Database, error)
+	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
