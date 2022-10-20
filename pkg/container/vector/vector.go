@@ -516,6 +516,7 @@ func NewConst(typ types.Type, length int) *Vector {
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	v := New(typ)
 	v.isConst = true
+	// old initConst function don't set value to vector.data. that will make some bug
 	if types.T(typ.Oid) != types.T_any {
 		val := getInitConstVal(typ)
 		v.Append(val, true, mp)
@@ -525,15 +526,6 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	v.length = length
 	return v
 }
-
-// func NewConstNull(typ types.Type, length int) *Vector {
-// 	v := New(typ)
-// 	v.isConst = true
-// 	v.initConst(typ)
-// 	nulls.Add(v.Nsp, 0)
-// 	v.length = length
-// 	return v
-// }
 
 func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T, mp *mpool.MPool) *Vector {
 	if mp == nil {
