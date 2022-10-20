@@ -2148,8 +2148,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
@@ -2307,7 +2305,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
-		fromLoadData = cw.GetLoadTag()
 
 		runner = ret.(ComputationRunner)
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
