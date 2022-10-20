@@ -92,6 +92,10 @@ func (*CompilerContext) GetRootSql() string {
 	return ""
 }
 
+func (*CompilerContext) GetUserName() string {
+	return "root"
+}
+
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
 		schemaName = c.defaultDB
