@@ -55,9 +55,7 @@ SELECT * FROM t2;
 -- Whether support USING keyword
 DELETE FROM t1 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 SELECT * FROM t1;
--- @bvt:issue#5216
 DELETE FROM t3 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
--- @bvt:issue
 
 -- Alias
 DELETE t1,t2 FROM table_name AS t1 LEFT JOIN table2_name AS t2 ON t1.id = t2.id WHERE table_name.id = 25;

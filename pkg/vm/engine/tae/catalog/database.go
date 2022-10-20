@@ -85,6 +85,27 @@ func compareTableFn(a, b *TableEntry) int {
 	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
+func NewDBEntryWithID(catalog *Catalog, name string, id uint64, txnCtx txnif.AsyncTxn) *DBEntry {
+	//id := catalog.NextDB()
+
+	e := &DBEntry{
+		DBBaseEntry: NewDBBaseEntry(id),
+		catalog:     catalog,
+		name:        name,
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
+	}
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		e.acInfo.TenantID = txnCtx.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	e.CreateWithTxn(txnCtx)
+	e.acInfo.CreateAt = types.CurrentTimestamp()
+	return e
+}
+
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
@@ -296,6 +317,10 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 
 func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
 	e.Lock()
+	//Deduplicate for tableId
+	if _, exist := e.entries[tableId]; exist {
+		return nil, moerr.NewDuplicate()
+	}
 	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()

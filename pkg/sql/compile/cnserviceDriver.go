@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -757,6 +759,28 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
 		}
+	case *hashbuild.Argument:
+		in.HashBuild = &pipeline.HashBuild{
+			NeedExpr: t.NeedExpr,
+			NeedHash: t.NeedHashMap,
+			Ibucket:  t.Ibucket,
+			Nbucket:  t.Nbucket,
+			Types:    convertToPlanTypes(t.Typs),
+			Conds:    t.Conditions,
+		}
+	case *external.Argument:
+		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
+		i := 0
+		for k, v := range t.Es.Name2ColIndex {
+			name2ColIndexSlice[i] = &pipeline.ExternalName2ColIndex{Name: k, Index: v}
+			i++
+		}
+		in.ExternalScan = &pipeline.ExternalScan{
+			Attrs:         t.Es.Attrs,
+			Cols:          t.Es.Cols,
+			Name2ColIndex: name2ColIndexSlice,
+			CreateSql:     t.Es.CreateSql,
+		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -971,6 +995,31 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Es: &generate_series.Param{
 				Attrs: opr.GenerateSeries.Attrs,
 				Cols:  opr.GenerateSeries.Cols,
+			},
+		}
+	case vm.HashBuild:
+		t := opr.GetHashBuild()
+		v.Arg = &hashbuild.Argument{
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			NeedHashMap: t.NeedHash,
+			NeedExpr:    t.NeedExpr,
+			Typs:        convertToTypes(t.Types),
+			Conditions:  t.Conds,
+		}
+	case vm.External:
+		t := opr.GetExternalScan()
+		name2ColIndex := make(map[string]int32)
+		for _, n2i := range t.Name2ColIndex {
+			name2ColIndex[n2i.Name] = n2i.Index
+		}
+		v.Arg = &external.Argument{
+			Es: &external.ExternalParam{
+				Attrs:         t.Attrs,
+				Cols:          t.Cols,
+				CreateSql:     t.CreateSql,
+				Name2ColIndex: name2ColIndex,
+				Fileparam:     new(external.ExternalFileparam),
 			},
 		}
 	default:

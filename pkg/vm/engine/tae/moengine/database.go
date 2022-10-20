@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -102,8 +103,8 @@ func (db *txnDatabase) Truncate(_ context.Context, name string) error {
 	return err
 }
 
-func (db *txnDatabase) TruncateRelation(_ context.Context, name string) error {
-	_, err := db.handle.TruncateByName(name)
+func (db *txnDatabase) TruncateRelation(_ context.Context, name string, id uint64) error {
+	_, err := db.handle.TruncateWithID(name, id)
 	return err
 }
 
@@ -115,6 +116,19 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 	schema.BlockMaxRows = 40000
 	schema.SegmentMaxBlocks = 20
 	_, err = db.handle.CreateRelation(schema)
+	return err
+}
+
+func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
+	id uint64, defs []engine.TableDef) error {
+	// schema, err := DefsToSchema(name, defs)
+	schema, err := HandleDefsToSchema(name, defs)
+	if err != nil {
+		return err
+	}
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 20
+	_, err = db.handle.CreateRelationWithID(schema, id)
 	return err
 }
 
