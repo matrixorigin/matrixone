@@ -70,7 +70,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, MO_PRIMARY_OFF, ibat); err != nil {
+		if err := part.Insert(ctx, MO_PRIMARY_OFF, ibat, false); err != nil {
 			bat.Clean(m)
 			return err
 		}
@@ -94,7 +94,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat); err != nil {
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
 			bat.Clean(m)
 			return err
 		}
@@ -111,7 +111,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat); err != nil {
+				ibat, false); err != nil {
 				bat.Clean(m)
 				return err
 			}
@@ -135,7 +135,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat); err != nil {
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
 			bat.Clean(m)
 			return err
 		}
@@ -152,7 +152,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat); err != nil {
+				ibat, false); err != nil {
 				bat.Clean(m)
 				return err
 			}
@@ -176,7 +176,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 			bat.Clean(m)
 			return err
 		}
-		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat); err != nil {
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
 			bat.Clean(m)
 			return err
 		}
@@ -193,7 +193,7 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 				return err
 			}
 			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-				ibat); err != nil {
+				ibat, false); err != nil {
 				bat.Clean(m)
 				return err
 			}
@@ -238,7 +238,7 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore, op client.TxnOperator,
+func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
 	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	db.Lock()
 	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
@@ -254,7 +254,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore, op client.TxnOperato
 		part := parts[db.dnMap[dn.UUID]]
 		part.Lock()
 		if part.ts.Less(ts) {
-			if err := updatePartition(i, primaryIdx, ctx, op, db, part, dn,
+			if err := updatePartition(i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
 				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
 				part.Unlock()
 				return err
