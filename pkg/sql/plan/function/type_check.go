@@ -387,7 +387,8 @@ func initTypeCheckRelated() {
 		types.T_blob:       {types.T_blob},
 		types.T_decimal64:  {types.T_decimal128, types.T_float64},
 		types.T_decimal128: {types.T_float64},
-		types.T_date:       {types.T_datetime},
+		types.T_date:       {types.T_datetime, types.T_timestamp},
+		types.T_timestamp:  {types.T_datetime},
 	}
 	preferredTypeConvert = make([][]bool, maxTypes)
 	for i := range preferredTypeConvert {
