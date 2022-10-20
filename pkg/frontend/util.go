@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
@@ -419,7 +417,7 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 		return vector.GetValueAt[float32](vec, 0), nil
 	case types.T_float64:
 		return vector.GetValueAt[float64](vec, 0), nil
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
@@ -490,113 +488,31 @@ func fileExists(path string) (bool, error) {
 	return false, err
 }
 
-func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string, string, error) {
-	var (
-		attrs   = make([]string, 0, len(tableDefs))
-		tblDDL  string
-		view    string
-		comment string
-		pk      string
-		indexes []string
-	)
-	first := true
-	for _, tblDef := range tableDefs {
+func getAttrFromTableDef(defs []engine.TableDef) ([]string, bool, error) {
+	attrs := make([]string, 0, len(defs))
+	isView := false
+	for _, tblDef := range defs {
 		switch def := tblDef.(type) {
 		case *engine.AttributeDef:
 			if def.Attr.IsHidden || def.Attr.IsRowId {
 				continue
 			}
 			attrs = append(attrs, def.Attr.Name)
-			if !first {
-				tblDDL += ","
-			}
-			first = false
-			if types.IsDecimal(def.Attr.Type.Oid) { // after decimal type fix, remove this
-				tblDDL += fmt.Sprintf("\n  `%s` DECIMAL", def.Attr.Name)
-			} else {
-				tblDDL += fmt.Sprintf("\n  `%s` %s", def.Attr.Name, def.Attr.Type.String())
-			}
-			if def.Attr.AutoIncrement {
-				tblDDL += " AUTO_INCREMENT"
-			}
-			if def.Attr.Default != nil {
-				if def.Attr.Default.NullAbility {
-					tblDDL += " DEFAULT NULL"
-				} else {
-					bat := batch.NewWithSize(0)
-					bat.Zs = []int64{1}
-					vec, err := colexec.EvalExpr(bat, nil, def.Attr.Default.Expr)
-					if err != nil {
-						return nil, "", "", err
-					}
-					defaultVaL, err := getValueFromVector(vec)
-					if err != nil {
-						return nil, "", "", err
-					}
-					var defaultStr string
-					if needQuote(def.Attr.Type) {
-						defaultStr = fmt.Sprintf("'%s'", defaultVaL)
-					} else {
-						defaultStr = fmt.Sprintf("%v", defaultVaL)
-					}
-					tblDDL += " NOT NULL DEFAULT " + fmt.Sprintf("%v", defaultStr)
-				}
-			}
-			if def.Attr.OnUpdate != nil {
-				if f, ok := def.Attr.OnUpdate.Expr.(*plan.Expr_F); ok { //? other type
-					tblDDL += " ON UPDATE " + f.F.GetFunc().GetObjName()
-				}
-			}
-			if def.Attr.Comment != "" {
-				tblDDL += fmt.Sprintf(" COMMENT '%s'", def.Attr.Comment)
-			}
-
-		case *engine.CommentDef:
-			comment = fmt.Sprintf("  COMMENT '%s'", def.Comment)
-		case *engine.IndexTableDef:
-			logutil.Infof("index table def change to index def")
-		case *engine.PrimaryIndexDef:
-			pk = fmt.Sprintf("  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
 		case *engine.ViewDef:
-			viewTmp := struct {
-				Stmt            string
-				DefaultDatabase string
-			}{}
-			if err := json.Unmarshal([]byte(def.View), &viewTmp); err != nil {
-				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
-			}
-
-			view = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n%s;\n\n", tblName, viewTmp.Stmt)
-		case *engine.ComputeIndexDef: //TODO support
-			//for i := 0; i < len(def.Names); i++ {
-			//	ifUnique := ""
-			//	if def.Uniques[i] {
-			//		ifUnique = "UNIQUE "
-			//	}
-			//	index := fmt.Sprintf("  %sKEY `%s` (`%s`)", ifUnique, def.Names[i], def.TableNames)
-			//}
-			logutil.Infof("unique/secondary index not supported in dump now")
-
-		case *engine.PartitionDef:
-			//TODO support
-
-		case *engine.PropertiesDef:
-			//TODO support
-		default:
-			return nil, "", "", moerr.NewInternalError("unsupported table def %T", tblDef)
+			isView = true
 		}
 	}
-	if len(view) == 0 {
-		tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (%s", tblName, tblName, tblDDL)
+	return attrs, isView, nil
+}
+
+func getDDL(bh BackgroundExec, ctx context.Context, sql string) (string, error) {
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return "", err
 	}
-	if len(pk) > 0 {
-		tblDDL += ",\n" + pk
-	}
-	for _, index := range indexes {
-		tblDDL += ",\n" + index
-	}
-	tblDDL += fmt.Sprintf("\n)%s;\n\n", comment)
-	return attrs, tblDDL, view, nil
+	ret := string(bh.GetExecResultSet()[0].(*MysqlResultSet).Data[0][1].([]byte))
+	return ret, nil
 }
 
 func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
@@ -648,7 +564,7 @@ func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) 
 		case types.T_decimal128:
 			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			xs := vector.MustStrCols(bat.Vecs[i])
 			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
 		case types.T_json:
@@ -737,10 +653,6 @@ func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, 
 	}
 	buf.Reset()
 	return f, curFileIdx, newFileSize, nil
-}
-
-func needQuote(p types.Type) bool {
-	return p.Oid == types.T_char || p.Oid == types.T_varchar || p.Oid == types.T_blob || p.Oid == types.T_json || p.Oid == types.T_timestamp || p.Oid == types.T_datetime || p.Oid == types.T_date || p.Oid == types.T_decimal64 || p.Oid == types.T_decimal128 || p.Oid == types.T_uuid
 }
 
 func maybeAppendExtension(s string) string {

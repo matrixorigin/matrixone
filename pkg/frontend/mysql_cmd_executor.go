@@ -872,6 +872,8 @@ func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.D
 func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dump) error {
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
+	bh := ses.GetBackgroundExec(requestCtx)
+	defer bh.Close()
 	dbName := string(dump.Database)
 	var (
 		db        engine.Database
@@ -883,8 +885,17 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 	if db, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn()); err != nil {
 		return moerr.NewBadDB(dbName)
 	}
+	err = bh.Exec(requestCtx, fmt.Sprintf("use `%s`", dbName))
+	if err != nil {
+		return err
+	}
 	if len(dump.Tables) == 0 {
-		dbDDL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\nCREATE DATABASE `%s`;\nUSE `%s`;\n\n\n", dbName, dbName, dbName)
+		dbDDL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\n", dbName)
+		createSql, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE DATABASE `%s`;", dbName))
+		if err != nil {
+			return err
+		}
+		dbDDL += createSql + ";\n\nUSE `" + dbName + "`;\n\n"
 		showDbDDL = true
 		tables, err = db.Relations(requestCtx)
 		if err != nil {
@@ -906,19 +917,21 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 		if err != nil {
 			return err
 		}
+		tblDDL, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE TABLE `%s`;", tblName))
+		if err != nil {
+			return err
+		}
 		tableDefs, err := table.TableDefs(requestCtx)
 		if err != nil {
 			return err
 		}
-		attrs, tblDDL, viewDDL, err := getTableMeta(tblName, tableDefs)
-		if err != nil {
-			return err
-		}
-		if len(viewDDL) != 0 {
-			params = append(params, &dumpTable{tblName, viewDDL, nil, attrs, true})
+		attrs, isView, err := getAttrFromTableDef(tableDefs)
+		if isView {
+			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + ";\n\n"
 		} else {
-			params = append(params, &dumpTable{tblName, tblDDL, table, attrs, false})
+			tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n", tblName) + tblDDL + ";\n\n"
 		}
+		params = append(params, &dumpTable{tblName, tblDDL, table, attrs, isView})
 	}
 	return mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
 }
