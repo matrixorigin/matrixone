@@ -21,23 +21,6 @@ import (
 )
 
 func TestSingleDDLPartition(t *testing.T) {
-	//sql := `CREATE TABLE quarterly_report_status (
-	//			report_id INT NOT NULL,
-	//			report_status VARCHAR(20) NOT NULL,
-	//			report_updated TIMESTAMP NOT NULL
-	//		)
-	//		PARTITION BY RANGE ( UNIX_TIMESTAMP(report_updated) ) (
-	//			PARTITION p0 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-01-01 00:00:00') ),
-	//			PARTITION p1 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-04-01 00:00:00') ),
-	//			PARTITION p2 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-07-01 00:00:00') ),
-	//			PARTITION p3 VALUES LESS THAN ( UNIX_TIMESTAMP('2008-10-01 00:00:00') ),
-	//			PARTITION p4 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-01-01 00:00:00') ),
-	//			PARTITION p5 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-04-01 00:00:00') ),
-	//			PARTITION p6 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-07-01 00:00:00') ),
-	//			PARTITION p7 VALUES LESS THAN ( UNIX_TIMESTAMP('2009-10-01 00:00:00') ),
-	//			PARTITION p8 VALUES LESS THAN ( UNIX_TIMESTAMP('2010-01-01 00:00:00') ),
-	//			PARTITION p9 VALUES LESS THAN (MAXVALUE)
-	//		);`
 	//sql := "CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;"
 
 	//sql := `CREATE TABLE k1 (
@@ -56,20 +39,20 @@ func TestSingleDDLPartition(t *testing.T) {
 	//		PARTITION BY KEY()
 	//		PARTITIONS 2;`
 
-	sql := `CREATE TABLE k1 (
-				id INT NOT NULL,
-				name VARCHAR(20),
-				UNIQUE KEY (id)
-			)
-			PARTITION BY KEY()
-			PARTITIONS 2;`
-
 	//sql := `CREATE TABLE k1 (
 	//			id INT NOT NULL,
-	//			name VARCHAR(20)
+	//			name VARCHAR(20),
+	//			UNIQUE KEY (id)
 	//		)
 	//		PARTITION BY KEY()
 	//		PARTITIONS 2;`
+
+	sql := `CREATE TABLE k1 (
+				id INT NOT NULL,
+				name VARCHAR(20)
+			)
+			PARTITION BY KEY()
+			PARTITIONS 2;`
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
@@ -146,6 +129,12 @@ func TestKeyPartitionError(t *testing.T) {
 		)
 		PARTITION BY KEY(col3)
 		PARTITIONS 4;`,
+		`CREATE TABLE k1 (
+					id INT NOT NULL,
+					name VARCHAR(20)
+				)
+				PARTITION BY KEY()
+				PARTITIONS 2;`,
 	}
 	mock := NewMockOptimizer()
 	for _, sql := range sqls {
