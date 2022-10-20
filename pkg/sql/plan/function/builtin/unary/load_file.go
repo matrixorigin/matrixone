@@ -34,7 +34,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	resultType := types.New(types.T_blob, 0, 0, 0)
 	resultVector := vector.New(resultType)
 	if inputVector.ConstVectorIsNull() {
-		return vector.NewConstNull(resultType, 1), nil
+		return vector.NewConstNull(resultType, 1, proc.Mp()), nil
 	}
 	Filepath := vector.GetStrColumn(inputVector)[0]
 	fs := proc.FileService

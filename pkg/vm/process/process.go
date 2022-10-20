@@ -164,8 +164,14 @@ func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
 }
 
 func (proc *Process) AllocConstNullVector(typ types.Type, cnt int) *vector.Vector {
-	vec := vector.NewConstNull(typ, cnt)
-	nulls.Add(vec.Nsp, 0)
+	var vec *vector.Vector
+	if proc != nil {
+		vec = vector.NewConstNull(typ, cnt, proc.mp)
+	} else {
+		// TODO : when constantFold, proc is nil.
+		vec = vector.NewConst(typ, cnt)
+		nulls.Add(vec.Nsp, 0)
+	}
 	return vec
 }
 

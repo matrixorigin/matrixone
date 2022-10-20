@@ -58,7 +58,7 @@ func adapter(vectors []*vector.Vector,
 		}
 		//step 4: fill the result vector
 		if result == nil {
-			return vector.NewConstNull(resultType, 1), nil
+			return vector.NewConstNull(resultType, 1, proc.Mp()), nil
 		} else if resultType.IsString() {
 			return vector.NewConstString(resultType, 1, svals[0], proc.Mp()), nil
 		} else {

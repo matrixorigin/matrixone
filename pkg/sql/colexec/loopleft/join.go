@@ -104,7 +104,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count)
+			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count, proc.Mp())
 		}
 	}
 	rbat.Zs = bat.Zs

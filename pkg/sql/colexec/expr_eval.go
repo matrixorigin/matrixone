@@ -44,7 +44,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
-		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1, proc.Mp()), nil
 	}
 
 	var length = len(bat.Zs)
@@ -52,7 +52,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -159,7 +159,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	case *plan.Expr_C:
 		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -258,7 +258,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	var vec *vector.Vector
 
 	if len(bat.Zs) == 0 {
-		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1), nil
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, 1, proc.Mp()), nil
 	}
 
 	var length = len(bat.Zs)
@@ -266,7 +266,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -433,7 +433,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	case *plan.Expr_C:
 		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:

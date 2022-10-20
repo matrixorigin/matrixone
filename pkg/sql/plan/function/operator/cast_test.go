@@ -19,6 +19,7 @@ import (
 	"time"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2967,14 +2968,14 @@ func TestCastIntegerAsTimestamp(t *testing.T) {
 
 func TestCastNullAsAllType(t *testing.T) {
 	//Cast null as (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32/float64/date/datetime/timestamp/decimal64/decimal128/char/varchar)
+	procs := testutil.NewProc()
 	makeTempVectors := func(srcType types.T, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		vectors[0] = makeScalarNullVector(srcType)
+		vectors[0] = makeScalarNullVector(srcType, procs.Mp())
 		vectors[1] = makeTypeVector(destType)
 		return vectors
 	}
 
-	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4571,8 +4572,8 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	return vec
 }
 
-func makeScalarNullVector(srcType types.T) *vector.Vector {
-	nullVector := vector.NewConstNull(srcType.ToType(), 1)
+func makeScalarNullVector(srcType types.T, mp *mpool.MPool) *vector.Vector {
+	nullVector := vector.NewConstNull(srcType.ToType(), 1, mp)
 	return nullVector
 }
 

@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -333,7 +334,7 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.Rowid](v, row, mp)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		if nulls.Contains(v.Nsp, uint64(row)) {
-			return NewConstNull(v.GetType(), 1)
+			return NewConstNull(v.GetType(), 1, mp)
 		}
 		bs := v.GetBytes(int64(row))
 		return NewConstBytes(v.Typ, 1, bs, mp)
@@ -416,7 +417,7 @@ func fillDefaultValue[T types.FixedSizeT](v *Vector) {
 
 func toConstVector[T types.FixedSizeT](v *Vector, row int, m *mpool.MPool) *Vector {
 	if nulls.Contains(v.Nsp, uint64(row)) {
-		return NewConstNull(v.Typ, 1)
+		return NewConstNull(v.Typ, 1, m)
 	} else {
 		val := GetValueAt[T](v, int64(row))
 		return NewConstFixed(v.Typ, 1, val, m)
@@ -512,14 +513,27 @@ func NewConst(typ types.Type, length int) *Vector {
 	return v
 }
 
-func NewConstNull(typ types.Type, length int) *Vector {
+func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	v := New(typ)
 	v.isConst = true
-	v.initConst(typ)
-	nulls.Add(v.Nsp, 0)
+	if types.T(typ.Oid) != types.T_any {
+		val := getInitConstVal(typ)
+		v.Append(val, true, mp)
+	} else {
+		nulls.Add(v.Nsp, 0)
+	}
 	v.length = length
 	return v
 }
+
+// func NewConstNull(typ types.Type, length int) *Vector {
+// 	v := New(typ)
+// 	v.isConst = true
+// 	v.initConst(typ)
+// 	nulls.Add(v.Nsp, 0)
+// 	v.length = length
+// 	return v
+// }
 
 func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T, mp *mpool.MPool) *Vector {
 	if mp == nil {
@@ -546,6 +560,54 @@ func NewConstBytes(typ types.Type, length int, val []byte, mp *mpool.MPool) *Vec
 	v := NewConst(typ, length)
 	SetBytesAt(v, 0, val, mp)
 	return v
+}
+
+func getInitConstVal(typ types.Type) any {
+	switch typ.Oid {
+	case types.T_bool:
+		return false
+	case types.T_int8:
+		return int8(0)
+	case types.T_int16:
+		return int16(0)
+	case types.T_int32:
+		return int32(0)
+	case types.T_int64:
+		return int64(0)
+	case types.T_uint8:
+		return uint8(0)
+	case types.T_uint16:
+		return uint16(0)
+	case types.T_uint32:
+		return uint32(0)
+	case types.T_uint64:
+		return uint64(0)
+	case types.T_float32:
+		return float32(0)
+	case types.T_float64:
+		return float64(0)
+	case types.T_date:
+		return types.Date(0)
+	case types.T_datetime:
+		return types.Datetime(0)
+	case types.T_timestamp:
+		return types.Timestamp(0)
+	case types.T_decimal64:
+		return types.Decimal64{}
+	case types.T_decimal128:
+		return types.Decimal128{}
+	case types.T_uuid:
+		return types.Uuid{}
+	case types.T_TS:
+		return types.TS{}
+	case types.T_Rowid:
+		return types.Rowid{}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		return types.Varlena{}
+	default:
+		//T_any T_star T_tuple T_interval
+		return int64(0)
+	}
 }
 
 func (v *Vector) initConst(typ types.Type) {

@@ -92,7 +92,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return math1(vs, proc, momath.Ln)
 	}
 	if vs[0].IsScalarNull() {
-		return vector.NewConstNull(vs[0].Typ, vs[1].Length()), nil
+		return vector.NewConstNull(vs[0].Typ, vs[1].Length(), proc.Mp()), nil
 	}
 	vals := vs[0].Col.([]float64)
 	for i := range vals {
