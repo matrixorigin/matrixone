@@ -235,7 +235,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 }
 
 // this function used in Precommit. CN won't give PrimaryIndexDef and ComputeIndexDef
-// HandleDefsToSchema assume there is at most on AttributeDef with Primary true. TODO:
+// HandleDefsToSchema assume there is at most one AttributeDef with Primary true. TODO:
 func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
 	schema = catalog.NewEmptySchema(name)
 

@@ -109,8 +109,7 @@ func (db *txnDatabase) TruncateRelation(_ context.Context, name string, id uint6
 }
 
 func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []engine.TableDef) error {
-	// schema, err := DefsToSchema(name, defs)
-	schema, err := HandleDefsToSchema(name, defs)
+	schema, err := DefsToSchema(name, defs)
 	if err != nil {
 		return err
 	}
