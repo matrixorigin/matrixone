@@ -35,7 +35,7 @@ const (
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
 
-	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultGossipProbeInterval = 5 * time.Second
 	defaultHeartbeatInterval   = time.Second
 	defaultLogDBBufferSize     = 768 * 1024
 )
@@ -79,7 +79,7 @@ type Config struct {
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
-	// GossipProbeInternval how often gossip nodes probe each other.
+	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
@@ -87,7 +87,7 @@ type Config struct {
 	// HAKeeperTickInterval is the interval of how often log service node should
 	// tick the HAKeeper.
 	HAKeeperTickInterval toml.Duration `toml:"hakeeper-tick-interval"`
-	// HAKeeperCheckInterval is the internval of how often HAKeeper should run
+	// HAKeeperCheckInterval is the interval of how often HAKeeper should run
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
