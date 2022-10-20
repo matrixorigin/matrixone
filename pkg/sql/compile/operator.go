@@ -310,6 +310,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:             eg,
 		DB:                 db,
 		TableID:            relation.GetTableID(ctx),
+		DBName:             n.ObjRef.SchemaName,
+		TableName:          n.TableDef.Name,
 		CPkeyColDef:        n.TableDef.CompositePkey,
 		ComputeIndexTables: computeIndexTables,
 		ComputeIndexInfos:  n.TableDef.ComputeIndexInfos,
