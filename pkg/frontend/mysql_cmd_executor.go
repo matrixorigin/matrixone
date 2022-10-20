@@ -991,7 +991,7 @@ func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tre
 			buf.WriteString("INSERT INTO ")
 			buf.WriteString(param.name)
 			buf.WriteString(" VALUES ")
-			rbat, err = convertValueBat2Str(bat, ses.Mp, ses.timeZone)
+			rbat, err = convertValueBat2Str(bat, ses.Mp, ses.GetTimeZone())
 			if err != nil {
 				return err
 			}
