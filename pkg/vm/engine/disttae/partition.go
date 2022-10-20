@@ -157,7 +157,8 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	return nil
 }
 
-func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batch) error {
+func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
+	b *api.Batch, needCheck bool) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
@@ -193,7 +194,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 			if err != nil {
 				return err
 			}
-			if len(entries) > 0 {
+			if len(entries) > 0 && needCheck {
 				return moerr.NewDuplicate()
 			}
 		}
@@ -245,7 +246,8 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
-	return types.DecodeUint64(rowID[:8]) //TODO use tae provided function
+	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
+	return id
 }
 
 func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
