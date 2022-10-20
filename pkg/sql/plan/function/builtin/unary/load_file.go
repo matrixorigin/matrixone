@@ -31,7 +31,7 @@ const (
 
 func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_blob, 0, 0, 0)
+	resultType := types.New(types.T_text, 0, 0, 0)
 	resultVector := vector.New(resultType)
 	if inputVector.ConstVectorIsNull() {
 		return vector.NewConstNull(resultType, 1), nil

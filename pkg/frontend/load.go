@@ -185,6 +185,7 @@ type ParseLineHandler struct {
 	simdCsvBatchPool              chan *PoolElement
 	simdCsvNotiyEventChan         chan *notifyEvent
 	closeOnce                     sync.Once
+	proc                          *process.Process
 }
 
 type WriteBatchHandler struct {
@@ -284,7 +285,10 @@ func makeBatch(handler *ParseLineHandler, proc *process.Process, id int) *PoolEl
 	//alloc space for vector
 	for i := 0; i < len(handler.attrName); i++ {
 		// XXX memory alloc, where is the proc.Mp?
-		vec := vector.PreAllocType(handler.cols[i].Attr.Type, batchSize, batchSize, proc.Mp())
+		vec := vector.NewOriginal(handler.cols[i].Attr.Type)
+		vector.PreAlloc(vec, batchSize, batchSize, proc.Mp())
+
+		//vec := vector.PreAllocType(handler.cols[i].Attr.Type, batchSize, batchSize, proc.Mp())
 		batchData.Vecs[i] = vec
 	}
 
@@ -487,7 +491,7 @@ func judgeInterge(field string) bool {
 	return true
 }
 
-func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, row2colChoose bool) error {
+func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Process, forceConvert bool, row2colChoose bool) error {
 	begin := time.Now()
 	defer func() {
 		handler.saveParsedLine += time.Since(begin)
@@ -575,7 +579,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					field = strings.TrimSpace(field)
 				}
 				isNullOrEmpty := field == NULL_FLAG
-				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 					isNullOrEmpty = isNullOrEmpty || len(field) == 0
 				}
 
@@ -867,7 +871,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar, types.T_blob:
+				case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -1475,7 +1479,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1497,7 +1501,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1602,7 +1606,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 		write batch into the engine
 	*/
 	//the second parameter must be FALSE here
-	err = writeBatchToStorage(handler, forceConvert)
+	err = writeBatchToStorage(handler, proc, forceConvert)
 
 	toStorage += time.Since(wait_c)
 
@@ -1631,7 +1635,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 save batch to storage.
 when force is true, batchsize will be changed.
 */
-func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
+func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, force bool) error {
 	var err error = nil
 
 	ctx := handler.loadCtx
@@ -1674,6 +1678,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				}
 			}
 			err = tableHandler.Write(ctx, handler.batchData)
+			handler.batchData.Clean(proc.Mp())
 			if handler.oneTxnPerBatch {
 				if err != nil {
 					goto handleError
@@ -1764,7 +1769,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar, types.T_json, types.T_blob: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text: //bytes is different
 						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:
@@ -1819,7 +1824,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 							goto handleError2
 						}
 					}
+					handler.batchData.Zs = handler.batchData.Zs[:handler.batchFilled]
 					err = tableHandler.Write(ctx, handler.batchData)
+					handler.batchData.Clean(proc.Mp())
 					if handler.oneTxnPerBatch {
 						if err != nil {
 							goto handleError2
@@ -1877,7 +1884,7 @@ var saveLinesToStorage = func(handler *ParseLineHandler, force bool) error {
 		defer handler.simdCsvWaitWriteRoutineToQuit.Done()
 
 		//step 3 : save into storage
-		err = rowToColumnAndSaveToStorage(writeHandler, force, row2colChoose)
+		err = rowToColumnAndSaveToStorage(writeHandler, handler.proc, force, row2colChoose)
 		writeHandler.simdCsvErr = err
 
 		releaseBatch(handler, writeHandler.pl)
@@ -1970,6 +1977,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, proc *process.
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
+		proc:                          proc,
 	}
 
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(pu.SV.LoadDataConcurrencyCount), runtime.NumCPU())

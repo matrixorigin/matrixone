@@ -105,7 +105,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -140,7 +140,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -409,6 +409,14 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
@@ -1621,6 +1629,39 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
+
+			{
+				Index:     22,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     23,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     24,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     25,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
 		},
 	},
 	FROM_UNIXTIME: {
@@ -2243,7 +2284,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			{
@@ -2252,7 +2293,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			// {

@@ -281,7 +281,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeSlice(v.Col.([]types.TS))
 	case types.T_Rowid:
 		return types.EncodeSlice(v.Col.([]types.Rowid))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return types.EncodeSlice(v.Col.([]types.Varlena))
 	case types.T_tuple:
 		bs, _ := types.Encode(v.Col.([][]interface{}))

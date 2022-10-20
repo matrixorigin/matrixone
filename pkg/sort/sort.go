@@ -187,7 +187,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, uuidGreater)
 		}
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		if strCol == nil {
 			strCol = vector.GetStrVectorValues(vec)
 		}

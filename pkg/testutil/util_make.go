@@ -85,10 +85,12 @@ var (
 		return makeStringVector(values, nsp, varcharType)
 	}
 
+	MakeBlobVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeStringVector(values, nsp, blobType)
+	}
 	MakeTextVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeStringVector(values, nsp, textType)
 	}
-
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
 		cols := make([]types.Decimal64, len(values))
 		for i, v := range values {
@@ -280,7 +282,7 @@ var (
 		if err != nil {
 			panic(err)
 		}
-		dec128Val, err := types.ParseStringToDecimal128(val, 34, scale)
+		dec128Val, err := types.ParseStringToDecimal128(val, 34, scale, false)
 		if err != nil {
 			panic(err)
 		}
