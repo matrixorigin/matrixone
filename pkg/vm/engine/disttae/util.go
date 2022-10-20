@@ -64,11 +64,11 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			_getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
@@ -78,7 +78,7 @@ func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 
 func getColumnsByExpr(expr *plan.Expr) []int {
 	columnMap := make(map[int]struct{})
-	_getColumnMapByExpr(expr, columnMap)
+	getColumnMapByExpr(expr, columnMap)
 
 	columns := make([]int, len(columnMap))
 	i := 0
@@ -275,17 +275,17 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	return true, uint64(list[0])
 }
 
-func _getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
+func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := _getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
+			canCompute, pkBytes := getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return _getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
+			return getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
 
 		case "=":
 			var pkVal *plan.Expr
@@ -326,7 +326,7 @@ func _getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 }
 
 func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
-	canCompute, valExpr := _getNonIntPkExprValue(expr, pkIdx)
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
 	if !canCompute {
 		return canCompute, nil
 	}
@@ -368,7 +368,7 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
 func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
-	canCompute, valExpr := _getNonIntPkExprValue(expr, pkIdx)
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
 	if !canCompute {
 		return canCompute, 0
 	}
