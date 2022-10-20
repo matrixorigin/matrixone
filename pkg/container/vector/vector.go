@@ -505,6 +505,8 @@ func NewWithNspSize(typ types.Type, n int64) *Vector {
 	}
 }
 
+// XXX here need add mpool, but now some case will can't get mpool.
+// that will be a bug.
 func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.isConst = true
