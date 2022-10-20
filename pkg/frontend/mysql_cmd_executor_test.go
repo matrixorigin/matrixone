@@ -1025,6 +1025,7 @@ func Test_handleLoadData(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+		proc := &process.Process{}
 
 		mce := NewMysqlCmdExecutor()
 		ses := &Session{
@@ -1034,7 +1035,7 @@ func Test_handleLoadData(t *testing.T) {
 		load := &tree.Import{
 			Local: true,
 		}
-		err = mce.handleLoadData(ctx, load)
+		err = mce.handleLoadData(ctx, proc, load)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

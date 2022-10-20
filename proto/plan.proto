@@ -720,7 +720,8 @@ message DropIndex {
 }
 
 message TruncateTable {
-	string table = 1;
+	string database = 1;
+	string table = 2;
 }
 
 message ShowVariables {

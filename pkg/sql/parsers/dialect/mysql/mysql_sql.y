@@ -176,6 +176,12 @@ import (
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
     showType tree.ShowType
+    joinTableExpr *tree.JoinTableExpr
+
+    indexHintType tree.IndexHintType
+    indexHintScope tree.IndexHintScope
+    indexHint *tree.IndexHint
+    indexHintList []*tree.IndexHint
 }
 
 %token LEX_ERROR
@@ -342,7 +348,7 @@ import (
 
 %type <statement> stmt
 %type <statements> stmt_list
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -372,8 +378,9 @@ import (
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
-%type <tableExprs> table_references table_name_wild_list
-%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
+%type <tableExprs> table_name_wild_list
+%type <joinTableExpr>  table_references join_table
+%type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
@@ -524,7 +531,7 @@ import (
 %type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
-%type <strs> index_name_and_type_opt
+%type <strs> index_name_and_type_opt index_name_list
 %type <str> index_name index_type key_or_index_opt key_or_index
 // type <str> mo_keywords
 %type <properties> properties_list
@@ -555,6 +562,11 @@ import (
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
+%type <indexHintType> index_hint_type
+%type <indexHintScope> index_hint_scope
+%type <indexHint> index_hint
+%type <indexHintList> index_hint_list index_hint_list_opt
+
 %start start_command
 
 %%
@@ -581,6 +593,7 @@ stmt:
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
+|   truncate_table_stmt
 |   explain_stmt
 |   prepare_stmt
 |   deallocate_stmt
@@ -1746,7 +1759,7 @@ update_no_with_stmt:
     {
         // Multiple-table syntax
         $$ = &tree.Update{
-            Tables: $4,
+            Tables: tree.TableExprs{$4},
             Exprs: $6,
             Where: $7,
         }
@@ -2385,6 +2398,16 @@ unresolved_object_name:
         $$ = tree.SetUnresolvedObjectName(3, [3]string{$5, $3, $1})
     }
 
+truncate_table_stmt:
+    TRUNCATE table_name
+    {
+    	$$ = tree.NewTruncateTable($2)
+    }
+|   TRUNCATE TABLE table_name
+    {
+	$$ = tree.NewTruncateTable($3)
+    }
+
 drop_stmt:
     drop_ddl_stmt
 
@@ -2515,7 +2538,7 @@ delete_without_using_stmt:
         $$ = &tree.Delete{
             Tables: $5,
             Where: $8,
-            TableRefs: $7,
+            TableRefs: tree.TableExprs{$7},
         }
     }
 
@@ -2528,7 +2551,7 @@ delete_with_using_stmt:
         $$ = &tree.Delete{
             Tables: $6,
             Where: $9,
-            TableRefs: $8,
+            TableRefs: tree.TableExprs{$8},
         }
     }
 
@@ -3338,18 +3361,22 @@ from_clause:
     FROM table_references
     {
         $$ = &tree.From{
-            Tables: $2,
+            Tables: tree.TableExprs{$2},
         }
     }
 
 table_references:
     escaped_table_reference
-    {
-        $$ = tree.TableExprs{$1}
+   	{
+   		if t, ok := $1.(*tree.JoinTableExpr); ok {
+   			$$ = t
+   		} else {
+   			$$ = &tree.JoinTableExpr{Left: $1, Right: nil, JoinType: tree.JOIN_TYPE_CROSS}
+   		}
     }
 |   table_references ',' escaped_table_reference
     {
-        $$ = append($1, $3)
+        $$ = &tree.JoinTableExpr{Left: $1, Right: $3, JoinType: tree.JOIN_TYPE_CROSS}
     }
 
 escaped_table_reference:
@@ -3358,6 +3385,9 @@ escaped_table_reference:
 table_reference:
     table_factor
 |   join_table
+	{
+		$$ = $1
+	}
 
 join_table:
     table_reference inner_join table_factor join_condition_opt
@@ -3378,7 +3408,6 @@ join_table:
             Cond: $4,
         }
     }
-// right: table_reference
 |   table_reference outer_join table_factor join_condition
     {
         $$ = &tree.JoinTableExpr{
@@ -3543,7 +3572,10 @@ table_factor:
             $$ = $1
         }
     }
-// |   '(' table_references ')'
+|   '(' table_references ')'
+	{
+		$$ = $2
+	}
 
 derived_table:
     '(' select_no_parens ')'
@@ -3732,17 +3764,94 @@ as_opt:
 |   AS {}
 
 aliased_table_name:
-    table_name as_opt_id // index_hint_list
+    table_name as_opt_id index_hint_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
                 Alias: tree.Identifier($2),
             },
+            IndexHints: $3,
         }
     }
-// |   table_name PARTITION '(' partition_id_list ')' as_opt_id index_hint_list
 
+index_hint_list_opt:
+	{
+		$$ = nil
+	}
+|	index_hint_list
+
+index_hint_list:
+	index_hint
+	{
+		$$ = []*tree.IndexHint{$1}
+	}
+|	index_hint_list index_hint
+	{
+		$$ = append($1, $2)
+	}
+
+index_hint:
+	index_hint_type index_hint_scope '(' index_name_list ')'
+	{
+		$$ = &tree.IndexHint{
+			IndexNames: $4,
+			HintType: $1,
+			HintScope: $2,
+		}
+	}
+
+index_hint_type:
+	USE key_or_index
+	{
+		$$ = tree.HintUse
+	}
+|	IGNORE key_or_index
+	{
+		$$ = tree.HintIgnore
+	}
+|	FORCE key_or_index
+	{
+		$$ = tree.HintForce
+	}
+
+index_hint_scope:
+	{
+		$$ = tree.HintForScan
+	}
+|	FOR JOIN
+	{
+		$$ = tree.HintForJoin
+	}
+|	FOR ORDER BY
+	{
+		$$ = tree.HintForOrderBy
+	}
+|	FOR GROUP BY
+	{
+		$$ = tree.HintForGroupBy
+	}
+
+index_name_list:
+	{
+		$$ = nil
+	}
+|	ident
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' ident
+	{
+		$$ = append($1, $3)
+	}
+|	PRIMARY
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' PRIMARY
+	{
+		$$ = append($1, $3)
+	}
 
 as_opt_id:
     {
@@ -5552,7 +5661,7 @@ simple_expr:
     {
         $$ = $1
     }
-|     function_call_json
+|   function_call_json
     {
         $$ = $1
     }

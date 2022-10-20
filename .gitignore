@@ -30,6 +30,7 @@ path_to_file
 test/resources/into_outfile/outfile_float_2.csv
 test/resources/into_outfile/outfile_integer_numbers_1.csv
 test/resources/into_outfile/outfile_time_date_2.csv
+test/resources/into_outfile/outfile_uuid.csv
 test/resources/into_outfile_2/outfile_float_2.csv
 test/resources/into_outfile_2/outfile_integer_numbers_1.csv
 test/resources/into_outfile_2/outfile_time_date_2.csv

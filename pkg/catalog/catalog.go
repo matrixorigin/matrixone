@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"regexp"
 	"strconv"
 
@@ -130,6 +131,7 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
 	}
 	return infos
 }
@@ -372,4 +374,12 @@ func isTruncate(name string) (uint64, bool) {
 	str := reg.FindString(name)
 	id, _ := strconv.ParseUint(str, 10, 64)
 	return id, true
+}
+
+func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {
+	tempBuf := make([]byte, 8)
+	copy(tempBuf[2:], rowid[6:12])
+	blockId = binary.BigEndian.Uint64(tempBuf)
+	offset = binary.BigEndian.Uint32(rowid[12:])
+	return
 }

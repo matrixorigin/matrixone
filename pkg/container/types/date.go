@@ -148,7 +148,7 @@ func ParseDateCast(s string) (Date, error) {
 	//if it's pure number series like yyyymmdd,it must be 8 or 6 digits, otherwise there will be obfuscate
 	flag1, _ := regexp.MatchString("^[0-9]{4}[0-9]{1,2}[0-9]{1,2}$", s)
 	//the reg rule test: here refers to https://regex101.com/r/NlaiAo/1
-	flag2, _ := regexp.MatchString("^[0-9]{4}[.|-]{0,1}[0-9]{1,2}[.|-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
+	flag2, _ := regexp.MatchString("^[0-9]{4}[./-]{0,1}[0-9]{1,2}[./-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
 	if !flag2 {
 		return -1, moerr.NewInvalidArg("parsedate", s)
 	}

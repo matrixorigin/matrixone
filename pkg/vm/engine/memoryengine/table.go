@@ -214,31 +214,31 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return resp.Defs, nil
 }
 
-func (t *Table) Truncate(ctx context.Context) (uint64, error) {
-
-	resps, err := DoTxnRequest[TruncateResp](
-		ctx,
-		t.txnOperator,
-		false,
-		t.engine.allShards,
-		OpTruncate,
-		TruncateReq{
-			TableID:      t.id,
-			DatabaseName: t.databaseName,
-			TableName:    t.tableName,
-		},
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	var affectedRows int64
-	for _, resp := range resps {
-		affectedRows += resp.AffectedRows
-	}
-
-	return uint64(affectedRows), nil
-}
+//func (t *Table) Truncate(ctx context.Context) (uint64, error) {
+//
+//	resps, err := DoTxnRequest[TruncateResp](
+//		ctx,
+//		t.txnOperator,
+//		false,
+//		t.engine.allShards,
+//		OpTruncate,
+//		TruncateReq{
+//			TableID:      t.id,
+//			DatabaseName: t.databaseName,
+//			TableName:    t.tableName,
+//		},
+//	)
+//	if err != nil {
+//		return 0, err
+//	}
+//
+//	var affectedRows int64
+//	for _, resp := range resps {
+//		affectedRows += resp.AffectedRows
+//	}
+//
+//	return uint64(affectedRows), nil
+//}
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 
