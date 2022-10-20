@@ -917,7 +917,6 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 		if len(viewDDL) != 0 {
 			params = append(params, &dumpTable{tblName, viewDDL, nil, attrs, true})
 		} else {
-			tblDDL += "\n);\n"
 			params = append(params, &dumpTable{tblName, tblDDL, table, attrs, false})
 		}
 	}

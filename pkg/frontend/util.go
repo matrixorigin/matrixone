@@ -492,12 +492,12 @@ func fileExists(path string) (bool, error) {
 
 func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string, string, error) {
 	var (
-		attrs      = make([]string, 0, len(tableDefs))
-		tblDDL     string
-		viewDDL    string
-		commentDef string
-		pkDef      string
-		indexDefs  []string
+		attrs   = make([]string, 0, len(tableDefs))
+		tblDDL  string
+		view    string
+		comment string
+		pk      string
+		indexes []string
 	)
 	first := true
 	for _, tblDef := range tableDefs {
@@ -552,30 +552,31 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			}
 
 		case *engine.CommentDef:
-			tblDDL += fmt.Sprintf("  COMMENT '%s'", def.Comment)
+			comment = fmt.Sprintf("  COMMENT '%s'", def.Comment)
 		case *engine.IndexTableDef:
-			indexDefs = append(indexDefs, fmt.Sprintf("  %s INDEX `%s` (`%s`)", def.Typ.ToString(), def.Name, strings.Join(def.ColNames, "`,`")))
+			logutil.Infof("index table def change to index def")
 		case *engine.PrimaryIndexDef:
-			pkDef = fmt.Sprintf("  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
+			pk = fmt.Sprintf("  PRIMARY KEY (`%s`)", strings.Join(def.Names, "`,`"))
 		case *engine.ViewDef:
-			view := struct {
+			viewTmp := struct {
 				Stmt            string
 				DefaultDatabase string
 			}{}
-			if err := json.Unmarshal([]byte(def.View), &view); err != nil {
+			if err := json.Unmarshal([]byte(def.View), &viewTmp); err != nil {
 				return nil, "", "", moerr.NewInternalError("unmarshal view failed. error:%v", err)
 			}
 
-			viewDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n%s;\n\n", tblName, view.Stmt)
+			view = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n%s;\n\n", tblName, viewTmp.Stmt)
 		case *engine.ComputeIndexDef: //TODO support
-			for i := 0; i < len(def.Names); i++ {
-				ifUnique := ""
-				if def.Uniques[i] {
-					ifUnique = "UNIQUE "
-				}
-				index := fmt.Sprintf("  %sKEY `%s` (`%s`)", ifUnique, def.Names[i], def.TableNames)
-				indexDefs = append(indexDefs, index)
-			}
+			//for i := 0; i < len(def.Names); i++ {
+			//	ifUnique := ""
+			//	if def.Uniques[i] {
+			//		ifUnique = "UNIQUE "
+			//	}
+			//	index := fmt.Sprintf("  %sKEY `%s` (`%s`)", ifUnique, def.Names[i], def.TableNames)
+			//}
+			logutil.Infof("unique/secondary index not supported in dump now")
+
 		case *engine.PartitionDef:
 			//TODO support
 
@@ -585,16 +586,17 @@ func getTableMeta(tblName string, tableDefs []engine.TableDef) ([]string, string
 			return nil, "", "", moerr.NewInternalError("unsupported table def %T", tblDef)
 		}
 	}
-	if len(viewDDL) == 0 {
+	if len(view) == 0 {
 		tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n\nCREATE TABLE `%s` (%s", tblName, tblName, tblDDL)
 	}
-	if pkDef != "" {
-		tblDDL += ",\n" + pkDef
+	if len(pk) > 0 {
+		tblDDL += ",\n" + pk
 	}
-	for _, indexDef := range indexDefs {
-		tblDDL += ",\n" + indexDef
+	for _, index := range indexes {
+		tblDDL += ",\n" + index
 	}
-	return attrs, tblDDL, viewDDL, nil
+	tblDDL += fmt.Sprintf("\n)%s;\n\n", comment)
+	return attrs, tblDDL, view, nil
 }
 
 func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
