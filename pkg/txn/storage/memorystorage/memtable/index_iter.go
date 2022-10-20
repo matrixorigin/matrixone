@@ -35,9 +35,25 @@ type IndexIter[
 
 func (t *Table[K, V, R]) NewIndexIter(tx *Transaction, min Tuple, max Tuple) *IndexIter[K, V] {
 	state := t.state.Load()
+	return t.newIndexIter(
+		state.indexes.Copy().Iter(),
+		state.rows,
+		tx,
+		min,
+		max,
+	)
+}
+
+func (t *Table[K, V, R]) newIndexIter(
+	iter btree.GenericIter[*IndexEntry[K, V]],
+	rows *btree.BTreeG[*PhysicalRow[K, V]],
+	tx *Transaction,
+	min Tuple,
+	max Tuple,
+) *IndexIter[K, V] {
 	return &IndexIter[K, V]{
-		iter:     state.indexes.Copy().Iter(),
-		rows:     state.rows,
+		iter:     iter,
+		rows:     rows,
 		readTime: tx.Time,
 		tx:       tx,
 		min:      min,
