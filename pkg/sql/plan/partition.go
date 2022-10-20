@@ -367,7 +367,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 		}
 
 		partitionAst := genPartitionAst(exprs, int64(partitionInfo.PartitionNum))
-		fmt.Println(tree.String(partitionAst, dialect.MYSQL))
 
 		partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
 		if err != nil {
@@ -378,7 +377,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 		// For the Hash partition, convert the partition information into the expression,such as: abs (hash_value (expr)) % partitionNum
 		hashExpr := partitionType.Expr
 		partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionInfo.PartitionNum))
-		fmt.Println(tree.String(partitionAst, dialect.MYSQL))
 
 		partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
 		if err != nil {
@@ -408,7 +406,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 			if err != nil {
 				return err
 			}
-			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
 			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
 			if err != nil {
 				return err
@@ -425,7 +422,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 			if err != nil {
 				return err
 			}
-			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
 			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
 			if err != nil {
 				return err
@@ -442,7 +438,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 			if err != nil {
 				return err
 			}
-			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
 			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
 			if err != nil {
 				return err
@@ -863,7 +858,7 @@ func checkUniqueKeyIncludePartKey(partCols []string, pkcols []string) bool {
 	for i := 0; i < len(partCols); i++ {
 		partCol := partCols[i]
 		if !findColumnInIndexCols(partCol, pkcols) {
-			// Partition column is not found in the index columns.
+			// Partition column is not found in the Unique Keys columns.
 			return false
 		}
 	}
