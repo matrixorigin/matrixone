@@ -3234,7 +3234,6 @@ func TestLogtailBasic(t *testing.T) {
 		go func() {
 			for i := 0; i < 10; i++ {
 				reader := logMgr.GetReader(minTs, maxTs)
-				assert.True(t, reader.HasCatalogChanges())
 				_ = reader.GetDirtyByTable(dbID, tableID)
 			}
 			wg.Done()
