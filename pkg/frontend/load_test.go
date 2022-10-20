@@ -22,11 +22,12 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -575,9 +576,21 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			batchData: &batch.Batch{
 				Vecs:  make([]*vector.Vector, curBatchSize),
 				Attrs: make([]string, curBatchSize),
+				Cnt:   1,
 			},
 			ThreadInfo: &ThreadInfo{},
 		}
+		mp, err := mpool.NewMPool("session", 0, mpool.NoFixed)
+		if err != nil {
+			panic(err)
+		}
+		proc := process.New(
+			ctx,
+			mp,
+			nil,
+			nil,
+			nil,
+		)
 		field := [][]string{{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "8", "9"}}
 		Oid := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16,
 			types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_char, types.T_date, types.T_datetime}
@@ -585,27 +598,32 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		handler.simdCsvLineArray[0] = field[0]
 		for i := 0; i < curBatchSize; i++ {
 			handler.dataColumnId2TableColumnId[i] = i
-			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
+			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
+			handler.batchData.Vecs[i].SetOriginal(false)
 		}
 		var force = false
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
 		row2colChoose = false
 		handler.lineIdx = 1
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
 		handler.maxFieldCnt = 0
-		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
+		convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldBeNil)
 
+		handler.batchData.Clean(proc.Mp())
 		row2colChoose = true
+
+		handler.batchData.Vecs = make([]*vector.Vector, curBatchSize)
 		handler.ignoreFieldError = false
 		for i := 0; i < curBatchSize; i++ {
 			if Oid[i] == types.T_char {
 				continue
 			}
 			// XXX Vecs[0]?   What are we testing?
-			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
-			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
+			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
+			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
+			vector.Clean(handler.batchData.Vecs[i], proc.Mp())
 		}
 
 		row2colChoose = false
@@ -615,9 +633,13 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 				continue
 			}
 			// XXX Vecs[0]?   What are we testing?
-			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, testutil.TestUtilMp)
-			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
+			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, proc.Mp())
+			convey.So(rowToColumnAndSaveToStorage(handler, proc, force, row2colChoose), convey.ShouldNotBeNil)
+			vector.Clean(handler.batchData.Vecs[i], proc.Mp())
 		}
+		a := proc.Mp().Stats().NumAlloc.Load()
+		b := proc.Mp().Stats().NumFree.Load()
+		convey.So(a, convey.ShouldEqual, b)
 	})
 }
 

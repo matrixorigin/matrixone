@@ -295,7 +295,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 			vs := vector.MustBytesCols(vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {
