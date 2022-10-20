@@ -182,8 +182,9 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
 		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		if id, ok := isTruncate(name); ok {
+		if id, tblName, ok := isTruncate(name); ok {
 			cmds[i].Id = id
+			cmds[i].Name = tblName
 			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
 			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
@@ -355,7 +356,7 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 			col := vector.GetBytesVectorValues(vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
@@ -365,15 +366,15 @@ func GenRows(bat *batch.Batch) [][]any {
 	return rows
 }
 
-func isTruncate(name string) (uint64, bool) {
+func isTruncate(name string) (uint64, string, bool) {
 	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
 	if !ok {
-		return 0, false
+		return 0, "", false
 	}
 	reg, _ := regexp.Compile(`\d+`)
 	str := reg.FindString(name)
 	id, _ := strconv.ParseUint(str, 10, 64)
-	return id, true
+	return id, name[len(str)+Meta_Length:], true
 }
 
 func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {

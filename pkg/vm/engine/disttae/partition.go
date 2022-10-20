@@ -86,8 +86,27 @@ func (d *DataRow) UniqueIndexes() []memtable.Tuple {
 
 var _ MVCC = new(Partition)
 
-func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
-	return nil
+func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
+	blks := make([]BlockMeta, 0, len(blocks))
+	deletes := make(map[uint64]uint8)
+	p.IterDeletedRowIDs(ctx, ts, func(rowID RowID) bool {
+		deletes[rowIDToBlockID(rowID)] = 0
+		return true
+	})
+	for _, entry := range entries {
+		if entry.typ == DELETE {
+			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				deletes[rowIDToBlockID(RowID(v))] = 0
+			}
+		}
+	}
+	for i := range blocks {
+		if _, ok := deletes[blocks[i].info.BlockID]; !ok {
+			blks = append(blks, blocks[i])
+		}
+	}
+	return blks
 }
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
