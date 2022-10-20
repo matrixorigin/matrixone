@@ -20,11 +20,13 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -117,24 +119,51 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
-	dir, pattern := path.Split(param.Filepath)
-	fs, readPath, err := fileservice.GetForETL(param.FileService, dir+"/")
-	if err != nil {
-		return nil, err
-	}
 	ctx := context.TODO()
-	entries, err := fs.List(ctx, readPath)
-	if err != nil {
-		return nil, err
+
+	filePath := strings.TrimSpace(param.Filepath)
+	pathDir := strings.Split(filePath, "/")
+	l := list.New()
+	if pathDir[0] == "" {
+		l.PushBack("/")
+	} else {
+		l.PushBack(pathDir[0])
 	}
-	for _, entry := range entries {
-		matched, _ := path.Match(pattern, entry.Name)
-		if !matched {
-			continue
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := fs.List(ctx, readPath)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, _ := filepath.Match(pathDir[i], entry.Name)
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+			}
+			l.Remove(l.Front())
 		}
-		fileList = append(fileList, path.Join(dir, entry.Name))
 	}
-	return
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+	}
+	return fileList, err
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
@@ -327,7 +356,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
@@ -770,6 +799,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_uuid:
+			cols := vector.MustTCols[types.Uuid](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseUuid(field)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not uuid type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}
