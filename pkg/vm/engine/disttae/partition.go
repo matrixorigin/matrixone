@@ -55,9 +55,10 @@ type DataValue struct {
 }
 
 type DataRow struct {
-	rowID   RowID
-	value   DataValue
-	indexes []memtable.Tuple
+	rowID         RowID
+	value         DataValue
+	indexes       []memtable.Tuple
+	uniqueIndexes []memtable.Tuple
 }
 
 type Op uint8
@@ -77,6 +78,10 @@ func (d *DataRow) Value() DataValue {
 
 func (d *DataRow) Indexes() []memtable.Tuple {
 	return d.indexes
+}
+
+func (d *DataRow) UniqueIndexes() []memtable.Tuple {
+	return d.uniqueIndexes
 }
 
 var _ MVCC = new(Partition)
