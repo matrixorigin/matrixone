@@ -234,6 +234,54 @@ func TestBlockWrite(t *testing.T) {
 	}
 }
 
+func TestGetNonIntPkValueByExpr(t *testing.T) {
+	type asserts = struct {
+		result bool
+		data   any
+		expr   *plan.Expr
+	}
+
+	testCases := []asserts{
+		// a > "a"  false   only 'and', '=' function is supported
+		{false, 0, makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2StringConstExprWithType("a"),
+		})},
+		// a = 100  true
+		{true, int64(100),
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(100),
+			})},
+		// b > 10 and a = "abc"  true
+		{true, "abc",
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest(">", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2StringConstExprWithType("abc"),
+				}),
+			})},
+	}
+
+	t.Run("test getNonIntPkValueByExpr", func(t *testing.T) {
+		for i, testCase := range testCases {
+			result, data := getNonIntPkValueByExpr(testCase.expr, 0)
+			if result != testCase.result {
+				t.Fatalf("test getNonIntPkValueByExpr at cases[%d], get result is different with expected", i)
+			}
+			if result {
+				if data != testCase.data {
+					t.Fatalf("test getNonIntPkValueByExpr at cases[%d], data is not match", i)
+				}
+			}
+		}
+	})
+}
+
 func TestComputeRangeByNonIntPk(t *testing.T) {
 	type asserts = struct {
 		result bool
@@ -278,7 +326,7 @@ func TestComputeRangeByNonIntPk(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(10),
 				}),
 			})},
-		// b > 10 and a = "aa"  true
+		// b > 10 and a = "abc"  true
 		{true, getHash(plan2.MakePlan2StringConstExprWithType("abc")),
 			makeFunctionExprForTest("and", []*plan.Expr{
 				makeFunctionExprForTest(">", []*plan.Expr{
