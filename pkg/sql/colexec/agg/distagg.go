@@ -95,9 +95,11 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 			}
 		} else {
 			var v T2
-			a.es = append(a.es, true)
-			a.vs = append(a.vs, v)
-			a.srcs = append(a.srcs, make([]T1, 0, 1))
+			for i := 0; i < size; i++ {
+				a.es = append(a.es, true)
+				a.vs = append(a.vs, v)
+				a.srcs = append(a.srcs, make([]T1, 0, 1))
+			}
 			mp, err := hashmap.NewStrMap(true, 0, 0, m)
 			if err != nil {
 				return err
