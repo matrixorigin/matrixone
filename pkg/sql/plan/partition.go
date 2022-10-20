@@ -34,7 +34,8 @@ const (
 )
 
 // buildHashPartition handle Hash Partitioning
-func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
+func buildHashPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
+	partitionOp := stmt.PartitionOption
 	if partitionOp.SubPartBy != nil {
 		return moerr.NewInvalidInput("no subpartition")
 	}
@@ -75,7 +76,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 	if err != nil {
 		return err
 	}
-	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	err = buildEvalPartitionExpression(partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -91,7 +92,8 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 }
 
 // buildKeyPartition handle KEY Partitioning
-func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
+func buildKeyPartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
+	partitionOp := stmt.PartitionOption
 	if partitionOp.SubPartBy != nil {
 		return moerr.NewInvalidInput("no subpartition")
 	}
@@ -137,7 +139,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 	if err != nil {
 		return err
 	}
-	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	err = buildEvalPartitionExpression(partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -153,7 +155,8 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 }
 
 // buildRangePartition handle Range Partitioning and Range columns partitioning
-func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
+func buildRangePartition(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
+	partitionOp := stmt.PartitionOption
 	partitionType := partitionOp.PartBy.PType.(*tree.RangeType)
 
 	partitionNum := len(partitionOp.Partitions)
@@ -194,7 +197,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 		return err
 	}
 
-	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	err = buildEvalPartitionExpression(partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -210,7 +213,8 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 }
 
 // buildListPartitiion handle List Partitioning and List columns partitioning
-func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
+func buildListPartitiion(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error {
+	partitionOp := stmt.PartitionOption
 	partitionType := partitionOp.PartBy.PType.(*tree.ListType)
 
 	partitionNum := len(partitionOp.Partitions)
@@ -249,7 +253,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 		return err
 	}
 
-	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	err = buildEvalPartitionExpression(partitionBinder, stmt, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -287,6 +291,28 @@ func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan
 	return nil
 }
 
+func getPrimaryKeyAndUniqueKey(defs tree.TableDefs) (primaryKeys []*tree.UnresolvedName, uniqueIndexs []*tree.UniqueIndex) {
+	//primaryKeys := make([]*tree.UnresolvedName, 0)
+	//uniqueIndexs := make([]*tree.UniqueIndex, 0)
+	for _, item := range defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+					primaryKeys = append(primaryKeys, def.Name)
+				}
+			}
+		case *tree.PrimaryKeyIndex:
+			for _, key := range def.KeyParts {
+				primaryKeys = append(primaryKeys, key.ColName)
+			}
+		case *tree.UniqueIndex:
+			uniqueIndexs = append(uniqueIndexs, def)
+		}
+	}
+	return
+}
+
 // This method is used to generate partition ast for key partition and hash partition
 // For example: abs (hash_value (col3))% 4
 func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
@@ -309,13 +335,35 @@ func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
 }
 
 // This method is used to convert different types of partition structures into plan.Expr
-func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, partitionInfo *plan.PartitionInfo) error {
+func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionInfo *plan.PartitionInfo) error {
+	partitionOp := stmt.PartitionOption
 	switch partitionType := partitionOp.PartBy.PType.(type) {
 	case *tree.KeyType:
-		keyList := partitionType.ColumnList
-		exprs := make([]tree.Expr, len(keyList))
-		for i, expr := range keyList {
-			exprs[i] = expr
+		// For the Key partition, convert the partition information into the expression,such as : abs (hash_value (expr)) % partitionNum
+		var exprs []tree.Expr
+		if len(partitionInfo.Columns) == 0 {
+			primaryKeys, uniqueIndexs := getPrimaryKeyAndUniqueKey(stmt.Defs)
+			if len(primaryKeys) != 0 {
+				exprs = make([]tree.Expr, len(primaryKeys))
+				for i, expr := range primaryKeys {
+					exprs[i] = expr
+				}
+			} else if len(uniqueIndexs) != 0 {
+				exprs = make([]tree.Expr, len(uniqueIndexs))
+				for i, uniqueIndex := range uniqueIndexs {
+					for _, col1 := range uniqueIndex.KeyParts {
+						exprs[i] = col1.ColName
+					}
+				}
+			} else {
+				return moerr.NewInvalidInput("Field in list of fields for partition function not found in table")
+			}
+		} else {
+			keyList := partitionType.ColumnList
+			exprs = make([]tree.Expr, len(keyList))
+			for i, expr := range keyList {
+				exprs[i] = expr
+			}
 		}
 
 		partitionAst := genPartitionAst(exprs, int64(partitionInfo.PartitionNum))
@@ -327,6 +375,7 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp 
 		}
 		partitionInfo.PartitionExpression = partitionExpression
 	case *tree.HashType:
+		// For the Hash partition, convert the partition information into the expression,such as: abs (hash_value (expr)) % partitionNum
 		hashExpr := partitionType.Expr
 		partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionInfo.PartitionNum))
 		fmt.Println(tree.String(partitionAst, dialect.MYSQL))
@@ -337,6 +386,8 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp 
 		}
 		partitionInfo.PartitionExpression = partitionExpression
 	case *tree.RangeType:
+		// For the Range partition, convert the partition information into the expression,such as:
+		// case when expr < 6 then 0 when expr < 11 then 1 when true then 3 else -1 end
 		if partitionType.ColumnList == nil {
 			rangeExpr := partitionType.Expr
 			partitionExprAst, err := buildRangeCaseWhenExpr(rangeExpr, partitionOp.Partitions)
@@ -350,6 +401,8 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp 
 			}
 			partitionInfo.PartitionExpression = partitionExpression
 		} else {
+			// For the Range Columns partition, convert the partition information into the expression, such as:
+			// case when col1 < 10 and col2 < 5 then 0 when col1 < 20 and col3 < 10 then 1 when true and true then 4 else -1 end
 			columnsExpr := partitionType.ColumnList
 			partitionExprAst, err := buildRangeColumnsCaseWhenExpr(columnsExpr, partitionOp.Partitions)
 			if err != nil {
@@ -364,6 +417,8 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp 
 		}
 
 	case *tree.ListType:
+		// For the List partition, convert the partition information into the expression, such as:
+		// case when expr in (1, 5, 9, 13, 17) then 0 when expr in (2, 6, 10, 14, 18) then 1 else -1 end
 		if partitionType.ColumnList == nil {
 			listExpr := partitionType.Expr
 			partitionExprAst, err := buildListCaseWhenExpr(listExpr, partitionOp.Partitions)
@@ -377,6 +432,11 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp 
 			}
 			partitionInfo.PartitionExpression = partitionExpression
 		} else {
+			// For the List Columns partition, convert the partition information into the expression, such as:
+			// case when col1 = 0 and col2 = 0 or col1 = null and col2 = null then 0
+			// when col1 = 0 and col2 = 1 or col1 = 0 and col2 = 2 or col1 = 0 and col2 = 3 then 1
+			// when col1 = 1 and col2 = 0 or col1 = 2 and col2 = 0 or col1 = 2 and col2 = 1 then 2
+			// else -1 end
 			columnsExpr := partitionType.ColumnList
 			partitionExprAst, err := buildListColumnsCaseWhenExpr(columnsExpr, partitionOp.Partitions)
 			if err != nil {
@@ -736,15 +796,40 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 	return nil
 }
 
+func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionInfo) (string, error) {
+	defs := tableDef.Defs
+	hasPrimaryKey := false
+	var primaryKeyMsg string
+
+	for _, def := range defs {
+		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
+			hasPrimaryKey = true
+			primaryKeyMsg = pkdef.Pk.Names[0]
+		}
+	}
+
+	if hasPrimaryKey {
+		pkNames := util.SplitCompositePrimaryKeyColumnName(primaryKeyMsg)
+		return pkNames[0], nil
+	} else {
+		return "", moerr.NewInvalidInput("Field in list of fields for partition function not found in table")
+	}
+
+}
+
 // checkPartitionKeysConstraints checks the partitioning key is included in the table constraint.
 func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
 	defs := tableDef.Defs
 	hasPrimaryKey := false
+	hasUniqueKey := false
 	var pkNames []string
 	for _, def := range defs {
 		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
 			hasPrimaryKey = true
 			pkNames = pkdef.Pk.Names
+		}
+		if _, ok := def.Def.(*plan.TableDef_DefType_ComputeIndex); ok {
+			hasUniqueKey = true
 		}
 	}
 
@@ -760,6 +845,13 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 			}
 		}
 	}
+
+	if partitionInfo.Type == plan.PartitionType_KEY {
+		if len(partitionInfo.Columns) == 0 && !hasUniqueKey && !hasPrimaryKey {
+			return moerr.NewInvalidInput("Field in list of fields for partition function not found in table")
+		}
+	}
+
 	return nil
 }
 

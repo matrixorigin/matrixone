@@ -799,6 +799,12 @@ var (
 		}, {
 			input: "select t.a from sa.t",
 		}, {
+			input:  "create table k1 (id int not null primary key,name varchar(20)) partition by key() partitions 2",
+			output: "create table k1 (id int not null primary key, name varchar(20)) partition by key algorithm = 2 partitions 2",
+		}, {
+			input:  "create table k1 (id int not null,name varchar(20),unique key (id))partition by key() partitions 2",
+			output: "create table k1 (id int not null, name varchar(20), unique key (id)) partition by key algorithm = 2 partitions 2",
+		}, {
 			input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
 			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
 		}, {
