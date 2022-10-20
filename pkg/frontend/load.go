@@ -575,7 +575,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					field = strings.TrimSpace(field)
 				}
 				isNullOrEmpty := field == NULL_FLAG
-				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 					isNullOrEmpty = isNullOrEmpty || len(field) == 0
 				}
 
@@ -867,7 +867,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar, types.T_blob:
+				case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -1475,7 +1475,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1497,7 +1497,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale, vec.GetIsBin())
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1764,7 +1764,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar, types.T_json, types.T_blob: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text: //bytes is different
 						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:

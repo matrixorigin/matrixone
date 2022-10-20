@@ -24,6 +24,8 @@ package types
 import "C"
 
 import (
+	"encoding/hex"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -233,6 +235,7 @@ func Decimal128_FromString(s string) (Decimal128, error) {
 	}
 	return d, nil
 }
+
 func Decimal128_FromStringWithScale(s string, width, scale int32) (Decimal128, error) {
 	var d Decimal128
 	buf := zstr(s)
@@ -555,11 +558,29 @@ func (d Decimal128) DivInt64(x int64) Decimal128 {
 }
 
 // Wrap old decimal api.   Most likely we should delete them.
-func ParseStringToDecimal64(s string, width int32, scale int32) (Decimal64, error) {
+func ParseStringToDecimal64(s string, width int32, scale int32, isBin bool) (Decimal64, error) {
+	var res Decimal64
+	if isBin {
+		ss := hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s)))
+		ival, err := strconv.ParseUint(ss, 16, 64)
+		if err != nil {
+			return res, err
+		}
+		return Decimal64_FromUint64(ival, width, scale)
+	}
 	return Decimal64_FromStringWithScale(s, width, scale)
 }
 
-func ParseStringToDecimal128(s string, width int32, scale int32) (Decimal128, error) {
+func ParseStringToDecimal128(s string, width int32, scale int32, isBin bool) (Decimal128, error) {
+	var res Decimal128
+	if isBin {
+		ss := hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s)))
+		ival, err := strconv.ParseUint(ss, 16, 64)
+		if err != nil {
+			return res, err
+		}
+		return Decimal128_FromUint64(ival, width, scale)
+	}
 	return Decimal128_FromStringWithScale(s, width, scale)
 }
 
@@ -688,8 +709,14 @@ func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, _ int32) []Decimal6
 	return dst
 }
 
-func ParseStringToDecimal64WithoutTable(s string) (Decimal64, int32, error) {
-	ss := strings.TrimSpace(s)
+func ParseStringToDecimal64WithoutTable(s string, isBin ...bool) (Decimal64, int32, error) {
+	var ss string
+	if len(isBin) > 0 && isBin[0] {
+		// binary string
+		ss = strings.TrimSpace(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))))
+	} else {
+		ss = strings.TrimSpace(s)
+	}
 	d, err := Decimal64_FromString(ss)
 	var scale int32
 	idx := int32(strings.LastIndex(ss, "."))
@@ -699,9 +726,16 @@ func ParseStringToDecimal64WithoutTable(s string) (Decimal64, int32, error) {
 	return d, scale, err
 }
 
-func ParseStringToDecimal128WithoutTable(s string) (Decimal128, int32, error) {
-	ss := strings.TrimSpace(s)
+func ParseStringToDecimal128WithoutTable(s string, isBin ...bool) (Decimal128, int32, error) {
+	var ss string
+	if len(isBin) > 0 && isBin[0] {
+		// binary string
+		ss = strings.TrimSpace(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))))
+	} else {
+		ss = strings.TrimSpace(s)
+	}
 	d, err := Decimal128_FromString(ss)
+
 	var scale int32
 	idx := int32(strings.LastIndex(ss, "."))
 	if idx >= 0 {

@@ -54,6 +54,13 @@ type NumVal struct {
 	resInt   int64
 	resFloat float64
 	ValType  P_TYPE
+
+	// tag 0xXXXX
+	isBin bool
+}
+
+func (n *NumVal) IsBinNum() bool {
+	return n.isBin
 }
 
 func (n *NumVal) Format(ctx *FmtCtx) {
@@ -120,12 +127,17 @@ func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
 }
 
 func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
-	return &NumVal{
+	numVal := &NumVal{
 		Value:      value,
 		origString: origString,
 		negative:   negative,
 		ValType:    typ,
 	}
+	// tag the 0xXXXX
+	if typ == P_hexnum {
+		numVal.isBin = true
+	}
+	return numVal
 }
 
 func NewNumValWithResInt(value constant.Value, origString string, negative bool, resInt int64) *NumVal {
