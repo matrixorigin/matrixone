@@ -43,6 +43,12 @@ func (t TestRow) Indexes() []Tuple {
 	}
 }
 
+func (t TestRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{Int(t.value)},
+	}
+}
+
 func TestTable(t *testing.T) {
 
 	table := NewTable[Int, int, TestRow]()
@@ -79,7 +85,6 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(entries))
 	assert.Equal(t, Int(42), entries[0].Key)
-	assert.Equal(t, 2, entries[0].Value)
 
 	// delete
 	err = table.Delete(tx, Int(42))
@@ -165,6 +170,10 @@ func (i Issue5388Row) Indexes() []Tuple {
 	return nil
 }
 
+func (i Issue5388Row) UniqueIndexes() []Tuple {
+	return nil
+}
+
 func TestIssue5388(t *testing.T) {
 	table := NewTable[memoryengine.ID, Issue5388Row, Issue5388Row]()
 
@@ -232,4 +241,24 @@ func TestIssue5388(t *testing.T) {
 	}
 	assert.Equal(t, 1, n)
 
+}
+
+func TestUniqueIndex(t *testing.T) {
+	table := NewTable[Int, int, TestRow]()
+	tx1 := NewTransaction("1", ts(1), Serializable)
+	tx2 := NewTransaction("2", ts(1), Serializable)
+
+	row := TestRow{key: 42, value: 1}
+
+	err := table.Insert(tx1, row)
+	assert.Nil(t, err)
+
+	err = table.Insert(tx2, row)
+	assert.Nil(t, err)
+
+	err = tx1.Commit(ts(2))
+	assert.Nil(t, err)
+
+	err = tx2.Commit(ts(2))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 }

@@ -16,6 +16,10 @@ package rpc
 
 import (
 	"context"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -26,9 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
-	"sync"
-	"testing"
-	"time"
 )
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
@@ -266,7 +267,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	txnEngine := handle.GetTxnEngine()
-	schema := catalog.MockSchema(2, 1)
+	schema := catalog.MockSchema(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -550,7 +551,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	txnEngine := handle.GetTxnEngine()
-	schema := catalog.MockSchema(2, 1)
+	schema := catalog.MockSchema(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -855,7 +856,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	txnEngine := handle.GetTxnEngine()
-	schema := catalog.MockSchema(2, 1)
+	schema := catalog.MockSchema(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
