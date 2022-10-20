@@ -1819,6 +1819,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 							goto handleError2
 						}
 					}
+					handler.batchData.Zs = handler.batchData.Zs[:handler.batchFilled]
 					err = tableHandler.Write(ctx, handler.batchData)
 					if handler.oneTxnPerBatch {
 						if err != nil {
