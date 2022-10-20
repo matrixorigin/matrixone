@@ -39,25 +39,38 @@ func TestSingleDDLPartition(t *testing.T) {
 	//			PARTITION p9 VALUES LESS THAN (MAXVALUE)
 	//		);`
 
-	sql := `CREATE TABLE tp16 (
-					a INT NULL,
-					b INT NULL
-				)
-				PARTITION BY LIST COLUMNS(a,b) (
-					PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
-					PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
-					PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
-					PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
-				)`
+	//sql := `CREATE TABLE tp16 (
+	//				a INT NULL,
+	//				b INT NULL
+	//			)
+	//			PARTITION BY LIST COLUMNS(a,b) (
+	//				PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+	//				PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
+	//				PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
+	//				PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
+	//			)`
 
-	//sql := `SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);`
+	sql := `CREATE TABLE customers_1 (
+        				first_name VARCHAR(25),
+        			last_name VARCHAR(25),
+        			street_1 VARCHAR(30),
+        			street_2 VARCHAR(30),
+        			city VARCHAR(15),
+        			renewal DATE
+        		)
+        			PARTITION BY LIST COLUMNS(city) (
+        			PARTITION pRegion_1 VALUES IN('Oskarshamn', 'Högsby', 'Mönsterås'),
+        			PARTITION pRegion_2 VALUES IN('Vimmerby', 'Hultsfred', 'Västervik'),
+        			PARTITION pRegion_3 VALUES IN('Nässjö', 'Eksjö', 'Vetlanda'),
+        			PARTITION pRegion_4 VALUES IN('Uppvidinge', 'Alvesta', 'Växjo')
+        		);`
 
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, false, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 // ---------------------------------- Key Partition ----------------------------------

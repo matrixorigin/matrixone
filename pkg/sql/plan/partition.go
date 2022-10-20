@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go/constant"
 	"strconv"
 	"strings"
 
@@ -59,16 +61,21 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 		partitionInfo.Type = plan.PartitionType_HASH
 	}
 
-	err := buildPartitionExpr(partitionBinder, partitionInfo, partitionType.Expr)
+	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
 	if err != nil {
 		return err
 	}
+	partitionInfo.Expr = planExpr
 
 	err = buildPartitionDefinitionsInfo(partitionBinder, partitionInfo, partitionOp.Partitions)
 	if err != nil {
 		return err
 	}
 	err = checkTableDefPartition(partitionBinder, tableDef, partitionInfo)
+	if err != nil {
+		return err
+	}
+	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -79,6 +86,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 			Partition: partitionInfo,
 		},
 	})
+
 	return nil
 }
 
@@ -129,6 +137,10 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 	if err != nil {
 		return err
 	}
+	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	if err != nil {
+		return err
+	}
 
 	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -136,6 +148,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 			Partition: partitionInfo,
 		},
 	})
+
 	return nil
 }
 
@@ -157,10 +170,11 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 	// RANGE Partitioning
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_RANGE
-		err := buildPartitionExpr(partitionBinder, partitionInfo, partitionType.Expr)
+		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
 		if err != nil {
 			return err
 		}
+		partitionInfo.Expr = planExpr
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
@@ -180,12 +194,18 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 		return err
 	}
 
+	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
+	if err != nil {
+		return err
+	}
+
 	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Partition{
 			Partition: partitionInfo,
 		},
 	})
+
 	return nil
 }
 
@@ -206,10 +226,11 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_LIST
-		err := buildPartitionExpr(partitionBinder, partitionInfo, partitionType.Expr)
+		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
 		if err != nil {
 			return err
 		}
+		partitionInfo.Expr = planExpr
 	} else {
 		partitionInfo.Type = plan.PartitionType_LIST_COLUMNS
 		err := buildPartitionColumns(partitionBinder, partitionInfo, partitionType.ColumnList)
@@ -224,6 +245,11 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 	}
 
 	err = checkTableDefPartition(partitionBinder, tableDef, partitionInfo)
+	if err != nil {
+		return err
+	}
+
+	err = buildEvalPartitionExpression(partitionBinder, partitionOp, partitionInfo)
 	if err != nil {
 		return err
 	}
@@ -261,17 +287,289 @@ func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan
 	return nil
 }
 
-// buildPartitionExpr expr partitioning is an expression using one or more table columns.
-func buildPartitionExpr(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, expr tree.Expr) error {
-	planExpr, err := partitionBinder.BindExpr(expr, 0, true)
-	if err != nil {
-		return err
+// This method is used to generate partition ast for key partition and hash partition
+// For example: abs (hash_value (col3))% 4
+func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
+	hashFuncName := tree.SetUnresolvedName(strings.ToLower("hash_value"))
+	hashfuncExpr := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(hashFuncName),
+		Exprs: exprs,
 	}
-	partitionInfo.Expr = planExpr
 
-	partitionExpr := tree.String(expr, dialect.MYSQL)
-	partitionInfo.PartitionExpression = partitionExpr
+	absFuncName := tree.SetUnresolvedName(strings.ToLower("abs"))
+	absFuncExpr := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(absFuncName),
+		Exprs: tree.Exprs{hashfuncExpr},
+	}
+
+	numstr := fmt.Sprintf("%v", partNum)
+	divExpr := tree.NewNumValWithType(constant.MakeInt64(partNum), numstr, false, tree.P_int64)
+	modOpExpr := tree.NewBinaryExpr(tree.MOD, absFuncExpr, divExpr)
+	return modOpExpr
+}
+
+// This method is used to convert different types of partition structures into plan.Expr
+func buildEvalPartitionExpression(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, partitionInfo *plan.PartitionInfo) error {
+	switch partitionType := partitionOp.PartBy.PType.(type) {
+	case *tree.KeyType:
+		keyList := partitionType.ColumnList
+		exprs := make([]tree.Expr, len(keyList))
+		for i, expr := range keyList {
+			exprs[i] = expr
+		}
+
+		partitionAst := genPartitionAst(exprs, int64(partitionInfo.PartitionNum))
+		fmt.Println(tree.String(partitionAst, dialect.MYSQL))
+
+		partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+		if err != nil {
+			return err
+		}
+		partitionInfo.PartitionExpression = partitionExpression
+	case *tree.HashType:
+		hashExpr := partitionType.Expr
+		partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionInfo.PartitionNum))
+		fmt.Println(tree.String(partitionAst, dialect.MYSQL))
+
+		partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+		if err != nil {
+			return err
+		}
+		partitionInfo.PartitionExpression = partitionExpression
+	case *tree.RangeType:
+		if partitionType.ColumnList == nil {
+			rangeExpr := partitionType.Expr
+			partitionExprAst, err := buildRangeCaseWhenExpr(rangeExpr, partitionOp.Partitions)
+			if err != nil {
+				return err
+			}
+			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
+			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+			if err != nil {
+				return err
+			}
+			partitionInfo.PartitionExpression = partitionExpression
+		} else {
+			columnsExpr := partitionType.ColumnList
+			partitionExprAst, err := buildRangeColumnsCaseWhenExpr(columnsExpr, partitionOp.Partitions)
+			if err != nil {
+				return err
+			}
+			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
+			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+			if err != nil {
+				return err
+			}
+			partitionInfo.PartitionExpression = partitionExpression
+		}
+
+	case *tree.ListType:
+		if partitionType.ColumnList == nil {
+			listExpr := partitionType.Expr
+			partitionExprAst, err := buildListCaseWhenExpr(listExpr, partitionOp.Partitions)
+			if err != nil {
+				return err
+			}
+			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
+			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+			if err != nil {
+				return err
+			}
+			partitionInfo.PartitionExpression = partitionExpression
+		} else {
+			columnsExpr := partitionType.ColumnList
+			partitionExprAst, err := buildListColumnsCaseWhenExpr(columnsExpr, partitionOp.Partitions)
+			if err != nil {
+				return err
+			}
+			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
+			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+			if err != nil {
+				return err
+			}
+			partitionInfo.PartitionExpression = partitionExpression
+		}
+	}
 	return nil
+}
+
+func buildListColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tree.Partition) (*tree.CaseExpr, error) {
+	whens := make([]*tree.When, len(defs))
+
+	for i, partition := range defs {
+		valuesIn := partition.Values.(*tree.ValuesIn)
+
+		elements := make([]tree.Expr, len(valuesIn.ValueList))
+		for j, value := range valuesIn.ValueList {
+			if tuple, ok := value.(*tree.Tuple); ok {
+				exprs := tuple.Exprs
+				if len(exprs) != len(columnsExpr) {
+					panic("the number of IN expression parameters does not match")
+				}
+
+				if len(columnsExpr) == 1 {
+					newExpr := tree.NewComparisonExpr(tree.EQUAL, columnsExpr[0], exprs[0])
+					elements[j] = newExpr
+					continue
+				}
+
+				if len(columnsExpr) >= 2 {
+					var andExpr tree.Expr
+
+					first := true
+					for k, lexpr := range columnsExpr {
+						if first {
+							andExpr = tree.NewComparisonExpr(tree.EQUAL, lexpr, exprs[k])
+							first = false
+							continue
+						}
+						newExpr := tree.NewComparisonExpr(tree.EQUAL, lexpr, exprs[k])
+						andExpr = tree.NewAndExpr(andExpr, newExpr)
+					}
+					elements[j] = andExpr
+					continue
+				}
+			} else {
+				if len(columnsExpr) != 1 {
+					panic("the number of IN expression parameters does not match")
+				}
+				newExpr := tree.NewComparisonExpr(tree.EQUAL, columnsExpr[0], value)
+				elements[j] = newExpr
+				continue
+			}
+		}
+
+		var conditionExpr tree.Expr
+		if len(valuesIn.ValueList) == 1 {
+			conditionExpr = elements[0]
+		}
+
+		if len(valuesIn.ValueList) > 1 {
+			for m := 1; m < len(elements); m++ {
+				if m == 1 {
+					conditionExpr = tree.NewOrExpr(elements[m-1], elements[m])
+				} else {
+					conditionExpr = tree.NewOrExpr(conditionExpr, elements[m])
+				}
+			}
+		}
+
+		when := &tree.When{
+			Cond: conditionExpr,
+			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+		}
+		whens[i] = when
+	}
+	caseWhenExpr := &tree.CaseExpr{
+		Expr:  nil,
+		Whens: whens,
+		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+	}
+	return caseWhenExpr, nil
+}
+
+func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.CaseExpr, error) {
+	whens := make([]*tree.When, len(defs))
+	for i, partition := range defs {
+		valuesLessThan := partition.Values.(*tree.ValuesLessThan)
+		if len(valuesLessThan.ValueList) != 1 {
+			panic("range partition less than expression should have one element")
+		}
+		valueExpr := valuesLessThan.ValueList[0]
+
+		var conditionExpr tree.Expr
+		if _, ok := valueExpr.(*tree.MaxValue); ok {
+			conditionExpr = tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+		} else {
+			LessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, pexpr, valueExpr)
+			conditionExpr = LessThanExpr
+		}
+
+		when := &tree.When{
+			Cond: conditionExpr,
+			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+		}
+		whens[i] = when
+	}
+
+	caseWhenExpr := &tree.CaseExpr{
+		Expr:  nil,
+		Whens: whens,
+		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+	}
+	return caseWhenExpr, nil
+}
+
+func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tree.Partition) (*tree.CaseExpr, error) {
+	whens := make([]*tree.When, len(defs))
+	for i, partition := range defs {
+		valuesLessThan := partition.Values.(*tree.ValuesLessThan)
+
+		if len(valuesLessThan.ValueList) != len(columnsExpr) {
+			panic("the number of less value expression parameters does not match")
+		}
+
+		elements := make([]tree.Expr, len(valuesLessThan.ValueList))
+		for j, valueExpr := range valuesLessThan.ValueList {
+			if _, ok := valueExpr.(*tree.MaxValue); ok {
+				trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+				elements[j] = trueExpr
+			} else {
+				lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
+				elements[j] = lessThanExpr
+			}
+		}
+
+		var conditionExpr tree.Expr
+		if len(valuesLessThan.ValueList) == 1 {
+			conditionExpr = elements[0]
+		}
+
+		if len(valuesLessThan.ValueList) > 1 {
+			for m := 1; m < len(elements); m++ {
+				if m == 1 {
+					conditionExpr = tree.NewAndExpr(elements[m-1], elements[m])
+				} else {
+					conditionExpr = tree.NewAndExpr(conditionExpr, elements[m])
+				}
+			}
+		}
+
+		when := &tree.When{
+			Cond: conditionExpr,
+			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+		}
+		whens[i] = when
+	}
+
+	caseWhenExpr := &tree.CaseExpr{
+		Expr:  nil,
+		Whens: whens,
+		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+	}
+	return caseWhenExpr, nil
+}
+
+func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.CaseExpr, error) {
+	whens := make([]*tree.When, len(defs))
+	for i, partition := range defs {
+		valuesIn := partition.Values.(*tree.ValuesIn)
+
+		tuple := tree.NewTuple(valuesIn.ValueList)
+		inExpr := tree.NewComparisonExpr(tree.IN, listExpr, tuple)
+
+		when := &tree.When{
+			Cond: inExpr,
+			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
+		}
+		whens[i] = when
+	}
+	caseWhenExpr := &tree.CaseExpr{
+		Expr:  nil,
+		Whens: whens,
+		Else:  tree.NewNumValWithType(constant.MakeInt64(int64(-1)), fmt.Sprintf("%v", -1), false, tree.P_int64),
+	}
+	return caseWhenExpr, nil
 }
 
 // buildPartitionDefinitionsInfo build partition definitions info without assign partition id. tbInfo will be constant
