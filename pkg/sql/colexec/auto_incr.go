@@ -143,7 +143,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, err
 	}
 
-	oriNum, step, err := getCurrentIndex(param, name)
+	oriNum, step, err := getCurrentIndex(param, name, param.proc.Mp())
 	if err != nil {
 		ctx, cancel := context.WithTimeout(
 			param.ctx,
@@ -260,15 +260,51 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []ui
 	return nil
 }
 
-func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, error) {
-	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
-	for {
+func getCurrentIndex(param *AutoIncrParam, colName string, mp *mpool.MPool) (uint64, uint64, error) {
+	ctx := context.TODO()
+
+	var rds []engine.Reader
+
+	ret, err := param.rel.Ranges(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	switch {
+	case len(ret) == 0:
+		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+			return 0, 0, err
+		}
+	case len(ret) == 1 && len(ret[0]) == 0:
+		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+			return 0, 0, err
+		}
+	case len(ret[0]) == 0:
+		rds0, err := param.rel.NewReader(ctx, 1, nil, nil)
+		if err != nil {
+			return 0, 0, err
+		}
+		rds1, err := param.rel.NewReader(ctx, 1, nil, ret[1:])
+		if err != nil {
+			return 0, 0, err
+		}
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = param.rel.NewReader(ctx, 1, nil, ret)
+	}
+
+	for len(rds) > 0 {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
-		if err != nil || bat == nil {
+		if err != nil {
 			return 0, 0, moerr.NewInvalidInput("can not find the auto col")
 		}
+		if bat == nil {
+			rds[0].Close()
+			rds = rds[1:]
+			continue
+		}
 		if len(bat.Vecs) < 2 {
-			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
+			return 0, 0, moerr.NewInternalError("the mo_increment_columns col num is not two")
 		}
 		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
 		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
@@ -280,9 +316,12 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
+			bat.Clean(mp)
 			return vs2[rowIndex], vs3[rowIndex], nil
 		}
+		bat.Clean(mp)
 	}
+	return 0, 0, nil
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
