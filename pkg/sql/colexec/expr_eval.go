@@ -86,6 +86,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
 		}
+		vec.SetIsBin(t.C.IsBin)
 		return vec, nil
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data

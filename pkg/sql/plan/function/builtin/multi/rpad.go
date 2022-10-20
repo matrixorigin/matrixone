@@ -173,7 +173,7 @@ func rpad(rowCount int, strs []string, sizes interface{}, pads interface{}, isCo
 		// XXX What is this code?
 		sizesFloat64 := make([]float64, len(sz))
 		isEmptyStringOrNull := make([]int, len(sz))
-		sizesFloat64, err2 = binary.BytesToFloat(sz, sizesFloat64, isEmptyStringOrNull)
+		sizesFloat64, err2 = binary.BytesToFloat(sz, sizesFloat64, false, isEmptyStringOrNull)
 		sizesInt64 := make([]int64, len(sz))
 		for i, val := range sizesFloat64 { //for func rpad,like '1.8', is 1, not 2.
 			sizesInt64[i] = int64(math.Floor(val))
