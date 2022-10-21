@@ -1269,22 +1269,6 @@ func NewTableOptionDelayKeyWrite(v uint64) *TableOptionDelayKeyWrite {
 	}
 }
 
-type TableOptionLowCardinality struct {
-	tableOptionImpl
-	Value uint64
-}
-
-func (node *TableOptionLowCardinality) Format(ctx *FmtCtx) {
-	ctx.WriteString("low_cardinality = ")
-	ctx.WriteString(strconv.FormatUint(node.Value, 10))
-}
-
-func NewTableOptionLowCardinality(v uint64) *TableOptionLowCardinality {
-	return &TableOptionLowCardinality{
-		Value: v,
-	}
-}
-
 type RowFormatType uint64
 
 const (

@@ -4863,10 +4863,6 @@ table_option:
     {
         $$ = &tree.TableOptionProperties{Preperties: $3}
     }
-|   LOW_CARDINALITY equal_opt INTEGRAL
-    {
-        $$ = tree.NewTableOptionLowCardinality(uint64($3.(int64)))
-    }
 // |   INSERT_METHOD equal_opt insert_method_options
 
 properties_list:

@@ -175,30 +175,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][]int64, proc *process.Process) error {
-	if ctr.fixedMap != nil {
-		for i, sels := range mSels {
-			lbucket := ctr.leftSels[ctr.fixedMap[i]-1]
-			for _, sel := range sels {
-				for _, v := range lbucket {
-					if ap.Cond != nil {
-						vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, int(v), int(sel), proc, ap.Cond)
-						if err != nil {
-							return err
-						}
-						bs := vector.MustTCols[bool](vec)
-						if !bs[0] {
-							vec.Free(proc.Mp())
-							continue
-						}
-						vec.Free(proc.Mp())
-					}
-					// TODO: low cardinality indexes join
-				}
-			}
-		}
-	}
-
-	// only the right join column has low cardinality index
 	col := vector.MustTCols[uint16](ctr.vecs[0])
 	for i, v := range col {
 		if v == 0 {
@@ -221,6 +197,10 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
 					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+						rbat.Clean(proc.Mp())
+						return err
+					}
+					if err := populateIndex(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
@@ -285,6 +265,7 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 	}
 
 	vec := ctr.vecs[0]
+	encoded := vector.New(types.Type{Oid: types.T_uint16})
 	// case 1
 	// 1. the join columns of both left table and right table are indexed
 	// 2. left condition is not an expression
@@ -293,13 +274,23 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 		// e.g. idx.dict = ["a"->1, "b"->2, "c"->3]
 		//      leftIdx.dict = ["c"->1, "d"->2, "b"->3, "a"->4]
 		//      mapping => fixed map = [3, 0, 2, 1]
-		ctr.fixedMap = idx.GetDict().FindBatch(leftIdx.GetDict().GetUnique())
-		ctr.leftSels = leftIdx.GetSels()[1:]
+		fixedMap := idx.GetDict().FindBatch(leftIdx.GetDict().GetUnique())
+		poses := vector.MustTCols[uint16](leftIdx.GetPoses())
+		col := make([]uint16, len(poses))
+		for i, pos := range poses {
+			if pos == 0 {
+				continue
+			}
+			col[i] = fixedMap[pos-1]
+		}
+		if err := vector.AppendFixed(encoded, col, m); err != nil {
+			encoded.Free(m)
+			return false, err
+		}
 	} else {
 		// case 2
 		// 1. only the join column of right table is indexed
 		// 2. it does not matter if left is an expression or not
-		encoded := vector.New(types.Type{Oid: types.T_uint16})
 		if err := idx.Encode(encoded, vec); err != nil {
 			encoded.Free(m)
 			vec.Free(m)
@@ -308,10 +299,10 @@ func (ctr *container) dictEncoding(m *mpool.MPool) (bool, error) {
 		if ctr.evecs[0].needFree {
 			vec.Free(m)
 		}
-		ctr.vecs[0] = encoded
-		ctr.evecs[0].vec = encoded
-		ctr.evecs[0].needFree = true
 	}
+	ctr.vecs[0] = encoded
+	ctr.evecs[0].vec = encoded
+	ctr.evecs[0].needFree = true
 	return true, nil
 }
 
@@ -327,9 +318,5 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mpool.MPool) e
 
 	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	dst, src := resultIdx.GetPoses(), idx.GetPoses()
-	if err := vector.UnionOne(dst, src, row, m); err != nil {
-		return err
-	}
-	resultIdx.UpdateSels([]uint16{vector.MustTCols[uint16](src)[row]}, nil)
-	return nil
+	return vector.UnionOne(dst, src, row, m)
 }

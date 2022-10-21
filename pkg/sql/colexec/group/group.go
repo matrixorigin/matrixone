@@ -330,7 +330,14 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 }
 
 func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
-	mSels := ctr.idx.GetSels()
+	mSels := make([][]int64, index.MaxLowCardinality+1)
+	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	for k, v := range poses {
+		if len(mSels[v]) == 0 {
+			mSels[v] = make([]int64, 0, 64)
+		}
+		mSels[v] = append(mSels[v], int64(k))
+	}
 	if len(mSels[0]) == 0 { // hasNotNull == true
 		mSels = mSels[1:]
 	}
@@ -357,31 +364,14 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 	for i, ag := range ctr.bat.Aggs {
 		aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
 		for j, sels := range mSels {
-			for _, ri := range sels {
-				if err := ag.Fill(int64(j), ri, 1, aggVecs); err != nil {
+			for _, sel := range sels {
+				if err := ag.Fill(int64(j), sel, 1, aggVecs); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	//for i, ag := range ctr.bat.Aggs {
-	//	aggVec := ctr.aggVecs[i].vec
-	//	for j, sels := range mSels {
-	//		if err := ctr.groupFill(ag, aggVec, int64(j), sels, bat, proc); err != nil {
-	//			return err
-	//		}
-	//	}
-	//}
 	return nil
-}
-
-// groupFill inefficient
-func (ctr *container) groupFill(ag agg.Agg[any], aggVec *vector.Vector, gi int64, sels []int64, bat *batch.Batch, proc *process.Process) error {
-	v := vector.New(aggVec.Typ)
-	if err := vector.Union(v, aggVec, sels, proc.Mp()); err != nil {
-		return err
-	}
-	return ag.BulkFill(gi, bat.Zs, []*vector.Vector{v})
 }
 
 func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {

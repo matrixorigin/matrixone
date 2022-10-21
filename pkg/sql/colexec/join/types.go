@@ -45,10 +45,6 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
-
-	// for low cardinality join
-	fixedMap []uint16
-	leftSels [][]int64
 }
 
 type Argument struct {
