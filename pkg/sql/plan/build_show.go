@@ -113,7 +113,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
-		if types.IsDecimal(typ.Oid) { //after decimal fix,revert this
+		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
 			typeStr = "DECIMAL"
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
@@ -122,7 +122,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		updateOpt := ""
 		if col.OnUpdate != nil {
 			if f, ok := col.OnUpdate.Expr.(*plan.Expr_F); ok { //? other type
-				updateOpt = " ON UPDATE " + f.F.GetFunc().GetObjName()
+				fStr, err := convertFunc2Str(f.F)
+				if err != nil {
+					return nil, err
+				}
+				updateOpt = " ON UPDATE " + fStr
 			}
 		}
 		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
