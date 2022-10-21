@@ -70,6 +70,9 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 }
 
 type Session struct {
+	// account id
+	accountId uint32
+
 	//protocol layer
 	protocol Protocol
 
@@ -1268,6 +1271,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
+}
+
+func (tcc *TxnCompilerContext) GetAccountId() uint32 {
+	return tcc.ses.accountId
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
