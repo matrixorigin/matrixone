@@ -41,7 +41,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 
 	mock := NewEmptyMockOptimizer()
 	for _, ast := range ddls {
-		_, err := mock.Optimize(ast)
+		_, err := mock.Optimize(ast, 0)
 		if err != nil {
 			t.Errorf("Optimizer failed, %v", err)
 		}
@@ -58,7 +58,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Query Parser failed, error %v", err)
 	}
 	for _, ast := range qs {
-		_, err := mock.Optimize(ast)
+		_, err := mock.Optimize(ast, 0)
 		if err != nil {
 			t.Errorf("Optimizer failed, NYI")
 		}
@@ -75,7 +75,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 			t.Errorf("Query %d Parser failed, error %v", qn, err)
 		}
 		for _, ast := range qns {
-			_, err := mock.Optimize(ast)
+			_, err := mock.Optimize(ast, 0)
 			if err != nil {
 				t.Errorf("Optimizer %d failed, error %v", qn, err)
 			}

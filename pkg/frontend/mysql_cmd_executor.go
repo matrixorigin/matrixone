@@ -1822,7 +1822,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var err error
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt)
+			ret, err = plan2.BuildPlan(ctx, stmt, getAccountId(requestCtx))
 			if err != nil {
 				return nil, err
 			}
@@ -1844,7 +1844,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt)
+		optimized, err := opt.Optimize(stmt, getAccountId(requestCtx))
 		if err != nil {
 			return nil, err
 		}
@@ -1854,7 +1854,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt)
+		ret, err = plan2.BuildPlan(ctx, stmt, getAccountId(requestCtx))
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
@@ -3059,4 +3059,13 @@ var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 
 func init() {
 	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	var accountId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	return accountId
 }

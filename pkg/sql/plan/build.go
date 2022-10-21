@@ -41,23 +41,23 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	}, err
 }
 
-func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, accountId uint32) (*Plan, error) {
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlan(ctx, stmt.Statement)
+	plan, err := BuildPlan(ctx, stmt.Statement, accountId)
 	if err != nil {
 		return nil, err
 	}
 	return plan, nil
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, accountId uint32) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
 	case *tree.ExplainAnalyze:
-		return buildExplainAnalyze(ctx, stmt)
+		return buildExplainAnalyze(ctx, stmt, accountId)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:
@@ -89,31 +89,31 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.DropIndex:
 		return buildDropIndex(stmt, ctx)
 	case *tree.ShowCreateDatabase:
-		return buildShowCreateDatabase(stmt, ctx)
+		return buildShowCreateDatabase(stmt, ctx, accountId)
 	case *tree.ShowCreateTable:
-		return buildShowCreateTable(stmt, ctx)
+		return buildShowCreateTable(stmt, ctx, accountId)
 	case *tree.ShowCreateView:
-		return buildShowCreateView(stmt, ctx)
+		return buildShowCreateView(stmt, ctx, accountId)
 	case *tree.ShowDatabases:
-		return buildShowDatabases(stmt, ctx)
+		return buildShowDatabases(stmt, ctx, accountId)
 	case *tree.ShowTables:
-		return buildShowTables(stmt, ctx)
+		return buildShowTables(stmt, ctx, accountId)
 	case *tree.ShowColumns:
-		return buildShowColumns(stmt, ctx)
+		return buildShowColumns(stmt, ctx, accountId)
 	case *tree.ShowTableStatus:
-		return buildShowTableStatus(stmt, ctx)
+		return buildShowTableStatus(stmt, ctx, accountId)
 	case *tree.ShowTarget:
-		return buildShowTarget(stmt, ctx)
+		return buildShowTarget(stmt, ctx, accountId)
 	case *tree.ShowIndex:
-		return buildShowIndex(stmt, ctx)
+		return buildShowIndex(stmt, ctx, accountId)
 	case *tree.ShowGrants:
-		return buildShowGrants(stmt, ctx)
+		return buildShowGrants(stmt, ctx, accountId)
 	case *tree.ShowVariables:
 		return buildShowVariables(stmt, ctx)
 	case *tree.ShowStatus:
-		return buildShowStatus(stmt, ctx)
+		return buildShowStatus(stmt, ctx, accountId)
 	case *tree.ShowProcessList:
-		return buildShowProcessList(stmt, ctx)
+		return buildShowProcessList(stmt, ctx, accountId)
 	case *tree.SetVar:
 		return buildSetVariables(stmt, ctx)
 	case *tree.Execute:
@@ -123,7 +123,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.Load:
 		return buildLoad(stmt, ctx)
 	case *tree.PrepareStmt, *tree.PrepareString:
-		return buildPrepare(stmt, ctx)
+		return buildPrepare(stmt, ctx, accountId)
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:

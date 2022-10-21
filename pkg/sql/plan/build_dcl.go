@@ -21,10 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement, accountId uint32) (*Plan, error) {
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt)
+			return BuildPlan(ctx, stmt, accountId)
 		}
 	}
 
@@ -34,7 +34,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt)
+		optimized, err := opt.Optimize(stmt, accountId)
 		if err != nil {
 			return nil, err
 		}
@@ -44,11 +44,11 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 			},
 		}, nil
 	default:
-		return BuildPlan(ctx, stmt)
+		return BuildPlan(ctx, stmt, accountId)
 	}
 }
 
-func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+func buildPrepare(stmt tree.Prepare, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	var preparePlan *Plan
 	var err error
 	var stmtName string
@@ -56,7 +56,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt, accountId)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInvalidInput("cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, stmts[0])
+		preparePlan, err = getPreparePlan(ctx, stmts[0], accountId)
 		if err != nil {
 			return nil, err
 		}

@@ -31,7 +31,8 @@ import (
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
 
-func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
+func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
+	ctx CompilerContext, accountId uint32) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
 		return nil, moerr.NewBadDB(stmt.Name)
 	}
@@ -46,10 +47,11 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 	sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
 	// logutil.Info(sqlStr)
 
-	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
+	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE, accountId)
 }
 
-func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
+func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext,
+	accountId uint32) (*Plan, error) {
 	tblName := stmt.Name.Parts[0]
 	dbName := ctx.DefaultDatabase()
 	if stmt.Name.NumParts == 2 {
@@ -62,7 +64,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
-		return buildShowCreateView(newStmt, ctx)
+		return buildShowCreateView(newStmt, ctx, accountId)
 	}
 
 	// sql := `
@@ -164,11 +166,12 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	sql = fmt.Sprintf(sql, tblName, buf.String())
 
-	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE, accountId)
 }
 
 // buildShowCreateView
-func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan, error) {
+func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext,
+	accountId uint32) (*Plan, error) {
 	tblName := stmt.Name.Parts[0]
 	dbName := ctx.DefaultDatabase()
 	if stmt.Name.NumParts == 2 {
@@ -202,31 +205,31 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	// logutil.Info(sqlStr)
 
-	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE, accountId)
 }
 
-func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
+func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType, accountId)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND datname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("datname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType, accountId)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
+func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
@@ -250,23 +253,24 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and (account_id = %v or account_id = 0)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType, accountId)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("relname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType, accountId)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
+func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
@@ -289,25 +293,26 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType, accountId)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("attname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType, accountId)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
+func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext,
+	accountId uint32) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
@@ -329,21 +334,21 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType, accountId)
 	}
 
 	if stmt.Like != nil {
 		// append filter [AND ma.relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("relname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType, accountId)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
 // TODO: Implement show target
-func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) {
+func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := ""
 	switch stmt.Type {
@@ -352,10 +357,10 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	default:
 		sql = "select 1 where 0"
 	}
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
+func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	dbName := string(stmt.TableName.Schema())
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -378,14 +383,14 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
 
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType, accountId)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
 // TODO: Improve SQL. Currently, Lack of the mata of grants
-func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
+func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := ""
 	if stmt.Username == "" {
@@ -395,7 +400,7 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Hostname)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
@@ -436,27 +441,30 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 	}, nil
 }
 
-func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
+func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext, accountId uint32) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_STATUS
 	sql := "select '' as `Variable_name`, '' as `Value` where 0"
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
+func buildShowProcessList(stmt *tree.ShowProcessList,
+	ctx CompilerContext, accountId uint32) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_PROCESSLIST
 	sql := "select '' as `Id`, '' as `User`, '' as `Host`, '' as `db` , '' as `Command`, '' as `Time` , '' as `State`, '' as `Info` where 0"
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	return returnByRewriteSQL(ctx, sql, ddlType, accountId)
 }
 
-func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByRewriteSQL(ctx CompilerContext, sql string,
+	ddlType plan.DataDefinition_DdlType, accountId uint32) (*Plan, error) {
 	stmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
 	}
-	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, stmt, ddlType, accountId)
 }
 
-func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
+	where *tree.Where, ddlType plan.DataDefinition_DdlType, accountId uint32) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(sql)
@@ -465,10 +473,11 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Wh
 	}
 	// set show statement's where clause to new statement
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
-	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType, accountId)
 }
 
-func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
+	ddlType plan.DataDefinition_DdlType, accountId uint32) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
@@ -492,7 +501,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 	// set show statement's like clause to new statement
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = whereExpr
 	// logutil.Info(tree.String(newStmt, dialect.MYSQL))
-	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType, accountId)
 }
 
 func getRewriteSQLStmt(sql string) (tree.Statement, error) {
@@ -506,8 +515,9 @@ func getRewriteSQLStmt(sql string) (tree.Statement, error) {
 	return newStmts[0], nil
 }
 
-func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	queryPlan, err := BuildPlan(ctx, stmt)
+func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
+	ddlType plan.DataDefinition_DdlType, accountId uint32) (*Plan, error) {
+	queryPlan, err := BuildPlan(ctx, stmt, accountId)
 	if err != nil {
 		return nil, err
 	}

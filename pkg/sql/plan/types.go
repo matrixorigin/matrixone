@@ -75,7 +75,7 @@ type CompilerContext interface {
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement) (*Query, error)
+	Optimize(stmt tree.Statement, accountId uint32) (*Query, error)
 	CurrentContext() CompilerContext
 }
 
