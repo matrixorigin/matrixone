@@ -1003,6 +1003,7 @@ func Test_convert_type(t *testing.T) {
 		convertEngineTypeToMysqlType(types.T_decimal64, &MysqlColumn{})
 		convertEngineTypeToMysqlType(types.T_decimal128, &MysqlColumn{})
 		convertEngineTypeToMysqlType(types.T_blob, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_text, &MysqlColumn{})
 	})
 }
 

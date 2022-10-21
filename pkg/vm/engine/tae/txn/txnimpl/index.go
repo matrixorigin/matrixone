@@ -81,7 +81,7 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := containers.MakeVector(kType, false)
 	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)))
 		}
@@ -185,7 +185,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		return InsertOp[types.TS](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_Rowid:
 		return InsertOp[types.Rowid](col.Slice(), start, count, row, dedupInput, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
 			set := make(map[string]bool)
@@ -254,7 +254,7 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 		return DedupOp[types.TS](vals, idx.tree)
 	case types.T_Rowid:
 		return DedupOp[types.Rowid](vals, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		bs := vals.(*containers.Bytes)
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.GetVarValueAt(i))
