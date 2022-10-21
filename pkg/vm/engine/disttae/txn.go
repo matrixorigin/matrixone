@@ -308,7 +308,8 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, txn.meta.SnapshotTS, writes)
+		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, nil,
+			txn.meta.SnapshotTS, nil, writes)
 		if err != nil {
 			return nil, err
 		}
@@ -466,29 +467,21 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 
 }
 
-// needSyncDnStores determine the dn store need to sync
-func needSyncDnStores(expr *plan.Expr, defs []engine.TableDef, dnStores []DNStore) []int {
-	//TODO
-	dnList := make([]int, len(dnStores))
-	for i := range dnStores {
-		dnList[i] = i
-	}
-	return dnList
-}
-
 // get row count of block
-func blockRows(blkInfo BlockMeta) int64 {
-	// TODO
-	return 0
+func blockRows(meta BlockMeta) int64 {
+	return meta.Rows
 }
 
-func blockMarshal(blkInfo BlockMeta) []byte {
-	// TODO
-	return nil
+func blockMarshal(meta BlockMeta) []byte {
+	data, _ := types.Encode(meta)
+	return data
 }
 
 func blockUnmarshal(data []byte) BlockMeta {
-	return BlockMeta{}
+	var meta BlockMeta
+
+	types.Decode(data, &meta)
+	return meta
 }
 
 // write a block to s3
@@ -532,9 +525,17 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	return writer.WriteEnd()
 }
 
-func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {
-	// get primay keys index(that was colPos in expr)
+func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
+	priKeys []*engine.Attribute, dnStores []DNStore) []int {
 	var pk *engine.Attribute
+
+	fullList := func() []int {
+		dnList := make([]int, len(dnStores))
+		for i := range dnStores {
+			dnList[i] = i
+		}
+		return dnList
+	}
 	for _, key := range priKeys {
 		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		if isCPkey {
@@ -543,28 +544,23 @@ func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attr
 		pk = key
 		break
 	}
-
 	// have no PrimaryKey, return all the list
-	if pk == nil {
-		return list
+	if expr == nil || pk == nil || tableDef == nil {
+		return fullList()
 	}
-
 	pkIndex := tableDef.Name2ColIndex[pk.Name]
 	if pk.Type.IsIntOrUint() {
 		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
 		if !canComputeRange {
-			return list
+			return fullList()
 		}
-
-		return getListByRange(list, pkRange)
-	} else {
-		canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
-		if !canComputeRange {
-			return list
-		}
-		listLen := uint64(len(list))
-		idx := hashVal % listLen
-		return list[idx : idx+1]
+		return getListByRange(dnStores, pkRange)
 	}
-
+	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
+	if !canComputeRange {
+		return fullList()
+	}
+	listLen := uint64(len(dnStores))
+	idx := hashVal % listLen
+	return []int{int(idx)}
 }
