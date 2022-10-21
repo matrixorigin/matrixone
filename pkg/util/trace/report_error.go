@@ -16,9 +16,11 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -37,7 +39,7 @@ type MOErrorHolder struct {
 }
 
 func (h *MOErrorHolder) GetName() string {
-	return MOErrorType
+	return errorView.OriginTable.GetName()
 }
 
 func (h *MOErrorHolder) Size() int64 {
@@ -47,22 +49,26 @@ func (h *MOErrorHolder) Free() {
 	h.Error = nil
 }
 
-func (h *MOErrorHolder) CsvFields() []string {
-	var span Span
-	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
-		span = SpanFromContext(ct.Context())
-	} else {
-		span = SpanFromContext(DefaultContext())
+func (h *MOErrorHolder) GetRow() *export.Row { return errorView.OriginTable.GetRow() }
+
+func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
+	row.Reset()
+	row.SetColumnVal(rawItemCol, errorView.Table)
+	row.SetColumnVal(timestampCol, nanoSec2DatetimeString(h.Timestamp))
+	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
+	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
+	row.SetColumnVal(errorCol, h.Error.Error())
+	row.SetColumnVal(stackCol, fmt.Sprintf(errorFormatter.Load().(string), h.Error))
+	var moError *moerr.Error
+	if errors.As(h.Error, &moError) {
+		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", moError.ErrorCode()))
 	}
-	var result []string
-	result = append(result, span.SpanContext().TraceID.String())
-	result = append(result, span.SpanContext().SpanID.String())
-	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType)
-	result = append(result, h.Error.Error())
-	result = append(result, fmt.Sprintf(errorFormatter.Load().(string), h.Error))
-	result = append(result, nanoSec2DatetimeString(h.Timestamp))
-	return result
+	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
+		span := SpanFromContext(ct.Context())
+		row.SetColumnVal(stmtIDCol, span.SpanContext().TraceID.String())
+		row.SetColumnVal(spanIDCol, span.SpanContext().SpanID.String())
+	}
+	return row.ToStrings()
 }
 
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
