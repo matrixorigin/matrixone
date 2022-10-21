@@ -16,7 +16,9 @@ package logtail
 
 import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type Scope = int
@@ -32,10 +34,45 @@ const (
 	ScopeUserTables
 )
 
+const (
+	SegmentAttr_ID       = "id"
+	SegmentAttr_CreateAt = "create_at"
+	SegmentAttr_State    = "state"
+)
+
 var (
 	// for blk meta response
 	BlkMetaSchema *catalog.Schema
 	DelSchema     *catalog.Schema
+	SegSchema     *catalog.Schema
+	TxnNodeSchema *catalog.Schema
+)
+
+var (
+	SegmentSchemaAttr = []string{
+		SegmentAttr_ID,
+		SegmentAttr_CreateAt,
+		SegmentAttr_State,
+	}
+	SegmentSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_bool, 0, 0, 0),
+	}
+	TxnNodeSchemaAttr = []string{
+		txnbase.SnapshotAttr_LogIndex_LSN,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_LogIndex_CSN,
+		txnbase.SnapshotAttr_LogIndex_Size,
+	}
+	TxnNodeSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+	}
 )
 
 func init() {
@@ -58,4 +95,31 @@ func init() {
 
 	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
 	DelSchema = catalog.NewEmptySchema("del")
+
+	SegSchema = catalog.NewEmptySchema("segment")
+
+	for i, colname := range SegmentSchemaAttr {
+		if i == 0 {
+			if err := SegSchema.AppendPKCol(colname, SegmentSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := SegSchema.AppendCol(colname, SegmentSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	TxnNodeSchema = catalog.NewEmptySchema("segment")
+
+	for i, colname := range TxnNodeSchemaAttr {
+		if i == 0 {
+			if err := TxnNodeSchema.AppendPKCol(colname, TxnNodeSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := TxnNodeSchema.AppendCol(colname, TxnNodeSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
 }

@@ -72,6 +72,12 @@ func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTa
 	return visitor.BuildResp()
 }
 
+func CollectSnapshot(c *catalog.Catalog, start, end types.TS) (*CheckpointLogtailRespBuilder, error) {
+	visitor := NewCheckpointLogtailRespBuilder(start, end)
+	c.RecurLoop(visitor)
+	return visitor, nil
+}
+
 type RespBuilder interface {
 	catalog.Processor
 	BuildResp() (api.SyncLogTailResp, error)
@@ -488,4 +494,278 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		CkpLocation: b.checkpoint,
 		Commands:    entries,
 	}, nil
+}
+
+type UserTableSnapshot struct {
+	start, end         types.TS
+	tid, did           uint64
+	segInsBatch        *containers.Batch
+	segInsTxnBatch     *containers.Batch
+	segDelBatch        *containers.Batch
+	segDelTxnBatch     *containers.Batch
+	blkMetaInsBatch    *containers.Batch
+	blkMetaInsTxnBatch *containers.Batch
+	blkMetaDelBatch    *containers.Batch
+	blkMetaDelTxnBatch *containers.Batch
+}
+
+func NewUserTableSnapshot(tid, did uint64, start, end types.TS) *UserTableSnapshot {
+	b := &UserTableSnapshot{
+		start:              start,
+		end:                end,
+		tid:                tid,
+		did:                did,
+		segInsBatch:        makeRespBatchFromSchema(SegSchema),
+		segInsTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		segDelBatch:        makeRespBatchFromSchema(DelSchema),
+		segDelTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		blkMetaInsBatch:    makeRespBatchFromSchema(BlkMetaSchema),
+		blkMetaInsTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+		blkMetaDelBatch:    makeRespBatchFromSchema(DelSchema),
+		blkMetaDelTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+	}
+	return b
+}
+func (b *UserTableSnapshot) VisitSeg(entry *catalog.SegmentEntry) (err error) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	entry.RUnlock()
+	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
+		segNode := node.(*catalog.MetadataMVCCNode)
+		if segNode.HasDropCommitted() {
+			b.segDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
+			b.segDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd())
+			segNode.TxnMVCCNode.FillTxnRows(b.segDelTxnBatch)
+		} else {
+			b.segInsBatch.GetVectorByName(SegmentAttr_ID).Append(entry.GetID())
+			b.segInsBatch.GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd())
+			b.segInsBatch.GetVectorByName(SegmentAttr_State).Append(entry.IsAppendable())
+			segNode.TxnMVCCNode.FillTxnRows(b.segInsTxnBatch)
+		}
+	}
+	return nil
+}
+func (b *UserTableSnapshot) VisitBlk(entry *catalog.BlockEntry) (err error) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	entry.RUnlock()
+	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
+		metaNode := node.(*catalog.MetadataMVCCNode)
+		if metaNode.HasDropCommitted() {
+			b.segDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
+			b.segDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaDelTxnBatch)
+		} else {
+			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
+			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())
+			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+			b.blkMetaInsBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+			b.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
+			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaInsTxnBatch)
+		}
+	}
+	return nil
+}
+func (b *UserTableSnapshot) Close() {
+	if b.segInsBatch != nil {
+		b.segInsBatch.Close()
+		b.segInsBatch = nil
+	}
+	if b.segInsTxnBatch != nil {
+		b.segInsTxnBatch.Close()
+		b.segInsTxnBatch = nil
+	}
+	if b.segDelBatch != nil {
+		b.segDelBatch.Close()
+		b.segDelBatch = nil
+	}
+	if b.segDelTxnBatch != nil {
+		b.segDelTxnBatch.Close()
+		b.segDelTxnBatch = nil
+	}
+	if b.blkMetaInsBatch != nil {
+		b.blkMetaInsBatch.Close()
+		b.blkMetaInsBatch = nil
+	}
+	if b.blkMetaInsTxnBatch != nil {
+		b.blkMetaInsTxnBatch.Close()
+		b.blkMetaInsTxnBatch = nil
+	}
+	if b.blkMetaDelBatch != nil {
+		b.blkMetaDelBatch.Close()
+		b.blkMetaDelBatch = nil
+	}
+	if b.blkMetaDelTxnBatch != nil {
+		b.blkMetaDelTxnBatch.Close()
+		b.blkMetaDelTxnBatch = nil
+	}
+}
+
+type CheckpointLogtailRespBuilder struct {
+	*catalog.LoopProcessor
+	start, end types.TS
+	// checkpoint      string
+	dbInsBatch     *containers.Batch
+	dbInsTxnBatch  *containers.Batch
+	dbDelBatch     *containers.Batch
+	dbDelTxnBatch  *containers.Batch
+	tblInsBatch    *containers.Batch
+	tblInsTxnBatch *containers.Batch
+	tblDelBatch    *containers.Batch
+	tblDelTxnBatch *containers.Batch
+	tblColInsBatch *containers.Batch
+	tblColDelBatch *containers.Batch
+	tableSnapshots map[uint64]*UserTableSnapshot
+}
+
+func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailRespBuilder {
+	b := &CheckpointLogtailRespBuilder{
+		LoopProcessor:  new(catalog.LoopProcessor),
+		start:          start,
+		end:            end,
+		tableSnapshots: make(map[uint64]*UserTableSnapshot),
+		dbInsBatch:     makeRespBatchFromSchema(catalog.SystemDBSchema),
+		dbInsTxnBatch:  makeRespBatchFromSchema(TxnNodeSchema),
+		dbDelBatch:     makeRespBatchFromSchema(DelSchema),
+		dbDelTxnBatch:  makeRespBatchFromSchema(TxnNodeSchema),
+		tblInsBatch:    makeRespBatchFromSchema(catalog.SystemTableSchema),
+		tblInsTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+		tblDelBatch:    makeRespBatchFromSchema(DelSchema),
+		tblDelTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+		tblColInsBatch: makeRespBatchFromSchema(catalog.SystemColumnSchema),
+		tblColDelBatch: makeRespBatchFromSchema(DelSchema),
+	}
+	b.DatabaseFn = b.VisitDB
+	b.TableFn = b.VisitTable
+	b.SegmentFn = b.VisitSeg
+	b.BlockFn = b.VisitBlk
+	return b
+}
+func (b *CheckpointLogtailRespBuilder) GetDBBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
+	return b.dbInsBatch, b.dbInsTxnBatch, b.dbDelBatch, b.dbDelTxnBatch
+}
+func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	entry.RUnlock()
+	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
+		dbNode := node.(*catalog.DBMVCCNode)
+		if dbNode.HasDropCommitted() {
+			// delScehma is empty, it will just fill rowid / commit ts
+			catalogEntry2Batch(b.dbDelBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			dbNode.TxnMVCCNode.FillTxnRows(b.dbInsTxnBatch)
+		} else {
+			catalogEntry2Batch(b.dbInsBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			dbNode.TxnMVCCNode.FillTxnRows(b.dbDelTxnBatch)
+		}
+	}
+	return nil
+}
+
+func (b *CheckpointLogtailRespBuilder) VisitTable(entry *catalog.TableEntry) (err error) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	entry.RUnlock()
+	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
+		tblNode := node.(*catalog.TableMVCCNode)
+		if !tblNode.HasDropCommitted() {
+			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
+				txnimpl.FillColumnRow(entry, syscol.Name, b.tblColInsBatch.GetVectorByName(syscol.Name))
+				rowidVec := b.tblColInsBatch.GetVectorByName(catalog.AttrRowID)
+				commitVec := b.tblColInsBatch.GetVectorByName(catalog.AttrCommitTs)
+				for _, usercol := range entry.GetSchema().ColDefs {
+					rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
+					commitVec.Append(tblNode.GetEnd())
+				}
+			}
+			catalogEntry2Batch(b.tblInsBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+			tblNode.TxnMVCCNode.FillTxnRows(b.tblInsTxnBatch)
+		} else {
+			rowidVec := b.tblColDelBatch.GetVectorByName(catalog.AttrRowID)
+			commitVec := b.tblColDelBatch.GetVectorByName(catalog.AttrCommitTs)
+			for _, usercol := range entry.GetSchema().ColDefs {
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
+				commitVec.Append(tblNode.GetEnd())
+			}
+			catalogEntry2Batch(b.tblColDelBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+			tblNode.TxnMVCCNode.FillTxnRows(b.tblDelTxnBatch)
+		}
+	}
+	return nil
+}
+func (b *CheckpointLogtailRespBuilder) VisitSeg(entry *catalog.SegmentEntry) (err error) {
+	tbl := b.getUserTable(entry.GetTable().GetDB().ID, entry.GetTable().ID)
+	tbl.VisitSeg(entry)
+	return nil
+}
+func (b *CheckpointLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) (err error) {
+	tbl := b.getUserTable(entry.GetSegment().GetTable().GetDB().ID, entry.GetSegment().GetTable().ID)
+	tbl.VisitBlk(entry)
+	return nil
+}
+func (b *CheckpointLogtailRespBuilder) getUserTable(tid, did uint64) (tbl *UserTableSnapshot) {
+	var ok bool
+	if tbl, ok = b.tableSnapshots[tid]; !ok {
+		tbl = NewUserTableSnapshot(tid, did, b.start, b.end)
+	}
+	return
+}
+func (b *CheckpointLogtailRespBuilder) Close() {
+	if b.dbInsBatch != nil {
+		b.dbInsBatch.Close()
+		b.dbInsBatch = nil
+	}
+	if b.dbInsTxnBatch != nil {
+		b.dbInsTxnBatch.Close()
+		b.dbInsTxnBatch = nil
+	}
+	if b.dbDelBatch != nil {
+		b.dbDelBatch.Close()
+		b.dbDelBatch = nil
+	}
+	if b.dbDelTxnBatch != nil {
+		b.dbDelTxnBatch.Close()
+		b.dbDelTxnBatch = nil
+	}
+	if b.tblInsBatch != nil {
+		b.tblInsBatch.Close()
+		b.tblInsBatch = nil
+	}
+	if b.tblInsTxnBatch != nil {
+		b.tblInsTxnBatch.Close()
+		b.tblInsTxnBatch = nil
+	}
+	if b.tblDelBatch != nil {
+		b.tblDelBatch.Close()
+		b.tblDelBatch = nil
+	}
+	if b.tblDelTxnBatch != nil {
+		b.tblDelTxnBatch.Close()
+		b.tblDelTxnBatch = nil
+	}
+	if b.tblColInsBatch != nil {
+		b.tblColInsBatch.Close()
+		b.tblColInsBatch = nil
+	}
+	if b.tblColDelBatch != nil {
+		b.tblColDelBatch.Close()
+		b.tblColDelBatch = nil
+	}
+	for _, userTable := range b.tableSnapshots {
+		userTable.Close()
+	}
 }

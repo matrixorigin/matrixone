@@ -3817,3 +3817,28 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
 }
+
+func TestSnapshotBatch(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 30)
+	tae.createRelAndAppend(bat, true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
+	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	ins, insTxn, del, delTxn := builder.GetDBBatchs()
+	t.Log(ins)
+	t.Log(insTxn)
+	t.Log(del)
+	t.Log(delTxn)
+}
