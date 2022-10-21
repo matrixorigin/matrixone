@@ -388,7 +388,7 @@ const LINES = 57710
 const ROWS = 57711
 const IMPORT = 57712
 const FROM_JSONLINE = 57713
-const DUMP = 57714
+const MODUMP = 57714
 const DATABASES = 57715
 const TABLES = 57716
 const EXTENDED = 57717
@@ -898,7 +898,7 @@ var yyToknames = [...]string{
 	"ROWS",
 	"IMPORT",
 	"FROM_JSONLINE",
-	"DUMP",
+	"MODUMP",
 	"DATABASES",
 	"TABLES",
 	"EXTENDED",
@@ -6116,7 +6116,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:633
 		{
-			yyLOCAL = &tree.Dump{
+			yyLOCAL = &tree.MoDump{
 				Database:    tree.Identifier(yyDollar[3].str),
 				OutFile:     yyDollar[5].str,
 				MaxFileSize: int64(yyDollar[6].int64ValUnion()),
@@ -6128,7 +6128,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:641
 		{
-			yyLOCAL = &tree.Dump{
+			yyLOCAL = &tree.MoDump{
 				Database:    tree.Identifier(yyDollar[3].str),
 				Tables:      yyDollar[5].tableNamesUnion(),
 				OutFile:     yyDollar[7].str,

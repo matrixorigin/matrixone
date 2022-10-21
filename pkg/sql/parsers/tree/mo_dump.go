@@ -16,7 +16,7 @@ package tree
 
 import "strconv"
 
-type Dump struct {
+type MoDump struct {
 	statementImpl
 	Database    Identifier
 	Tables      TableNames
@@ -24,7 +24,7 @@ type Dump struct {
 	MaxFileSize int64
 }
 
-func (node *Dump) Format(ctx *FmtCtx) {
+func (node *MoDump) Format(ctx *FmtCtx) {
 	ctx.WriteString("dump")
 	if node.Database != "" {
 		ctx.WriteString(" database ")

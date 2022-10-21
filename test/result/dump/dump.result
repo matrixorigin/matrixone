@@ -6,5 +6,5 @@ insert into t1 values(1,1,1,1,1,1,1,1,1,1,'2019-01-01','2019-01-01 00:00:00','20
 select * from t1;
 c1	c2	c3	c4	c5	c6	c7	c8	c9	c10	c11	c12	c13	c14	c15	c16	c17	c18	c19	c20
 1	1	1	1	1	1	1	1	1.0	1.0	2019-01-01	2019-01-01 00:00:00	2019-01-01 00:00:00	a	a	{"a": 1}	1212	a	aza	00000000-0000-0000-0000-000000000000
-dump database t into 'a.sql';
+modump database t into 'a.sql';
 drop database t;

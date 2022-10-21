@@ -1070,7 +1070,7 @@ func TestHandleDump(t *testing.T) {
 			protocol: proto,
 		}
 		mce.ses = ses
-		dump := &tree.Dump{
+		dump := &tree.MoDump{
 			OutFile: "test",
 		}
 		err = mce.handleDump(ctx, dump)
@@ -1122,7 +1122,7 @@ func TestDump2File(t *testing.T) {
 			protocol: proto,
 		}
 		mce.ses = ses
-		dump := &tree.Dump{
+		dump := &tree.MoDump{
 			OutFile: "test_dump_" + strconv.Itoa(int(time.Now().Unix())),
 		}
 		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)

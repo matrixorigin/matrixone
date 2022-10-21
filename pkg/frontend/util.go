@@ -626,7 +626,7 @@ func createDumpFile(filename string) (*os.File, error) {
 	return ret, nil
 }
 
-func writeDump2File(buf *bytes.Buffer, dump *tree.Dump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
+func writeDump2File(buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
 	if dump.MaxFileSize > 0 && int64(buf.Len()) > dump.MaxFileSize {
 		err = moerr.NewInternalError("dump: data in db is too large,please set a larger max_file_size")
 		return

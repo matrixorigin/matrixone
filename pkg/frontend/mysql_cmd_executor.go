@@ -875,7 +875,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.Dump) error {
+func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
 	var err error
 	dump.OutFile = maybeAppendExtension(dump.OutFile)
 	exists, err := fileExists(dump.OutFile)
@@ -894,7 +894,7 @@ func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.D
 	return mce.dumpData(requestCtx, dump)
 }
 
-func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dump) error {
+func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.MoDump) error {
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
 	bh := ses.GetBackgroundExec(requestCtx)
@@ -964,7 +964,7 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 	return mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
 }
 
-func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tree.Dump, dbDDL string, params []*dumpTable, showDbDDL bool) error {
+func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tree.MoDump, dbDDL string, params []*dumpTable, showDbDDL bool) error {
 	ses := mce.GetSession()
 	var (
 		err         error
@@ -2387,7 +2387,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-		case *tree.Dump:
+		case *tree.MoDump:
 			selfHandle = true
 			//dump
 			err = mce.handleDump(requestCtx, st)
@@ -2805,7 +2805,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-			*tree.CreateView, *tree.DropView, *tree.Load, *tree.Dump,
+			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -3076,7 +3076,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true, nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Dump:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
