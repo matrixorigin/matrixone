@@ -979,8 +979,8 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 			return nil, err
 		}
 		metas[i] = BlockMeta{
-			info:    blockInfo,
-			zonemap: zm,
+			Info:    blockInfo,
+			Zonemap: zm,
 		}
 	}
 	return metas, nil
@@ -1003,7 +1003,7 @@ func genModifedBlocks(deletes map[uint64][]int, orgs, modfs []BlockMeta,
 			if needRead(expr, blk, tableDef, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
-					deletes: deletes[orgs[i].info.BlockID],
+					deletes: deletes[orgs[i].Info.BlockID],
 				})
 			}
 		}

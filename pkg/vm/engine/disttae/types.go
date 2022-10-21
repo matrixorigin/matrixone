@@ -270,8 +270,9 @@ type emptyReader struct {
 }
 
 type BlockMeta struct {
-	info    catalog.BlockInfo
-	zonemap [][64]byte
+	Rows    int64
+	Info    catalog.BlockInfo
+	Zonemap [][64]byte
 }
 
 type ModifyBlockMeta struct {
@@ -286,5 +287,5 @@ func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
-	return a.info.BlockID == b.info.BlockID
+	return a.Info.BlockID == b.Info.BlockID
 }

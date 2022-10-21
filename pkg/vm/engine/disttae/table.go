@@ -65,7 +65,18 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
+	priKeys := make([]*engine.Attribute, 0, 1)
+	if tbl.primaryIdx >= 0 {
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				if attr.Attr.Primary {
+					priKeys = append(priKeys, &attr.Attr)
+				}
+			}
+		}
+	}
+	//	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
+	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}

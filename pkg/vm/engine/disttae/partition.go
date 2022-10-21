@@ -106,7 +106,7 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 		}
 	}
 	for i := range blocks {
-		if _, ok := deletes[blocks[i].info.BlockID]; !ok {
+		if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
 			blks = append(blks, blocks[i])
 		}
 	}

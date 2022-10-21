@@ -20,18 +20,18 @@ const (
 	Semi
 	Left
 	Limit
-	Merge
+	Merge //5
 	Order
-	Group
-	Output
+	Group  //7
+	Output //8
 	Offset
 	Product
 	Restrict
 	Dispatch
-	Connector
-	Projection
+	Connector  //13
+	Projection //14
 	Anti
-	Single
+	Single //16
 	Mark
 
 	LoopJoin
@@ -43,7 +43,7 @@ const (
 	MergeTop
 	MergeLimit
 	MergeOrder
-	MergeGroup
+	MergeGroup //26
 	MergeOffset
 
 	Deletion
