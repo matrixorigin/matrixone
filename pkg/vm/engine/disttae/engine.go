@@ -117,6 +117,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}

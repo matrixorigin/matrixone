@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -119,11 +120,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		return err
 	}
+	id := rel.GetTableID(c.ctx)
 	err = dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
-	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, id)
 	if err != nil {
 		return err
 	}

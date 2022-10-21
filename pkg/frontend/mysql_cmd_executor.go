@@ -1860,6 +1860,9 @@ func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
+	if ses != nil {
+		ses.accountId = getAccountId(requestCtx)
+	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			ret, err = plan2.BuildPlan(ctx, stmt)
@@ -2598,8 +2601,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable,
-			*tree.Deallocate, *tree.Use,
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
@@ -2618,6 +2620,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return retErr
 				}
 			} else {
+				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
+					trace.EndStatement(requestCtx, err2)
+					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+					return retErr
+				}
+			}
+
+		case *tree.Deallocate:
+			//we will not send response in COM_STMT_CLOSE command
+			if ses.GetCmd() != int(COM_STMT_CLOSE) {
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
@@ -3099,4 +3113,13 @@ var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 
 func init() {
 	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	var accountId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	return accountId
 }
