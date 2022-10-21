@@ -22,7 +22,7 @@ auth_option: {
 
 #### auth_option
 
-Specifies the default account name and authorization mode of the tenant. Results are returned for random passwords.
+Specifies the default account name and authorization mode of the tenant, `auth_string` specifies the password explicitly.
 
 #### status_option
 
