@@ -1,0 +1,77 @@
+#SELECT,  算术运算，嵌套
+#select now()-now(),weekday("2022-06-02")-weekday(now()),unix_timestamp()-unix_timestamp(now());
+#select now()-current_timestamp();
+
+#0.5 not supported curdate and curtime 
+#select now()-curdate()*1000000-curtime();
+
+#INSERT
+#0.5 not support MAKETIME function
+#CREATE TABLE t1 (a TIMESTAMP);
+#INSERT INTO t1 VALUES (now()), (now());
+#SELECT 1 FROM t1 ORDER BY MAKETIME(1, 1, a);
+#DROP TABLE t1;
+
+#CREATE TABLE t1 (a TIMESTAMP);
+#INSERT INTO t1 select (now());
+#INSERT INTO t1 select (now());
+#SELECT 1 FROM t1 ORDER BY 1;
+#DROP TABLE t1;
+
+#INSERT
+#DROP TABLE if exists t1;
+#create table t1 (a int primary key, b int, c int, d timestamp default current_timestamp);
+#insert into t1 select 1,1,1,now();
+#insert into t1 select 2,0,0,null;
+#select a,b,c,year(d) from t1;
+#DROP TABLE t1;
+
+#比较运算,数据类型
+#CREATE TABLE t1 (a TIMESTAMP);
+#INSERT INTO t1 select (now());
+#INSERT INTO t1 select (now());
+#INSERT INTO t1 select (now());
+#SELECT year(a) FROM t1 WHERE a > '2008-01-01';
+#DROP TABLE t1;
+
+#算术运算，CREATE SELECT
+#0.5 not supported
+#create table t1 select now() - now(), curtime() - curtime(), sec_to_time(1) + 0, from_unixtime(1) + 0;
+#select * from t1;
+#drop table t1;
+
+#ALTER TABLE
+#DROP TABLE IF EXISTS t1;
+#DROP TABLE IF EXISTS t2;
+#SET TIMESTAMP=1558818549;
+#CREATE TABLE t1 (i INT PRIMARY KEY, no_default DATETIME);
+#CREATE TABLE t2(i INT, alter_date DATETIME);
+#INSERT INTO t2 select 0, now();
+#INSERT INTO t2 select 1, now();
+#INSERT INTO t2 select 2, now();
+#SET TIMESTAMP=1558818554;
+#INSERT INTO t1 (i, no_default) select 0, now();
+#INSERT INTO t1 (i, no_default) select 1, now();
+#INSERT INTO t1 (i, no_default) select 2, now();
+#SELECT (t1.no_default > t2.alter_date) AS no_default_newer_than_alter,(t1.no_default > t2.alter_date) AS alter_default_newer_than_alter FROM t1 NATURAL JOIN t2;
+#DROP TABLE t2;
+#DROP TABLE t1;
+
+
+#DROP TABLE if exists t1;
+#create table t1 (a int primary key, b int, c int, d timestamp default current_timestamp);
+#insert into t1 select 1,1,1,now();
+#insert into t1 select 2,0,0,null;
+#0.5 not supported
+#replace into t1 values(null,1,0,null);
+#select last_insert_id();
+#select a, b, c, year(d) from t1;
+#drop table t1;
+#create table t1 (a int primary key, b int, c int, e int, d timestamp default current_timestamp);
+#insert into t1 select 1,1,1,1,now();
+#insert into t1 select 2,0,0,0,null;
+#0.5 not supported
+#replace into t1 values(null,1,0,2,null);
+#select last_insert_id();
+#select a, b, c, year(d) from t1;
+#drop table t1;
