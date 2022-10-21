@@ -294,6 +294,19 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					pks = append(pks, def.Name.Parts[0])
 				}
 
+				if _, ok := attr.(*tree.AttributeUnique); ok {
+					part := &tree.KeyPart{
+						ColName: def.Name,
+					}
+					uniqueKey := &tree.UniqueIndex{
+						KeyParts:    []*tree.KeyPart{part},
+						Name:        "",
+						Empty:       true,
+						IndexOption: nil,
+					}
+					indexInfos = append(indexInfos, uniqueKey)
+				}
+
 				if attrComment, ok := attr.(*tree.AttributeComment); ok {
 					comment = attrComment.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
