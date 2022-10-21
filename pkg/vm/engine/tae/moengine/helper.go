@@ -277,6 +277,9 @@ func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Sc
 		case *engine.ViewDef:
 			schema.View = defVal.View
 
+		case *engine.CommentDef:
+			schema.Comment = defVal.Comment
+
 		default:
 			// We will not deal with other cases for the time being
 		}
