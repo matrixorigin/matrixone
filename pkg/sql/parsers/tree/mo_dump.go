@@ -25,7 +25,7 @@ type MoDump struct {
 }
 
 func (node *MoDump) Format(ctx *FmtCtx) {
-	ctx.WriteString("dump")
+	ctx.WriteString("modump")
 	if node.Database != "" {
 		ctx.WriteString(" database ")
 		ctx.WriteString(string(node.Database))
