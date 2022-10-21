@@ -109,6 +109,37 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 		WithBackendHasPayloadResponse())
 }
 
+func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			wg.Wait()
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			req := newTestMessage(1)
+			req.payload = []byte("hello")
+			f, err := b.Send(ctx, req)
+			require.NoError(t, err)
+			id := f.id
+			f.mu.Lock()
+			f.mu.closed = true
+			f.releaseFunc = nil // make it nil to keep this future in b.mu.features
+			f.mu.Unlock()
+			b.mu.RLock()
+			_, ok := b.mu.futures[id]
+			b.mu.RUnlock()
+			assert.True(t, ok)
+			wg.Done()
+			time.Sleep(time.Second)
+		},
+		WithBackendConnectWhenCreate(),
+		WithBackendHasPayloadResponse())
+}
+
 func TestCloseWhileContinueSending(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	testBackendSend(t,
