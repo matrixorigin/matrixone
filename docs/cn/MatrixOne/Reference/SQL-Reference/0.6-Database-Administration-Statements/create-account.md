@@ -22,7 +22,7 @@ auth_option: {
 
 #### auth_option
 
-指定租户默认的帐号名和授权方式，并返回随机密码。
+指定租户默认的帐号名和授权方式，`auth_string` 显式指定密码。
 
 #### status_option
 
