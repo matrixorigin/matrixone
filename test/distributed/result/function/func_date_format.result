@@ -1,0 +1,68 @@
+create table t_dates(
+a_date date,
+b_datetime datetime,
+c_timestamp timestamp
+);
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02.123456');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10.123456');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02.123456','1999-04-05 11:01:02.123456');
+insert into t_dates values('1999-04-05','2004-04-03 13:11:10.123456','2004-04-03 13:11:10.123456');
+select date_format(a_date, '%W %M %Y'),date_format(b_datetime, '%W %M %Y'),date_format(c_timestamp, '%W %M %Y') from t_dates;
+date_format(a_date, '%W %M %Y')	date_format(b_datetime, '%W %M %Y')	date_format(c_timestamp, '%W %M %Y')
+Monday April 1999	Monday April 1999	Monday April 1999
+Saturday April 2004	Saturday April 2004	Saturday April 2004
+Monday April 1999	Monday April 1999	Monday April 1999
+Saturday April 2004	Saturday April 2004	Saturday April 2004
+Monday April 1999	Monday April 1999	Monday April 1999
+Monday April 1999	Saturday April 2004	Saturday April 2004
+select date_format(NULL, '%W %M %Y'),date_format('1999-04-05 11:01:02', NULL),date_format(NULL, NULL);
+date_format(NULL, '%W %M %Y')	date_format('1999-04-05 11:01:02', NULL)	date_format(NULL, NULL)
+null	null	null
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+DATE_FORMAT('2012-12-21 23:12:34.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%')
+Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %
+SELECT DATE_FORMAT('2010-01-07 23:12:34.12345', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+DATE_FORMAT('2010-01-07 23:12:34.12345', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%')
+Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %
+SELECT DATE_FORMAT('0001-01-01 00:00:00.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+DATE_FORMAT('0001-01-01 00:00:00.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%')
+Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 01 53 01 Mon Monday 1 0000 0001 0001 01 %
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', 'abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z');
+DATE_FORMAT('2012-12-21 23:12:34.123456', 'abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z')
+abcDec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12!123 %xyz z
+select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d %H:%i:%s'),date_format(c_timestamp,'%Y-%m-%d %H:%i:%s') from t_dates;
+date_format(a_date,'%Y-%m-%d %H:%i:%s')	date_format(b_datetime,'%Y-%m-%d %H:%i:%s')	date_format(c_timestamp,'%Y-%m-%d %H:%i:%s')
+1999-04-05 00:00:00	1999-04-05 11:01:02	1999-04-05 11:01:02
+2004-04-03 00:00:00	2004-04-03 13:11:10	2004-04-03 13:11:10
+1999-04-05 00:00:00	1999-04-05 11:01:02	1999-04-05 11:01:02
+2004-04-03 00:00:00	2004-04-03 13:11:10	2004-04-03 13:11:10
+1999-04-05 00:00:00	1999-04-05 11:01:02	1999-04-05 11:01:02
+1999-04-05 00:00:00	2004-04-03 13:11:10	2004-04-03 13:11:10
+select date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s'),date_format(cast('2004-04-03 13:11:10' as datetime),'%Y-%m-%d %H:%i:%s') from t_dates;
+date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s')    date_format(cast('2004-04-03 13:11:10' as datetime),'%Y-%m-%d %H:%i:%s')
+2004-04-03 00:00:00	2004-04-03 13:11:10
+2004-04-03 00:00:00	2004-04-03 13:11:10
+2004-04-03 00:00:00	2004-04-03 13:11:10
+2004-04-03 00:00:00	2004-04-03 13:11:10
+2004-04-03 00:00:00	2004-04-03 13:11:10
+2004-04-03 00:00:00	2004-04-03 13:11:10
+drop table t_dates;
+SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
+invalid input: invalid datatime value 123456
+select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19980021000000
+select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19980131131415, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+13|01|13|1|14|PM|01:14:15 PM|15|13:14:15| January|Saturday|31st|1998|98|Sat|Jan|031|01|31|01|15|Saturday
+select date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19981321000000
+select date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19981021000000, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Wednesday|21st|1998|98|Wed|Oct|294|10|21|12|00|Wednesday
+select date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19981033000000
+select date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19981031000000, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Saturday|31st|1998|98|Sat|Oct|304|10|31|12|00|Saturday

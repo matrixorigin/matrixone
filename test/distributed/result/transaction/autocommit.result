@@ -1,0 +1,70 @@
+set autocommit=1;
+drop table if exists t1;
+create table t1(a int);
+start transaction;
+insert into t1 values(1);
+start transaction;
+select * from t1;
+a
+1
+insert into t1 values(2);
+select * from t1;
+a
+1
+2
+rollback;
+select * from t1;
+a
+1
+start transaction;
+create table t2(a int);
+insert into t2 values (1);
+rollback;
+select * from t2;
+SQL parser error: table "t2" does not exist
+start transaction;
+use autocommit;
+start transaction;
+drop table t1;
+internal error: Only CREATE of DDL is supported in transactions
+commit;
+start transaction;
+set autocommit=1;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+commit;
+start transaction;
+show tables;
+tables_in_autocommit
+t1
+commit;
+set autocommit=0;
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values(1);
+rollback;
+create table t1(a int);
+select * from t1;
+a
+insert into t1 values(1);
+insert into t1 values(2);
+set autocommit=1;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+commit;
+set autocommit=1;
+set autocommit=0;
+select * from t1;
+a
+1
+2
+insert into t1 values(3);
+create table t2 (a int);
+rollback;
+select * from t2;
+SQL parser error: table "t2" does not exist
+insert into t1 values(3);
+use autocommit;
+show tables;
+tables_in_autocommit
+t1
+commit;
+set autocommit = 1;
