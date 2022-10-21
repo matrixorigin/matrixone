@@ -862,7 +862,7 @@ func TestResultColumns(t *testing.T) {
 		"show create table nation":  "Table,Create Table",
 		"show databases":            "Database",
 		"show tables":               "Tables_in_tpch",
-		"show columns from nation":  "Field,Type,Null,Key,Default,Comment",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Extra,Comment",
 	}
 	for sql, colsStr := range returnColumnsSQL {
 		cols := strings.Split(colsStr, ",")

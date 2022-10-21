@@ -275,10 +275,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, accountId uin
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
-	if stmt.Full {
-		return nil, moerr.NewNotSupported("statement '%v'", tree.String(stmt, dialect.MYSQL))
-	}
-
 	dbName := stmt.Table.GetDBName()
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -293,7 +289,10 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, accountId uin
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
+	if stmt.Full {
+		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
+	}
 
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
 

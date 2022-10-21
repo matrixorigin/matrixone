@@ -813,7 +813,8 @@ func Test_handleShowColumns(t *testing.T) {
 		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
 		convey.So(err, convey.ShouldBeNil)
 		data[0][1] = typ
-		data[0][2] = int8(2)
+		data[0][2] = []byte("NULL")
+		data[0][3] = int8(2)
 		data[0][primaryKeyPos] = []byte("p")
 		ses.SetData(data)
 		proto.ses = ses
@@ -1077,5 +1078,5 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0])
+	return plan.BuildPlan(ctx, stmts[0], 0)
 }
