@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -1126,6 +1127,7 @@ func TestDump2File(t *testing.T) {
 		}
 		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)
 		convey.So(err, convey.ShouldBeNil)
+		os.RemoveAll(dump.OutFile)
 	})
 }
 
