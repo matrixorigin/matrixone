@@ -51,7 +51,7 @@ func TestNoopTableOptions_FormatDdl(t *testing.T) {
 }
 
 var dummyStrColumn = Column{Name: "str", Type: "varchar(32)", Default: "", Comment: "str column"}
-var dummyStrCreateSql = "`str` varchar(32) COMMENT \"str column\""
+var dummyStrCreateSql = "`str` varchar(32) NOT NULL COMMENT \"str column\""
 var dummyInt64Column = Column{Name: "int64", Type: "BIGINT", Default: "0", Comment: "int64 column"}
 var dummyInt64CreateSql = "`int64` BIGINT DEFAULT \"0\" COMMENT \"int64 column\""
 var dummyFloat64Column = Column{Name: "float64", Type: "DOUBLE", Default: "0.0", Comment: "float64 column"}
@@ -61,7 +61,7 @@ var dummyTable = &Table{
 	Database:         "db_dummy",
 	Table:            "tbl_dummy",
 	Columns:          []Column{dummyStrColumn, dummyInt64Column, dummyFloat64Column},
-	PrimaryKeyColumn: nil,
+	PrimaryKeyColumn: []Column{dummyStrColumn, dummyInt64Column},
 	Engine:           ExternalTableEngine,
 	Comment:          "dummy table",
 	TableOptions:     NoopTableOptions{},
@@ -71,11 +71,13 @@ var dummyTableCreateExistsSql = "CREATE TABLE IF NOT EXISTS `db_dummy`.`tbl_dumm
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
+	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
 	"\n)"
 var dummyTableCreateSql = "CREATE TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
+	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
 	"\n)"
 
 type dummyCondition struct{}
