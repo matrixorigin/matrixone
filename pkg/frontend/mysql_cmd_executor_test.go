@@ -17,12 +17,14 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"testing"
-	"time"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1041,60 +1042,91 @@ func Test_handleLoadData(t *testing.T) {
 	})
 }
 
-//func TestHandleDump(t *testing.T) {
-//	ctx := context.TODO()
-//	convey.Convey("call handleDump func", t, func() {
-//		ctrl := gomock.NewController(t)
-//		defer ctrl.Finish()
-//		rs1 := []*MysqlResultSet{{Data: [][]interface{}{{[]byte("create database test_dump")}}}}
-//		rs2 := []*MysqlResultSet{{Data: [][]interface{}{{[]byte("create table test_dump.t1 (a int)")}}}}
-//
-//		ioses := mock_frontend.NewMockIOSession(ctrl)
-//		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-//		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-//		table := mock_frontend.NewMockRelation(ctrl)
-//		db := mock_frontend.NewMockDatabase(ctrl)
-//		db.EXPECT().Relations(gomock.Any()).Return([]string{"a"}, nil).AnyTimes()
-//		db.EXPECT().Relation(gomock.Any(), "a").Return(table, nil).AnyTimes()
-//		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-//		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-//			func(ctx2 context.Context, sql string) {
-//				bh.EXPECT().GetExecResultSet().Return(rs1)
-//			}).AnyTimes()
-//		eng := mock_frontend.NewMockEngine(ctrl)
-//		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-//		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-//		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-//		eng.EXPECT().Hints().Return(engine.Hints{
-//			CommitOrRollbackTimeout: time.Second,
-//		}).AnyTimes()
-//		//eng.EXPECT().Database(ctx, "test_dump", gomock.Any()).Return(db, nil).AnyTimes()
-//		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-//		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
-//		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
-//
-//		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-//		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
-//		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-//		convey.So(err, convey.ShouldBeNil)
-//		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-//		var gSys GlobalSystemVariables
-//		InitGlobalSystemVariables(&gSys)
-//		ses := NewSession(proto, nil, pu, &gSys)
-//		ses.SetRequestContext(ctx)
-//		ses.GetBackgroundExec()
-//		mce := NewMysqlCmdExecutor()
-//		mce.PrepareSessionBeforeExecRequest(ses)
-//
-//		dump := &tree.Dump{
-//			Database: "test_dump",
-//			OutFile:  "test_dump.sql",
-//		}
-//		err = mce.handleDump(ctx, dump)
-//		convey.So(err, convey.ShouldNotBeNil)
-//	})
-//
-//}
+func TestHandleDump(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call handleDump func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.Dump{
+			OutFile: "test",
+		}
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+		dump.MaxFileSize = 1024
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDump2File(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call dumpData2File func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		reader := mock_frontend.NewMockReader(ctrl)
+		cnt := 0
+		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(attrs []string, b, c interface{}) (*batch.Batch, error) {
+			cnt += 1
+			if cnt == 1 {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.New(types.T_int64.ToType())
+				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			return nil, nil
+		}).AnyTimes()
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.Dump{
+			OutFile: "test_dump_" + strconv.Itoa(int(time.Now().Unix())),
+		}
+		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
 
 func TestSerializePlanToJson(t *testing.T) {
 	sqls := []string{
