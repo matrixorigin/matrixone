@@ -212,7 +212,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[types.TS](v)
 	case types.T_Rowid:
 		bs = movecToBytes[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
 		if v.Col != nil {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
@@ -387,7 +387,7 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 			data = append(data, types.Datetime(i+offset))
 		}
 		_ = movec.AppendFixed(vec, data, mockMp)
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		data := make([][]byte, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
@@ -496,7 +496,7 @@ func AppendValue(vec *movec.Vector, v any) {
 		AppendFixedValue[types.TS](vec, v)
 	case types.T_Rowid:
 		AppendFixedValue[types.Rowid](vec, v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		AppendBytes(vec, v)
 	default:
 		panic(any("not expected"))
@@ -546,7 +546,7 @@ func GetValue(col *movec.Vector, row uint32) any {
 		return movec.GetValueAt[types.TS](col, int64(row))
 	case types.T_Rowid:
 		return movec.GetValueAt[types.Rowid](col, int64(row))
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		return col.GetBytes(int64(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -595,7 +595,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	case types.T_Rowid:
 		GenericUpdateFixedValue[types.Rowid](col, row, val)
 
-	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
+	case types.T_varchar, types.T_char, types.T_json, types.T_blob, types.T_text:
 		GenericUpdateBytes(col, row, val)
 	default:
 		panic(moerr.NewInternalError("%v not supported", col.Typ))

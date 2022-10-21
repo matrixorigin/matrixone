@@ -98,7 +98,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 }
 
 func (db *database) Truncate(ctx context.Context, name string) error {
-	newId, err := db.txn.idGen.AllocateID(ctx)
+	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 	}
 
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
-		genMetaTableName(oldId), db.databaseName, db.txn.proc.Mp())
+		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	accountId, userId, roleId := getAccessInfo(ctx)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
 	defer cancel()
-	tableId, err := db.txn.idGen.AllocateID(ctx)
+	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}

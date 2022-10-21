@@ -173,7 +173,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 			v2 := rand.Intn(math.MaxInt32) + 1
 			vec.Append(float64(v1) / float64(v2))
 		}
-	case types.T_varchar, types.T_char, types.T_blob:
+	case types.T_varchar, types.T_char, types.T_blob, types.T_text:
 		if unique {
 			for i := 0; i < rows; i++ {
 				s := fmt.Sprintf("%d-%d", i, 0)
@@ -295,7 +295,7 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i + offset))
 		}
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i + offset)))
 		}

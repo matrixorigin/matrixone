@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
@@ -67,6 +68,7 @@ const (
 
 	// blobs
 	T_blob T = 70
+	T_text T = 71
 
 	// Transaction TS
 	T_TS    T = 100
@@ -187,7 +189,8 @@ var Types map[string]T = map[string]T{
 	"varchar": T_varchar,
 
 	"json": T_json,
-	"text": T_blob,
+	"text": T_text,
+	"blob": T_blob,
 	"uuid": T_uuid,
 
 	"transaction timestamp": T_TS,
@@ -322,7 +325,7 @@ func (t T) ToType() Type {
 		typ.Size = TxnTsSize
 	case T_Rowid:
 		typ.Size = RowidSize
-	case T_char, T_varchar, T_json, T_blob:
+	case T_char, T_varchar, T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
 	case T_any:
 		// XXX I don't know about this one ...
@@ -378,6 +381,8 @@ func (t T) String() string {
 	case T_decimal128:
 		return "DECIMAL128"
 	case T_blob:
+		return "BLOB"
+	case T_text:
 		return "TEXT"
 	case T_TS:
 		return "TRANSACTION TIMESTAMP"
@@ -434,6 +439,8 @@ func (t T) OidString() string {
 		return "T_decimal128"
 	case T_blob:
 		return "T_blob"
+	case T_text:
+		return "T_text"
 	case T_TS:
 		return "T_TS"
 	case T_Rowid:
@@ -467,7 +474,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob:
+	case T_char, T_varchar, T_json, T_blob, T_text:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -506,7 +513,7 @@ func (t T) FixedLength() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return -24
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
@@ -546,7 +553,7 @@ func IsFloat(t T) bool {
 
 // isString: return true if the types.T is string type
 func IsString(t T) bool {
-	if t == T_char || t == T_varchar || t == T_blob {
+	if t == T_char || t == T_varchar || t == T_blob || t == T_text {
 		return true
 	}
 	return false

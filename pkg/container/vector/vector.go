@@ -52,6 +52,19 @@ type Vector struct {
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
 	isConst bool
 	length  int
+
+	// tag for distinguish '0x00..' and 0x... and 0x... is binary
+	// TODO: check whether isBin should be changed into array/bitmap
+	// now we assumpt that it can only be true in the case of only one data in vector
+	isBin bool
+}
+
+func (v *Vector) SetIsBin(isBin bool) {
+	v.isBin = isBin
+}
+
+func (v *Vector) GetIsBin() bool {
+	return v.isBin
 }
 
 func (v *Vector) Length() int {
@@ -281,7 +294,7 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
 		fillDefaultValue[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		fillDefaultValue[types.Varlena](v)
 	default:
 		panic("unsupported type in FillDefaultValue")
@@ -331,7 +344,7 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.TS](v, row, mp)
 	case types.T_Rowid:
 		return toConstVector[types.Rowid](v, row, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
@@ -390,7 +403,7 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
 		expandVector[types.Rowid](v, types.RowidSize, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
 	v.isConst = false
@@ -588,7 +601,7 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
 		v.Col = make([]types.Rowid, 1)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		v.Col = make([]types.Varlena, 1)
 	}
 }
@@ -731,7 +744,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if isNull {
 			return appendOneBytes(v, nil, true, m)
 		}
@@ -995,7 +1008,7 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
 		ShrinkFixed[float64](v, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1074,7 +1087,7 @@ func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		ShuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ShuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		ShuffleFixed[types.Date](v, sels, m)
@@ -1469,7 +1482,7 @@ func (v *Vector) String() string {
 		return VecToString[types.TS](v)
 	case types.T_Rowid:
 		return VecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
