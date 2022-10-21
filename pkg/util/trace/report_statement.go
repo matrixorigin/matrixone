@@ -79,7 +79,9 @@ func (s *StatementInfo) Size() int64 {
 	)
 }
 
-func (s *StatementInfo) Free() {}
+func (s *StatementInfo) Free() {
+	s.ExecPlan = nil
+}
 
 func (s *StatementInfo) CsvFields() []string {
 	s.mux.Lock()
