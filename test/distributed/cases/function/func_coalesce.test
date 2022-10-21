@@ -1,0 +1,174 @@
+
+
+
+# WHERE clause, 比较运算
+CREATE TABLE t1 (a BIGINT);
+INSERT INTO t1 VALUES (1);
+SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
+SELECT * FROM t1 WHERE coalesce(a)=0.9;
+SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
+SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
+SELECT * FROM t1 WHERE a=0.9;
+SELECT * FROM t1 WHERE a IN (0.8,0.9);
+DROP TABLE t1;
+
+
+# SELECT clause
+CREATE TABLE t1 (EMPNUM INT);
+INSERT INTO t1 VALUES (0), (2);
+CREATE TABLE t2 (EMPNUM DECIMAL (4, 2));
+INSERT INTO t2 VALUES (0.0), (9.0);
+SELECT COALESCE(t2.EMPNUM,t1.EMPNUM) AS CEMPNUM,
+t1.EMPNUM AS EMPMUM1, t2.EMPNUM AS EMPNUM2
+FROM t1 LEFT JOIN t2 ON t1.EMPNUM=t2.EMPNUM;
+drop table t1;
+drop table t2;
+
+# 嵌套
+#0.5的IFNULL暂不支持
+CREATE TABLE t0(c0 BIGINT UNSIGNED);
+INSERT INTO t0(c0) VALUES(NULL);
+SELECT * FROM t0 WHERE CAST(COALESCE(t0.c0, -1) AS UNSIGNED);
+SELECT * FROM t0 WHERE CAST(IFNULL(t0.c0, -1) AS UNSIGNED);
+SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;
+SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) FROM t0;
+DROP TABLE t0;
+
+# Comparison
+CREATE TABLE t1 (a char(10), b INT);
+INSERT INTO t1 VALUES ('', 0);
+SELECT COALESCE(a) = COALESCE(b) FROM t1;
+DROP TABLE t1;
+
+# ORDER BY clause, DATE TYPE
+CREATE TABLE t1 ( a INTEGER, b varchar(255) );
+INSERT INTO t1 VALUES (1,'z');
+INSERT INTO t1 VALUES (2,'y');
+INSERT INTO t1 VALUES (3,'x');
+SELECT MIN(b) AS min_b FROM t1 GROUP BY a ORDER BY COALESCE(MIN(b), 'a');
+SELECT MIN(b) AS min_b FROM t1 GROUP BY a ORDER BY COALESCE(min_b, 'a');
+SELECT MIN(b) AS min_b FROM t1 GROUP BY a ORDER BY COALESCE(MIN(b), 'a') DESC;
+SELECT MIN(b) AS min_b FROM t1 GROUP BY a ORDER BY COALESCE(min_b, 'a') DESC;
+DROP TABLE t1;
+
+# INSERT Clause, DATE TYPE
+create table t1 (a bigint unsigned);
+insert into t1 select (if(1, 9223372036854775808, 1));
+insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
+insert into t1 select (coalesce(9223372036854775808, 1));
+select * from t1;
+drop table t1;
+
+# Case When Clause
+select if(1, cast(1111111111111111111 as unsigned), 1) i,case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
+
+# IN Subquery
+CREATE TABLE ot (col_int_nokey int(11), col_varchar_nokey varchar(1));
+INSERT INTO ot VALUES (1,'x');
+CREATE TABLE it (col_int_key int(11), col_varchar_key varchar(1));
+INSERT INTO it VALUES (NULL,'x'), (NULL,'f');
+SELECT col_int_nokey FROM ot WHERE col_varchar_nokey IN(SELECT col_varchar_key FROM it WHERE coalesce(col_int_nokey, 1) );
+drop table ot;
+drop table it;
+
+#WHERE
+CREATE TABLE ot1(a INT);
+CREATE TABLE ot2(a INT);
+CREATE TABLE ot3(a INT);
+CREATE TABLE it1(a INT);
+CREATE TABLE it2(a INT);
+CREATE TABLE it3(a INT);
+INSERT INTO ot1 VALUES(0),(1),(2),(3),(4),(5),(6),(7);
+INSERT INTO ot2 VALUES(0),(2),(4),(6);
+INSERT INTO ot3 VALUES(0),(3),(6);
+INSERT INTO it1 VALUES(0),(1),(2),(3),(4),(5),(6),(7);
+INSERT INTO it2 VALUES(0),(2),(4),(6);
+INSERT INTO it3 VALUES(0),(3),(6);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+WHERE COALESCE(ot2.a,0) IN (SELECT a FROM it3);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+WHERE COALESCE(ot2.a,0) IN (SELECT a+0 FROM it3);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+LEFT JOIN ot3 ON ot1.a=ot3.a
+WHERE COALESCE(ot2.a,0) IN (SELECT a FROM it3);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+LEFT JOIN ot3 ON ot1.a=ot3.a
+WHERE COALESCE(ot3.a,0) IN (SELECT a FROM it3);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+LEFT JOIN ot3 ON ot2.a=ot3.a
+WHERE COALESCE(ot2.a,0) IN (SELECT a FROM it3);
+SELECT *
+FROM ot1 LEFT JOIN ot2 ON ot1.a=ot2.a
+LEFT JOIN ot3 ON ot2.a=ot3.a
+WHERE COALESCE(ot3.a,0) IN (SELECT a FROM it3);
+drop table ot1;
+drop table ot2;
+drop table ot3;
+drop table it1;
+drop table it2;
+drop table it3;
+
+#DATATYPE, distinct
+CREATE TABLE t1 (dt2 DATETIME(2), t3 TIMESTAMP, d DATE);
+INSERT INTO t1 VALUES ('2001-01-01 00:00:00.12', '2001-01-01 00:00:00.567', '2002-01-01');
+SELECT distinct COALESCE(dt2, t3) FROM t1;
+SELECT CONCAT_WS(",", COALESCE(dt2, t3)) FROM t1;
+DROP TABLE t1;
+
+#SELECT 嵌套
+CREATE TABLE t1 (a DATE);
+INSERT INTO t1 VALUES ('2000-01-01');
+SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
+SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
+SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
+SELECT CAST(COALESCE(a,a) AS DATETIME(6)) FROM t1;
+-- @bvt:issue#4689
+SELECT CAST(COALESCE(a,a) AS TIME(6)) FROM t1;
+-- @bvt:issue
+SELECT ROUND(COALESCE(a,a)) FROM t1;
+DROP TABLE t1;
+CREATE TABLE t1 (a DATETIME);
+INSERT INTO t1 VALUES ('2000-01-01 00:00:00');
+SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
+SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
+SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
+SELECT CAST(COALESCE(a,a) AS DATETIME(6)) FROM t1;
+-- @bvt:issue#4689
+SELECT CAST(COALESCE(a,a) AS TIME(6)) FROM t1;
+-- @bvt:issue
+SELECT ROUND(COALESCE(a,a)) FROM t1;
+DROP TABLE t1;
+
+#null
+select coalesce(null);
+
+#EXTRME VALUE
+SELECT COALESCE(NULL, NULL, NULL, 'W3Schools.com', NULL, 'Example.com');
+
+#算术操作
+SELECT COALESCE(1)+COALESCE(1);
+
+#HAVING
+drop table if exists t1;
+create table t1(a datetime);
+INSERT INTO t1 VALUES (NULL), ('2001-01-01 00:00:00.12'), ('2002-01-01 00:00:00.567');
+select a from t1 group by a having COALESCE(a)<"2002-01-01";
+drop table t1;
+
+
+#ON CONDITION
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a INT,  b varchar(255));
+create table t2(a INT,  b varchar(255));
+insert into t1 values(1, "你好"), (3, "再见");
+insert into t2 values(2, "日期时间"), (4, "明天");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (length(COALESCE(t1.b)) = length(COALESCE(t2.b)));
+drop table t1;
+drop table t2;
+

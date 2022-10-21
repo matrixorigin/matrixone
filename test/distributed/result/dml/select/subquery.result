@@ -1,0 +1,183 @@
+drop table if exists t1;
+create table t1 (id int,ti tinyint unsigned,si smallint,bi bigint unsigned,fl float,dl double,de decimal,ch char(20),vch varchar(20),dd date,dt datetime);
+insert into t1 values(1,1,4,3,1113.32,111332,1113.32,'hello','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(2,2,5,2,2252.05,225205,2252.05,'bye','sub query','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(3,6,6,3,3663.21,366321,3663.21,'hi','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(4,7,1,5,4715.22,471522,4715.22,'good morning','my subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(5,1,2,6,51.26,5126,51.26,'byebye',' is subquery?','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(6,3,2,1,632.1,6321,632.11,'good night','maybe subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(7,4,4,3,7443.11,744311,7443.11,'yes','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
+drop table if exists t2;
+create table t2 (id int,ti tinyint unsigned,si smallint,bi bigint unsigned,fl float,dl double,de decimal,ch char(20),vch varchar(20),dd date,dt datetime);
+insert into t2 values(1,1,4,3,1113.32,111332,1113.32,'hello','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(2,2,5,2,2252.05,225205,2252.05,'bye','sub query','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(3,6,6,3,3663.21,366321,3663.21,'hi','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(4,7,1,5,4715.22,471522,4715.22,'good morning','my subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(5,1,2,6,51.26,5126,51.26,'byebye',' is subquery?','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(6,3,2,1,632.1,6321,632.11,'good night','maybe subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(7,4,4,3,7443.11,744311,7443.11,'yes','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
+select * from (select * from t1) sub where id > 4;
+id	ti	si	bi	fl	dl	de	ch	vch	dd	dt
+5	1	2	6	51.26	5126.0	51	byebye	 is subquery?	2022-04-28	2022-04-28 22:40:11
+6	3	2	1	632.1	6321.0	632	good night	maybe subquery	2022-04-28	2022-04-28 22:40:11
+7	4	4	3	7443.11	744311.0	7443	yes	subquery	2022-04-28	2022-04-28 22:40:11
+8	7	5	8	8758.0	875800.0	8758	nice to meet	just subquery	2022-04-28	2022-04-28 22:40:11
+9	8	4	9	9849.31	9849312.0	9849	see you	subquery	2022-04-28	2022-04-28 22:40:11
+select ti as t,fl as f from (select * from t1) sub where dl <> 4;
+t	f
+1	1113.32
+2	2252.05
+6	3663.21
+7	4715.22
+1	51.26
+3	632.1
+4	7443.11
+7	8758.0
+8	9849.31
+select * from (select ti as t,fl as f from t1 where dl <> 4) sub;
+t	f
+1	1113.32
+2	2252.05
+6	3663.21
+7	4715.22
+1	51.26
+3	632.1
+4	7443.11
+7	8758.0
+8	9849.31
+select id,min(ti) from (select * from t1) sub group by id;
+id	min(ti)
+1	1
+2	2
+3	6
+4	7
+5	1
+6	3
+7	4
+8	7
+9	8
+select * from (select id,min(ti) from (select * from t1) t1 group by id) sub;
+id	min(ti)
+1	1
+2	2
+3	6
+4	7
+5	1
+6	3
+7	4
+8	7
+9	8
+select id,min(ti) from (select * from t1) sub group by id order by id desc;
+id	min(ti)
+9	8
+8	7
+7	4
+6	3
+5	1
+4	7
+3	6
+2	2
+1	1
+select id,sum(ti) from (select * from t1) sub group by id;
+id	sum(ti)
+1	1
+2	2
+3	6
+4	7
+5	1
+6	3
+7	4
+8	7
+9	8
+select distinct(ti) from (select * from t1) sub;
+ti
+1
+2
+6
+7
+3
+4
+8
+select distinct(ti) from (select * from t1) sub where id <6;
+ti
+1
+2
+6
+7
+select count(*) from (select * from t1) sub where id > 4 ;
+count(*)
+5
+select * from (select * from t1) sub where id > 1 limit 3;
+id	ti	si	bi	fl	dl	de	ch	vch	dd	dt
+2	2	5	2	2252.05	225205.0	2252	bye	sub query	2022-04-28	2022-04-28 22:40:11
+3	6	6	3	3663.21	366321.0	3663	hi	subquery	2022-04-28	2022-04-28 22:40:11
+4	7	1	5	4715.22	471522.0	4715	good morning	my subquery	2022-04-28	2022-04-28 22:40:11
+select max(ti),min(si),avg(fl) from (select * from t1) sub where id < 4 || id > 5;
+max(ti)	min(si)	avg(fl)
+8	2	4815.871616908482
+select max(ti)+10,min(si)-1,avg(fl) from (select * from t1) sub where id < 4 || id > 5;
+max(ti)+10	min(si)-1	avg(fl)
+18	1	4815.871616908482
+select substr from (select * from t1) sub where id < 4 || id > 5;
+invalid input: column substr does not exist
+select ti,-si from (select * from t1) sub order by -si desc;
+ti	-si
+7	-1
+1	-2
+3	-2
+1	-4
+4	-4
+8	-4
+2	-5
+7	-5
+6	-6
+select * from (select * from t1) sub where (ti=2 or si=3) and  (ch = 'bye' or vch = 'subquery');
+id	ti	si	bi	fl	dl	de	ch	vch	dd	dt
+2	2	5	2	2252.05	225205.0	2252	bye	sub query	2022-04-28	2022-04-28 22:40:11
+select * from (select * from (select * from (select id,ti,si,de from (select * from t1 ) sub3 where fl <> 4.5 ) sub2 where ti > 1) sub1 where id >2 ) sub where id > 4;
+id	ti	si	de
+6	3	2	632
+7	4	4	7443
+8	7	5	8758
+9	8	4	9849
+select * from (select * from t1 where id > 100) sub ;
+id	ti	si	bi	fl	dl	de	ch	vch	dd	dt
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1 (libname1 varchar(21) not null primary key, city varchar(20));
+create table t2 (isbn2 varchar(21) not null primary key, author varchar(20), title varchar(60));
+create table t3 (isbn3 varchar(21) not null, libname3 varchar(21) not null, quantity int);
+insert into t2 values ('001','Daffy','Aducklife');
+insert into t2 values ('002','Bugs','Arabbitlife');
+insert into t2 values ('003','Cowboy','Lifeontherange');
+insert into t2 values ('000','Anonymous','Wannabuythisbook?');
+insert into t2 values ('004','BestSeller','OneHeckuvabook');
+insert into t2 values ('005','EveryoneBuys','Thisverybook');
+insert into t2 values ('006','SanFran','Itisasanfranlifestyle');
+insert into t2 values ('007','BerkAuthor','Cool.Berkley.the.book');
+insert into t3 values('000','NewYorkPublicLibra',1);
+insert into t3 values('001','NewYorkPublicLibra',2);
+insert into t3 values('002','NewYorkPublicLibra',3);
+insert into t3 values('003','NewYorkPublicLibra',4);
+insert into t3 values('004','NewYorkPublicLibra',5);
+insert into t3 values('005','NewYorkPublicLibra',6);
+insert into t3 values('006','SanFransiscoPublic',5);
+insert into t3 values('007','BerkeleyPublic1',3);
+insert into t3 values('007','BerkeleyPublic2',3);
+insert into t3 values('001','NYC Lib',8);
+insert into t1 values ('NewYorkPublicLibra','NewYork');
+insert into t1 values ('SanFransiscoPublic','SanFran');
+insert into t1 values ('BerkeleyPublic1','Berkeley');
+insert into t1 values ('BerkeleyPublic2','Berkeley');
+insert into t1 values ('NYCLib','NewYork');
+select * from (select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1) sub ;
+city	libname1	a
+NewYork	NewYorkPublicLibra	6
+SanFran	SanFransiscoPublic	1
+Berkeley	BerkeleyPublic1	1
+Berkeley	BerkeleyPublic2	1

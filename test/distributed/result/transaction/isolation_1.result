@@ -1,0 +1,556 @@
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+use isolation_1;
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+delete from test_11 where c =1;
+select * from test_11;
+c	d
+2	2
+3	1
+4	2
+select * from test_11;
+c	d
+1	1
+2	2
+update test_11 set d = c +1 where c > 2;
+select * from test_11;
+c	d
+2	2
+3	4
+4	5
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+2	2
+3	4
+4	5
+commit;
+select * from test_11;
+c	d
+2	2
+3	4
+4	5
+drop table if exists test_11;
+begin;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c	d
+1	1
+2	2
+begin;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(5,4);
+select * from test_11;
+c	d
+1	1
+2	2
+5	4
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+Insert into test_11 values(50,50);
+Insert into test_11 values(51,50);
+select * from test_11;
+c	d
+1	1
+2	2
+5	4
+51	50
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+commit;
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+5	4
+51	50
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+5	4
+51	50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(5,4);
+select * from test_11;
+c	d
+1	1
+2	2
+5	4
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+Insert into test_11 values(50,50);
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+5	4
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+commit;
+commit;
+w-w conflict
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+3	1
+4	2
+50	50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+delete from test_11 where c = 50;
+select * from test_11;
+c	d
+1	1
+2	2
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+commit;
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c	d
+1	1
+2	2
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+Insert into test_11 values(100,50);
+commit;
+commit;
+w-w conflict
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+100	50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c	d
+1	1
+2	2
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+update test_11 set c = 101 where c = 50;
+commit;
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+101	50
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+101	50
+100	50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+Insert into test_11 values(50,50);
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c	d
+1	1
+2	2
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+50	50
+update test_11 set c = 100 where d = 50;
+commit;
+commit;
+w-w conflict
+select * from test_11;
+c	d
+1	1
+2	2
+100	50
+select * from test_11;
+c	d
+1	1
+2	2
+100	50
+drop table if exists test_11;
+begin;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c	d
+1	1
+2	2
+begin;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c	d
+1	1
+2	2
+begin;
+select * from test_11;
+c	d
+1	1
+2	2
+begin;
+drop table test_11;
+internal error: Only CREATE of DDL is supported in transactions
+select * from test_11;
+c	d
+1	1
+2	2
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+drop table if exists test_11;
+begin;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c	d
+1	1
+2	2
+begin;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+select * from test_11;
+c	d
+1	1
+2	2
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+commit;
+select * from test_11;
+c	d
+1	1
+2	2
+drop table if exists test_11;
