@@ -64,11 +64,11 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			_getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
@@ -78,7 +78,7 @@ func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 
 func getColumnsByExpr(expr *plan.Expr) []int {
 	columnMap := make(map[int]struct{})
-	_getColumnMapByExpr(expr, columnMap)
+	getColumnMapByExpr(expr, columnMap)
 
 	columns := make([]int, len(columnMap))
 	i := 0
@@ -132,13 +132,9 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
+func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
 	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
-	zonemapList := make([][64]byte, columnLength)
-	idxs := make([]uint16, columnLength)
-	for i := 0; i < columnLength; i++ {
-		idxs[i] = uint16(i)
-	}
+	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
@@ -156,7 +152,7 @@ func fetchZonemapFromBlockInfo(columnLength int, blockInfo catalog.BlockInfo, fs
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return nil, nil
+	return zonemapList, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
@@ -279,62 +275,108 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	return true, uint64(list[0])
 }
 
-// computeRangeByNonIntPk compute NonIntPk range Expr
-// only support function :["and", "="]
-// support eg: pk="a",  pk="a" and noPk > 200
-// unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
-func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
+func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := computeRangeByNonIntPk(exprImpl.F.Args[0], pkIdx)
+			canCompute, pkBytes := getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return computeRangeByNonIntPk(exprImpl.F.Args[1], pkIdx)
+			return getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
 
 		case "=":
-			var pkHashValue uint64
-			var ok bool
+			var pkVal *plan.Expr
 			leftIsConstant := false
 			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
 			case *plan.Expr_C:
-				ok, pkHashValue = getConstantExprHashValue(exprImpl.F.Args[0])
-				if !ok {
-					return false, 0
-				}
+				pkVal = exprImpl.F.Args[0]
 				leftIsConstant = true
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
-					return false, 0
+					return false, nil
 				}
 			default:
-				return false, 0
+				return false, nil
 			}
 
 			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_C:
 				if leftIsConstant {
-					return false, 0
+					return false, nil
 				}
-				return getConstantExprHashValue(exprImpl.F.Args[1])
+				return true, exprImpl.F.Args[1]
 			case *plan.Expr_Col:
 				if !leftIsConstant {
-					return false, 0
+					return false, nil
 				}
 				if subExpr.Col.ColPos != pkIdx {
-					return false, 0
+					return false, nil
 				}
-				return true, pkHashValue
+				return true, pkVal
 			default:
-				return false, 0
+				return false, nil
 			}
 		}
 	}
 
-	return false, 0
+	return false, nil
+}
+
+func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+	if !canCompute {
+		return canCompute, nil
+	}
+	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
+	case *plan.Const_Ival:
+		return true, val.Ival
+	case *plan.Const_Dval:
+		return true, val.Dval
+	case *plan.Const_Sval:
+		return true, val.Sval
+	case *plan.Const_Bval:
+		return true, val.Bval
+	case *plan.Const_Uval:
+		return true, val.Uval
+	case *plan.Const_Fval:
+		return true, val.Fval
+	case *plan.Const_Dateval:
+		return true, val.Dateval
+	case *plan.Const_Datetimeval:
+		return true, val.Datetimeval
+	case *plan.Const_Decimal64Val:
+		return true, val.Decimal64Val
+	case *plan.Const_Decimal128Val:
+		return true, val.Decimal128Val
+	case *plan.Const_Timestampval:
+		return true, val.Timestampval
+	case *plan.Const_Jsonval:
+		return true, val.Jsonval
+	case *plan.Const_Defaultval:
+		return true, val.Defaultval
+	case *plan.Const_UpdateVal:
+		return true, val.UpdateVal
+	}
+	return false, nil
+}
+
+// computeRangeByNonIntPk compute NonIntPk range Expr
+// only support function :["and", "="]
+// support eg: pk="a",  pk="a" and noPk > 200
+// unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
+func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+	if !canCompute {
+		return canCompute, 0
+	}
+	ok, pkHashValue := getConstantExprHashValue(valExpr)
+	if !ok {
+		return false, 0
+	}
+	return true, pkHashValue
 }
 
 // computeRangeByIntPk compute primaryKey range by Expr

@@ -1,165 +1,168 @@
 SELECT TIMESTAMPDIFF( MICROSECOND, '2017-12-01 12:15:12','2018-01-01 7:18:20');
-timestampdiff(time_stamp_unit(microsecond), 2017-12-01 12:15:12, 2018-01-01 7:18:20)
+timestampdiff(microsecond, 2017-12-01 12:15:12, 2018-01-01 7:18:20)
 2660588000000
 SELECT TIMESTAMPDIFF( SECOND, '2017-12-01 12:15:12','2018-01-01 7:18:20');
-timestampdiff(time_stamp_unit(second), 2017-12-01 12:15:12, 2018-01-01 7:18:20)
+timestampdiff(second, 2017-12-01 12:15:12, 2018-01-01 7:18:20)
 2660588
 SELECT TIMESTAMPDIFF( MINUTE, '2017-12-01 12:15:12','2018-01-01 7:18:20');
-timestampdiff(time_stamp_unit(minute), 2017-12-01 12:15:12, 2018-01-01 7:18:20)
+timestampdiff(minute, 2017-12-01 12:15:12, 2018-01-01 7:18:20)
 44343
 SELECT TIMESTAMPDIFF( HOUR, '2017-12-01 12:15:12','2018-01-01 7:18:20');
-timestampdiff(time_stamp_unit(hour), 2017-12-01 12:15:12, 2018-01-01 7:18:20)
+timestampdiff(hour, 2017-12-01 12:15:12, 2018-01-01 7:18:20)
 739
 SELECT TIMESTAMPDIFF( DAY, '2017-12-01 12:15:12','2018-01-01 7:18:20');
-timestampdiff(time_stamp_unit(day), 2017-12-01 12:15:12, 2018-01-01 7:18:20)
+timestampdiff(day, 2017-12-01 12:15:12, 2018-01-01 7:18:20)
 30
 SELECT TIMESTAMPDIFF( WEEK, '2018-01-01 12:15:12','2018-01-08 12:15:12');
-timestampdiff(time_stamp_unit(week), 2018-01-01 12:15:12, 2018-01-08 12:15:12)
+timestampdiff(week, 2018-01-01 12:15:12, 2018-01-08 12:15:12)
 1
 SELECT TIMESTAMPDIFF( MONTH, '2017-11-01 12:15:12','2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2017-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2017-11-01 12:15:12, 2018-01-01 12:15:12)
 2
 SELECT TIMESTAMPDIFF( QUARTER,  '2017-01-01 12:15:12','2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2017-01-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2017-01-01 12:15:12, 2018-01-01 12:15:12)
 4
 SELECT TIMESTAMPDIFF( YEAR, '2017-01-01 12:15:12','2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2017-01-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2017-01-01 12:15:12, 2018-01-01 12:15:12)
 1
 SELECT TIMESTAMPDIFF( MICROSECOND, '2018-01-01 7:18:20','2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(microsecond), 2018-01-01 7:18:20, 2017-12-01 12:15:12)
+timestampdiff(microsecond, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
 -2660588000000
 SELECT TIMESTAMPDIFF( SECOND, '2018-01-01 7:18:20', '2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(second), 2018-01-01 7:18:20, 2017-12-01 12:15:12)
+timestampdiff(second, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
 -2660588
 SELECT TIMESTAMPDIFF( MINUTE, '2018-01-01 7:18:20','2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(minute), 2018-01-01 7:18:20, 2017-12-01 12:15:12)
+timestampdiff(minute, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
 -44343
 SELECT TIMESTAMPDIFF( HOUR, '2018-01-01 7:18:20','2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(hour), 2018-01-01 7:18:20, 2017-12-01 12:15:12)
+timestampdiff(hour, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
 -739
 SELECT TIMESTAMPDIFF( DAY, '2018-01-01 7:18:20', '2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(day), 2018-01-01 7:18:20, 2017-12-01 12:15:12)
+timestampdiff(day, 2018-01-01 7:18:20, 2017-12-01 12:15:12)
 -30
 SELECT TIMESTAMPDIFF( WEEK, '2018-01-08 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(week), 2018-01-08 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(week, 2018-01-08 12:15:12, 2018-01-01 12:15:12)
 -1
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2017-11-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2017-11-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2017-11-01 12:15:12)
 -2
 SELECT TIMESTAMPDIFF( QUARTER,  '2018-01-01 12:15:12', '2017-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2017-01-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2017-01-01 12:15:12)
 -4
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2017-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2017-01-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2017-01-01 12:15:12)
 -1
 SELECT TIMESTAMPDIFF( MICROSECOND, NULL,'2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(microsecond), null, 2017-12-01 12:15:12)
+timestampdiff(microsecond, null, 2017-12-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( SECOND, '2018-01-01 7:18:20', NULL);
-timestampdiff(time_stamp_unit(second), 2018-01-01 7:18:20, null)
+timestampdiff(second, 2018-01-01 7:18:20, null)
 null
 SELECT TIMESTAMPDIFF( HOUR, NULL,'2017-12-01 12:15:12');
-timestampdiff(time_stamp_unit(hour), null, 2017-12-01 12:15:12)
+timestampdiff(hour, null, 2017-12-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( DAY, '2018-01-01 7:18:20', NULL);
-timestampdiff(time_stamp_unit(day), 2018-01-01 7:18:20, null)
+timestampdiff(day, 2018-01-01 7:18:20, null)
 null
 SELECT TIMESTAMPDIFF( MONTH, NULL, '2017-11-01 12:15:12');
-timestampdiff(time_stamp_unit(month), null, 2017-11-01 12:15:12)
+timestampdiff(month, null, 2017-11-01 12:15:12)
 null
 SELECT TIMESTAMPDIFF( QUARTER,  '2018-01-01 12:15:12', NULL);
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, null)
+timestampdiff(quarter, 2018-01-01 12:15:12, null)
 null
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2019-11-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2019-11-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2019-11-01 12:15:12)
 22
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2019-10-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2019-10-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2019-10-01 12:15:12)
 21
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2020-10-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2020-10-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2020-10-01 12:15:12)
 33
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2021-11-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2021-11-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2021-11-01 12:15:12)
 46
 SELECT TIMESTAMPDIFF( MONTH, '2018-01-01 12:15:12', '2022-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2018-01-01 12:15:12, 2022-01-01 12:15:12)
+timestampdiff(month, 2018-01-01 12:15:12, 2022-01-01 12:15:12)
 48
 SELECT TIMESTAMPDIFF( QUARTER, '2018-01-01 12:15:12', '2019-11-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2019-11-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2019-11-01 12:15:12)
 7
 SELECT TIMESTAMPDIFF( QUARTER, '2018-01-01 12:15:12', '2019-10-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2019-10-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2019-10-01 12:15:12)
 7
 SELECT TIMESTAMPDIFF( QUARTER, '2018-01-01 12:15:12', '2020-10-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2020-10-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2020-10-01 12:15:12)
 11
 SELECT TIMESTAMPDIFF( QUARTER, '2018-01-01 12:15:12', '2021-11-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2021-11-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2021-11-01 12:15:12)
 15
 SELECT TIMESTAMPDIFF( QUARTER, '2018-01-01 12:15:12', '2022-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2018-01-01 12:15:12, 2022-01-01 12:15:12)
+timestampdiff(quarter, 2018-01-01 12:15:12, 2022-01-01 12:15:12)
 16
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2019-11-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2019-11-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2019-11-01 12:15:12)
 1
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2019-10-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2019-10-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2019-10-01 12:15:12)
 1
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2020-10-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2020-10-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2020-10-01 12:15:12)
 2
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2021-11-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2021-11-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2021-11-01 12:15:12)
 3
 SELECT TIMESTAMPDIFF( YEAR, '2018-01-01 12:15:12', '2022-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2018-01-01 12:15:12, 2022-01-01 12:15:12)
+timestampdiff(year, 2018-01-01 12:15:12, 2022-01-01 12:15:12)
 4
 SELECT TIMESTAMPDIFF( MONTH, '2019-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2019-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2019-11-01 12:15:12, 2018-01-01 12:15:12)
 -22
 SELECT TIMESTAMPDIFF( MONTH, '2019-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2019-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2019-10-01 12:15:12, 2018-01-01 12:15:12)
 -21
 SELECT TIMESTAMPDIFF( MONTH, '2020-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2020-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2020-10-01 12:15:12, 2018-01-01 12:15:12)
 -33
 SELECT TIMESTAMPDIFF( MONTH, '2021-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2021-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2021-11-01 12:15:12, 2018-01-01 12:15:12)
 -46
 SELECT TIMESTAMPDIFF( MONTH, '2022-01-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(month), 2022-01-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(month, 2022-01-01 12:15:12, 2018-01-01 12:15:12)
 -48
 SELECT TIMESTAMPDIFF( QUARTER, '2019-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2019-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2019-11-01 12:15:12, 2018-01-01 12:15:12)
 -7
 SELECT TIMESTAMPDIFF( QUARTER, '2019-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2019-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2019-10-01 12:15:12, 2018-01-01 12:15:12)
 -7
 SELECT TIMESTAMPDIFF( QUARTER, '2020-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2020-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2020-10-01 12:15:12, 2018-01-01 12:15:12)
 -11
 SELECT TIMESTAMPDIFF( QUARTER, '2021-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2021-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2021-11-01 12:15:12, 2018-01-01 12:15:12)
 -15
 SELECT TIMESTAMPDIFF( QUARTER, '2022-01-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(quarter), 2022-01-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(quarter, 2022-01-01 12:15:12, 2018-01-01 12:15:12)
 -16
 SELECT TIMESTAMPDIFF( YEAR, '2019-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2019-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2019-11-01 12:15:12, 2018-01-01 12:15:12)
 -1
 SELECT TIMESTAMPDIFF( YEAR, '2019-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2019-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2019-10-01 12:15:12, 2018-01-01 12:15:12)
 -1
 SELECT TIMESTAMPDIFF( YEAR, '2020-10-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2020-10-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2020-10-01 12:15:12, 2018-01-01 12:15:12)
 -2
 SELECT TIMESTAMPDIFF( YEAR, '2021-11-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2021-11-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2021-11-01 12:15:12, 2018-01-01 12:15:12)
 -3
 SELECT TIMESTAMPDIFF( YEAR, '2022-01-01 12:15:12', '2018-01-01 12:15:12');
-timestampdiff(time_stamp_unit(year), 2022-01-01 12:15:12, 2018-01-01 12:15:12)
+timestampdiff(year, 2022-01-01 12:15:12, 2018-01-01 12:15:12)
 -4
+SELECT TIMESTAMPDIFF(MONTH,'2003-02-01','2003-05-01');
+timestampdiff(month, 2003-02-01, 2003-05-01)
+3
 drop table if exists t1;
 create table t1(a date,  b date);
 insert into t1 values('2019-11-01 12:15:12', '2018-01-01 12:15:12');
@@ -173,7 +176,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(MICROSECOND, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(microsecond), a, b)
+a    b    timestampdiff(microsecond, a, b)
 2019-11-01    2018-01-01    -57801600000000
 2019-10-01    2018-01-01    -55123200000000
 2020-10-01    2018-01-01    -86745600000000
@@ -198,7 +201,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(SECOND, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(second), a, b)
+a    b    timestampdiff(second, a, b)
 2019-11-01    2018-01-01    -57801600
 2019-10-01    2018-01-01    -55123200
 2020-10-01    2018-01-01    -86745600
@@ -223,7 +226,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(MINUTE, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(minute), a, b)
+a    b    timestampdiff(minute, a, b)
 2019-11-01    2018-01-01    -963360
 2019-10-01    2018-01-01    -918720
 2020-10-01    2018-01-01    -1445760
@@ -248,7 +251,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(HOUR, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(hour), a, b)
+a    b    timestampdiff(hour, a, b)
 2019-11-01    2018-01-01    -16056
 2019-10-01    2018-01-01    -15312
 2020-10-01    2018-01-01    -24096
@@ -273,7 +276,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(DAY, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(day), a, b)
+a    b    timestampdiff(day, a, b)
 2019-11-01    2018-01-01    -669
 2019-10-01    2018-01-01    -638
 2020-10-01    2018-01-01    -1004
@@ -298,7 +301,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(WEEK, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(week), a, b)
+a    b    timestampdiff(week, a, b)
 2019-11-01    2018-01-01    -95
 2019-10-01    2018-01-01    -91
 2020-10-01    2018-01-01    -143
@@ -323,7 +326,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(MONTH, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(month), a, b)
+a    b    timestampdiff(month, a, b)
 2019-11-01    2018-01-01    -22
 2019-10-01    2018-01-01    -21
 2020-10-01    2018-01-01    -33
@@ -348,7 +351,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(QUARTER, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(quarter), a, b)
+a    b    timestampdiff(quarter, a, b)
 2019-11-01    2018-01-01    -7
 2019-10-01    2018-01-01    -7
 2020-10-01    2018-01-01    -11
@@ -373,7 +376,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2020-10-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2021-11-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2022-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(YEAR, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(year), a, b)
+a    b    timestampdiff(year, a, b)
 2019-11-01    2018-01-01    -1
 2019-10-01    2018-01-01    -1
 2020-10-01    2018-01-01    -2
@@ -398,7 +401,7 @@ insert into t1 values( '2018-01-01 12:15:12', '2018-01-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2018-01-01 12:15:12');
 insert into t1 values( '2018-01-01 12:15:12', '2018-01-01 12:15:12');
 SELECT a, b, TIMESTAMPDIFF(YEAR, a, b) from t1;
-a    b    timestampdiff(time_stamp_unit(year), a, b)
+a    b    timestampdiff(year, a, b)
 2019-11-01    2019-11-01    0
 2019-10-01    2019-10-01    0
 2020-10-01    2020-10-01    0

@@ -367,27 +367,52 @@ func handleShowColumns(ses *Session) error {
 	data := ses.GetData()
 	mrs := ses.GetMysqlResultSet()
 	for _, d := range data {
-		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
 		if colName == catalog.Row_ID {
 			continue
 		}
-		row[0] = colName
-		typ := &types.Type{}
-		data := d[1].([]uint8)
-		if err := types.Decode(data, typ); err != nil {
-			return err
-		}
-		row[1] = typ.String()
-		if d[2].(int8) == 0 {
-			row[2] = "NO"
+
+		if len(d) == 7 {
+			row := make([]interface{}, 7)
+			row[0] = colName
+			typ := &types.Type{}
+			data := d[1].([]uint8)
+			if err := types.Decode(data, typ); err != nil {
+				return err
+			}
+			row[1] = typ.String()
+			if d[2].(int8) == 0 {
+				row[2] = "NO"
+			} else {
+				row[2] = "YES"
+			}
+			row[3] = d[3]
+			row[4] = "NULL"
+			row[5] = ""
+			row[6] = d[6]
+			mrs.AddRow(row)
 		} else {
-			row[2] = "YES"
+			row := make([]interface{}, 9)
+			row[0] = colName
+			typ := &types.Type{}
+			data := d[1].([]uint8)
+			if err := types.Decode(data, typ); err != nil {
+				return err
+			}
+			row[1] = typ.String()
+			row[2] = "NULL"
+			if d[3].(int8) == 0 {
+				row[3] = "NO"
+			} else {
+				row[3] = "YES"
+			}
+			row[4] = d[4]
+			row[5] = "NULL"
+			row[6] = ""
+			row[7] = d[7]
+			row[8] = d[8]
+			mrs.AddRow(row)
 		}
-		row[3] = d[3]
-		row[4] = "NULL"
-		row[5] = d[5]
-		mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
 		logutil.Errorf("handleShowColumns error %v \n", err)
@@ -740,7 +765,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			row[i] = vec.GetBytes(rowIndex)
 		} else {
@@ -1694,13 +1719,28 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
-		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+		if len(cols) == 7 {
+			cols = []*plan2.ColDef{
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+			}
+		} else {
+			cols = []*plan2.ColDef{
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
+				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+			}
 		}
 	}
 	columns := make([]interface{}, len(cols))
@@ -1820,6 +1860,9 @@ func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
+	if ses != nil {
+		ses.accountId = getAccountId(requestCtx)
+	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			ret, err = plan2.BuildPlan(ctx, stmt)
@@ -2148,8 +2191,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		case *tree.Load:
-			fromLoadData = true
 		case *tree.Import:
 			fromLoadData = true
 			selfHandle = true
@@ -2307,7 +2348,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
-		fromLoadData = cw.GetLoadTag()
 
 		runner = ret.(ComputationRunner)
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
@@ -3005,6 +3045,9 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		col.SetCharset(63) // set binnary charset
+	case types.T_text:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT) // default utf-8
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
@@ -3070,4 +3113,13 @@ var SerializeExecPlan = func(plan any, uuid uuid.UUID) ([]byte, int64, int64) {
 
 func init() {
 	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	var accountId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	return accountId
 }

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,6 +61,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		return nil, nil, err
 	}
 	tbl := new(table)
+	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
 	tbl.viewdef = string(row[catalog.MO_TABLES_VIEWDEF_IDX].([]byte))
 	tbl.relKind = string(row[catalog.MO_TABLES_RELKIND_IDX].([]byte))
@@ -75,7 +77,10 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	cols := getColumnsFromRows(rows)
 	defs := make([]engine.TableDef, 0, len(cols))
 	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
-	for _, col := range cols {
+	for i, col := range cols {
+		if col.constraintType == catalog.SystemColPKConstraint {
+			tbl.primaryIdx = i
+		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
 	return tbl, defs, nil
@@ -133,7 +138,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 }
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string, needUpdated bool) (*tableMeta, error) {
+	name string, needUpdated bool, columnLength int) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	if needUpdated {
 		for i, dnStore := range txn.dnStores {
@@ -145,7 +150,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			if err != nil {
 				return nil, err
 			}
-			blocks[i], err = genBlockMetas(rows, txn.proc.FileService, txn.proc.GetMPool())
+			blocks[i], err = genBlockMetas(rows, columnLength, txn.proc.FileService, txn.proc.GetMPool())
 			if err != nil {
 				return nil, err
 			}
@@ -387,6 +392,12 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	return bat
 }
 
+func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return txn.idGen.AllocateID(ctx)
+}
+
 func (txn *Transaction) genRowId() types.Rowid {
 	txn.rowId[1]++
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
@@ -419,6 +430,9 @@ func (h *transactionHeap) Pop() any {
 // needRead determine if a block needs to be read
 func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
 	var err error
+	if expr == nil {
+		return true
+	}
 	columns := getColumnsByExpr(expr)
 
 	// if expr match no columns, just eval expr
