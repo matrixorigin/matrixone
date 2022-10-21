@@ -69,6 +69,15 @@ func (e *txnEngine) DropDatabase(ctx context.Context, name string, txnHandle Txn
 	return
 }
 
+func (e *txnEngine) DropDatabaseByID(ctx context.Context, id uint64, txnHandle Txn) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	_, err = txn.DropDatabaseByID(id)
+	return
+}
+
 func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {

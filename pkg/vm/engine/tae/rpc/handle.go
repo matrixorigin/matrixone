@@ -200,11 +200,6 @@ func (h *Handle) HandlePreCommit(
 				req := db.DropDatabaseReq{
 					Name: cmd.Name,
 					ID:   cmd.Id,
-					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
-					},
 				}
 				if err = h.HandleDropDatabase(ctx, meta, req,
 					new(db.DropDatabaseResp)); err != nil {

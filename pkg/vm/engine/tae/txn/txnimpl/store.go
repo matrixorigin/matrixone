@@ -313,6 +313,24 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
+func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {
+	hasNewEntry, meta, err := store.catalog.DropDBEntryByID(id, store.txn)
+	if err != nil {
+		return
+	}
+	db, err := store.getOrSetDB(meta.GetID())
+	if err != nil {
+		return
+	}
+	if hasNewEntry {
+		if err = db.SetDropEntry(meta); err != nil {
+			return
+		}
+	}
+	h = buildDB(db)
+	return
+}
+
 func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Relation, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

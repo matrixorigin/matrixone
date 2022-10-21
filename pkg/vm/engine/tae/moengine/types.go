@@ -86,6 +86,7 @@ type Database interface {
 type Engine interface {
 	// Delete deletes a database
 	DropDatabase(ctx context.Context, databaseName string, txn Txn) error
+	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
 	// Create creates a database
 	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error

@@ -70,6 +70,7 @@ type TxnHandle interface {
 	CreateDatabase(name string) (handle.Database, error)
 	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
+	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
 }
@@ -226,6 +227,7 @@ type TxnStore interface {
 	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
+	DropDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)

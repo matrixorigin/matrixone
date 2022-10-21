@@ -233,7 +233,12 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 }
 
 func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
-	panic(moerr.NewNYI("DropDatabaseById is not implemented"))
+	_, entry, err := txn.catalog.DropDBEntryByID(id, txn)
+	if err != nil {
+		return nil, err
+	}
+	txn.Store.AddTxnEntry(0, entry)
+	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {

@@ -395,6 +395,10 @@ func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
 	return
 }
 
+func (txn *Txn) DropDatabaseByID(id uint64) (db handle.Database, err error) {
+	return
+}
+
 func (txn *Txn) UnsafeGetDatabase(id uint64) (db handle.Database, err error) {
 	return
 }
