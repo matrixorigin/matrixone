@@ -38,13 +38,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type Options func(*service)
-
 func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
-	options ...Options,
+	options ...Option,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -57,7 +55,6 @@ func NewService(
 	}
 
 	srv := &service{
-		logger: logutil.GetGlobalLogger().Named("cnservice").With(zap.String("uuid", cfg.UUID)),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
@@ -66,6 +63,10 @@ func NewService(
 		metadataFS:  fs,
 		fileService: fileService,
 	}
+	for _, opt := range options {
+		opt(srv)
+	}
+	srv.logger = logutil.Adjust(srv.logger).Named("cn-service").With(zap.String("uuid", cfg.UUID))
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {
@@ -275,11 +276,4 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	})
 	c = s._txnClient
 	return
-}
-
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message,
-	cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient, mAcquirer func() morpc.Message) error) Options {
-	return func(s *service) {
-		s.requestHandler = f
-	}
 }

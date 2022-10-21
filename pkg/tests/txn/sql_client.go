@@ -59,6 +59,7 @@ func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
 		if err != nil {
 			continue
 		}
+		logger.Debug("get completed tasks", zap.Int("count", len(tasks)))
 		n := 0
 		for _, t := range tasks {
 			if t.Metadata.Executor == uint32(task.TaskCode_FrontendInit) {

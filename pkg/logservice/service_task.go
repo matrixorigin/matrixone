@@ -32,7 +32,7 @@ func (s *Service) initTaskHolder() {
 		return
 	}
 
-	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, func() (string, error) {
+	addressFunc := func() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(),
 			time.Second*5)
 		defer cancel()
@@ -49,7 +49,17 @@ func (s *Service) initTaskHolder() {
 
 		n := rand.Intn(len(details.CNStores))
 		return details.CNStores[n].SQLAddress, nil
-	})
+	}
+
+	if s.task.storageFactory != nil {
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+			addressFunc,
+			func(_, _, _ string) taskservice.TaskStorageFactory {
+				return s.task.storageFactory
+			})
+		return
+	}
+	s.task.holder = taskservice.NewTaskServiceHolder(s.logger, addressFunc)
 }
 
 func (s *Service) createTaskService(command *logservicepb.CreateTaskService) {

@@ -16,6 +16,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -32,8 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -265,6 +269,13 @@ type testCluster struct {
 		addressSets []addressSet
 	}
 
+	task struct {
+		port            int
+		mysql           mysql.MySQLServer
+		factory         taskservice.TaskStorageFactory
+		externalAddress string
+	}
+
 	fileservices *fileServices
 
 	mu struct {
@@ -289,6 +300,22 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	}
 	clock.SetupDefaultClock(c.clock)
 
+	if c.opt.task.useExternalMySQL {
+		port, err := getAvailablePort("127.0.0.1")
+		if err != nil {
+			panic(err)
+		}
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			panic(err)
+		}
+		c.task.mysql, err = mysql.NewMySQLServer(p, "root", "root")
+		if err != nil {
+			panic(p)
+		}
+		c.task.externalAddress = fmt.Sprintf("127.0.0.1:%d", p)
+	}
+
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
 
@@ -312,6 +339,10 @@ func (c *testCluster) Start() error {
 
 	if c.mu.running {
 		return nil
+	}
+
+	if err := c.startExternalMySQL(); err != nil {
+		return err
 	}
 
 	// start log services first
@@ -362,6 +393,11 @@ func (c *testCluster) Close() error {
 
 	if !c.mu.running {
 		return nil
+	}
+
+	// close external mysql
+	if err := c.closeExternalMySQL(); err != nil {
+		return err
 	}
 
 	// close all dn services first
@@ -1338,6 +1374,9 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 			panic(err)
 		}
 
+		opt = append(opt,
+			dnservice.WithTaskStorageFactory(c.task.factory),
+			dnservice.WithLogger(c.logger))
 		ds, err := newDNService(cfg, fs, opt)
 		require.NoError(c.t, err)
 
@@ -1363,7 +1402,9 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		opt = append(opt, logservice.WithLogger(c.logger))
+		opt = append(opt,
+			logservice.WithLogger(c.logger),
+			logservice.WithTaskStorageFactory(c.task.factory))
 		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
@@ -1396,6 +1437,13 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			panic(err)
 		}
 
+		if c.task.externalAddress != "" {
+			cfg.SQLAddress = c.task.externalAddress
+		}
+
+		opt = append(opt,
+			cnservice.WithLogger(c.logger),
+			cnservice.WithTaskStorageFactory(c.task.factory))
 		cs, err := newCNService(cfg, context.TODO(), fs, opt)
 		if err != nil {
 			panic(err)
@@ -1505,6 +1553,27 @@ func (c *testCluster) closeCNServices() error {
 	}
 
 	return nil
+}
+
+func (c *testCluster) startExternalMySQL() error {
+	if c.task.mysql != nil {
+		if err := c.task.mysql.Start(); err != nil {
+			return err
+		}
+		// TODO: move database name to config
+		c.task.factory = taskservice.NewMySQLBasedTaskStorageFactory("root", "root", "mo_task")
+		for _, cfg := range c.cn.cfgs {
+			cfg.SQLAddress = c.task.externalAddress
+		}
+	}
+	return nil
+}
+
+func (c *testCluster) closeExternalMySQL() error {
+	if c.task.mysql == nil {
+		return nil
+	}
+	return c.task.mysql.Stop()
 }
 
 // getClusterState fetches cluster state from arbitrary hakeeper.

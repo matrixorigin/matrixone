@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +36,13 @@ func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *Service) {
 		s.logger = logger
+	}
+}
+
+// WithTaskStorageFactory setup the special task strorage factory
+func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
+	return func(s *Service) {
+		s.task.storageFactory = factory
 	}
 }
 

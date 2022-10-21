@@ -101,7 +101,7 @@ func (c *cnService) ID() string {
 }
 
 func (c *cnService) SQLAddress() string {
-	return c.cfg.SQLAddress
+	return fmt.Sprintf("127.0.0.1:%d", c.cfg.Frontend.Port)
 }
 
 func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
@@ -113,7 +113,7 @@ func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 }
 
 // cnOptions is options for a cn service.
-type cnOptions []cnservice.Options
+type cnOptions []cnservice.Option
 
 // newCNService initializes an instance of `CNService`.
 func newCNService(

@@ -92,6 +92,10 @@ type Options struct {
 		dnStoreTimeout  time.Duration
 		cnStoreTimeout  time.Duration
 	}
+
+	task struct {
+		useExternalMySQL bool
+	}
 }
 
 // DefaultOptions sets a list of recommended options.
@@ -160,6 +164,9 @@ func (opt *Options) validate() {
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
 	}
+
+	// TODO: remove this option after mo is ready
+	opt.task.useExternalMySQL = true
 }
 
 // BuildHAKeeperConfig returns hakeeper.Config
@@ -288,6 +295,12 @@ func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 // GetTxnStorageBackend returns the txn storage backend
 func (opt Options) GetTxnStorageBackend() string {
 	return opt.dn.txnStorageBackend
+}
+
+// WithExternalMySQLAsTaskStorage sets cluster use external mysql as task storage
+func (opt Options) WithExternalMySQLAsTaskStorage() Options {
+	opt.task.useExternalMySQL = true
+	return opt
 }
 
 // gossipSeedNum calculates the count of gossip seed.

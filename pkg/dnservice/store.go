@@ -84,6 +84,13 @@ func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Clie
 	}
 }
 
+// WithTaskStorageFactory setup the special task strorage factory
+func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
+	return func(s *store) {
+		s.task.storageFactory = factory
+	}
+}
+
 type store struct {
 	cfg                 *Config
 	logger              *zap.Logger
@@ -112,6 +119,7 @@ type store struct {
 		sync.RWMutex
 		serviceCreated bool
 		serviceHolder  taskservice.TaskServiceHolder
+		storageFactory taskservice.TaskStorageFactory
 	}
 }
 

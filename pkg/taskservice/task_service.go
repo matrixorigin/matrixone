@@ -130,7 +130,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return nil
 	}
 	if len(exists) != 1 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 
 	old := exists[0]
@@ -145,17 +145,18 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		old.TaskRunner = taskRunner
 		old.LastHeartbeat = time.Now().UnixMilli()
 	default:
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 
 	n, err := s.store.Update(ctx,
 		[]task.Task{old},
+		WithTaskIDCond(EQ, old.ID),
 		WithTaskEpochCond(EQ, old.Epoch-1))
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 	return nil
 }

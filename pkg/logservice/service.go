@@ -74,8 +74,9 @@ type Service struct {
 
 	task struct {
 		sync.RWMutex
-		created bool
-		holder  taskservice.TaskServiceHolder
+		created        bool
+		holder         taskservice.TaskServiceHolder
+		storageFactory taskservice.TaskStorageFactory
 	}
 }
 
@@ -97,12 +98,12 @@ func NewService(
 	for _, opt := range opts {
 		opt(service)
 	}
-	logger := logutil.Adjust(service.logger).Named("LogService").With(zap.String("uuid", cfg.UUID))
-	service.logger = logger
 
-	store, err := newLogStore(cfg, service.getTaskService, logger)
+	service.logger = logutil.Adjust(service.logger).Named("LogService").With(zap.String("uuid", cfg.UUID))
+
+	store, err := newLogStore(cfg, service.getTaskService, service.logger)
 	if err != nil {
-		logger.Error("failed to create log store", zap.Error(err))
+		service.logger.Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
@@ -130,7 +131,7 @@ func NewService(
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)
 		})),
-		morpc.WithServerLogger(logger),
+		morpc.WithServerLogger(service.logger),
 	)
 	if err != nil {
 		return nil, err
@@ -145,16 +146,16 @@ func NewService(
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
-		logger.Error("failed to start the server", zap.Error(err))
+		service.logger.Error("failed to start the server", zap.Error(err))
 		if err := store.close(); err != nil {
-			logger.Error("failed to close the store", zap.Error(err))
+			service.logger.Error("failed to close the store", zap.Error(err))
 		}
 		return nil, err
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
-			logger.Info("logservice heartbeat worker started")
+			service.logger.Info("logservice heartbeat worker started")
 
 			// transfer morpc options via context
 			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)

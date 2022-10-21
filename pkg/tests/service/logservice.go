@@ -15,7 +15,6 @@
 package service
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"path"
 	"strconv"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 

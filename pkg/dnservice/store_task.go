@@ -19,9 +19,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"go.uber.org/zap"
@@ -34,7 +33,7 @@ func (s *store) initTaskHolder() {
 		return
 	}
 
-	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.logger, func() (string, error) {
+	addressFunc := func() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		details, err := s.hakeeperClient.GetClusterDetails(ctx)
@@ -47,7 +46,18 @@ func (s *store) initTaskHolder() {
 
 		n := rand.Intn(len(details.CNStores))
 		return details.CNStores[n].SQLAddress, nil
-	})
+	}
+
+	if s.task.storageFactory != nil {
+		s.task.serviceHolder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+			addressFunc,
+			func(_, _, _ string) taskservice.TaskStorageFactory {
+				return s.task.storageFactory
+			})
+		return
+	}
+
+	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.logger, addressFunc)
 }
 
 func (s *store) createTaskService(command *logservicepb.CreateTaskService) {

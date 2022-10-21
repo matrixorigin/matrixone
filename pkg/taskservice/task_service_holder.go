@@ -46,12 +46,14 @@ type taskServiceHolder struct {
 // NewTaskServiceHolder create a task service hold, it will create task storage and task service from the hakeeper's schedule command.
 func NewTaskServiceHolder(logger *zap.Logger,
 	addressFactory func() (string, error)) TaskServiceHolder {
-	return newTaskServiceHolderWithTaskStorageFactorySelector(logger, addressFactory, func(username, password, database string) TaskStorageFactory {
+	return NewTaskServiceHolderWithTaskStorageFactorySelector(logger, addressFactory, func(username, password, database string) TaskStorageFactory {
 		return NewMySQLBasedTaskStorageFactory(username, password, database)
 	})
 }
 
-func newTaskServiceHolderWithTaskStorageFactorySelector(logger *zap.Logger,
+// NewTaskServiceHolderWithTaskStorageFactorySelector is similar to NewTaskServiceHolder, but with a special
+// task storage facroty selector
+func NewTaskServiceHolderWithTaskStorageFactorySelector(logger *zap.Logger,
 	addressFactory func() (string, error),
 	selector func(string, string, string) TaskStorageFactory) TaskServiceHolder {
 	return &taskServiceHolder{
@@ -324,6 +326,7 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
 		s.logger.Error("refresh task storage failed",
+			zap.String("address", connectAddress),
 			zap.Error(err))
 		return
 	}
@@ -347,9 +350,6 @@ func NewMySQLBasedTaskStorageFactory(username, password, database string) TaskSt
 }
 
 func (f *mysqlBasedStorageFactory) Create(address string) (TaskStorage, error) {
-	f.username = "root"
-	f.password = "root"
-	address = "127.0.01:3306"
 	dsn := fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=5s&writeTimeout=5s&timeout=5s",
 		f.username,
 		f.password,

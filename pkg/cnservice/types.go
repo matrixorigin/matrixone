@@ -199,7 +199,8 @@ type service struct {
 
 	task struct {
 		sync.RWMutex
-		holder taskservice.TaskServiceHolder
-		runner taskservice.TaskRunner
+		holder         taskservice.TaskServiceHolder
+		runner         taskservice.TaskRunner
+		storageFactory taskservice.TaskStorageFactory
 	}
 }

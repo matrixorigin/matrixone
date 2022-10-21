@@ -47,7 +47,7 @@ type cluster struct {
 
 // NewCluster new txn testing cluster based on the service.Cluster
 func NewCluster(t *testing.T, options service.Options) (Cluster, error) {
-	logger := logutil.GetPanicLoggerWithLevel(zap.ErrorLevel)
+	logger := logutil.GetPanicLoggerWithLevel(zap.DebugLevel)
 	env, err := service.NewCluster(t, options.WithLogger(logger))
 	if err != nil {
 		return nil, err

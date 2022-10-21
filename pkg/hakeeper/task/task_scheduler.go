@@ -80,6 +80,7 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 		return moerr.NewInternalError("failed to get task service")
 	}
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
+		s.logger.Error("new tasks create failed", zap.Error(err))
 		return err
 	}
 	s.logger.Debug("new tasks created", zap.Int("created", len(tasks)))
@@ -87,6 +88,7 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 	if len(v) == 0 && err == nil {
 		panic("created tasks cannot read")
 	}
+	s.logger.Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
 	return nil
 }
 

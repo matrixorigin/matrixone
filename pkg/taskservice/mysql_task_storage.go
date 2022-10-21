@@ -19,8 +19,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,13 +29,9 @@ import (
 )
 
 var (
-	createDB = []string{
-		`create database if not exists `,
-		`use `,
-	}
-
-	createSqls = []string{
-		`create table if not exists sys_async_task (
+	initSqls = []string{
+		`create database if not exists %s`,
+		`create table if not exists %s.sys_async_task (
 			task_id                     int primary key auto_increment,
 			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -50,7 +46,7 @@ var (
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
 			end_at                      bigint)`,
-		`create table if not exists sys_cron_task (
+		`create table if not exists %s.sys_cron_task (
 			cron_task_id				int primary key auto_increment,
     		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -63,7 +59,7 @@ var (
 			update_at					bigint)`,
 	}
 
-	insertAsyncTask = `insert into sys_async_task(
+	insertAsyncTask = `insert into %s.sys_async_task(
                            task_metadata_id,
                            task_metadata_executor,
                            task_metadata_context,
@@ -76,7 +72,7 @@ var (
                            create_at,
                            end_at) values `
 
-	updateAsyncTask = `update sys_async_task set 
+	updateAsyncTask = `update %s.sys_async_task set 
 							task_metadata_executor=?,
 							task_metadata_context=?,
 							task_metadata_option=?,
@@ -105,9 +101,9 @@ var (
 							error_msg,
 							create_at,
 							end_at 
-						from sys_async_task`
+						from %s.sys_async_task`
 
-	insertCronTask = `insert into sys_cron_task (
+	insertCronTask = `insert into %s.sys_cron_task (
                            task_metadata_id,
 						   task_metadata_executor,
                            task_metadata_context,
@@ -130,9 +126,9 @@ var (
     						trigger_times,
     						create_at,
     						update_at
-						from sys_cron_task`
+						from %s.sys_cron_task`
 
-	updateCronTask = `update sys_cron_task set 
+	updateCronTask = `update %s.sys_cron_task set 
 							task_metadata_executor=?,
     						task_metadata_context=?,
     						task_metadata_option=?,
@@ -141,11 +137,23 @@ var (
     						trigger_times=?,
     						create_at=?,
     						update_at=? where cron_task_id=?`
+
+	checkTaskExists = `select exists(select * from %s.sys_async_task where task_metadata_id=?)`
+
+	getTriggerTimes = `select trigger_times from %s.sys_cron_task where task_metadata_id=?`
+
+	deleteTask = `delete from %s.sys_async_task where `
+)
+
+var (
+	forceNewConn = "async_task_force_new_connection"
 )
 
 type mysqlTaskStorage struct {
-	dsn string
-	db  *sql.DB
+	dsn          string
+	dbname       string
+	db           *sql.DB
+	forceNewConn bool
 }
 
 func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
@@ -154,26 +162,23 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 		return nil, err
 	}
 
-	db.SetConnMaxIdleTime(time.Second * 10)
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(2)
-	for _, s := range createDB {
-		if _, err = db.Exec(s + dbname); err != nil {
-			return nil, multierr.Append(err, db.Close())
-		}
-	}
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(0)
 
 	// TODO: Can not init here. Consider how many CNs are started and how many times they will be executed,
 	// the initialization logic needs to be moved to the initialization of HaKeeper
-	for _, s := range createSqls {
-		if _, err = db.Exec(s); err != nil {
+	for _, s := range initSqls {
+		if _, err = db.Exec(fmt.Sprintf(s, dbname)); err != nil {
 			return nil, multierr.Append(err, db.Close())
 		}
 	}
 
+	_, ok := os.LookupEnv(forceNewConn)
 	return &mysqlTaskStorage{
-		dsn: dsn,
-		db:  db,
+		dsn:          dsn,
+		db:           db,
+		dbname:       dbname,
+		forceNewConn: ok,
 	}, nil
 }
 
@@ -182,18 +187,27 @@ func (m *mysqlTaskStorage) Close() error {
 }
 
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
-	conn, err := m.db.Conn(ctx)
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer func() {
 		_ = conn.Close()
 	}()
-	if len(tasks) == 0 {
-		return 0, nil
-	}
 
-	sqlStr := insertAsyncTask
+	sqlStr := fmt.Sprintf(insertAsyncTask, m.dbname)
 	vals := make([]any, 0, len(tasks)*13)
 
 	for _, t := range tasks {
@@ -217,7 +231,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 		)
 	}
 
-	if sqlStr == insertAsyncTask {
+	if sqlStr == fmt.Sprintf(insertAsyncTask, m.dbname) {
 		return 0, nil
 	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
@@ -246,7 +260,15 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 }
 
 func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condition ...Condition) (int, error) {
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -267,9 +289,9 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 
 	var update string
 	if where != "" {
-		update = updateAsyncTask + " and " + where
+		update = fmt.Sprintf(updateAsyncTask, m.dbname) + " and " + where
 	} else {
-		update = updateAsyncTask
+		update = fmt.Sprintf(updateAsyncTask, m.dbname)
 	}
 	n := 0
 	for _, t := range tasks {
@@ -317,14 +339,22 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 			return 0, err
 		}
 	}
-	if err = tx.Commit(); tx != nil {
+	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
 	return n, nil
 }
 
 func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (int, error) {
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -338,7 +368,7 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 	}
 	where := buildWhereClause(c)
 
-	exec, err := conn.ExecContext(ctx, "delete from sys_async_task where "+where)
+	exec, err := conn.ExecContext(ctx, fmt.Sprintf(deleteTask, m.dbname)+where)
 	if err != nil {
 		return 0, err
 	}
@@ -350,7 +380,15 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 }
 
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -366,9 +404,9 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	where := buildWhereClause(c)
 	var query string
 	if where != "" {
-		query = selectAsyncTask + " where " + where
+		query = fmt.Sprintf(selectAsyncTask, m.dbname) + " where " + where
 	} else {
-		query = selectAsyncTask
+		query = fmt.Sprintf(selectAsyncTask, m.dbname)
 	}
 	query += buildLimitClause(c)
 
@@ -430,7 +468,15 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -438,7 +484,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		_ = conn.Close()
 	}()
 
-	sqlStr := insertCronTask
+	sqlStr := fmt.Sprintf(insertCronTask, m.dbname)
 	vals := make([]any, 0)
 	for _, t := range cronTask {
 		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?),"
@@ -459,9 +505,8 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.CreateAt,
 			t.UpdateAt,
 		)
-
 	}
-	if sqlStr == insertCronTask {
+	if sqlStr == fmt.Sprintf(insertCronTask, m.dbname) {
 		return 0, nil
 	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
@@ -489,7 +534,15 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 }
 
 func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
-	conn, err := m.db.Conn(ctx)
+	db, release, err := m.getDB()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = release()
+	}()
+
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +550,7 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 		_ = conn.Close()
 	}()
 
-	rows, err := conn.QueryContext(ctx, selectCronTask)
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf(selectCronTask, m.dbname))
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
@@ -564,7 +617,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	defer func(tx *sql.Tx) {
 		_ = tx.Rollback()
 	}(tx)
-	stmt, err := tx.Prepare(insertAsyncTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare(fmt.Sprintf(insertAsyncTask, m.dbname) + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		return 0, err
 	}
@@ -588,7 +641,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
-	exec, err := tx.Exec(updateCronTask,
+	exec, err := tx.Exec(fmt.Sprintf(updateCronTask, m.dbname),
 		cronTask.Metadata.Executor,
 		cronTask.Metadata.Context,
 		string(j),
@@ -618,7 +671,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 
 func (m *mysqlTaskStorage) taskExists(ctx context.Context, conn *sql.Conn, taskMetadataID string) (bool, error) {
 	var exists bool
-	err := conn.QueryRowContext(ctx, "select exists(select * from sys_async_task where task_metadata_id=?)", taskMetadataID).Scan(&exists)
+	err := conn.QueryRowContext(ctx, fmt.Sprintf(checkTaskExists, m.dbname), taskMetadataID).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
@@ -627,7 +680,7 @@ func (m *mysqlTaskStorage) taskExists(ctx context.Context, conn *sql.Conn, taskM
 
 func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, conn *sql.Conn, taskMetadataID string) (uint64, error) {
 	var triggerTimes uint64
-	err := conn.QueryRowContext(ctx, "select trigger_times from sys_cron_task where task_metadata_id=?", taskMetadataID).Scan(&triggerTimes)
+	err := conn.QueryRowContext(ctx, fmt.Sprintf(getTriggerTimes, m.dbname), taskMetadataID).Scan(&triggerTimes)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil
@@ -675,6 +728,33 @@ func buildWhereClause(c conditions) string {
 	return clause
 }
 
+func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
+	if !m.forceNewConn {
+		if err := m.useDB(m.db); err != nil {
+			return nil, nil, err
+		}
+		return m.db, func() error { return nil }, nil
+	}
+
+	db, err := sql.Open("mysql", m.dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err = m.useDB(db); err != nil {
+		return nil, nil, multierr.Append(err, db.Close())
+	}
+
+	return db, func() error { return db.Close() }, nil
+}
+
+func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
+	if _, err := db.Exec("use " + m.dbname); err != nil {
+		return err
+	}
+	return nil
+}
+
 func buildLimitClause(c conditions) string {
 	if c.limit != 0 {
 		return fmt.Sprintf(" limit %d", c.limit)
@@ -690,10 +770,9 @@ func removeDuplicateTasks(err error, tasks []task.Task) ([]task.Task, error) {
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	key := strings.Split(me.Message, "'")[1]
 	i := 0
 	for _, t := range tasks {
-		if t.Metadata.ID != key {
+		if !strings.Contains(me.Message, t.Metadata.ID) {
 			tasks[i] = t
 			i++
 		}
@@ -710,10 +789,9 @@ func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	key := strings.Split(me.Message, "'")[1]
 	i := 0
 	for _, t := range tasks {
-		if t.Metadata.ID != key {
+		if !strings.Contains(me.Message, t.Metadata.ID) {
 			tasks[i] = t
 			i++
 		}

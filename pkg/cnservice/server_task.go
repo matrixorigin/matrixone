@@ -30,8 +30,18 @@ import (
 )
 
 func (s *service) initTaskServiceHolder() {
-	s.task.holder = taskservice.NewTaskServiceHolder(s.logger,
-		func() (string, error) { return s.cfg.SQLAddress, nil })
+	s.task.Lock()
+	defer s.task.Unlock()
+	if s.task.storageFactory == nil {
+		s.task.holder = taskservice.NewTaskServiceHolder(s.logger,
+			func() (string, error) { return s.cfg.SQLAddress, nil })
+		return
+	}
+	s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+		func() (string, error) { return s.cfg.SQLAddress, nil },
+		func(_, _, _ string) taskservice.TaskStorageFactory {
+			return s.task.storageFactory
+		})
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
