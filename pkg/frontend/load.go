@@ -1824,6 +1824,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 							goto handleError2
 						}
 					}
+					handler.batchData.Zs = handler.batchData.Zs[:handler.batchFilled]
 					err = tableHandler.Write(ctx, handler.batchData)
 					handler.batchData.Clean(proc.Mp())
 					if handler.oneTxnPerBatch {
