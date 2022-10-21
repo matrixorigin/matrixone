@@ -1,0 +1,71 @@
+#SELECT, 科学计数法
+select abs(-10);
+select abs(-2) * -2;
+select abs(1e10);
+
+#NULL
+select abs(NULL);
+
+#EXTREME VALUE
+select abs(9999999999999999999999);
+select abs(-9999999999999999999999);
+select abs(10/0);
+
+#嵌套
+select abs(cast(-2 as unsigned)), abs(18446744073709551614), abs(-2);
+
+#WHERE, 数据类型
+CREATE TABLE t(u TINYINT UNSIGNED NOT NULL);
+INSERT INTO t VALUES (0), (3), (255);
+SELECT * FROM t WHERE ABS(u=256)=0;
+DROP TABLE t;
+
+#DISTINCT
+create table t1(a int, b int, c int);
+insert into t1 values(100,1,2),(200,1,1),(300,2,1),(400,2,2);
+select distinct b from t1 order by abs(b);
+select distinct b as z from t1 order by abs(z);
+select distinct abs(b) as z from t1 order by z;
+select distinct abs(b) as z from t1 order by abs(b);
+select distinct abs(b) from t1 order by abs(b);
+drop table t1;
+
+#CASE WHEN
+CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
+INSERT INTO t1 VALUES(1, 1, 1), (1, 1, 1);
+SELECT CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END, ABS(AVG(c0)) FROM t1;
+DROP TABLE t1;
+CREATE TABLE t(i INT);
+INSERT INTO t VALUES (-1),(2),(1);
+SELECT ABS(i) AS a FROM t GROUP BY abs(i) ORDER BY a + 1;
+-- @bvt:issue#3265
+SELECT ABS(i) AS a FROM t GROUP BY a ORDER BY a + 1;
+-- @bvt:issue
+DROP TABLE t;
+
+
+#INSERT, HAVING, ON
+
+
+CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
+CREATE TABLE t2(c0 INTEGER, c1 INTEGER, c2 INTEGER);
+INSERT INTO t1 select abs(-341.741), abs(-234141113), abs(-141241);
+INSERT INTO t2 select abs(-341.5612), abs(-23413), abs(-14141);
+select * from t1;
+select * from t2;
+
+SELECT t1.c0, t2.c0 from t1 join t2 on abs(t1.c0) = abs(t2.c0) having abs(t1.c0)>100;
+
+drop table t1;
+drop table t2;
+
+
+
+
+#算式操作
+SELECT abs(10)-abs(-34);
+SELECT abs(1241)*abs(-0.4141);
+
+#比较操作
+SELECT abs(-100)>abs(-102);
+SELECT abs(-100)<>abs(100);

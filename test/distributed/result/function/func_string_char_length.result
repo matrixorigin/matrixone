@@ -1,0 +1,120 @@
+SELECT CHAR_LENGTH("你好");
+CHAR_LENGTH("你好")
+2
+SELECT CHAR_LENGTH("français");
+CHAR_LENGTH("français")
+8
+SELECT CHAR_LENGTH("にほんご");
+CHAR_LENGTH("にほんご")
+4
+SELECT CHAR_LENGTH("Español");
+CHAR_LENGTH("Español")
+7
+SELECT CHAR_LENGTH(NULL);
+CHAR_LENGTH(NULL)
+null
+create table t1 (a char(20));
+insert into t1 values ('123456'),('андрей');
+select char_length(a), length(a), a from t1 order by a;
+char_length(a)	length(a)	a
+6	6	123456
+6	12	андрей
+drop table t1;
+select char_length('\n\t\r\b\0\_\%\\');
+char_length(\n\t\r\b\0\_\%\\)
+10
+SELECT CHAR_LENGTH(concat_ws(" ",121,83,81,'76')) as my_column;
+my_column
+12
+create table t (c varchar(20));
+insert into t values ('\\');
+select char_length(c) from t;
+char_length(c)
+1
+insert into t values ('0C');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+3
+insert into t values ('"');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+4
+insert into t values ('\a');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+5
+insert into t values ('\b');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+6
+insert into t values ('\t');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+7
+insert into t values ('\n');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+8
+insert into t values ('\r');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+9
+insert into t values ('10');
+select sum(char_length(c)) from t;
+sum(char_length(c))
+11
+drop table t;
+create table t1(a tinyint, b SMALLINT, c BIGINT, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10",  "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
+insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22",  "2013-03-12 10:03:12", "2032-03-12 13:04:12", "abr23c", "3dcf");
+insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12",  "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
+insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12",  "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
+select char_length(a),char_length(b),char_length(c),char_length(d),char_length(e),char_length(f),char_length(g),char_length(h),char_length(i),char_length(k),char_length(l),char_length(m),char_length(n) from t1;
+char_length(a)	char_length(b)	char_length(c)	char_length(d)	char_length(e)	char_length(f)	char_length(g)	char_length(h)	char_length(i)	char_length(k)	char_length(l)	char_length(m)	char_length(n)
+1	1	1	2	1	4	6	22	10	19	19	5	4
+2	1	1	2	1	3	6	22	10	19	19	6	4
+1	1	2	1	2	4	6	22	10	19	19	4	5
+1	2	1	2	1	3	6	23	10	19	19	6	4
+drop table t1;
+create table t1(a int, b varchar(255));
+insert into t1 select char_length("你好"), "你好";
+insert into t1 select char_length("再见"), "再见";
+select distinct a, char_length(b) from t1;
+a	char_length(b)
+2	2
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b varchar(255));
+insert into t1 select char_length("你好"), "你好";
+insert into t1 select char_length("再见"), "再见";
+select * from t1 where char_length(b)=2;
+a	b
+2	你好
+2	再见
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a INT,  b varchar(255));
+create table t2(a INT,  b varchar(255));
+insert into t1 select char_length("你好"), "你好";
+insert into t1 select char_length("再见"), "再见";
+insert into t2 select char_length("今天"), "日期时间";
+insert into t2 select char_length("明天"), "明天";
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (char_length(t1.b) = char_length(t2.b));
+a	a
+2	2
+2	2
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(a INT,  b varchar(255));
+insert into t1 select char_length("你好"), "你好";
+insert into t1 select char_length("再见"), "再见";
+select b from t1 group by b having char_length(b)<3;
+b
+你好
+再见
+drop table t1;
+SELECT char_length("你好")+char_length("再见");
+char_length("你好")+char_length("再见")
+4

@@ -241,11 +241,11 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	targetTypes := getTypeSlice(targetTs)
 	rewriteTypesIfNecessary(targetTypes, args)
 
-	finalTypes := make([]types.Type, len(args))
+	var finalTypes []types.Type
 	if targetTs != nil {
-		copy(finalTypes, targetTypes)
+		finalTypes = targetTypes
 	} else {
-		copy(finalTypes, args)
+		finalTypes = args
 	}
 
 	// deal the failed situations

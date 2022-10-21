@@ -1,0 +1,96 @@
+DROP TABLE IF EXISTS t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1;
+a	b
+{"t1": "a"}	1
+{"t1": "b"}	2
+select * from t1 where b=1;
+a	b
+{"t1": "a"}	1
+select * from t1 where b=2;
+a	b
+{"t1": "b"}	2
+insert into t1 values ('{"t1":"c"',3);
+invalid input: Invalid JSON text: '{"t1":"c"' for column 'a' at row '1'
+select count(a) from t1;
+count(a)
+2
+update t1 set a='{"t1":"qaq"}' where b=1;
+delete from t1 where b=2;
+select * from t1;
+a	b
+{"t1": "qaq"}	1
+delete from t1 where b=1;
+select * from t1;
+a	b
+drop table if exists t2;
+create table t2 (a json,b int);
+delete from t1;
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
+a	b
+load data infile '$resources/json/export_1.csv' into table t1 ignore 1 lines;
+load data infile '$resources/json/export_1.csv' into table t2 ignore 1 lines;
+select * from t1;
+a	b
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+select * from t2;
+a	b
+{"t1": "a"}	1
+{"t1": "b"}	2
+select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
+a	b
+load data local infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
+load data local infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
+select * from t1;
+a	b
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+select * from t2;
+a	b
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+{"t1": "a"}	1
+{"t1": "b"}	2
+delete from t1;
+load data local infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
+select * from t1;
+a	b
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2
+load data local infile '$resources/json/data_2.csv' into table t1;
+select * from t1;
+a	b
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2
+{"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	1
+drop table if exists t3;
+create table t3 (a json,b json);
+load data local infile '$resources/json/data_3.csv' into table t3;
+select * from t3;
+a	b
+{"a": 1, "b": [1, 2, {"c": 1.5}, null, true, false]}	{"b": 1}
+drop table if exists t4;
+create table t4 (a json null);
+drop table if exists t5;
+create table t5 (a json not null);
+drop table if exists t6;
+create table t6 (a json primary key);
+not supported: JSON column 'a' cannot be in primary key
+drop table if exists t7;
+create table t7 (a json default '{"t1":"a"}');
+not supported: JSON column 'a' cannot have default value
+drop table if exists t8;
+create table t8 (a json default null);

@@ -1,0 +1,58 @@
+-- @suite                                                                                                                                                                                
+-- @case
+-- @desc:test for boolean datatype
+-- @label:bvt
+
+#Test cases of basic action
+DROP TABLE IF EXISTS t1;
+create table t1 (a boolean,b bool);
+insert into t1 values (0,1),(true,false),(true,1),(0,false),(NULL,NULL);
+select * from t1;
+SELECT * FROM t1 WHERE IF(a AND 1, 0, 1) order by a asc;
+SELECT * FROM t1 WHERE IF(1 AND a, 0, 1);
+SELECT * FROM t1 where NOT(a AND 1) order by a asc, b desc;
+SELECT * FROM t1 where NOT(1 AND a);
+SELECT * FROM t1 where (a AND 1)=0;
+SELECT * FROM t1 where (1 AND a)=0;
+SELECT * FROM t1 where (1 AND a)=1 order by a asc, 2 asc;
+SELECT * FROM t1 where (1 AND a) IS NULL order by 1 desc, 2 asc;
+select not a,a and b,a or b,a xor b from t1;
+select not a and not b from t1;
+select not a or b xor b from t1;
+drop table if exists t2;
+create table t2(a int,b int);
+insert into t2 values(1,2),(3,4);
+select a<2 from t2;
+select a<2 and b<3 from t2;
+select a=1 or b=3 from t2;
+select a,count(a) from t1 group by a;
+select max(b) from t1;
+select min(a) from t1;
+select max(b)<min(a) from t1;
+select distinct a from t1 where a=true;
+
+#Test cases of IS opertors
+select * from t1 where a IS NULL;
+select * from t1 where b is NOT NULL;
+select * from t1 where a IS NULL and b is NOT NULL;
+select * from t1 where a>b order by a asc;
+-- @bvt:issue#3250
+select * from t2 where a<1 AND NOT b order by b desc;
+-- @bvt:issue
+select b,max(b) from t1 where b is not NULL group by b order by b;
+select * from t1 where a<=b and a is not NULL;
+
+select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
+select a,count(a) from t1 group by a having count(a)>1;
+select a,any_value(b) from t1 where isnotnull(a) group by a order by a asc;
+select a,b from t1 where a in (0,1);
+select a,b from t1 where a not in (0,2);
+select distinct t.a from (select * from t1) t where a not in (2) order by t.a asc;
+select a and b from t1 where exists (select a from t1 where a is null) order by a desc;
+
+#Test cases of update and delete
+update t1 set a=false where b is null;
+delete from t1 where a=false;
+select * from t1;
+delete from t1 where b=true;
+select * from t1;

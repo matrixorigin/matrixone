@@ -1,0 +1,219 @@
+-- @suite                                                                                                                                                                                
+-- @case
+-- @desc:test for double datatype
+-- @label:bvt
+
+#Test cases of query without table
+select -1.7976931348623157E+308,-2.2250738585072014E-308,0,2.2250738585072014E-308,1.7976931348623157E+308;
+select 1.7976931348623158E+308,-2.2250738585072015E-308,2.2250738585072015E-308,1.7976931348623158E+308;
+select 1.7976931348623158E+308*1,-2.2250738585072015E-308+1.2250738585072015E-308;
+
+
+#Test cases of query with single table
+drop table if exists t1;
+create table t1 (a double not null, primary key(a));
+insert into t1 values(-1.7976931348623157E+308),(-2.2250738585072014E-308),(0),(2.2250738585072014E-308),(1.7976931348623157E+308);
+select * from t1 order by a asc;
+delete from t1 where a>0;
+drop table if exists t1;
+create table t1(a double(53,30));
+insert into t1 values(-1.7976931348623157),(2.2250738585072014),(0),(2.2250738585072014),(1.7976931348623157);
+select * from t1 order by 1 asc;
+drop table if exists t1;
+create table t1(a double(53,5));
+insert into t1 values(-1.7976931348623157),(2.2250738585072014),(0),(2.2250738585072014),(1.7976931348623157);
+select * from t1;
+drop table t1;
+create table t1(a float(34));
+-- @bvt:issue#4604
+show create table t1;
+-- @bvt:issue
+drop table t1;
+create table t1 ( a double not null default 1, big double(30,5) );
+insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
+select * from t1 order by a desc, big asc;
+select min(big),max(big),max(big)-1 from t1;
+select min(big),max(big),max(big)-1 from t1 group by a order by 1+2;
+drop table t1;
+create table t1 ( a double not null default 1, big double);
+insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
+select * from t1;
+select * from t1 order by big limit 1,2;
+select * from t1 order by big limit 2 offset 1;
+select min(big),max(big),max(big)-1 from t1;
+select min(big),max(big),max(big)+1 from t1 group by a;
+drop table t1;
+create table t1 (id double primary key, a int);
+insert into t1 values (1.1,1);
+insert into t1 values (2.22,2);
+insert into t1 values (3.333,3);
+insert into t1 values (4.4444,4);
+select * from t1 order by id desc;
+
+
+#Test cases of query with multi tables
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (
+a double not null,
+b double not null,
+primary key(a)
+);
+create table t2 (
+a  double  not null,
+b  integer  not null,
+primary key(a)
+);
+insert into t1 values(0.123456, 1);
+insert into t1 values(1.23456, 2);
+insert into t2 values(1.23456e-1, 3);
+insert into t2 values(1.23456e1, 4);
+insert into t1 values(3,5);
+select * from t1;
+select * from t2;
+select * from t1 join t2 on t1.a=t2.a order by 1 asc, 2 desc;
+select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456 order by abs(1);
+select * from t1 join t2 on t2.b=t1.a order by t1.a, t2.b asc;
+
+#Test cases of operators
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (a double);
+insert into t1 values (17.666);
+select * from t1 where a>=17.6660;
+select * from t1 where a>='17.6660';
+drop table t1;
+CREATE TABLE t1 (id INT PRIMARY KEY,
+a double(20),
+b VARCHAR(20));
+INSERT INTO t1 (id,a) VALUES
+(1,0),
+(2,CAST(0x7FFFFFFFFFFFFFFF AS UNSIGNED)),
+(3,CAST(0x8000000000000000 AS UNSIGNED)),
+(4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
+select * from t1;
+UPDATE t1 SET b = a;
+select * from t1;
+select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776E+18')) group by a having count(a)>1 order by count(a);
+select distinct a,b from t1 where ((a = 1.844674407370955e19) and (b != '9.223372036854776e18')) order by 1;
+CREATE TABLE t_double(id double(30,1));
+INSERT INTO t_double VALUES (1.19),(1.11), (2);
+SELECT id, id >= 1.1 FROM t_double;
+SELECT id, 1.1 <= id FROM t_double;
+-- @bvt:issue#3366
+SELECT id, id = 1.1 FROM t_double;
+SELECT id, 1.1 = id FROM t_double;
+SELECT * from t_double WHERE id = 1.1;
+SELECT * from t_double WHERE id = 1.1e0;
+-- @bvt:issue
+-- @bvt:issue#3677
+SELECT * from t_double WHERE id = '1.1';
+SELECT * from t_double WHERE id = '1.1e0';
+SELECT * from t_double WHERE id IN (1.1, 2.2);
+SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
+SELECT * from t_double WHERE id IN ('1.1', '2.2');
+SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
+-- @bvt:issue
+SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
+SELECT * from t_double WHERE id BETWEEN 1.1e0 AND 1.9e0;
+SELECT * from t_double WHERE id BETWEEN '1.1' AND '1.9';
+SELECT * from t_double WHERE id BETWEEN '1.1e0' AND '1.9e0';
+drop table t1;
+CREATE TABLE t1 (a double(5,4));
+INSERT INTO t1 VALUES (1),(0.8999),(0.800000);
+-- @bvt:issue#3185
+SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
+-- @bvt:issue
+SELECT * FROM t1 WHERE a=0.9;
+SELECT * FROM t1 WHERE a in (0.8,0.9);
+SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
+drop table t1;
+create table t1 (id double, b int);
+insert into t1 values(4.571231231231233534314,1);
+insert into t1 values(5.31110909092103910293012,2);
+insert into t1 values(177.1715012301203103111,3);
+select count(*) from t1
+where id>=5.3111 and id <=177.171 order by 1;
+select count(*) from t1 
+where id between 5.3111 and 177.171;
+drop table t1;
+
+#Test cases of update with single table
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a double(3,2), b double(5,2) primary key);
+INSERT INTO t1 VALUES (1.00,1.0000),(1.00,2.0000);
+update t1 set a=2.00 where a=1 limit 1;
+select * from t1;
+INSERT INTO t1 VALUES (1,3);
+update t1 set a=2 where a=1.00;
+select * from t1;
+drop table t1;
+create table t1 (
+a double(10,5) not null,
+b int not null default 12346,
+c double(10,5) not null default 12345.67890,
+d double(10,5) not null default 12345.67890,
+e double(10,5) not null default 12345.67890,
+f double(10,5) not null default 12345.67890,
+g double(10,5) not null default 12345.67890,
+h double(10,5) not null default 12345.67890,
+i double(10,5) not null default 12345.67890,
+j double(10,5) not null default 12345.67890,
+primary key (a));
+insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
+update t1 set a=a+101;
+select a,b from t1;
+update t1 set a=27 where a=125;
+select a,b from t1;
+update t1 set a=a-1 where 1 > 2;
+select a,b from t1;
+update t1 set a=a-1 where 3 > 2;
+select a,b from t1;
+drop table t1;
+create table t1 (a double(10,5) primary key, b char(32));
+insert into t1 values (1,'apple'), (2,'apple');
+select * from t1;
+
+#Test cases of delete with single table
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a double(3,2), b double(5,4) primary key);
+INSERT INTO t1 VALUES (1,1),(1,2);
+delete from t1 where a=1 limit 1;
+select * from t1;
+INSERT INTO t1 VALUES (1,3);
+delete from t1 where a=1;
+select * from t1;
+drop table t1;
+create table t1 (
+a double(10,5) not null,
+b int not null default 12346,
+c double(10,5) not null default 12345.67890,
+d double(10,5) not null default 12345.67890,
+e double(10,5) not null default 12345.67890,
+f double(10,5) not null default 12345.67890,
+g double(10,5) not null default 12345.67890,
+h double(10,5) not null default 12345.67890,
+i double(10,5) not null default 12345.67890,
+j double(10,5) not null default 12345.67890,
+primary key (a));
+insert into t1 (a) values (2.1111),(4),(00006.12311),(8.41231),(24.0000);
+delete from t1 where a=2+2.0000;
+select a,b from t1;
+delete from t1 where  a=24.0000;
+select a,b from t1;
+delete from t1 where  3 < 2;
+select a,b from t1;
+delete from t1 where  1 < 2;
+select a,b from t1;
+drop table t1;
+create table t1 (a double(10,5) primary key, b char(32));
+insert into t1 values (1,'apple'), (2,'apple');
+select * from t1;
