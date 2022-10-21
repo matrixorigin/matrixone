@@ -55,7 +55,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			if types.T(expr.Typ.GetId()) == types.T_any {
 				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 			} else {
-				vec = vector.NewConstDefault(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 			}
 		} else {
 			switch t.C.GetValue().(type) {
@@ -167,7 +167,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			if types.T(expr.Typ.GetId()) == types.T_any {
 				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 			} else {
-				vec = vector.NewConstDefault(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 			}
 		} else {
 			switch t.C.GetValue().(type) {
@@ -278,7 +278,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 			if types.T(expr.Typ.GetId()) == types.T_any {
 				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 			} else {
-				vec = vector.NewConstDefault(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 			}
 		} else {
 			switch t.C.GetValue().(type) {
@@ -449,7 +449,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 			if types.T(expr.Typ.GetId()) == types.T_any {
 				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
 			} else {
-				vec = vector.NewConstDefault(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
 			}
 		} else {
 			switch t.C.GetValue().(type) {

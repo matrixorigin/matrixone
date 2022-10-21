@@ -518,11 +518,11 @@ func NewWithNspSize(typ types.Type, n int64) *Vector {
 	}
 }
 
-func NewConstDefault(typ types.Type, length int, mp *mpool.MPool) *Vector {
+func NewConstNullWithData(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	v := New(typ)
 	v.isConst = true
-	val := GetDefaultConstVal(typ)
-	v.Append(val, false, mp)
+	val := GetInitConstVal(typ)
+	v.Append(val, true, mp)
 	v.length = length
 	return v
 }
@@ -1508,7 +1508,7 @@ func (v *Vector) String() string {
 	}
 }
 
-func GetDefaultConstVal(typ types.Type) any {
+func GetInitConstVal(typ types.Type) any {
 	switch typ.Oid {
 	case types.T_bool:
 		return false
@@ -1543,13 +1543,17 @@ func GetDefaultConstVal(typ types.Type) any {
 	case types.T_decimal128:
 		return types.Decimal128{}
 	case types.T_uuid:
-		return types.Uuid{}
+		var emptyUuid [16]byte
+		return emptyUuid[:]
 	case types.T_TS:
-		return types.TS{}
+		var emptyTs [types.TxnTsSize]byte
+		return emptyTs[:]
 	case types.T_Rowid:
-		return types.Rowid{}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-		return types.Varlena{}
+		var emptyRowid [types.RowidSize]byte
+		return emptyRowid[:]
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		var emptyVarlena [types.VarlenaSize]byte
+		return emptyVarlena[:]
 	default:
 		//T_any T_star T_tuple T_interval
 		return int64(0)
