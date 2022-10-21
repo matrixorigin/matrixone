@@ -133,18 +133,24 @@ func newMOZap() *MOZapLog {
 	return &MOZapLog{}
 }
 
-func (m MOZapLog) GetName() string {
+func (m *MOZapLog) GetName() string {
 	return MOLogType
 }
 
 // Size 计算近似值
-func (m MOZapLog) Size() int64 {
+func (m *MOZapLog) Size() int64 {
 	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)))
 }
 
-func (m MOZapLog) Free() {}
+func (m *MOZapLog) Free() {
+	m.SpanContext = nil
+	m.LoggerName = ""
+	m.Caller = ""
+	m.Message = ""
+	m.Extra = ""
+}
 
-func (m MOZapLog) CsvFields() []string {
+func (m *MOZapLog) CsvFields() []string {
 	var result []string
 	result = append(result, m.SpanContext.TraceID.String())
 	result = append(result, m.SpanContext.SpanID.String())
