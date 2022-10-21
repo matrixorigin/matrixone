@@ -1152,6 +1152,7 @@ func (th *TxnHandler) CommitTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Commit(ctx, txnOp); err != nil {
+		th.SetInvalid()
 		return err
 	}
 	err := txnOp.Commit(ctx)
@@ -1175,6 +1176,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Rollback(ctx, txnOp); err != nil {
+		th.SetInvalid()
 		return err
 	}
 	err := txnOp.Rollback(ctx)
