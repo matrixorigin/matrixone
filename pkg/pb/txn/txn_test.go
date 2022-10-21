@@ -14,4 +14,21 @@
 
 package txn
 
-// func Test
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestErrorTypeConversion(t *testing.T) {
+	err := moerr.NewInfo("test")
+
+	txnErr := WrapError(err, 0)
+	assert.Equal(t, txnErr.TxnErrCode, uint32(err.ErrorCode()))
+	assert.Equal(t, err, txnErr.UnwrapError())
+
+	txnErr = WrapError(err, moerr.ErrTAEError)
+	assert.Equal(t, txnErr.TxnErrCode, uint32(moerr.ErrTAEError))
+	assert.Equal(t, err, txnErr.UnwrapError())
+}
