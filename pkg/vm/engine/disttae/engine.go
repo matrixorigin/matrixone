@@ -73,7 +73,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	accountId, userId, roleId := getAccessInfo(ctx)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
 	defer cancel()
-	databaseId, err := txn.idGen.AllocateID(ctx)
+	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
