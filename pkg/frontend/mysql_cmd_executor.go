@@ -895,7 +895,7 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 		if err != nil {
 			return err
 		}
-		dbDDL += createSql + ";\n\nUSE `" + dbName + "`;\n\n"
+		dbDDL += createSql + "\n\nUSE `" + dbName + "`;\n\n"
 		showDbDDL = true
 		tables, err = db.Relations(requestCtx)
 		if err != nil {
@@ -927,9 +927,9 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 		}
 		attrs, isView, err := getAttrFromTableDef(tableDefs)
 		if isView {
-			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + ";\n\n"
+			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
 		} else {
-			tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n", tblName) + tblDDL + ";\n\n"
+			tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
 		}
 		params = append(params, &dumpTable{tblName, tblDDL, table, attrs, isView})
 	}

@@ -512,6 +512,9 @@ func getDDL(bh BackgroundExec, ctx context.Context, sql string) (string, error) 
 		return "", err
 	}
 	ret := string(bh.GetExecResultSet()[0].(*MysqlResultSet).Data[0][1].([]byte))
+	if !strings.HasSuffix(ret, ";") {
+		ret += ";"
+	}
 	return ret, nil
 }
 
