@@ -73,12 +73,12 @@ func TestDecimal64Neg(t *testing.T) {
 
 func TestDecimal128Neg(t *testing.T) {
 	xs := make([]types.Decimal128, 6)
-	xs[0], _ = types.ParseStringToDecimal128("123456.789", 20, 5)
-	xs[1], _ = types.ParseStringToDecimal128("120000.789", 20, 5)
-	xs[2], _ = types.ParseStringToDecimal128("-123456.789", 20, 5)
-	xs[3], _ = types.ParseStringToDecimal128("0", 20, 5)
-	xs[4], _ = types.ParseStringToDecimal128("-123", 20, 5)
-	xs[5], _ = types.ParseStringToDecimal128("-123.456789", 20, 5)
+	xs[0], _ = types.ParseStringToDecimal128("123456.789", 20, 5, false)
+	xs[1], _ = types.ParseStringToDecimal128("120000.789", 20, 5, false)
+	xs[2], _ = types.ParseStringToDecimal128("-123456.789", 20, 5, false)
+	xs[3], _ = types.ParseStringToDecimal128("0", 20, 5, false)
+	xs[4], _ = types.ParseStringToDecimal128("-123", 20, 5, false)
+	xs[5], _ = types.ParseStringToDecimal128("-123.456789", 20, 5, false)
 	rs := make([]types.Decimal128, 6)
 	rs = Decimal128Neg(xs, rs)
 

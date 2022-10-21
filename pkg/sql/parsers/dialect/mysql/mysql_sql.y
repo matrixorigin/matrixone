@@ -177,6 +177,11 @@ import (
     accountRole *tree.Role
     showType tree.ShowType
     joinTableExpr *tree.JoinTableExpr
+
+    indexHintType tree.IndexHintType
+    indexHintScope tree.IndexHintScope
+    indexHint *tree.IndexHint
+    indexHintList []*tree.IndexHint
 }
 
 %token LEX_ERROR
@@ -197,7 +202,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
+%token <item> INTEGRAL HEX BIT_LITERAL FLOAT 
+%token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -526,7 +532,7 @@ import (
 %type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
-%type <strs> index_name_and_type_opt
+%type <strs> index_name_and_type_opt index_name_list
 %type <str> index_name index_type key_or_index_opt key_or_index
 // type <str> mo_keywords
 %type <properties> properties_list
@@ -556,6 +562,11 @@ import (
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+
+%type <indexHintType> index_hint_type
+%type <indexHintScope> index_hint_scope
+%type <indexHint> index_hint
+%type <indexHintList> index_hint_list index_hint_list_opt
 
 %start start_command
 
@@ -3754,17 +3765,94 @@ as_opt:
 |   AS {}
 
 aliased_table_name:
-    table_name as_opt_id // index_hint_list
+    table_name as_opt_id index_hint_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
                 Alias: tree.Identifier($2),
             },
+            IndexHints: $3,
         }
     }
-// |   table_name PARTITION '(' partition_id_list ')' as_opt_id index_hint_list
 
+index_hint_list_opt:
+	{
+		$$ = nil
+	}
+|	index_hint_list
+
+index_hint_list:
+	index_hint
+	{
+		$$ = []*tree.IndexHint{$1}
+	}
+|	index_hint_list index_hint
+	{
+		$$ = append($1, $2)
+	}
+
+index_hint:
+	index_hint_type index_hint_scope '(' index_name_list ')'
+	{
+		$$ = &tree.IndexHint{
+			IndexNames: $4,
+			HintType: $1,
+			HintScope: $2,
+		}
+	}
+
+index_hint_type:
+	USE key_or_index
+	{
+		$$ = tree.HintUse
+	}
+|	IGNORE key_or_index
+	{
+		$$ = tree.HintIgnore
+	}
+|	FORCE key_or_index
+	{
+		$$ = tree.HintForce
+	}
+
+index_hint_scope:
+	{
+		$$ = tree.HintForScan
+	}
+|	FOR JOIN
+	{
+		$$ = tree.HintForJoin
+	}
+|	FOR ORDER BY
+	{
+		$$ = tree.HintForOrderBy
+	}
+|	FOR GROUP BY
+	{
+		$$ = tree.HintForGroupBy
+	}
+
+index_name_list:
+	{
+		$$ = nil
+	}
+|	ident
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' ident
+	{
+		$$ = append($1, $3)
+	}
+|	PRIMARY
+	{
+		$$ = []string{$1}
+	}
+|	index_name_list ',' PRIMARY
+	{
+		$$ = append($1, $3)
+	}
 
 as_opt_id:
     {
@@ -5574,7 +5662,7 @@ simple_expr:
     {
         $$ = $1
     }
-|     function_call_json
+|   function_call_json
     {
         $$ = $1
     }
@@ -6587,17 +6675,7 @@ literal:
     }
 |   HEXNUM
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_hexnum)
     }
 |   DECIMAL_VALUE
     {
@@ -7094,7 +7172,7 @@ char_type:
                 Family: tree.BlobFamily,
                 FamilyString: $1,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
             },
         }
     }

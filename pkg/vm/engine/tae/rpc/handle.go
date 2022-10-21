@@ -166,8 +166,8 @@ func (h *Handle) HandlePreCommit(
 					Name:       cmd.Name,
 					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
-						UserID:    cmd.Owner,
-						RoleID:    cmd.Creator,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
 						AccountID: cmd.AccountId,
 					},
 				}
@@ -180,9 +180,9 @@ func (h *Handle) HandlePreCommit(
 			for _, cmd := range cmds {
 				req := db.CreateRelationReq{
 					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
+						AccountID: cmd.AccountId,
 					},
 					Name:         cmd.Name,
 					RelationId:   cmd.TableId,
@@ -279,7 +279,7 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabase(ctx, req.Name, txn)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
@@ -302,19 +302,19 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.DropDatabase(ctx, req.Name, txn)
-	if err != nil {
-		return
-	}
 
 	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
+
+	if err = h.eng.DropDatabase(ctx, req.Name, txn); err != nil {
+		return
+	}
+
 	resp.ID = db.GetDatabaseID(ctx)
 	return
 }
@@ -338,7 +338,7 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	err = db.CreateRelation(context.TODO(), req.Name, req.Defs)
+	err = db.CreateRelationWithID(context.TODO(), req.Name, req.RelationId, req.Defs)
 	if err != nil {
 		return
 	}
@@ -371,6 +371,11 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
+	_, err = db.GetRelation(ctx, req.Name)
+	if err != nil {
+		return
+	}
+
 	if req.IsDrop {
 		err = db.DropRelation(context.TODO(), req.Name)
 		if err != nil {
@@ -378,7 +383,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		}
 		return
 	}
-	err = db.TruncateRelation(context.TODO(), req.Name)
+	err = db.TruncateRelation(context.TODO(), req.Name, req.NewId)
 	return err
 }
 

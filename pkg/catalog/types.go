@@ -25,6 +25,10 @@ const (
 )
 
 const (
+	Meta_Length = 6
+)
+
+const (
 	System_User    = uint32(0)
 	System_Role    = uint32(0)
 	System_Account = uint32(0)

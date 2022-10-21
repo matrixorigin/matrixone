@@ -70,7 +70,7 @@ func TestParse(t *testing.T) {
 
 func TestNeg(t *testing.T) {
 	s := "123456.789"
-	d128, err := ParseStringToDecimal128(s, 20, 5)
+	d128, err := ParseStringToDecimal128(s, 20, 5, false)
 
 	require.True(t, err == nil)
 	require.Equal(t, d128.ToString(), s)
@@ -107,10 +107,10 @@ func Test_ParseStringToDecimal64(t *testing.T) {
 		for i := 1; i <= M; i++ {
 			for j := 0; j <= i; j++ {
 				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
-				_, err := ParseStringToDecimal64(str+"4", int32(i), int32(j))
+				_, err := ParseStringToDecimal64(str+"4", int32(i), int32(j), false)
 				convey.So(err, convey.ShouldBeNil)
 
-				_, err = ParseStringToDecimal64(str+"5", int32(i), int32(j))
+				_, err = ParseStringToDecimal64(str+"5", int32(i), int32(j), false)
 				convey.So(err, convey.ShouldNotBeNil)
 			}
 		}
@@ -123,10 +123,10 @@ func Test_ParseStringToDecimal128(t *testing.T) {
 		for i := 16; i <= M; i++ {
 			for j := 0; j <= i && j <= 33; j++ {
 				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
-				_, err := ParseStringToDecimal128(str+"4", int32(i), int32(j))
+				_, err := ParseStringToDecimal128(str+"4", int32(i), int32(j), false)
 				convey.So(err, convey.ShouldBeNil)
 
-				_, err = ParseStringToDecimal128(str+"5", int32(i), int32(j))
+				_, err = ParseStringToDecimal128(str+"5", int32(i), int32(j), false)
 				convey.So(err, convey.ShouldNotBeNil)
 			}
 		}

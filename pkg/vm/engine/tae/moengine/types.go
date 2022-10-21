@@ -74,8 +74,10 @@ type Database interface {
 	GetRelation(context.Context, string) (Relation, error)
 
 	DropRelation(context.Context, string) error
-	CreateRelation(context.Context, string, []engine.TableDef) error // Create Table - (name, table define)
-	TruncateRelation(context.Context, string) error
+	TruncateRelation(context.Context, string, uint64) error
+
+	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
+	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
 
 	GetDatabaseID(ctx context.Context) uint64
 }
@@ -87,6 +89,7 @@ type Engine interface {
 
 	// Create creates a database
 	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName string, id uint64, txn Txn) error
 
 	// Databases returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
