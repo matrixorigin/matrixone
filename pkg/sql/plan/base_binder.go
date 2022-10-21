@@ -1039,7 +1039,66 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 		}, nil
 	case tree.P_decimal:
-		return returnDecimalExpr(astExpr.String())
+		if typ != nil {
+			if typ.Id == int32(types.T_decimal64) {
+				d64, err := types.Decimal64_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				return &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value: &plan.Const_Decimal64Val{
+								Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(d64)},
+							},
+						},
+					},
+					Typ: typ,
+				}, nil
+			}
+			if typ.Id == int32(types.T_decimal128) {
+				d128, err := types.Decimal128_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				a, b := types.Decimal128ToInt64Raw(d128)
+				return &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value: &plan.Const_Decimal128Val{
+								Decimal128Val: &plan.Decimal128{A: a, B: b},
+							},
+						},
+					},
+					Typ: typ,
+				}, nil
+			}
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(astExpr.String()), typ)
+		}
+		d128, scale, err := types.ParseStringToDecimal128WithoutTable(astExpr.String())
+		if err != nil {
+			return nil, err
+		}
+		a, b := types.Decimal128ToInt64Raw(d128)
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Decimal128Val{
+						Decimal128Val: &plan.Decimal128{A: a, B: b},
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:        int32(types.T_decimal128),
+				Width:     34,
+				Scale:     scale,
+				Precision: 34,
+				Nullable:  false,
+			},
+		}, nil
 	case tree.P_float64:
 		originString := astExpr.String()
 		if typ != nil && (typ.Id == int32(types.T_decimal64) || typ.Id == int32(types.T_decimal128)) {
