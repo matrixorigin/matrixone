@@ -161,12 +161,12 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if types.T(expr.Typ.Id) == types.T_any {
-		expr.Typ = copyType(targetType)
+		expr.Typ = targetType
 		return expr, nil
 	}
 	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
@@ -174,7 +174,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		return nil, err
 	}
 	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
-		Typ: copyType(targetType),
+		Typ: targetType,
 	}}}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -185,17 +185,6 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		},
 		Typ: targetType,
 	}, nil
-}
-
-func copyType(t *Type) *Type {
-	return &Type{
-		Id:        t.Id,
-		Nullable:  t.Nullable,
-		Width:     t.Width,
-		Precision: t.Precision,
-		Size:      t.Size,
-		Scale:     t.Scale,
-	}
 }
 
 // if typ is decimal128 and decimal64 without scalar and precision
