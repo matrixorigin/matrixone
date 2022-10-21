@@ -36,12 +36,12 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-data out of range: data type int64, 
+data out of range: data type int, 
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-data out of range: data type int64, 
+data out of range: data type int, 
 select cast('-10a' as signed integer);
 invalid argument cast to int, bad value -10a
 select cast('a10' as unsigned integer);
@@ -198,7 +198,8 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-invalid argument operator >=, bad value [TIMESTAMP DATETIME]
+f3
+2006-01-01 12:01:01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01

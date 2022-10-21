@@ -81,7 +81,12 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		if err != nil {
 			return nil, err
 		}
+
 		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
+			continue
+		}
+
+		if dataValue.op == opDelete {
 			continue
 		}
 
@@ -93,7 +98,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
 				continue
 			}
-			value, ok := dataValue[name]
+			value, ok := dataValue.value[name]
 			if !ok {
 				panic(fmt.Sprintf("invalid column name: %v", name))
 			}

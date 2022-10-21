@@ -52,6 +52,7 @@ message Const {
 		bool defaultval = 14;
 		bool updateVal = 15;
 	}
+	bool isBin = 16;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -720,7 +721,8 @@ message DropIndex {
 }
 
 message TruncateTable {
-	string table = 1;
+	string database = 1;
+	string table = 2;
 }
 
 message ShowVariables {

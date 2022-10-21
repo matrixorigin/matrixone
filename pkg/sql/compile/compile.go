@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -109,6 +110,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case TruncateTable:
+		return c.scope.TruncateTable(c)
 	case Deletion:
 		defer c.fillAnalyzeInfo()
 		affectedRows, err := c.scope.Delete(c)
@@ -168,6 +171,11 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return &Scope{
 				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_TRUNCATE_TABLE:
+			return &Scope{
+				Magic: TruncateTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
@@ -504,7 +512,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+func (c *Compile) ConstructScope() *Scope {
 	ds := &Scope{Magic: Normal}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	ds.Proc.LoadTag = true
@@ -515,12 +523,22 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
-	ss := []*Scope{ds}
-	for i := range ss {
+	return ds
+}
+
+func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+	mcpu := c.NumCPU()
+	if mcpu < 1 {
+		mcpu = 1
+	}
+	ss := make([]*Scope, mcpu)
+	fileparam := &external.ExternalFileparam{}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.ConstructScope()
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
 			Idx: c.anal.curr,
-			Arg: constructExternal(n, c.ctx),
+			Arg: constructExternal(n, c.ctx, fileparam),
 		})
 	}
 	return ss
