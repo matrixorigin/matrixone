@@ -28,6 +28,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -78,6 +79,34 @@ func TestSendWithPayloadCannotTimeout(t *testing.T) {
 			assert.Equal(t, req, resp)
 		},
 		WithBackendConnectWhenCreate())
+}
+
+func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			wg.Wait()
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			req := newTestMessage(1)
+			req.payload = []byte("hello")
+			f, err := b.Send(ctx, req)
+			require.NoError(t, err)
+			id := f.id
+			f.Close()
+			b.mu.RLock()
+			_, ok := b.mu.futures[id]
+			assert.True(t, ok)
+			b.mu.RUnlock()
+			wg.Done()
+			time.Sleep(time.Second)
+		},
+		WithBackendConnectWhenCreate(),
+		WithBackendHasPayloadResponse())
 }
 
 func TestCloseWhileContinueSending(t *testing.T) {

@@ -31,7 +31,8 @@ import (
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
 
-func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
+func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
+	ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
 		return nil, moerr.NewBadDB(stmt.Name)
 	}
@@ -209,8 +210,9 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
+	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -235,6 +237,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
+	accountId := ctx.GetAccountId()
 	dbName := stmt.DBName
 	if stmt.DBName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -250,7 +253,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and (account_id = %v or account_id = 0)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -271,6 +275,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
+	accountId := ctx.GetAccountId()
 	dbName := stmt.Table.GetDBName()
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
@@ -285,12 +290,12 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
 	if stmt.Full {
-		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' and (account_id = %v or account_id = 0)"
 	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -322,10 +327,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		return nil, moerr.NewBadDB(dbName)
 	}
 
+	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s'"
+	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and (account_id = %v and account_id = 0)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -447,7 +453,8 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByRewriteSQL(ctx CompilerContext, sql string,
+	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	stmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
@@ -455,7 +462,8 @@ func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefini
 	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
 }
 
-func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
+	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(sql)
@@ -467,7 +475,8 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string, where *tree.Wh
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
-func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
+	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(sql)
 	if err != nil {
 		return nil, err
@@ -505,7 +514,8 @@ func getRewriteSQLStmt(sql string) (tree.Statement, error) {
 	return newStmts[0], nil
 }
 
-func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
+	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	queryPlan, err := BuildPlan(ctx, stmt)
 	if err != nil {
 		return nil, err
