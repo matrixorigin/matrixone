@@ -2591,7 +2591,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		case *tree.Deallocate:
 			//we will not send response in COM_STMT_CLOSE command
-			if ses.GetCmd() == int(COM_QUERY) {
+			if ses.GetCmd() != int(COM_STMT_CLOSE) {
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(resp); err2 != nil {
 					trace.EndStatement(requestCtx, err2)
