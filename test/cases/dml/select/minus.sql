@@ -51,20 +51,16 @@ select * from t2;
 (select col1 from t2) minus (select col3 from t2);
 
 (select col1 from t2) minus (select col1 from t2 limit 0);
--- @bvt:issue#5406
 (select col1 from t2) minus (select col2 from t2 limit 0);
--- @bvt:issue
 (select col1 from t2) minus (select col3 from t2 limit 0);
 
 (select col2 from t2) minus (select col1 from t2 limit 0);
 (select col2 from t2) minus (select col2 from t2 limit 0);
 (select col2 from t2) minus (select col3 from t2 limit 0);
 
--- @bvt:issue#5406
 (select col3 from t2) minus (select col1 from t2 limit 0);
 (select col3 from t2) minus (select col2 from t2 limit 0);
 (select col3 from t2) minus (select col3 from t2 limit 0);
--- @bvt:issue
 
 drop table t2;
 

@@ -1,0 +1,142 @@
+select floor(5.5),floor(-5.5);
+floor(5.5)	floor(-5.5)
+5	-6
+select floor(1.1e5);
+floor(1.1e5)
+110000.0
+select floor(cast(-2 as unsigned)), floor(18446744073709551614), floor(-2);
+data out of range: data type uint64, 
+SELECT floor(ceil(12345678901234567890));
+floor(ceil(12345678901234567890))
+12345678901234567890
+SELECT floor(18446744073709551616);
+floor(18446744073709551616)
+18446744073709551616
+SELECT floor(floor(18446744073709551616));
+floor(floor(18446744073709551616))
+18446744073709551616
+SELECT floor(floor(floor(18446744073709551616)));
+floor(floor(floor(18446744073709551616)))
+18446744073709551616
+CREATE TABLE t1(a BIGINT UNSIGNED);
+INSERT INTO t1 VALUES(18446744073709551615);
+SELECT CEILING(a) AS c, FLOOR(a) AS f FROM t1;
+c	f
+18446744073709551615	18446744073709551615
+DROP TABLE t1;
+select floor(999999999999999999);
+floor(999999999999999999)
+999999999999999999
+select floor(9999999999999999999999);
+floor(9999999999999999999999)
+9999999999999999999999
+select floor(9.999999999999999999999);
+floor(9.999999999999999999999)
+9
+select floor(-9.999999999999999999999);
+floor(-9.999999999999999999999)
+-10
+select floor(-999999999999999999999.999);
+floor(-999999999999999999999.999)
+-1000000000000000000000
+CREATE TABLE t1 (col1 INTEGER);
+CREATE TABLE t2 (col1 INTEGER);
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES (1), (2);
+SELECT
+t1.col1,
+t2.col1
+FROM
+t1,
+t2
+WHERE
+t1.col1 = t2.col1
+AND t1.col1 = FLOOR(2);
+col1	col1
+2	2
+drop table t1;
+drop table t2;
+CREATE TABLE t1 (a VARCHAR(250), b INT, PRIMARY KEY (b));
+insert into t1 (a) select (FLOOR(0.13 * 100));
+constraint violation: Column 'b' cannot be null
+insert into t1 (a) select FLOOR(1.32 * 100) from t1;
+insert into t1 (a) select FLOOR(0.0044 * 100) from t1;
+insert into t1 (a) select FLOOR(124.314 * 100) from t1;
+insert into t1 (a) select FLOOR(0.3414 * 100) from t1;
+insert into t1 (a) select FLOOR(12.4412 * 100) from t1;
+insert into t1 (a) select FLOOR(124131.4123 * 100) from t1;
+insert into t1 (a) select FLOOR(0.2314114 * 100) from t1;
+insert into t1 (a) select FLOOR(13.45123 * 100) from t1;
+insert into t1 (a) select FLOOR(0.44521 * 100) from t1;
+insert into t1 (a) select FLOOR(0.577134 * 100) from t1;
+insert into t1 (a) select FLOOR(1244.53 * 100) from t1;
+insert into t1 (a) select FLOOR(6604.642222 * 100) from t1;
+insert into t1 (a) select FLOOR(1415.313 * 100) from t1;
+SELECT a,
+(SELECT space(250) FROM t1 i1
+WHERE i1.b=t1.a ORDER BY 1 LIMIT 1) AS a
+FROM t1 ORDER BY a LIMIT 5;
+a	a
+DROP TABLE t1;
+SELECT DATE(FLOOR(20110512154559.616));
+invalid argument operator cast, bad value [DECIMAL128 DATE]
+CREATE table t1(a int, b float);
+insert into t1 select floor(12124.413), floor(-4213.413);
+insert into t1 select floor(12124.123), floor(-42413.409);
+select distinct floor(a) from t1;
+floor(a)
+12124
+drop table t1;
+select floor(null);
+floor(null)
+null
+select floor(123.34)-floor(123.03);
+floor(123.34)-floor(123.03)
+0
+drop table if exists t1;
+create table t1(a INT,  b float);
+insert into t1 select floor(12124.413), floor(-4213.413);
+insert into t1 select floor(12124.123), floor(-42413.409);
+select * from t1 where floor(a)=12124;
+a	b
+12124	-4214.0
+12124	-42414.0
+drop table t1;
+create table t1(a INT,  b float);
+create table t2(a INT,  b float);
+insert into t1 select floor(12124.413), floor(-4213.413);
+insert into t1 select floor(12124.123), floor(-42413.409);
+insert into t2 select floor(14124.413), floor(-4213.413);
+insert into t2 select floor(984798.123), floor(-980.409);
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (floor(t1.b) = floor(t2.b));
+a	a
+12124	14124
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(a INT,  b float);
+insert into t1 select floor(14124.413), floor(-4213.413);
+insert into t1 select floor(984798.123), floor(-980.409);
+select b from t1 group by b having floor(b)<-1000;
+b
+-4214.0
+drop table t1;
+select floor(123.342, 1);
+floor(123.342, 1)
+123.3000
+select floor(123.45, -1);
+floor(123.45, -1)
+120.0000
+select floor(123.342124124214, 100);
+floor(123.342124124214, 100)
+123.342124124214
+select floor(-123.342124124214, -100);
+floor(-123.342124124214, -100)
+-1.0E100
+select floor(123.342, null);
+invalid argument the second argument of the floor, bad value not const
+select floor(null, 1);
+floor(null, 1)
+null
+select floor(null, null);
+invalid argument the second argument of the floor, bad value not const
