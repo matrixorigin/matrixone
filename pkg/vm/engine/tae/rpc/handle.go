@@ -166,8 +166,8 @@ func (h *Handle) HandlePreCommit(
 					Name:       cmd.Name,
 					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
-						UserID:    cmd.Owner,
-						RoleID:    cmd.Creator,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
 						AccountID: cmd.AccountId,
 					},
 				}
@@ -180,9 +180,9 @@ func (h *Handle) HandlePreCommit(
 			for _, cmd := range cmds {
 				req := db.CreateRelationReq{
 					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
+						AccountID: cmd.AccountId,
 					},
 					Name:         cmd.Name,
 					RelationId:   cmd.TableId,

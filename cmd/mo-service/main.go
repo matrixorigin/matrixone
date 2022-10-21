@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -61,7 +64,17 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-	rand.Seed(time.Now().UnixNano())
+	if *httpListenAddr != "" {
+		go func() {
+			http.ListenAndServe(*httpListenAddr, nil)
+		}()
+	}
+
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {

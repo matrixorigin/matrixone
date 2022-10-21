@@ -1,0 +1,791 @@
+explain select date_add("1997-12-31 23:59:59",INTERVAL 1 YEAR);
+QUERY PLAN
+Project
+  ->  Values Scan "*VALUES*" 
+drop table if exists t1;
+create table t1 (spID int,userID int,score smallint);
+insert into t1 values (1,1,1);
+insert into t1 values (2,2,2);
+insert into t1 values (2,1,4);
+insert into t1 values (3,3,3);
+insert into t1 values (1,1,5);
+insert into t1 values (4,6,10);
+insert into t1 values (5,11,99);
+explain select spID,userID from t1;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+explain select * from t1;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+explain select distinct spID,userID from t1;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: #[0,0], #[0,1]
+        ->  Project
+              ->  Table Scan on explain.t1
+explain select distinct * from t1;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: #[0,0], #[0,1], #[0,2]
+        ->  Project
+              ->  Table Scan on explain.t1
+explain select userID, SUM(score) from t1 group by userID order by userID desc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid DESC
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.userid
+                    Aggregate Functions: sum(t1.score)
+                    ->  Table Scan on explain.t1
+explain select userID as a, MIN(score) as b from t1 group by userID order by userID;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid INTERNAL
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.userid
+                    Aggregate Functions: min(t1.score)
+                    ->  Table Scan on explain.t1
+explain select userID as user, MAX(score) as max from t1 group by userID order by max asc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: max(t1.score) ASC
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.userid
+                    Aggregate Functions: max(t1.score)
+                    ->  Table Scan on explain.t1
+explain select userID,count(score) from t1 where userID>2 group by userID having count(score)>1 order by userID;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid INTERNAL
+        ->  Project
+              ->  Filter
+                    Filter Cond: (count(t1.score) > 1)
+                    ->  Aggregate
+                          Group Key: t1.userid
+                          Aggregate Functions: count(t1.score)
+                          ->  Table Scan on explain.t1
+                                Filter Cond: (CAST(t1.userid AS BIGINT) > 2)
+explain select spID,userID from t1 where score>2;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+        Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select distinct spID,userID from t1 where score>2;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: #[0,0], #[0,1]
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select spID,userID from t1 where score>2 order by spID asc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.spid ASC
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select userID, SUM(score) from t1 where score>2 group by userID order by userID desc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid DESC
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.userid
+                    Aggregate Functions: sum(t1.score)
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select userID, SUM(score) from t1 where score>2 group by userID having count(score)>1 order by userID desc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid DESC
+        ->  Project
+              ->  Filter
+                    Filter Cond: (count(t1.score) > 1)
+                    ->  Aggregate
+                          Group Key: t1.userid
+                          Aggregate Functions: count(t1.score), sum(t1.score)
+                          ->  Table Scan on explain.t1
+                                Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select userID from t1 where userID between 2 and 3 group by userID order by userID;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid INTERNAL
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.userid
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.userid AS BIGINT) >= 2), (CAST(t1.userid AS BIGINT) <= 3)
+explain select spID,userID,score from t1 limit 2,1;
+QUERY PLAN
+Project
+  Limit: 1, Offset: 2
+  ->  Table Scan on explain.t1
+explain select spID,userID,score from t1 limit 2 offset 1;
+QUERY PLAN
+Project
+  Limit: 2, Offset: 1
+  ->  Table Scan on explain.t1
+explain select userID, SUM(score) from t1 where score>2 group by userID having count(score)>1 order by userID desc limit 2,1;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.userid DESC
+        Limit: 1, Offset: 2
+        ->  Project
+              ->  Filter
+                    Filter Cond: (count(t1.score) > 1)
+                    ->  Aggregate
+                          Group Key: t1.userid
+                          Aggregate Functions: count(t1.score), sum(t1.score)
+                          ->  Table Scan on explain.t1
+                                Filter Cond: (CAST(t1.score AS BIGINT) > 2)
+explain select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+explain select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1 where userID > 3 ;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+        Filter Cond: (CAST(t1.userid AS BIGINT) > 3)
+explain select CAST(userID AS CHAR) userid_cast, userID from t1 where CAST(spID AS CHAR)='1';
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t1
+        Filter Cond: (CAST(CAST(t1.spid AS CHAR) AS CHAR) = CAST('1' AS CHAR))
+explain select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2;
+QUERY PLAN
+Project
+  Limit: 2
+  ->  Table Scan on explain.t1
+create table t5(a int,b varchar(10),c varchar(10));
+insert into t5 values(1,'ab','cd'),(2,'ba','dc'),(3,'bc','de'),(4,'cb','ed'),(5,'cd','ef'),(6,'dc','fe'),(2,'de','fg'),(1,'ed','gf');
+explain select * from t5 where (b='ba' or b='cb') and (c='dc' or c='ed');
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t5
+        Filter Cond: ((t5.b = 'ba') or (t5.b = 'cb')), ((t5.c = 'dc') or (t5.c = 'ed'))
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1 (libname1 varchar(21) not null primary key, city varchar(20));
+create table t2 (isbn2 varchar(21) not null primary key, author varchar(20), title varchar(60));
+create table t3 (isbn3 varchar(21) not null, libname3 varchar(21) not null, quantity int);
+insert into t2 values ('001','Daffy','Aducklife');
+insert into t2 values ('002','Bugs','Arabbitlife');
+insert into t2 values ('003','Cowboy','Lifeontherange');
+insert into t2 values ('000','Anonymous','Wannabuythisbook?');
+insert into t2 values ('004','BestSeller','OneHeckuvabook');
+insert into t2 values ('005','EveryoneBuys','Thisverybook');
+insert into t2 values ('006','SanFran','Itisasanfranlifestyle');
+insert into t2 values ('007','BerkAuthor','Cool.Berkley.the.book');
+insert into t3 values('000','NewYorkPublicLibra',1);
+insert into t3 values('001','NewYorkPublicLibra',2);
+insert into t3 values('002','NewYorkPublicLibra',3);
+insert into t3 values('003','NewYorkPublicLibra',4);
+insert into t3 values('004','NewYorkPublicLibra',5);
+insert into t3 values('005','NewYorkPublicLibra',6);
+insert into t3 values('006','SanFransiscoPublic',5);
+insert into t3 values('007','BerkeleyPublic1',3);
+insert into t3 values('007','BerkeleyPublic2',3);
+insert into t3 values('001','NYC Lib',8);
+insert into t1 values ('NewYorkPublicLibra','NewYork');
+insert into t1 values ('SanFransiscoPublic','SanFran');
+insert into t1 values ('BerkeleyPublic1','Berkeley');
+insert into t1 values ('BerkeleyPublic2','Berkeley');
+insert into t1 values ('NYCLib','NewYork');
+explain select * from t1,t2,t3;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        ->  Join
+              Join Type: INNER
+              ->  Table Scan on explain.t2
+              ->  Table Scan on explain.t1
+        ->  Table Scan on explain.t3
+explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.city, t1.libname1
+        Aggregate Functions: count(t1.libname1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t3.isbn3 = t2.isbn2)
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (t1.libname1 = t3.libname3)
+                    ->  Table Scan on explain.t3
+                    ->  Table Scan on explain.t1
+              ->  Table Scan on explain.t2
+explain select city,libname1,count(libname1) as a from t3 join t2 on isbn3=isbn2 join t1 on libname1=libname3 group by city,libname1;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.city, t1.libname1
+        Aggregate Functions: count(t1.libname1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t3.isbn3 = t2.isbn2)
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (t1.libname1 = t3.libname3)
+                    ->  Table Scan on explain.t3
+                    ->  Table Scan on explain.t1
+              ->  Table Scan on explain.t2
+explain select city,libname1,count(libname1) as a from t1 join t3 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.city, t1.libname1
+        Aggregate Functions: count(t1.libname1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t3.isbn3 = t2.isbn2)
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (t1.libname1 = t3.libname3)
+                    ->  Table Scan on explain.t3
+                    ->  Table Scan on explain.t1
+              ->  Table Scan on explain.t2
+drop table if exists t1;
+create table t1 (id int,ti tinyint unsigned,si smallint,bi bigint unsigned,fl float,dl double,de decimal,ch char(20),vch varchar(20),dd date,dt datetime);
+insert into t1 values(1,1,4,3,1113.32,111332,1113.32,'hello','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(2,2,5,2,2252.05,225205,2252.05,'bye','sub query','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(3,6,6,3,3663.21,366321,3663.21,'hi','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(4,7,1,5,4715.22,471522,4715.22,'good morning','my subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(5,1,2,6,51.26,5126,51.26,'byebye',' is subquery?','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(6,3,2,1,632.1,6321,632.11,'good night','maybe subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(7,4,4,3,7443.11,744311,7443.11,'yes','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t1 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
+drop table if exists t2;
+create table t2 (id int,ti tinyint unsigned,si smallint,bi bigint unsigned,fl float,dl double,de decimal,ch char(20),vch varchar(20),dd date,dt datetime);
+insert into t2 values(1,1,4,3,1113.32,111332,1113.32,'hello','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(2,2,5,2,2252.05,225205,2252.05,'bye','sub query','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(3,6,6,3,3663.21,366321,3663.21,'hi','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(4,7,1,5,4715.22,471522,4715.22,'good morning','my subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(5,1,2,6,51.26,5126,51.26,'byebye',' is subquery?','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(6,3,2,1,632.1,6321,632.11,'good night','maybe subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(7,4,4,3,7443.11,744311,7443.11,'yes','subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subquery','2022-04-28','2022-04-28 22:40:11');
+insert into t2 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
+explain select * from (select * from t1) sub where id > 4;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: (CAST(t1.id AS BIGINT) > 4)
+explain select ti as t,fl as f from (select * from t1) sub where dl <> 4;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: (t1.dl <> 4)
+explain select * from (select ti as t,fl as f from t1 where dl <> 4) sub;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: (t1.dl <> 4)
+explain select id,min(ti) from (select * from t1) sub group by id;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: sub.id
+        Aggregate Functions: min(sub.ti)
+        ->  Project
+              ->  Table Scan on explain.t1
+explain select * from (select id,min(ti) from (select * from t1) t1 group by id) sub;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Aggregate
+              Group Key: t1.id
+              Aggregate Functions: min(t1.ti)
+              ->  Project
+                    ->  Table Scan on explain.t1
+explain select id,min(ti) from (select * from t1) sub group by id order by id desc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: sub.id DESC
+        ->  Project
+              ->  Aggregate
+                    Group Key: sub.id
+                    Aggregate Functions: min(sub.ti)
+                    ->  Project
+                          ->  Table Scan on explain.t1
+explain select id,sum(ti) from (select * from t1) sub group by id;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: sub.id
+        Aggregate Functions: sum(sub.ti)
+        ->  Project
+              ->  Table Scan on explain.t1
+explain select distinct(ti) from (select * from t1) sub;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: #[0,0]
+        ->  Project
+              ->  Project
+                    ->  Table Scan on explain.t1
+explain select distinct(ti) from (select * from t1) sub where id <6;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: #[0,0]
+        ->  Project
+              ->  Project
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.id AS BIGINT) < 6)
+explain select count(*) from (select * from t1) sub where id > 4 ;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.id AS BIGINT) > 4)
+explain select * from (select * from t1) sub where id > 1 limit 3;
+QUERY PLAN
+Project
+  Limit: 3
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: (CAST(t1.id AS BIGINT) > 1)
+explain select ti,-si from (select * from t1) sub order by -si desc;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: -sub.si DESC
+        ->  Project
+              ->  Project
+                    ->  Table Scan on explain.t1
+explain select * from (select * from t1) sub where (ti=2 or si=3) and  (ch = 'bye' or vch = 'subquery');
+QUERY PLAN
+Project
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: ((CAST(t1.ti AS BIGINT) = 2) or (CAST(t1.si AS BIGINT) = 3)), ((CAST(t1.ch AS CHAR) = CAST('bye' AS CHAR)) or (t1.vch = 'subquery'))
+explain select * from (select * from (select * from (select id,ti,si,de from (select * from t1 ) sub3 where fl <> 4.5 ) sub2 where ti > 1) sub1 where id >2 ) sub where id > 4;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Project
+              ->  Project
+                    ->  Project
+                          ->  Table Scan on explain.t1
+                                Filter Cond: (CAST(t1.id AS BIGINT) > 4), (CAST(t1.id AS BIGINT) > 2), (CAST(t1.ti AS BIGINT) > 1), (CAST(t1.fl AS DOUBLE) <> 4.5)
+explain select * from (select * from t1 where id > 100) sub ;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Table Scan on explain.t1
+              Filter Cond: (CAST(t1.id AS BIGINT) > 100)
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (a varchar(10), PRIMARY KEY (a));
+CREATE TABLE t2 (a varchar(10), b date, PRIMARY KEY(a));
+INSERT INTO t1 VALUES ('test1');
+INSERT INTO t2 VALUES
+('test1','2016-12-13'),('test2','2016-12-14'),('test3','2016-12-15');
+explain SELECT b, b = '20161213', CASE b WHEN '20161213' then 'found' ELSE 'not found' END FROM t2;
+QUERY PLAN
+Project
+  ->  Table Scan on explain.t2
+drop table if exists t1;
+create table t1 (`row` int not null, col int not null, val varchar(255) not null);
+insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
+explain select max(case col when 1 then val else null end) as color from t1 group by `row`;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.row
+        Aggregate Functions: max(CASE WHEN (CAST(t1.col AS BIGINT) = 1) THEN t1.val ELSE (null) END)
+        ->  Table Scan on explain.t1
+drop table if exists t1;
+create table t1(a float, b int default 3);
+insert into t1 (a) values (2), (11), (8);
+explain select min(a), min(case when 1=1 then a else NULL end),
+min(case when 1!=1 then NULL else a end)
+from t1 where b=3 group by b;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.b
+        Aggregate Functions: min(t1.a), min(CASE WHEN (1 = 1) THEN t1.a ELSE (null) END), min(CASE WHEN (1 <> 1) THEN (null) ELSE t1.a END)
+        ->  Table Scan on explain.t1
+              Filter Cond: (CAST(t1.b AS BIGINT) = 3)
+drop table if exists  t1;
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
+explain SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 GROUP BY b;
+QUERY PLAN
+Project
+  ->  Aggregate
+        Group Key: t1.b
+        Aggregate Functions: avg(t1.a)
+        ->  Table Scan on explain.t1
+drop table if exists  t1;
+drop table if exists  t2;
+create table t1 (a int, b bigint unsigned);
+create table t2 (c int);
+insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
+(3,11120436154190595086);
+insert into t2 (c) values (1), (2), (3);
+explain select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
+join t2 on t1.a=t2.c order by d;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: case t1.a when 0 then 0 else t1.b end INTERNAL
+        ->  Project
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (t1.a = t2.c)
+                    ->  Table Scan on explain.t1
+                    ->  Table Scan on explain.t2
+explain select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
+join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: case t1.a when 0 then 0 else t1.b end INTERNAL
+        ->  Project
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (t1.a = t2.c)
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (t1.b = )
+                    ->  Table Scan on explain.t2
+drop table if exists small;
+drop table if exists big;
+CREATE TABLE small (id int not null,PRIMARY KEY (id));
+CREATE TABLE big (id int not null,PRIMARY KEY (id));
+INSERT INTO small VALUES (1), (2);
+INSERT INTO big VALUES (1), (2), (3), (4);
+explain SELECT big.*, dt.* FROM big LEFT JOIN (SELECT id as dt_id,
+CASE id WHEN 0 THEN 0 ELSE 1 END AS simple,
+CASE WHEN id=0 THEN NULL ELSE 1 END AS cond
+FROM small) AS dt
+ON big.id=dt.dt_id;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: LEFT
+        Join Cond: (big.id = dt.dt_id)
+        ->  Table Scan on explain.big
+        ->  Project
+              ->  Table Scan on explain.small
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(null,null,null),(2,3,4);
+explain with qn as (select 1) select 2;
+QUERY PLAN
+Project
+  ->  Values Scan "*VALUES*" 
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(null,null,null),(2,3,4);
+explain WITH qn AS (SELECT b as a FROM t1)
+SELECT qn.a, qn2.a  FROM qn, qn as qn2;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        ->  Project
+              ->  Table Scan on explain.t1
+        ->  Project
+              ->  Table Scan on explain.t1
+explain WITH qn AS (SELECT b as a FROM t1),
+qn2 AS (SELECT c FROM t1 WHERE a IS NULL or a>0)
+SELECT qn.a, qn2.c  FROM qn, qn2;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER
+        ->  Project
+              ->  Table Scan on explain.t1
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: ((t1.a IS NULL) or (CAST(t1.a AS BIGINT) > 0))
+explain SELECT (WITH qn AS (SELECT 10*a as a FROM t1),
+qn2 AS (SELECT 3*a AS b FROM qn)
+SELECT * from qn2 LIMIT 1)
+FROM t1;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: LEFT
+        ->  Table Scan on explain.t1
+        ->  Project
+              Limit: 1
+              ->  Project
+                    ->  Project
+                          ->  Table Scan on explain.t1
+                                Filter Cond: true
+explain with qn as (select * from t1 limit 10)
+select (select max(a) from qn where a=0),
+(select min(b) from qn where b=3);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: LEFT
+        ->  Join
+              Join Type: LEFT
+              ->  Values Scan "*VALUES*" 
+              ->  Project
+                    ->  Aggregate
+                          Aggregate Functions: max(qn.a)
+                          ->  Project
+                                Limit: 10
+                                ->  Table Scan on explain.t1
+                                      Filter Cond: true, (CAST(t1.a AS BIGINT) = 0)
+        ->  Project
+              ->  Aggregate
+                    Aggregate Functions: min(qn.b)
+                    ->  Project
+                          Limit: 10
+                          ->  Table Scan on explain.t1
+                                Filter Cond: true, (CAST(t1.b AS BIGINT) = 3)
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(null,null,null),(2,3,4),(4,5,6);
+explain with qn as
+(with qn2 as (select "qn2" as a from t1) select "qn", a from qn2)
+select * from qn;
+QUERY PLAN
+Project
+  ->  Project
+        ->  Project
+              ->  Table Scan on explain.t1
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+DROP TABLE IF EXISTS t3;
+DROP TABLE IF EXISTS t4;
+create table t1 (a int);
+create table t2 (a int, b int);
+create table t3 (a int);
+create table t4 (a int not null, b int not null);
+insert into t1 values (2);
+insert into t2 values (1,7),(2,7);
+insert into t4 values (4,8),(3,8),(5,9);
+insert into t3 values (6),(7),(3);
+explain select * from t3 where a <> any (select b from t2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t3.a <> t2.b)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+explain select * from t3 where a = any (select b from t2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t3.a = t2.b)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+DROP TABLE IF EXISTS t3;
+CREATE TABLE t1 ( a int, b int );
+INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
+explain SELECT a FROM t1 WHERE a = ANY ( SELECT a FROM t1 WHERE b = 2 );
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a = t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a >= ANY ( SELECT a FROM t1 WHERE b = 2 );
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a >= t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a <> ANY ( SELECT a FROM t1 WHERE b = 2 );
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a <> t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Table Scan on explain.t1
+                    Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 WHERE b = 2 group by a);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a = t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 WHERE b = 2 group by a);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a >= t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 WHERE b = 2 group by a);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a <> t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.b AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 group by a HAVING a = 2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a = t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.a AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 group by a HAVING a = 2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a <= t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.a AS BIGINT) = 2)
+explain SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 group by a HAVING a = 2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t1.a <> t1.a)
+        ->  Table Scan on explain.t1
+        ->  Project
+              ->  Aggregate
+                    Group Key: t1.a
+                    ->  Table Scan on explain.t1
+                          Filter Cond: (CAST(t1.a AS BIGINT) = 2)
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+create table t1 (a int);
+create table t2 (a int, b int);
+create table t3 (a int);
+create table t4 (a int not null, b int not null);
+insert into t1 values (2);
+insert into t2 values (1,7),(2,7);
+insert into t4 values (4,8),(3,8),(5,9);
+insert into t2 values (100, 5);
+explain select * from t3 where a in (select b from t2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t3.a = t2.b)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+explain select * from t3 where a in (select b from t2 where b > 7);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t3.a = t2.b)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+                    Filter Cond: (CAST(t2.b AS BIGINT) > 7)
+explain select * from t3 where a not in (select b from t2);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: ANTI
+        Join Cond: (t3.a = t2.b)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop table if exists t5;
+drop table if exists t6;
+drop table if exists t7;
+create table t1 (a int);
+create table t2 (a int, b int);
+create table t3 (a int);
+create table t4 (a int not null, b int not null);
+insert into t1 values (2);
+insert into t2 values (1,7),(2,7);
+insert into t4 values (4,8),(3,8),(5,9);
+insert into t3 values (6),(7),(3);
+explain select * from t3 where exists (select * from t2 where t2.b=t3.a);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI
+        Join Cond: (t2.b = t3.a)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2
+explain select * from t3 where not exists (select * from t2 where t2.b=t3.a);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: ANTI
+        Join Cond: (t2.b = t3.a)
+        ->  Table Scan on explain.t3
+        ->  Project
+              ->  Table Scan on explain.t2

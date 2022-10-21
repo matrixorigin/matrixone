@@ -483,7 +483,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		}
 		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
@@ -703,7 +703,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {

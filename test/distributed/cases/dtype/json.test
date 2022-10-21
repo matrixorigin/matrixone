@@ -1,0 +1,61 @@
+-- @suite
+-- @case
+-- @desc:test for json datatype
+-- @label:bvt
+
+#Test cases of basic action
+DROP TABLE IF EXISTS t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1;
+select * from t1 where b=1;
+select * from t1 where b=2;
+insert into t1 values ('{"t1":"c"',3);
+select count(a) from t1;
+
+
+#Test cases of update and delete
+update t1 set a='{"t1":"qaq"}' where b=1;
+delete from t1 where b=2;
+select * from t1;
+delete from t1 where b=1;
+select * from t1;
+
+#Test cases of load and export
+drop table if exists t2;
+create table t2 (a json,b int);
+delete from t1;
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
+load data infile '$resources/json/export_1.csv' into table t1 ignore 1 lines;
+load data infile '$resources/json/export_1.csv' into table t2 ignore 1 lines;
+select * from t1;
+select * from t2;
+select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
+load data local infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
+load data local infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
+select * from t1;
+select * from t2;
+
+#Test cases of load
+delete from t1;
+load data local infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
+select * from t1;
+load data local infile '$resources/json/data_2.csv' into table t1;
+select * from t1;
+drop table if exists t3;
+create table t3 (a json,b json);
+load data local infile '$resources/json/data_3.csv' into table t3;
+select * from t3;
+
+#Test cases of ddl
+drop table if exists t4;
+create table t4 (a json null);
+drop table if exists t5;
+create table t5 (a json not null);
+drop table if exists t6;
+create table t6 (a json primary key);
+drop table if exists t7;
+create table t7 (a json default '{"t1":"a"}');
+drop table if exists t8;
+create table t8 (a json default null);
