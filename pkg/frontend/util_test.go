@@ -647,7 +647,7 @@ func TestWriteDump2File(t *testing.T) {
 	f, err := createDumpFile(base)
 	require.Nil(t, err)
 	require.NotNil(t, f)
-	dump := &tree.Dump{
+	dump := &tree.MoDump{
 		OutFile:     base,
 		MaxFileSize: 1,
 	}
