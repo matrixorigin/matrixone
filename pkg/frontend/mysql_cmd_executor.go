@@ -926,6 +926,9 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.Dum
 			return err
 		}
 		attrs, isView, err := getAttrFromTableDef(tableDefs)
+		if err != nil {
+			return err
+		}
 		if isView {
 			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
 		} else {

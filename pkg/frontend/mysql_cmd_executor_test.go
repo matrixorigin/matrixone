@@ -1041,6 +1041,61 @@ func Test_handleLoadData(t *testing.T) {
 	})
 }
 
+//func TestHandleDump(t *testing.T) {
+//	ctx := context.TODO()
+//	convey.Convey("call handleDump func", t, func() {
+//		ctrl := gomock.NewController(t)
+//		defer ctrl.Finish()
+//		rs1 := []*MysqlResultSet{{Data: [][]interface{}{{[]byte("create database test_dump")}}}}
+//		rs2 := []*MysqlResultSet{{Data: [][]interface{}{{[]byte("create table test_dump.t1 (a int)")}}}}
+//
+//		ioses := mock_frontend.NewMockIOSession(ctrl)
+//		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+//		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+//		table := mock_frontend.NewMockRelation(ctrl)
+//		db := mock_frontend.NewMockDatabase(ctrl)
+//		db.EXPECT().Relations(gomock.Any()).Return([]string{"a"}, nil).AnyTimes()
+//		db.EXPECT().Relation(gomock.Any(), "a").Return(table, nil).AnyTimes()
+//		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+//		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+//			func(ctx2 context.Context, sql string) {
+//				bh.EXPECT().GetExecResultSet().Return(rs1)
+//			}).AnyTimes()
+//		eng := mock_frontend.NewMockEngine(ctrl)
+//		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+//		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+//		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+//		eng.EXPECT().Hints().Return(engine.Hints{
+//			CommitOrRollbackTimeout: time.Second,
+//		}).AnyTimes()
+//		//eng.EXPECT().Database(ctx, "test_dump", gomock.Any()).Return(db, nil).AnyTimes()
+//		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+//		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+//		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+//
+//		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+//		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+//		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+//		convey.So(err, convey.ShouldBeNil)
+//		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+//		var gSys GlobalSystemVariables
+//		InitGlobalSystemVariables(&gSys)
+//		ses := NewSession(proto, nil, pu, &gSys)
+//		ses.SetRequestContext(ctx)
+//		ses.GetBackgroundExec()
+//		mce := NewMysqlCmdExecutor()
+//		mce.PrepareSessionBeforeExecRequest(ses)
+//
+//		dump := &tree.Dump{
+//			Database: "test_dump",
+//			OutFile:  "test_dump.sql",
+//		}
+//		err = mce.handleDump(ctx, dump)
+//		convey.So(err, convey.ShouldNotBeNil)
+//	})
+//
+//}
+
 func TestSerializePlanToJson(t *testing.T) {
 	sqls := []string{
 		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
