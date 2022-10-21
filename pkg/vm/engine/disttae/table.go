@@ -92,16 +92,17 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	if tbl.meta == nil {
 		return ranges, nil
 	}
-	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
+	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
-		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
+		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			if needRead(expr, blk, tbl.getTableDef(), tbl.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(deletes,
+			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	return ranges, nil
 }
@@ -316,12 +317,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 			}
 		}
 		for j := len(ranges); j < num; j++ {
-			rds[j] = &blockReader{
-				fs:       tbl.proc.FileService,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-			}
+			rds[j] = &emptyReader{}
 		}
 		return rds, nil
 	}
@@ -332,7 +328,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
@@ -340,7 +336,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
@@ -371,13 +367,13 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		var blks []BlockMeta
+		var blks []ModifyBlockMeta
 
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs,
-			blks, tbl.db.txn.meta.SnapshotTS, writes)
+		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs, tbl.tableDef,
+			blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err
 		}
