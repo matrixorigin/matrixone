@@ -587,8 +587,9 @@ func (b *buffer2Sql) Add(i bp.HasName) {
 func (b *buffer2Sql) Reset() {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	for _, i := range b.buf {
+	for idx, i := range b.buf {
 		i.Free()
+		b.buf[idx] = nil
 	}
 	b.buf = b.buf[0:0]
 	b.size = 0
