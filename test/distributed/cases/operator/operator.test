@@ -1,0 +1,152 @@
+-- @suite
+-- @setup
+drop table if exists t1;
+create table t1 (spID smallint,userID bigint,score int);
+insert into t1 values (1,1,1);
+insert into t1 values (2,2,2);
+insert into t1 values (2,1,4);
+insert into t1 values (3,3,3);
+insert into t1 values (1,1,5);
+insert into t1 values (4,6,10);
+insert into t1 values (5,11,99);
+create table t2(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER);
+insert into t2 values ( 'Computer', 2,2000, 1200),
+( 'TV', 1, 1999, 150),
+( 'Calculator', 1, 1999,50),
+( 'Computer', 1, 1999,1500),
+( 'Computer', 1, 2000,1500),
+( 'TV', 1, 2000, 150),
+( 'TV', 2, 2000, 100),
+( 'TV', 2, 2000, 100),
+( 'Calculator', 1, 2000,75),
+( 'Calculator', 2, 2000,75),
+( 'TV', 1, 1999, 100),
+( 'Computer', 1, 1999,1200),
+( 'Computer', 2, 2000,1500),
+( 'Calculator', 2, 2000,75),
+( 'Phone', 3, 2003,10);
+
+-- @case
+-- @desc:test for operators
+-- @label:bvt
+select userID,spID,score from t1 where userID=spID and userID<>score;
+select userID,spID,score from t1 where userID=spID and userID!=score;
+select userID,spID,score from t1 where userID between spID and score;
+select userID,spID,score from t1 where userID not between spID and score;
+select * from t1 where userID between 3 and 6;
+select userID,spID,score from t1 where spID>=userID*score;
+select userID,score,spID from t1 where userID<=score/spID;
+select spID,userID,score from t1 where spID>(userID-1);
+select spID,userID,score from t1 where score<(spID*userID+1);
+select userID, AVG(score) from t1 WHERE spID=2 group by userID order by userID;
+select product, SUM(profit) from t2 where year>1999 group by product order by product desc;
+select product, SUM(profit),AVG(profit) from t2 where product!='TV' group by product order by product asc;
+select product, SUM(profit),AVG(profit) from t2 where product<>'TV' group by product order by product asc;
+select product, SUM(profit),AVG(profit) from t2 where product='Phone' group by product order by product asc;
+select product, SUM(profit) from t2 where year>1999 and year<=2002 group by product order by product desc;
+select * from t1 where 2<10;
+select userID, userID DIV 2 as user_div, userID%2 as user_percent, userID MOD 2 as user_mod from t1 WHERE userID > 3;
+select * from t1 where userID-2>2 && (userID+spID)/3<>0 && score MOD 2 > 0;
+select * from t1 where spID >2 && userID < 6 && score != 1;
+drop table if exists t2;
+create table t2(c1 int, c2 int);
+insert into t2 values (-3, 2);
+insert into t2 values (1, 2);
+select -c1 from t2;
+select c1, c2 from t2 order by -c1 desc;
+drop table if exists t3;
+create table t3 (c1 varchar(80));
+insert into t3 values ("a"),
+("abc"),
+("abcd"),
+("hello"),
+("test"),
+("C:\Program Files(x86)"),
+("C:\\Program Files(x86)");
+select * from t3;
+create database if not exists likedb;
+create database if not exists dblike;
+show databases like 'like%';
+show databases like "%like%";
+show databases like "%aa%";
+drop database likedb;
+drop database dblike;
+SELECT * FROM t1 where t1.userID<6 OR NOT t1.userID;
+SELECT * FROM t1 where NOT t1.userID OR t1.userID<6;
+SELECT * FROM t1 where NOT t1.userID || t1.userID<6;
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (0),(1),(NULL);
+select * from t1;
+select * from t1 where not a between 2 and 3;
+drop table if exists t3;
+CREATE TABLE t3(
+cont_nr int(11) NOT NULL primary key,
+ver_nr int(11) NOT NULL default 0,
+aufnr int(11) NOT NULL default 0,
+username varchar(50) NOT NULL default ''
+);
+INSERT INTO t3 VALUES (3359356,405,3359356,'Mustermann Musterfrau');
+INSERT INTO t3 VALUES (3359357,468,3359357,'Mustermann Musterfrau'); 
+INSERT INTO t3 VALUES (3359359,468,3359359,'Mustermann musterfrau'); 
+INSERT INTO t3 VALUES (3359360,0,0,'Mustermann Masterfrau');
+INSERT INTO t3 VALUES (3359361,406,3359361,'Mastermann Masterfrau'); 
+INSERT INTO t3 VALUES (3359362,406,3359362,'Mustermann MusterFrau'); 
+select username from t3 where username like 'Ma%';
+select username from t3 where username like '%Frau';
+select username from t3 where username like '%Mast%';
+select username from t3 where username like '%a_t%';
+drop table if exists t2;
+create table t2(a int,b varchar(5),c float, d date, e datetime);
+insert into t2 values(1,'a',1.001,'2022-02-08','2022-02-08 12:00:00');
+insert into t2 values(2,'b',2.001,'2022-02-09','2022-02-09 12:00:00');
+insert into t2 values(1,'c',3.001,'2022-02-10','2022-02-10 12:00:00');
+insert into t2 values(4,'d',4.001,'2022-02-11','2022-02-11 12:00:00');
+select * from t2 where a in (2,4);
+select * from t2 where a not in (2,4);
+select * from t2 where c in (2.001,2.002);
+select * from t2 where b not in ('e',"f");
+select sum(a),c from t2 where a in (1,2) and d in ('2022-02-10','2022-02-11') group by c order by c;
+
+select * from t2 where d in ('20220208','2022-02-09');
+select * from t2 where e not in ('2022-02-09 12:00:00') and a in (4,5);
+select sum(a) as suma,e from t2 where e not in ('2022-02-09 12:00:00') and a in (4,5) group by e order by suma;
+-- @bvt:issue
+select * from t2 where c in (2.001,3);
+drop table if exists t1;
+create table t1(a int, b int unsigned);
+insert into t1 values (-1, 1), (-5, 5);
+select 1 & 2;
+select -1 & 2;
+select null & 2;
+select a & 2, b & 2 from t1;
+select 1 | 2;
+select -1 | 2;
+select null | 2;
+select a | 2, b | 2 from t1;
+select 1 ^ 2;
+select -1 ^ 2;
+select null ^ 2;
+select a ^ 2, b ^ 2 from t1;
+select 1 << 2;
+select -1 << 2;
+select null << 2;
+select a << 2, b << 2 from t1;
+delete from t1;
+insert into t1 values (-5, 1024);
+select 1024 >> 2;
+select -5 >> 2;
+select null >> 2;
+select a >> 2, b >> 2 from t1;
+delete from t1;
+insert into t1 values (-5, 5);
+select ~5;
+select ~-5;
+select ~null;
+select ~a, ~b from t1;
+select 2 << -2;
+select 2 >> -2;
+drop table if exists t1;
+create table t1 (a tinyint);
+insert into t1 values (2);
+select a << 20 from t1;

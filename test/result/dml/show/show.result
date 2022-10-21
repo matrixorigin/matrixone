@@ -17,10 +17,23 @@ tables_in_test01
 t1
 t2
 show columns from t1;
-Field	Type	Null	Key	Default	Comment
-id	INT	NO		NULL		
-str	CHAR	YES		NULL	
-name	VARCHAR	YES		NULL		
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT    NO        NULL
+str    CHAR    YES        NULL
+name    VARCHAR    YES        NULL
+show full columns from t1;
+Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
+id    INT    NULL    NO        NULL        select,insert,update,references
+str    CHAR    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR    NULL    YES        NULL        select,insert,update,references
+show full columns from t1 like '%';
+Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
+id    INT    NULL    NO        NULL        select,insert,update,references
+str    CHAR    NULL    YES        NULL        select,insert,update,references
+name    VARCHAR    NULL    YES        NULL        select,insert,update,references
+show full columns from t1 where `Field`='id';
+Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
+id    INT    NULL    NO        NULL        select,insert,update,references    
 drop database if exists test01;
 show charset;
 Charset    Description    Default collation    Maxlen

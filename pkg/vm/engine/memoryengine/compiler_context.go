@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -90,6 +91,13 @@ func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (def
 
 func (*CompilerContext) GetRootSql() string {
 	return ""
+}
+
+func (c *CompilerContext) GetAccountId() uint32 {
+	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	return 0
 }
 
 func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

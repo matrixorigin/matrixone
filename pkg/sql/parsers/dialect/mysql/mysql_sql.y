@@ -7665,7 +7665,6 @@ reserved_keyword:
 |   ADMIN_NAME
 |   RANDOM
 |   SUSPEND
-|   ATTRIBUTE
 |   REUSE
 |   CURRENT
 |   OPTIONAL
@@ -7680,6 +7679,7 @@ non_reserved_keyword:
 |   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
+|   ATTRIBUTE
 |   ACTION
 |   ALGORITHM
 |   BEGIN
