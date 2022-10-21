@@ -979,8 +979,8 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 			return nil, err
 		}
 		metas[i] = BlockMeta{
-			info:    blockInfo,
-			zonemap: zm,
+			Info:    blockInfo,
+			Zonemap: zm,
 		}
 	}
 	return metas, nil
@@ -995,12 +995,16 @@ func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
 	return false
 }
 
-func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []BlockMeta {
-	blks := make([]BlockMeta, 0, len(orgs)-len(modfs))
+func genModifedBlocks(deletes map[uint64][]int, orgs, modfs []BlockMeta,
+	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
+	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
 			if needRead(expr, blk, tableDef, proc) {
-				blks = append(blks, orgs[i])
+				blks = append(blks, ModifyBlockMeta{
+					meta:    orgs[i],
+					deletes: deletes[orgs[i].Info.BlockID],
+				})
 			}
 		}
 	}
