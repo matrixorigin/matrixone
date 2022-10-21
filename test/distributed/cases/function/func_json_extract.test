@@ -1,0 +1,47 @@
+#Test cases of json_extract from the command line
+select json_extract('{"a":1,"b":2,"c":3}','$.a');
+select json_extract('{"a":1,"b":2,"c":3}','$.b');
+select json_extract('{"a":{"q":[1,2,3]}}','$.a.q[1]');
+select json_extract('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]','$[1].a');
+select json_extract('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q[1]');
+select json_extract('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}','$.a.q');
+select json_extract('[1,2,3]','$[*]');
+select json_extract('{"a":[1,2,3,{"b":4}]}','$.a[3].b');
+select json_extract('{"a":[1,2,3,{"b":4}]}','$.a[3].c');
+select json_extract('{"a":[1,2,3,{"b":4}],"c":5}','$.*');
+select json_extract('{"a":[1,2,3,{"a":4}]}','$**.a');
+select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
+select json_extract('{"a":1}','$[0]');
+select json_extract('{"a":1}','$[0].a');
+select json_extract('{"a":1}','$[0].b');
+select json_extract('{"a":1}','$[1]');
+select json_extract('{"af": [1, "2", {"aaf": "bb"}],"eab":"888"}','$**.f');
+select json_extract('{"a": [1, "2", {"a": "bb"}]}','$**.a');
+select  json_extract('{"a":"a1","b":"b1"}','$.**');
+select  json_extract('{"a":"a1","b":"b1"}','$**.1');
+
+# Test cases of json_extract from column
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1(a,b) values ('{"a":1,"b":2,"c":3}',1);
+select json_extract(t1.a,'$.a') from t1 where t1.b=1;
+insert into t1(a,b) values ('{"a":4,"b":5,"c":6}',2);
+select json_extract(t1.a,'$.b') from t1 where t1.b=2;
+select json_extract(t1.a,'$.a') from t1;
+insert into t1(a,b) values ('{"a":{"q":[1,2,3]}}',3);
+select json_extract(t1.a,'$.a.q[1]') from t1 where t1.b=3;
+insert into t1(a,b) values ('[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]',4);
+select json_extract(t1.a,'$[1].a') from t1 where t1.b=4;
+insert into t1(a,b) values ('{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}',5);
+select json_extract(t1.a,'$.a.q[1]') from t1 where t1.b=5;
+select json_extract(t1.a,'$.a.q') from t1 where t1.b=5;
+insert into t1(a,b) values ('[1,2,3]',6);
+select json_extract(t1.a,'$[*]') from t1 where t1.b=6;
+insert into t1(a,b) values ('{"a":[1,2,3,{"b":4}]}',7);
+select json_extract(t1.a,'$.a[3].b') from t1 where t1.b=7;
+select json_extract(t1.a,'$.a[3].c') from t1 where t1.b=7;
+insert into t1(a,b) values ('{"a":[1,2,3,{"b":4}],"c":5}',8);
+select json_extract(t1.a,'$.*') from t1 where t1.b=8;
+insert into t1(a,b) values ('{"a":[1,2,3,{"a":4}]}',9);
+select json_extract(t1.a,'$**.a') from t1 where t1.b=9;
+select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;

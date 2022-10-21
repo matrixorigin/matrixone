@@ -98,18 +98,29 @@ func (db *database) Delete(ctx context.Context, name string) error {
 }
 
 func (db *database) Truncate(ctx context.Context, name string) error {
-	newId, err := db.txn.idGen.AllocateID(ctx)
+	var tbl *table
+	var oldId uint64
+
+	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	key := genTableKey(ctx, name, db.databaseId)
+	if v, ok := db.txn.tableMap.Load(key); ok {
+		tbl = v.(*table)
+	}
 
-	oldId, err := db.txn.getTableId(ctx, db.databaseId, name)
-	if err != nil {
-		return err
+	if tbl != nil {
+		oldId = tbl.tableId
+		tbl.tableId = newId
+	} else {
+		if oldId, err = db.txn.getTableId(ctx, db.databaseId, name); err != nil {
+			return err
+		}
 	}
 
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
-		genMetaTableName(oldId), db.databaseName, db.txn.proc.Mp())
+		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -127,7 +138,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 	accountId, userId, roleId := getAccessInfo(ctx)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
 	defer cancel()
-	tableId, err := db.txn.idGen.AllocateID(ctx)
+	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}

@@ -74,6 +74,7 @@ type CompilerContext interface {
 	GetRootSql() string
 	// get username of current session
 	GetUserName() string
+	GetAccountId() uint32
 }
 
 type Optimizer interface {

@@ -120,12 +120,13 @@ func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
 }
 
 func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
-	return &NumVal{
+	numVal := &NumVal{
 		Value:      value,
 		origString: origString,
 		negative:   negative,
 		ValType:    typ,
 	}
+	return numVal
 }
 
 func NewNumValWithResInt(value constant.Value, origString string, negative bool, resInt int64) *NumVal {

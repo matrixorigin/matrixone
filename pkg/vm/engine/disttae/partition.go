@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -55,9 +56,10 @@ type DataValue struct {
 }
 
 type DataRow struct {
-	rowID   RowID
-	value   DataValue
-	indexes []memtable.Tuple
+	rowID         RowID
+	value         DataValue
+	indexes       []memtable.Tuple
+	uniqueIndexes []memtable.Tuple
 }
 
 type Op uint8
@@ -79,10 +81,36 @@ func (d *DataRow) Indexes() []memtable.Tuple {
 	return d.indexes
 }
 
+func (d *DataRow) UniqueIndexes() []memtable.Tuple {
+	return d.uniqueIndexes
+}
+
 var _ MVCC = new(Partition)
 
-func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
-	return nil
+func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
+	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
+	blks := make([]BlockMeta, 0, len(blocks))
+	deletes := make(map[uint64][]int)
+	p.IterDeletedRowIDs(ctx, ts, func(rowID RowID) bool {
+		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
+		deletes[id] = append(deletes[id], int(offset))
+		return true
+	})
+	for _, entry := range entries {
+		if entry.typ == DELETE {
+			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				id, offset := catalog.DecodeRowid(v)
+				deletes[id] = append(deletes[id], int(offset))
+			}
+		}
+	}
+	for i := range blocks {
+		if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
+			blks = append(blks, blocks[i])
+		}
+	}
+	return blks, deletes
 }
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
@@ -157,7 +185,8 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	return nil
 }
 
-func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batch) error {
+func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
+	b *api.Batch, needCheck bool) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
 		return err
@@ -193,7 +222,7 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 			if err != nil {
 				return err
 			}
-			if len(entries) > 0 {
+			if len(entries) > 0 && needCheck {
 				return moerr.NewDuplicate()
 			}
 		}
@@ -245,7 +274,8 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int, b *api.Batc
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
-	return types.DecodeUint64(rowID[:8]) //TODO use tae provided function
+	id, _ := catalog.DecodeRowid(types.Rowid(rowID))
+	return id
 }
 
 func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp, blockID uint64) error {
@@ -308,8 +338,10 @@ func (p *Partition) NewReader(
 	readerNumber int,
 	expr *plan.Expr,
 	defs []engine.TableDef,
-	blocks []BlockMeta,
+	tableDef *plan.TableDef,
+	blks []ModifyBlockMeta,
 	ts timestamp.Timestamp,
+	fs fileservice.FileService,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 
@@ -357,9 +389,59 @@ func (p *Partition) NewReader(
 		inserts:  inserts,
 		deletes:  deletes,
 	}
-	for i := 1; i < readerNumber; i++ {
-		readers[i] = &emptyReader{}
+	if readerNumber == 1 {
+		for i := range blks {
+			readers = append(readers, &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{blks[i]},
+			})
+		}
+		return []engine.Reader{&mergeReader{readers}}, nil
 	}
-
+	if len(blks) < readerNumber-1 {
+		for i := range blks {
+			readers[i+1] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{blks[i]},
+			}
+		}
+		for j := len(blks) + 1; j < readerNumber; j++ {
+			readers[j] = &emptyReader{}
+		}
+		return readers, nil
+	}
+	step := len(blks) / (readerNumber - 1)
+	if step < 1 {
+		step = 1
+	}
+	for i := 1; i < readerNumber; i++ {
+		if i == readerNumber-1 {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				blks:     blks[i*step:],
+				sels:     make([]int64, 0, 1024),
+			}
+		} else {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				blks:     blks[i*step : (i+1)*step],
+				sels:     make([]int64, 0, 1024),
+			}
+		}
+	}
 	return readers, nil
 }
