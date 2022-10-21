@@ -73,6 +73,10 @@ func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.GetDatabase(name)
 }
 
+func (txn *txnImpl) GetDatabaseByID(id uint64) (db handle.Database, err error) {
+	return txn.Store.GetDatabaseByID(id)
+}
+
 func (txn *txnImpl) DatabaseNames() (names []string) {
 	return txn.Store.DatabaseNames()
 }

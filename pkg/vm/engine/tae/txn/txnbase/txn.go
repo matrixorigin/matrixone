@@ -411,6 +411,10 @@ func (txn *Txn) GetDatabase(name string) (db handle.Database, err error) {
 	return
 }
 
+func (txn *Txn) GetDatabaseByID(id uint64) (db handle.Database, err error) {
+	return
+}
+
 func (txn *Txn) UseDatabase(name string) (err error) {
 	return
 }

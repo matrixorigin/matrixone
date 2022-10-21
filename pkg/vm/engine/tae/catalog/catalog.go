@@ -645,7 +645,7 @@ func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, e
 	return n.GetPayload(), nil
 }
 
-func (catalog *Catalog) txnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
 	dbEntry, err := catalog.GetDatabaseByID(id)
 	if err != nil {
 		return nil, err
@@ -680,7 +680,7 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	entry, err := catalog.txnGetDBEntryByID(id, txn)
+	entry, err := catalog.TxnGetDBEntryByID(id, txn)
 	if err != nil {
 		return
 	}

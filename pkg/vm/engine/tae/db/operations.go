@@ -149,8 +149,9 @@ const (
 )
 
 type WriteReq struct {
-	AccessInfo   AccessInfo
+	//AccessInfo   AccessInfo
 	Type         EntryType
+	DatabaseId   uint64
 	TableID      uint64
 	DatabaseName string
 	TableName    string

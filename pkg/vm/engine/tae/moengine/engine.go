@@ -163,6 +163,21 @@ func (e *txnEngine) GetDatabase(ctx context.Context, name string, txnHandle Txn)
 	return db, nil
 }
 
+func (e *txnEngine) GetDatabaseByID(_ context.Context, id uint64, txnHandle Txn) (Database, error) {
+	var err error
+	var txn txnif.AsyncTxn
+
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	h, err := txn.GetDatabaseByID(id)
+	if err != nil {
+		return nil, err
+	}
+	db := newDatabase(h)
+	return db, nil
+}
+
 func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
 	return e.impl
 }

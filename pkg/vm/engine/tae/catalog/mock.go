@@ -80,6 +80,10 @@ func (store *mockTxnStore) ApplyCommit() error {
 	return nil
 }
 
+func (store *mockTxnStore) DropDatabaseByID(id uint64) (handle.Database, error) {
+	return nil, nil
+}
+
 type mockDBHandle struct {
 	*txnbase.TxnDatabase
 	catalog *Catalog
@@ -217,6 +221,14 @@ func (txn *mockTxn) CreateDatabaseByDef(def any) (handle.Database, error) {
 
 func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
 	entry, err := txn.catalog.GetDBEntry(name, txn)
+	if err != nil {
+		return nil, err
+	}
+	return newMockDBHandle(txn.catalog, txn, entry), nil
+}
+
+func (txn *mockTxn) GetDatabaseByID(id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.TxnGetDBEntryByID(id, txn)
 	if err != nil {
 		return nil, err
 	}

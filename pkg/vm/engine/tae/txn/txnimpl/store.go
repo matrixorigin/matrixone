@@ -263,6 +263,19 @@ func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
 	return
 }
 
+func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.TxnGetDBEntryByID(id, store.txn)
+	if err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
+		return
+	}
+	h = buildDB(db)
+	return
+}
+
 func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error) {
 	meta, err := store.catalog.CreateDBEntry(name, store.txn)
 	if err != nil {
