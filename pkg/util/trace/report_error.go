@@ -38,18 +38,20 @@ type MOErrorHolder struct {
 	Timestamp util.TimeNano `json:"timestamp"`
 }
 
-func (h MOErrorHolder) GetName() string {
+func (h *MOErrorHolder) GetName() string {
 	return errorView.OriginTable.GetName()
 }
 
-func (h MOErrorHolder) Size() int64 {
+func (h *MOErrorHolder) Size() int64 {
 	return int64(32*8) + int64(unsafe.Sizeof(h))
 }
-func (h MOErrorHolder) Free() {}
+func (h *MOErrorHolder) Free() {
+	h.Error = nil
+}
 
 func (h *MOErrorHolder) GetRow() *export.Row { return errorView.OriginTable.GetRow() }
 
-func (h MOErrorHolder) CsvFields(row *export.Row) []string {
+func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
 	row.SetColumnVal(timestampCol, nanoSec2DatetimeString(h.Timestamp))

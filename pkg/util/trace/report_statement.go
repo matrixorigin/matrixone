@@ -80,7 +80,13 @@ func (s *StatementInfo) Size() int64 {
 	)
 }
 
-func (s *StatementInfo) Free() {}
+func (s *StatementInfo) Free() {
+	s.Statement = ""
+	s.StatementFingerprint = ""
+	s.StatementTag = ""
+	s.ExecPlan = nil
+	s.Error = nil
+}
 
 func (s *StatementInfo) GetRow() *export.Row { return SingleStatementTable.GetRow() }
 

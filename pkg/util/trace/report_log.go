@@ -46,7 +46,6 @@ func newMOZap() *MOZapLog {
 
 func (m *MOZapLog) GetName() string {
 	return logView.OriginTable.GetName()
-	//return MOLogType
 }
 
 // Size 计算近似值
@@ -54,7 +53,13 @@ func (m *MOZapLog) Size() int64 {
 	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)))
 }
 
-func (m *MOZapLog) Free() {}
+func (m *MOZapLog) Free() {
+	m.SpanContext = nil
+	m.LoggerName = ""
+	m.Caller = ""
+	m.Message = ""
+	m.Extra = ""
+}
 
 func (m *MOZapLog) GetRow() *export.Row { return logView.OriginTable.GetRow() }
 
