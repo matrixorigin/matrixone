@@ -1078,5 +1078,5 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], 0)
+	return plan.BuildPlan(ctx, stmts[0])
 }

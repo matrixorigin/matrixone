@@ -358,6 +358,10 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	return m.costs[obj.ObjName]
 }
 
+func (m *MockCompilerContext) GetAccountId() uint32 {
+	return 0
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
@@ -374,9 +378,9 @@ func NewMockOptimizer() *MockOptimizer {
 	}
 }
 
-func (moc *MockOptimizer) Optimize(stmt tree.Statement, accountId uint32) (*Query, error) {
+func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := BuildPlan(ctx, stmt, 0)
+	query, err := BuildPlan(ctx, stmt)
 	if err != nil {
 		// logutil.Infof("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err

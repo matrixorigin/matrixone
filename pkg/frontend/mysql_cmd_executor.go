@@ -1860,9 +1860,12 @@ func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
+	if ses != nil {
+		ses.accountId = getAccountId(requestCtx)
+	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, getAccountId(requestCtx))
+			ret, err = plan2.BuildPlan(ctx, stmt)
 			if err != nil {
 				return nil, err
 			}
@@ -1884,7 +1887,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, getAccountId(requestCtx))
+		optimized, err := opt.Optimize(stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1894,7 +1897,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, getAccountId(requestCtx))
+		ret, err = plan2.BuildPlan(ctx, stmt)
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {

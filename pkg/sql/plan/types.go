@@ -72,10 +72,12 @@ type CompilerContext interface {
 	Cost(obj *ObjectRef, e *Expr) *Cost
 	// get origin sql string of the root
 	GetRootSql() string
+
+	GetAccountId() uint32
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement, accountId uint32) (*Query, error)
+	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
 }
 

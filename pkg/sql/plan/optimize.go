@@ -41,8 +41,8 @@ func (opt *BaseOptimizer) CurrentContext() CompilerContext {
 	return opt.ctx
 }
 
-func (opt *BaseOptimizer) Optimize(stmt tree.Statement, accountId uint32) (*Query, error) {
-	pn, err := BuildPlan(opt.ctx, stmt, accountId)
+func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	pn, err := BuildPlan(opt.ctx, stmt)
 	if err != nil {
 		return nil, err
 	}

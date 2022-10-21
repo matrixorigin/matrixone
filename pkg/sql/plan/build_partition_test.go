@@ -894,5 +894,5 @@ func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()
-	return BuildPlan(context, statements[0], 0)
+	return BuildPlan(context, statements[0])
 }
