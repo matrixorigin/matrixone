@@ -30,6 +30,7 @@ import (
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
+const MO_DEFUALT_HOSTNAME = "localhost"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -393,7 +394,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	if stmt.Hostname == "" {
-		stmt.Hostname = "localhost"
+		stmt.Hostname = MO_DEFUALT_HOSTNAME
 	}
 	if stmt.Username == "" {
 		stmt.Username = ctx.GetUserName()
