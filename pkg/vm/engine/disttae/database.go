@@ -98,14 +98,25 @@ func (db *database) Delete(ctx context.Context, name string) error {
 }
 
 func (db *database) Truncate(ctx context.Context, name string) error {
+	var tbl *table
+	var oldId uint64
+
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	key := genTableKey(ctx, name, db.databaseId)
+	if v, ok := db.txn.tableMap.Load(key); ok {
+		tbl = v.(*table)
+	}
 
-	oldId, err := db.txn.getTableId(ctx, db.databaseId, name)
-	if err != nil {
-		return err
+	if tbl != nil {
+		oldId = tbl.tableId
+		tbl.tableId = newId
+	} else {
+		if oldId, err = db.txn.getTableId(ctx, db.databaseId, name); err != nil {
+			return err
+		}
 	}
 
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
