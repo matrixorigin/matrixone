@@ -41,13 +41,22 @@ func TestInsertWithNulls(t *testing.T) {
 	require.NoError(t, v.Append([]byte(""), true, idx.m))
 
 	// dict = ["a"->1, "b"->2, "c"->3]
-	// poses = [1, 2, 0, 1, 3, 0, 3, 2, 1, 0]
-	err = idx.InsertBatch(v)
-	require.NoError(t, err)
+	require.NoError(t, idx.InsertBatch(v))
 
 	require.Equal(t, []string{"a", "b", "c"}, vector.GetStrVectorValues(idx.dict.GetUnique()))
 	require.Equal(t, []uint16{1, 2, 0, 1, 3, 0, 3, 2, 1, 0}, vector.MustTCols[uint16](idx.poses))
 	require.Equal(t, [][]int64{{2, 5, 9}, {0, 3, 8}, {1, 7}, {4, 6}}, idx.sels[:4])
+
+	// test data = ["c", "b", NULL, NULL, "a"]
+	v1 := vector.New(types.T_varchar.ToType())
+	require.NoError(t, v1.Append([]byte("c"), false, idx.m))
+	require.NoError(t, v1.Append([]byte("b"), false, idx.m))
+	require.NoError(t, v1.Append([]byte(""), true, idx.m))
+	require.NoError(t, v1.Append([]byte(""), true, idx.m))
+	require.NoError(t, v1.Append([]byte("a"), false, idx.m))
+
+	require.NoError(t, idx.InsertBatch(v1))
+	require.Equal(t, [][]int64{{2, 5, 9, 12, 13}, {0, 3, 8, 14}, {1, 7, 11}, {4, 6, 10}}, idx.sels[:4])
 }
 
 func TestEncode(t *testing.T) {

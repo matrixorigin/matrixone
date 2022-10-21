@@ -25,9 +25,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+const (
+	MaxLowCardinality = math.MaxUint16 + 1
+)
+
 var (
 	ErrNotSupported = errors.New("the type is not supported for low cardinality index")
 )
+
+//type Poses struct {
+//	values *vector.Vector
+//	sels   [][]int64 // sels[0] -> null values
+//	rowid  int64
+//}
+//
+//func newPoses() *Poses {
+//	return &Poses{
+//		values: vector.New(types.T_uint16.ToType()),
+//		sels:   make([][]int64, MaxLowCardinality+1),
+//		rowid:  0,
+//	}
+//}
+//
+//func (p *Poses) GetSels() [][]int64 {
+//	return p.sels
+//}
+//
+//func (p *Poses) Insert(data []uint16, m *mpool.MPool) error {
+//	for i, v := range data {
+//		if len(p.sels[v]) == 0 {
+//			p.sels[v] = make([]int64, 0, 64)
+//		}
+//		p.sels[v] = append(p.sels[v], p.rowid+int64(i))
+//	}
+//	p.rowid += int64(len(data))
+//
+//	return vector.AppendFixed(p.values, data, m)
+//}
+//
+//func (p *Poses) Free(m *mpool.MPool) {
+//	p.values.Free(m)
+//}
 
 type LowCardinalityIndex struct {
 	typ types.Type
@@ -40,14 +78,13 @@ type LowCardinalityIndex struct {
 	// The position of `null` value is 0.
 	poses *vector.Vector
 
-	sels  [][]int64
-	rowid int64
+	sels  [][]int64 // sels[0] -> null values
+	rowid int
 
 	ref int
 }
 
 func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
-	// TODO: int8, int16, uint8, uint16
 	if typ.Oid == types.T_decimal128 || typ.Oid == types.T_json {
 		return nil, ErrNotSupported
 	}
@@ -61,7 +98,7 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 		m:     m,
 		dict:  d,
 		poses: vector.New(types.T_uint16.ToType()),
-		sels:  make([][]int64, math.MaxUint16+2),
+		sels:  make([][]int64, MaxLowCardinality+1),
 		rowid: 0,
 		ref:   1,
 	}, nil
@@ -69,6 +106,21 @@ func New(typ types.Type, m *mpool.MPool) (*LowCardinalityIndex, error) {
 
 func (idx *LowCardinalityIndex) GetSels() [][]int64 {
 	return idx.sels
+}
+
+func (idx *LowCardinalityIndex) UpdateSels(data []uint16, flags []uint8) {
+	cnt := 0
+	for i, v := range data {
+		if flags != nil && flags[i] == 0 {
+			continue
+		}
+		if len(idx.sels[v]) == 0 {
+			idx.sels[v] = make([]int64, 0, 64)
+		}
+		idx.sels[v] = append(idx.sels[v], int64(i+idx.rowid))
+		cnt++
+	}
+	idx.rowid += cnt
 }
 
 func (idx *LowCardinalityIndex) GetPoses() *vector.Vector {
@@ -84,12 +136,14 @@ func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
 	return idx
 }
 
-func (idx *LowCardinalityIndex) DupWithEmptyPoses() *LowCardinalityIndex {
+func (idx *LowCardinalityIndex) DupEmpty() *LowCardinalityIndex {
 	return &LowCardinalityIndex{
 		typ:   idx.typ,
 		m:     idx.m,
 		dict:  idx.dict.Dup(),
 		poses: vector.New(types.T_uint16.ToType()),
+		sels:  make([][]int64, MaxLowCardinality+1),
+		rowid: 0,
 		ref:   1,
 	}
 }
@@ -98,6 +152,7 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 	originalLen := data.Length()
 	var sels []int64
 	if nulls.Any(data.Nsp) {
+		sels = make([]int64, 0, originalLen)
 		for i := 0; i < originalLen; i++ {
 			if !nulls.Contains(data.Nsp, uint64(i)) {
 				sels = append(sels, int64(i))
@@ -133,13 +188,7 @@ func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
 		}
 	}
 
-	for i, ip := range ips {
-		if len(idx.sels[ip]) == 0 {
-			idx.sels[ip] = make([]int64, 0, 64)
-		}
-		idx.sels[ip] = append(idx.sels[ip], idx.rowid+int64(i))
-	}
-	idx.rowid += int64(len(ips))
+	idx.UpdateSels(ips, nil)
 	return vector.AppendFixed(idx.poses, ips, idx.m)
 }
 

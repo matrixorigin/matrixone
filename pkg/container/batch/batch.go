@@ -298,11 +298,12 @@ func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 			if bat.Vecs[i].Index() == nil {
 				bat.Vecs[i].SetIndex(idx.Dup())
 			} else {
-				dst := bat.Vecs[i].Index().(*index.LowCardinalityIndex).GetPoses()
-				src := idx.GetPoses()
+				appendIdx := bat.Vecs[i].Index().(*index.LowCardinalityIndex)
+				dst, src := appendIdx.GetPoses(), idx.GetPoses()
 				if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
 					return bat, err
 				}
+				appendIdx.UpdateSels(vector.MustTCols[uint16](src), flags[:vector.Length(src)])
 			}
 		}
 	}

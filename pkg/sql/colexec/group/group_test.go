@@ -16,6 +16,8 @@ package group
 
 import (
 	"bytes"
+	"os"
+	"runtime/pprof"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -158,6 +160,7 @@ func TestLowCardinalityGroup(t *testing.T) {
 			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}})
 		tc.arg.NeedEval = true
 
+		// 16->32, 1->2, 4->8, 2->6, 8->16, 32->32
 		values := []int64{16, 16, 1, 4, 4, 2, 8, 8, 1, 32, 2, 2}
 		v := testutil.NewVector(len(values), types.T_int64.ToType(), tc.proc.Mp(), false, values)
 		constructIndex(t, v, tc.proc.Mp())
@@ -176,6 +179,34 @@ func TestLowCardinalityGroup(t *testing.T) {
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+	}
+}
+
+func TestProfile(t *testing.T) {
+	// SELECT COUNT(*) FROM t GROUP BY t.values
+	tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
+		[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
+
+	values := testutil.MakeRandomStrings(1024, 1_000_000)
+	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+	v.SetOriginal(true)
+	constructIndex(t, v, tc.proc.Mp())
+
+	f, err := os.Create("group_fill.prof")
+	require.NoError(t, err)
+
+	require.NoError(t, pprof.StartCPUProfile(f))
+	for i := 0; i < 10; i++ {
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+	}
+	pprof.StopCPUProfile()
+
+	if tc.proc.Reg.InputBatch != nil {
+		tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 	}
 }
 
