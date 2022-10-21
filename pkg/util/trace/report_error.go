@@ -36,16 +36,18 @@ type MOErrorHolder struct {
 	Timestamp util.TimeNano `json:"timestamp"`
 }
 
-func (h MOErrorHolder) GetName() string {
+func (h *MOErrorHolder) GetName() string {
 	return MOErrorType
 }
 
-func (h MOErrorHolder) Size() int64 {
+func (h *MOErrorHolder) Size() int64 {
 	return int64(32*8) + int64(unsafe.Sizeof(h))
 }
-func (h MOErrorHolder) Free() {}
+func (h *MOErrorHolder) Free() {
+	h.Error = nil
+}
 
-func (h MOErrorHolder) CsvFields() []string {
+func (h *MOErrorHolder) CsvFields() []string {
 	var span Span
 	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
 		span = SpanFromContext(ct.Context())
