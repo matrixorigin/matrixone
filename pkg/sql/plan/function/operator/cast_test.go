@@ -1053,7 +1053,7 @@ func TestCastLeftToRight(t *testing.T) {
 }
 
 func TestCastSpecials1Int(t *testing.T) {
-	// (char / varhcar / blob) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+	// (char / varhcar / blob / text) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 
 	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
@@ -1350,6 +1350,63 @@ func TestCastSpecials1Int(t *testing.T) {
 			wantValues: []uint64{15},
 			wantScalar: false,
 		},
+
+		{
+			name:       "Test41",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test42",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test43",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test44",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test45",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test46",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test47",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test48",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: false,
+		},
 	}
 
 	for _, c := range cases {
@@ -1466,6 +1523,34 @@ func TestCastSpecials1Float(t *testing.T) {
 			wantValues: []float64{15.23},
 			wantScalar: true,
 		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors("15.23", types.T_text, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors("15.23", types.T_text, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors("15.23", types.T_text, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors("15.23", types.T_text, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -1578,6 +1663,34 @@ func TestCastSpecials2Float(t *testing.T) {
 		{
 			name:       "Test12",
 			vecs:       makeTempVectors(float64(23.65), types.T_blob, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors(float32(23.65), types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors(float64(23.65), types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors(float32(23.65), types.T_text, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors(float64(23.65), types.T_text, true),
 			proc:       procs,
 			wantBytes:  []byte("23.65"),
 			wantScalar: true,
@@ -1708,6 +1821,41 @@ func TestCastSpecials3(t *testing.T) {
 		{
 			name:       "Test13",
 			vecs:       makeTempVectors("abcsedn", types.T_char, types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_varchar, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_char, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeTempVectors("abcsedn", types.T_varchar, types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeTempVectors("abcsedn", types.T_char, types.T_text, false),
 			proc:       procs,
 			wantBytes:  []byte("abcsedn"),
 			wantScalar: false,

@@ -366,7 +366,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
-					ctr.aggVecs[i].vec.Free(proc.Mp())
+					ctr.aggVecs[j].vec.Free(proc.Mp())
 				}
 			}
 			return err

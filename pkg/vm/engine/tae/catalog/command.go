@@ -161,7 +161,44 @@ func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	}
 	return cmd.entry.GetLatestNodeLocked().GetLogIndex()
 }
-
+func (cmd *EntryCommand) SetReplayTxn(txn txnif.AsyncTxn) {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment:
+		cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode).Txn = txn
+	case CmdUpdateTable:
+		cmd.entry.GetLatestNodeLocked().(*TableMVCCNode).Txn = txn
+	case CmdUpdateDatabase:
+		cmd.entry.GetLatestNodeLocked().(*DBMVCCNode).Txn = txn
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
+func (cmd *EntryCommand) ApplyCommit() {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
+		node := cmd.entry.GetLatestNodeLocked()
+		if node.Is1PC() {
+			return
+		}
+		if err := node.ApplyCommit(nil); err != nil {
+			panic(err)
+		}
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
+func (cmd *EntryCommand) ApplyRollback() {
+	switch cmd.cmdType {
+	case CmdUpdateBlock, CmdUpdateSegment, CmdUpdateTable, CmdUpdateDatabase:
+		node := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
+		if node.Is1PC() {
+			return
+		}
+		node.ApplyRollback(nil)
+	default:
+		panic(fmt.Sprintf("invalid command type %d", cmd.cmdType))
+	}
+}
 func (cmd *EntryCommand) GetTs() types.TS {
 	ts := cmd.entry.GetLatestNodeLocked().GetPrepare()
 	return ts
@@ -254,12 +291,12 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 }
 
 func (cmd *EntryCommand) String() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
 	return s
 }
 
 func (cmd *EntryCommand) VerboseString() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.entry.String())
 	switch cmd.cmdType {
 	case CmdUpdateTable, CmdLogTable:
 		s = fmt.Sprintf("%s;Schema=%v", s, cmd.Table.schema.String())

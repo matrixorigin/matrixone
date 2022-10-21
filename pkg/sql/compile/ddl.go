@@ -97,18 +97,39 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
-			if qry.GetIfNotExists() {
-				return nil
+		if _, err := dbSource.Relation(c.ctx, def.Name); err != nil {
+			if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+				return err
 			}
-			return moerr.NewTableAlreadyExists(tblName)
-		}
-		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-			return err
 		}
 	}
 
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
+}
+
+// Truncation operations cannot be performed if the session holds an active table lock.
+func (s *Scope) TruncateTable(c *Compile) error {
+	tqry := s.Plan.GetDdl().GetTruncateTable()
+	dbName := tqry.GetDatabase()
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := tqry.GetTable()
+	var rel engine.Relation
+	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
+		return err
+	}
+	id := rel.GetTableID(c.ctx)
+	err = dbSource.Truncate(c.ctx, tblName)
+	if err != nil {
+		return err
+	}
+	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, id)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Scope) DropTable(c *Compile) error {

@@ -62,8 +62,8 @@ func (rm *RoutineManager) getCtx() context.Context {
 }
 
 func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
-	rm.rwlock.RLock()
-	defer rm.rwlock.RUnlock()
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
 	rm.clients[rs] = r
 }
 
@@ -101,7 +101,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		panic(err)
+		logutil.Error("failed to handshake with server, quiting routine...")
+		routine.Quit()
+		return
 	}
 
 	rm.setRoutine(rs, routine)

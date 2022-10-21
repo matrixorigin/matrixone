@@ -54,6 +54,7 @@ message Const {
 		bool defaultval = 14;
 		bool updateVal = 15;
 	}
+	bool isBin = 16;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -195,7 +196,6 @@ message ColDef {
 	Type typ			= 3;
 	Default default 	= 4;
 	bool primary        = 5;
-	//bool auto_increment = 6;
 	int32 pkidx 		= 7;
 	string comment		= 8;
 	bool is_cPkey = 9;
@@ -534,6 +534,9 @@ message Query {
 
 	// return head
 	repeated string headings = 5;
+
+	// load Tag
+	bool loadTag = 6;
 }
 
 message TransationControl {
@@ -719,7 +722,8 @@ message DropIndex {
 }
 
 message TruncateTable {
-	string table = 1;
+	string database = 1;
+	string table = 2;
 }
 
 message ShowVariables {

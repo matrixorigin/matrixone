@@ -121,6 +121,8 @@ type Process struct {
 	Cancel context.CancelFunc
 
 	FileService fileservice.FileService
+
+	LoadTag bool
 }
 
 type analyze struct {

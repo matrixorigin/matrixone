@@ -71,25 +71,14 @@ func (appender *blockAppender) PrepareAppend(
 		appender.placeholder+appender.rows)
 	return
 }
-func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
-	var from int
-	if from, err = appender.node.ApplyAppend(bat, nil); err != nil {
+func (appender *blockAppender) ReplayAppend(
+	bat *containers.Batch,
+	txn txnif.AsyncTxn) (from int, err error) {
+	if from, err = appender.ApplyAppend(bat, txn); err != nil {
 		return
 	}
-	schema := appender.node.block.meta.GetSchema()
-	keysCtx := new(index.KeysCtx)
-	keysCtx.Count = bat.Length()
-	for _, colDef := range schema.ColDefs {
-		if colDef.IsPhyAddr() {
-			continue
-		}
-		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
-			panic(err)
-		}
-	}
+	// TODO: Remove ReplayAppend
 	appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
-
 	return
 }
 func (appender *blockAppender) ApplyAppend(

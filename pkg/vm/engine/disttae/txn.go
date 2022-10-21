@@ -16,8 +16,8 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -61,6 +61,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		return nil, nil, err
 	}
 	tbl := new(table)
+	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
 	tbl.viewdef = string(row[catalog.MO_TABLES_VIEWDEF_IDX].([]byte))
 	tbl.relKind = string(row[catalog.MO_TABLES_RELKIND_IDX].([]byte))
@@ -76,7 +77,10 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	cols := getColumnsFromRows(rows)
 	defs := make([]engine.TableDef, 0, len(cols))
 	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
-	for _, col := range cols {
+	for i, col := range cols {
+		if col.constraintType == catalog.SystemColPKConstraint {
+			tbl.primaryIdx = i
+		}
 		defs = append(defs, genTableDefOfColumn(col))
 	}
 	return tbl, defs, nil
@@ -134,7 +138,7 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 }
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
-	name string, needUpdated bool) (*tableMeta, error) {
+	name string, needUpdated bool, columnLength int) (*tableMeta, error) {
 	blocks := make([][]BlockMeta, len(txn.dnStores))
 	if needUpdated {
 		for i, dnStore := range txn.dnStores {
@@ -146,7 +150,10 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			if err != nil {
 				return nil, err
 			}
-			blocks[i] = genBlockMetas(rows)
+			blocks[i], err = genBlockMetas(rows, columnLength, txn.proc.FileService, txn.proc.GetMPool())
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return &tableMeta{
@@ -301,7 +308,8 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, txn.meta.SnapshotTS, writes)
+		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, nil,
+			txn.meta.SnapshotTS, nil, writes)
 		if err != nil {
 			return nil, err
 		}
@@ -318,6 +326,9 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 				}
 			}
 		}
+	}
+	if expr == nil {
+		return bats, nil
 	}
 	for i, bat := range bats {
 		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
@@ -382,6 +393,12 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	return bat
 }
 
+func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return txn.idGen.AllocateID(ctx)
+}
+
 func (txn *Transaction) genRowId() types.Rowid {
 	txn.rowId[1]++
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
@@ -414,6 +431,9 @@ func (h *transactionHeap) Pop() any {
 // needRead determine if a block needs to be read
 func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
 	var err error
+	if expr == nil {
+		return true
+	}
 	columns := getColumnsByExpr(expr)
 
 	// if expr match no columns, just eval expr
@@ -447,45 +467,31 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 
 }
 
-// needSyncDnStores determine the dn store need to sync
-func needSyncDnStores(expr *plan.Expr, defs []engine.TableDef, dnStores []DNStore) []int {
-	//TODO
-	dnList := make([]int, len(dnStores))
-	for i := range dnStores {
-		dnList[i] = i
-	}
-	return dnList
-}
-
 // get row count of block
-func blockRows(blkInfo BlockMeta) int64 {
-	// TODO
-	return 0
+func blockRows(meta BlockMeta) int64 {
+	return meta.Rows
 }
 
-func blockMarshal(blkInfo BlockMeta) []byte {
-	// TODO
-	return nil
+func blockMarshal(meta BlockMeta) []byte {
+	data, _ := types.Encode(meta)
+	return data
 }
 
 func blockUnmarshal(data []byte) BlockMeta {
-	return BlockMeta{}
+	var meta BlockMeta
+
+	types.Decode(data, &meta)
+	return meta
 }
 
 // write a block to s3
-func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
-	// 1. check columns length, check types
-	if len(blkInfo.columns) != len(bat.Vecs) {
-		return nil, moerr.NewInternalError(fmt.Sprintf("write block error: need %v columns, get %v columns", len(blkInfo.columns), len(bat.Vecs)))
+func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
+	// 1. write bat
+	accountId, _, _ := getAccessInfo(ctx)
+	s3FileName, err := getNewBlockName(accountId)
+	if err != nil {
+		return nil, err
 	}
-	for i, vec := range bat.Vecs {
-		if blkInfo.columns[i].typ != uint8(vec.Typ.Oid) {
-			return nil, moerr.NewInternalError(fmt.Sprintf("write block error: column[%v]'s type is not match", i))
-		}
-	}
-
-	// 2. write bat
-	s3FileName := getNameFromMeta(blkInfo)
 	writer, err := objectio.NewObjectWriter(s3FileName, fs)
 	if err != nil {
 		return nil, err
@@ -495,7 +501,7 @@ func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fil
 		return nil, err
 	}
 
-	// 3. write index (index and zonemap)
+	// 2. write index (index and zonemap)
 	for i, vec := range bat.Vecs {
 		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
 		if err != nil {
@@ -515,77 +521,46 @@ func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fil
 		}
 	}
 
-	// 4. get return
+	// 3. get return
 	return writer.WriteEnd()
 }
 
-// read a block from s3
-func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs fileservice.FileService, tableDef *plan.TableDef) (*batch.Batch, error) {
-	// 1. get extent from meta
-	extent := getExtentFromMeta(blkInfo)
+func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
+	priKeys []*engine.Attribute, dnStores []DNStore) []int {
+	var pk *engine.Attribute
 
-	// 2. get idxs
-	columnLength := len(columns)
-	idxs := make([]uint16, columnLength)
-	columnTypes := make([]types.Type, columnLength)
-	for i, column := range columns {
-		idxs[i] = uint16(tableDef.Name2ColIndex[column])
-		columnTypes[i] = types.T(blkInfo.columns[idxs[i]].typ).ToType()
-	}
-
-	// 2. read data
-	s3FileName := getNameFromMeta(blkInfo)
-	reader, err := objectio.NewObjectReader(s3FileName, fs)
-	if err != nil {
-		return nil, err
-	}
-	ioVec, err := reader.Read(extent, idxs)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. fill Batch
-	bat := batch.NewWithSize(columnLength)
-	bat.Attrs = columns
-	for i, entry := range ioVec.Entries {
-		vec := vector.New(columnTypes[i])
-		err := vec.Read(entry.Data)
-		if err != nil {
-			return nil, err
+	fullList := func() []int {
+		dnList := make([]int, len(dnStores))
+		for i := range dnStores {
+			dnList[i] = i
 		}
-		bat.Vecs[i] = vec
+		return dnList
 	}
-	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
-
-	return bat, nil
-}
-
-func getDNStore(expr *plan.Expr, tableDef *plan.TableDef, priKeys []*engine.Attribute, list []DNStore) []DNStore {
-	// get primay keys index(that was colPos in expr)
-	pkIndex := int32(-1)
 	for _, key := range priKeys {
 		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		if isCPkey {
 			continue
 		}
-		// if primary key is not int or uint, return all the list
-		if !key.Type.IsIntOrUint() {
-			return list
-		}
-
-		pkIndex = tableDef.Name2ColIndex[key.Name]
+		pk = key
 		break
 	}
-
 	// have no PrimaryKey, return all the list
-	if pkIndex == -1 {
-		return list
+	if expr == nil || pk == nil || tableDef == nil {
+		return fullList()
 	}
-
-	canComputeRange, pkRange := computeRange(expr, pkIndex)
+	pkIndex := tableDef.Name2ColIndex[pk.Name]
+	if pk.Type.IsIntOrUint() {
+		canComputeRange, pkRange := computeRangeByIntPk(expr, pkIndex, "")
+		if !canComputeRange {
+			return fullList()
+		}
+		return getListByRange(dnStores, pkRange)
+	}
+	canComputeRange, hashVal := computeRangeByNonIntPk(expr, pkIndex)
 	if !canComputeRange {
-		return list
+		return fullList()
 	}
-
-	return getListByRange(list, pkRange)
+	listLen := uint64(len(dnStores))
+	idx := hashVal % listLen
+	return []int{int(idx)}
 }

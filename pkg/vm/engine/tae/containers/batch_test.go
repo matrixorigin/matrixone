@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +27,9 @@ func TestBatch1(t *testing.T) {
 	vecTypes := types.MockColTypes(4)[2:]
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
-	bat := BuildBatch(attrs, vecTypes, nullable, 0)
+	opts := new(containers.Options)
+	opts.Capacity = 0
+	bat := BuildBatch(attrs, vecTypes, nullable, opts)
 	bat.Vecs[0].Append(int32(1))
 	bat.Vecs[0].Append(int32(2))
 	bat.Vecs[0].Append(int32(3))

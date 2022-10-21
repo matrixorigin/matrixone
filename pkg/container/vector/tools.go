@@ -281,7 +281,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeSlice(v.Col.([]types.TS))
 	case types.T_Rowid:
 		return types.EncodeSlice(v.Col.([]types.Rowid))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return types.EncodeSlice(v.Col.([]types.Varlena))
 	case types.T_tuple:
 		bs, _ := types.Encode(v.Col.([][]interface{}))
@@ -320,7 +320,16 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
 	// extend the null map
-	nulls.TryExpand(v.Nsp, newRows)
+	if v.IsScalar() {
+		if v.IsScalarNull() {
+			v.Nsp = nulls.NewWithSize(1)
+			nulls.Add(v.Nsp, 0)
+		} else {
+			v.Nsp = &nulls.Nulls{}
+		}
+	} else {
+		nulls.TryExpand(v.Nsp, newRows)
+	}
 	return nil
 }
 

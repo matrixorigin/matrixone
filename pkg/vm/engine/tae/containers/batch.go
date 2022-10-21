@@ -15,6 +15,8 @@
 package containers
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"unsafe"
 
@@ -143,7 +145,17 @@ func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cl
 }
 
 func (bat *Batch) String() string {
-	return ""
+	return bat.PPString(10)
+}
+
+func (bat *Batch) PPString(num int) string {
+	var w bytes.Buffer
+	for i, vec := range bat.Vecs {
+		_, _ = w.WriteString(fmt.Sprintf("[Name=%s]", bat.Attrs[i]))
+		_, _ = w.WriteString(vec.PPString(num))
+		_ = w.WriteByte('\n')
+	}
+	return w.String()
 }
 
 func (bat *Batch) Close() {

@@ -10,8 +10,6 @@ max-size = 512
 [hakeeper-client]
 service-addresses = [
     "127.0.0.1:32001",
-    "127.0.0.1:32011",
-    "127.0.0.1:32021",
 ]
 
 [[fileservice]]
@@ -25,7 +23,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "store"
+data-dir = "mo-data/etl"
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"

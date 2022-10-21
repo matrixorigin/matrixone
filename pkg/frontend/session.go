@@ -36,6 +36,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -68,6 +70,9 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 }
 
 type Session struct {
+	// account id
+	accountId uint32
+
 	//protocol layer
 	protocol Protocol
 
@@ -239,6 +244,11 @@ func (bgs *BackgroundSession) Close() {
 	}
 }
 
+// GetBackgroundExec generates a background executor
+func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
+}
+
 func (ses *Session) GetIsInternal() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -402,6 +412,17 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.tenant
+}
+
+// GetTenantName return tenant name according to GetTenantInfo and stmt.
+//
+// With stmt = nil, should be only called in TxnBegin, TxnCommit, TxnRollback
+func (ses *Session) GetTenantName(stmt tree.Statement) string {
+	tenant := sysAccountName
+	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
+		tenant = ses.GetTenantInfo().GetTenant()
+	}
+	return tenant
 }
 
 func (ses *Session) GetUUID() []byte {
@@ -731,6 +752,12 @@ func (ses *Session) TxnCommitSingleStatement(stmt tree.Statement) error {
 		err = ses.GetTxnHandler().CommitTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		// metric count
+		tenant := ses.GetTenantName(stmt)
+		incTransactionCounter(tenant)
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoCommit)
+		}
 	}
 	return err
 }
@@ -753,6 +780,13 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+		// metric count
+		tenant := ses.GetTenantName(stmt)
+		incTransactionCounter(tenant)
+		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
+		if err != nil {
+			incTransactionErrorsCounter(tenant, metric.SQLTypeAutoRollback)
+		}
 	}
 	return err
 }
@@ -763,17 +797,25 @@ It commits the current transaction implicitly.
 */
 func (ses *Session) TxnBegin() error {
 	var err error
+	tenant := ses.GetTenantName(nil)
 	if ses.InMultiStmtTransactionMode() {
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		err = ses.GetTxnHandler().CommitTxn()
+		// metric count: last txn
+		incTransactionCounter(tenant)
 	}
 	ses.ClearOptionBits(OPTION_BEGIN)
 	if err != nil {
+		// metric count: last txn commit failed.
+		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 		return err
 	}
 	ses.SetOptionBits(OPTION_BEGIN)
 	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
 	err = ses.GetTxnHandler().NewTxn()
+	if err != nil {
+		incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
+	}
 	return err
 }
 
@@ -784,6 +826,12 @@ func (ses *Session) TxnCommit() error {
 	err = ses.GetTxnHandler().CommitTxn()
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 	ses.ClearOptionBits(OPTION_BEGIN)
+	// metric count
+	tenant := ses.GetTenantName(nil)
+	incTransactionCounter(tenant)
+	if err != nil {
+		incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+	}
 	return err
 }
 
@@ -793,6 +841,13 @@ func (ses *Session) TxnRollback() error {
 	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY)
 	err = ses.GetTxnHandler().RollbackTxn()
 	ses.ClearOptionBits(OPTION_BEGIN)
+	// metric count
+	tenant := ses.GetTenantName(nil)
+	incTransactionCounter(tenant)
+	incTransactionErrorsCounter(tenant, metric.SQLTypeOther)
+	if err != nil {
+		incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+	}
 	return err
 }
 
@@ -843,10 +898,21 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var tenantID int64
 	var userID int64
 	var pwd string
+	var pwdBytes []byte
+	var isSpecial bool
+	var specialAccount *TenantInfo
+
 	//Get tenant info
 	tenant, err = GetTenantInfo(userInput)
 	if err != nil {
 		return nil, err
+	}
+
+	// check the special user for initilization
+	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
+	if isSpecial && specialAccount.IsMoAdminRole() {
+		ses.SetTenantInfo(specialAccount)
+		return pwdBytes, nil
 	}
 
 	ses.SetTenantInfo(tenant)
@@ -1089,6 +1155,7 @@ func (th *TxnHandler) CommitTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Commit(ctx, txnOp); err != nil {
+		th.SetInvalid()
 		return err
 	}
 	err := txnOp.Commit(ctx)
@@ -1112,6 +1179,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Rollback(ctx, txnOp); err != nil {
+		th.SetInvalid()
 		return err
 	}
 	err := txnOp.Rollback(ctx)
@@ -1131,6 +1199,10 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 		panic(err)
 	}
 	return th.GetTxnOperator()
+}
+
+func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	return th.txn
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -1199,6 +1271,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
+}
+
+func (tcc *TxnCompilerContext) GetAccountId() uint32 {
+	return tcc.ses.accountId
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
@@ -1523,9 +1599,11 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
-func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
-	rsset := make([]ExecResult, len(values))
-	for i, value := range values {
+// getResultSet extracts the result set
+func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
+	results := bh.GetExecResultSet()
+	rsset := make([]ExecResult, len(results))
+	for i, value := range results {
 		if er, ok := value.(ExecResult); ok {
 			rsset[i] = er
 		} else {
@@ -1544,7 +1622,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	if err != nil {
 		return nil, err
 	}
-	rsset := bh.GetExecResultSet()
+
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1558,7 +1636,7 @@ func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *con
 	//	}
 	//}
 
-	return convertIntoResultSet(rsset)
+	return getResultSet(bh)
 }
 
 type BackgroundHandler struct {

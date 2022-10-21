@@ -143,6 +143,10 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	} else {
 		// hasExplicitCols maybe true or false
+		binders := make([]*DefaultBinder, 0, len(explicitCols))
+		for _, col := range explicitCols {
+			binders = append(binders, NewDefaultBinder(nil, nil, col.Typ, nil))
+		}
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {
 				return nil, moerr.NewInvalidInput("insert values does not match the number of columns")
@@ -157,8 +161,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 					}
 					columns[idx].Column = append(columns[idx].Column, expr)
 				} else {
-					binder := NewDefaultBinder(nil, nil, col.Typ, nil)
-					planExpr, err := binder.BindExpr(row[idx], 0, false)
+					planExpr, err := binders[j].BindExpr(row[idx], 0, false)
 					if err != nil {
 						err = MakeInsertError(types.T(col.Typ.Id), col, rows, j, i)
 						return nil, err
@@ -210,7 +213,24 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 	} else {
 		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
 	}
+	if id == types.T_json {
+		return moerr.NewInvalidInput("Invalid %s text: '%s' for column '%s' at row '%d'", id.String(), str, col.Name, rowIdx+1)
+	}
 	return moerr.NewTruncatedValueForField(id.String(), str, col.Name, rowIdx+1)
+}
+
+func SetPlanLoadTag(pn *Plan) {
+	pn2, ok := pn.Plan.(*plan.Plan_Query)
+	if !ok {
+		return
+	}
+	nodes := pn2.Query.Nodes
+	for i := 0; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_EXTERNAL_SCAN {
+			pn2.Query.LoadTag = true
+			return
+		}
+	}
 }
 
 func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -218,6 +238,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	if err != nil {
 		return nil, err
 	}
+	SetPlanLoadTag(pn)
 	cols := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
 	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {

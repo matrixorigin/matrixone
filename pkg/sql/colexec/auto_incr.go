@@ -143,7 +143,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, err
 	}
 
-	oriNum, step, err := getCurrentIndex(param, name)
+	oriNum, step, err := getCurrentIndex(param, name, param.proc.Mp())
 	if err != nil {
 		ctx, cancel := context.WithTimeout(
 			param.ctx,
@@ -260,15 +260,51 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []ui
 	return nil
 }
 
-func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, error) {
-	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
-	for {
+func getCurrentIndex(param *AutoIncrParam, colName string, mp *mpool.MPool) (uint64, uint64, error) {
+	ctx := context.TODO()
+
+	var rds []engine.Reader
+
+	ret, err := param.rel.Ranges(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	switch {
+	case len(ret) == 0:
+		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+			return 0, 0, err
+		}
+	case len(ret) == 1 && len(ret[0]) == 0:
+		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+			return 0, 0, err
+		}
+	case len(ret[0]) == 0:
+		rds0, err := param.rel.NewReader(ctx, 1, nil, nil)
+		if err != nil {
+			return 0, 0, err
+		}
+		rds1, err := param.rel.NewReader(ctx, 1, nil, ret[1:])
+		if err != nil {
+			return 0, 0, err
+		}
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = param.rel.NewReader(ctx, 1, nil, ret)
+	}
+
+	for len(rds) > 0 {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
-		if err != nil || bat == nil {
+		if err != nil {
 			return 0, 0, moerr.NewInvalidInput("can not find the auto col")
 		}
+		if bat == nil {
+			rds[0].Close()
+			rds = rds[1:]
+			continue
+		}
 		if len(bat.Vecs) < 2 {
-			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
+			return 0, 0, moerr.NewInternalError("the mo_increment_columns col num is not two")
 		}
 		vs2 := vector.MustTCols[uint64](bat.Vecs[2])
 		vs3 := vector.MustTCols[uint64](bat.Vecs[3])
@@ -280,21 +316,26 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
+			bat.Clean(mp)
 			return vs2[rowIndex], vs3[rowIndex], nil
 		}
+		bat.Clean(mp)
 	}
+	return 0, 0, nil
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *mpool.MPool) error {
-	bat := GetDeleteBatch(param.rel, param.ctx, name, mp)
+	bat, _ := GetDeleteBatch(param.rel, param.ctx, name, mp)
 	bat.SetZs(bat.GetVector(0).Length(), mp)
 	err := param.rel.Delete(param.ctx, bat, AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
+		bat.Clean(mp)
 		return err
 	}
 
 	bat = makeAutoIncrBatch(name, curNum, 1, mp)
 	if err = param.rel.Write(param.ctx, bat); err != nil {
+		bat.Clean(mp)
 		return err
 	}
 	return nil
@@ -311,15 +352,41 @@ func makeAutoIncrBatch(name string, num, step uint64, mp *mpool.MPool) *batch.Ba
 	return bat
 }
 
-func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp *mpool.MPool) *batch.Batch {
-	rds, _ := rel.NewReader(ctx, 1, nil, nil)
+func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp *mpool.MPool) (*batch.Batch, uint64) {
+	var rds []engine.Reader
+
+	ret, err := rel.Ranges(ctx, nil)
+	if err != nil {
+		panic(err)
+	}
+	switch {
+	case len(ret) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret) == 1 && len(ret[0]) == 0:
+		rds, _ = rel.NewReader(ctx, 1, nil, nil)
+	case len(ret[0]) == 0:
+		rds0, _ := rel.NewReader(ctx, 1, nil, nil)
+		rds1, _ := rel.NewReader(ctx, 1, nil, ret[1:])
+		rds = append(rds, rds0...)
+		rds = append(rds, rds1...)
+	default:
+		rds, _ = rel.NewReader(ctx, 1, nil, ret)
+	}
+
 	retbat := &batch.Batch{
 		Vecs: []*vector.Vector{},
 	}
-	for {
+
+	for len(rds) > 0 {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, mp)
-		if err != nil || bat == nil {
-			return nil
+		if err != nil {
+			bat.Clean(mp)
+			return nil, 0
+		}
+		if bat == nil {
+			rds[0].Close()
+			rds = rds[1:]
+			continue
 		}
 		if len(bat.Vecs) < 2 {
 			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
@@ -328,12 +395,17 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
 			str := bat.Vecs[1].GetString(rowIndex)
 			if str == colName {
+				currentNum := vector.MustTCols[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
 				retbat.Vecs[0].Col = retbat.Vecs[0].Col.([]types.Rowid)[rowIndex : rowIndex+1]
-				return retbat
+				retbat.SetZs(1, mp)
+				bat.Clean(mp)
+				return retbat, currentNum[0]
 			}
 		}
+		bat.Clean(mp)
 	}
+	return nil, 0
 }
 
 // for create database operation, add col in mo_increment_columns table
@@ -389,8 +461,84 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			bat, _ := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
 			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+				bat.Clean(proc.Mp())
+				return err
+			}
+			bat.Clean(proc.Mp())
+		}
+	}
+	return nil
+}
+
+// for delete table operation, move old col as new col in mo_increment_columns table
+func MoveAutoIncrCol(tblName string, db engine.Database, ctx context.Context, proc *process.Process, oldTableID string) error {
+	autoRel, err := db.Relation(ctx, AUTO_INCR_TABLE)
+	if err != nil {
+		return err
+	}
+	newRel, err := db.Relation(ctx, tblName)
+	if err != nil {
+		return err
+	}
+	defs, err := newRel.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
+
+	newName := newRel.GetTableID(ctx) + "_"
+	for _, def := range defs {
+		switch d := def.(type) {
+		case *engine.AttributeDef:
+			if !d.Attr.AutoIncrement {
+				continue
+			}
+
+			bat, currentNum := GetDeleteBatch(autoRel, ctx, oldTableID+"_"+d.Attr.Name, proc.Mp())
+			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+				return err
+			}
+
+			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum, 1, proc.Mp())
+			if err = autoRel.Write(ctx, bat2); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// for truncate table operation, reset col in mo_increment_columns table
+func ResetAutoInsrCol(tblName string, db engine.Database, ctx context.Context, proc *process.Process, tableID string) error {
+	autoRel, err := db.Relation(ctx, AUTO_INCR_TABLE)
+	if err != nil {
+		return err
+	}
+
+	rel, err := db.Relation(ctx, tblName)
+	if err != nil {
+		return err
+	}
+	defs, err := rel.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
+
+	name := rel.GetTableID(ctx) + "_"
+	for _, def := range defs {
+		switch d := def.(type) {
+		case *engine.AttributeDef:
+			if !d.Attr.AutoIncrement {
+				continue
+			}
+			bat, _ := GetDeleteBatch(autoRel, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
+			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
+				return err
+			}
+
+			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
+			if err = autoRel.Write(ctx, bat2); err != nil {
 				return err
 			}
 		}

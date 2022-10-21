@@ -19,20 +19,28 @@ import (
 	"math"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	HASH_VALUE_FUN string = "hash_value"
+	MAX_RANGE_SIZE int64  = 200
 )
 
 func checkExprIsMonotonical(expr *plan.Expr) bool {
@@ -56,11 +64,11 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			_getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
@@ -70,7 +78,7 @@ func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 
 func getColumnsByExpr(expr *plan.Expr) []int {
 	columnMap := make(map[int]struct{})
-	_getColumnMapByExpr(expr, columnMap)
+	getColumnMapByExpr(expr, columnMap)
 
 	columns := make([]int, len(columnMap))
 	i := 0
@@ -124,27 +132,44 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	var columnMeta *ColumnMeta
+func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
+	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+	zonemapList := make([][64]byte, len(idxs))
 
-	getIdx := func(idx int) int {
-		return int(tableDef.Name2ColIndex[tableDef.Cols[columns[idx]].Name])
+	// raed s3
+	reader, err := objectio.NewObjectReader(name, fs)
+	if err != nil {
+		return nil, err
 	}
 
-	dataLength := len(columns)
+	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
+	if err != nil {
+		return nil, err
+	}
 
+	for i, data := range idxList {
+		bytes := data.(*objectio.ZoneMap).GetData()
+		copy(zonemapList[i][:], bytes[:])
+	}
+
+	return zonemapList, nil
+}
+
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
+	getIdx := func(idx int) int {
+		return int(tableDef.Name2ColIndex[tableDef.Cols[idx].Name])
+	}
+	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 
 	for i := 0; i < dataLength; i++ {
-		columnMeta = meta.columns[getIdx(i)]
-		dataTypes[i] = columnMeta.typ
-		typ := types.T(columnMeta.typ).ToType()
+		idx := getIdx(columns[i])
+		dataTypes[i] = uint8(tableDef.Cols[columns[i]].Typ.Id)
+		typ := types.T(dataTypes[i]).ToType()
 
-		czm, _ := columnMeta.zoneMap.(*objectio.ZoneMap)
-		buf := czm.GetData()
 		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(buf)
+		err := zm.Unmarshal(meta.Zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -214,21 +239,151 @@ func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 	return vectors
 }
 
-// getNameFromMeta  TODO change later
-func getNameFromMeta(blkInfo BlockMeta) string {
-	return fmt.Sprintf("%s:%d_%d_%d.blk", "local", blkInfo.header.blockId, blkInfo.header.segmentId, blkInfo.header.tableId)
+// getNewBlockName Each time a unique name is generated in one CN
+func getNewBlockName(accountId uint32) (string, error) {
+	uuid, err := types.BuildUuid()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d_%s.blk", accountId, uuid.ToString()), nil
 }
 
-// getExtentFromMeta  TODO change later
-func getExtentFromMeta(blkInfo BlockMeta) objectio.Extent {
-	return objectio.NewExtent(blkInfo.localExtent.offset, blkInfo.localExtent.length, blkInfo.localExtent.originSize)
+func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
+	args := []*plan.Expr{constExpr}
+	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
+	funId, returnType, _, _ := function.GetFunctionByName(HASH_VALUE_FUN, argTypes)
+	funExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&returnType),
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     funId,
+					ObjName: HASH_VALUE_FUN,
+				},
+				Args: args,
+			},
+		},
+	}
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	ret, err := colexec.EvalExpr(bat, nil, funExpr)
+	if err != nil {
+		return false, 0
+	}
+	list := vector.MustTCols[int64](ret)
+	return true, uint64(list[0])
 }
 
-// computeRange compute primaryKey range by Expr
+func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funName := exprImpl.F.Func.ObjName
+		switch funName {
+		case "and":
+			canCompute, pkBytes := getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
+			if canCompute {
+				return canCompute, pkBytes
+			}
+			return getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
+
+		case "=":
+			var pkVal *plan.Expr
+			leftIsConstant := false
+			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_C:
+				pkVal = exprImpl.F.Args[0]
+				leftIsConstant = true
+			case *plan.Expr_Col:
+				if subExpr.Col.ColPos != pkIdx {
+					return false, nil
+				}
+			default:
+				return false, nil
+			}
+
+			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				if leftIsConstant {
+					return false, nil
+				}
+				return true, exprImpl.F.Args[1]
+			case *plan.Expr_Col:
+				if !leftIsConstant {
+					return false, nil
+				}
+				if subExpr.Col.ColPos != pkIdx {
+					return false, nil
+				}
+				return true, pkVal
+			default:
+				return false, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+	if !canCompute {
+		return canCompute, nil
+	}
+	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
+	case *plan.Const_Ival:
+		return true, val.Ival
+	case *plan.Const_Dval:
+		return true, val.Dval
+	case *plan.Const_Sval:
+		return true, val.Sval
+	case *plan.Const_Bval:
+		return true, val.Bval
+	case *plan.Const_Uval:
+		return true, val.Uval
+	case *plan.Const_Fval:
+		return true, val.Fval
+	case *plan.Const_Dateval:
+		return true, val.Dateval
+	case *plan.Const_Datetimeval:
+		return true, val.Datetimeval
+	case *plan.Const_Decimal64Val:
+		return true, val.Decimal64Val
+	case *plan.Const_Decimal128Val:
+		return true, val.Decimal128Val
+	case *plan.Const_Timestampval:
+		return true, val.Timestampval
+	case *plan.Const_Jsonval:
+		return true, val.Jsonval
+	case *plan.Const_Defaultval:
+		return true, val.Defaultval
+	case *plan.Const_UpdateVal:
+		return true, val.UpdateVal
+	}
+	return false, nil
+}
+
+// computeRangeByNonIntPk compute NonIntPk range Expr
+// only support function :["and", "="]
+// support eg: pk="a",  pk="a" and noPk > 200
+// unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
+func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
+	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+	if !canCompute {
+		return canCompute, 0
+	}
+	ok, pkHashValue := getConstantExprHashValue(valExpr)
+	if !ok {
+		return false, 0
+	}
+	return true, pkHashValue
+}
+
+// computeRangeByIntPk compute primaryKey range by Expr
 // only under the following conditions：
 // 1、function named ["and", "or", ">", "<", ">=", "<=", "="]
 // 2、if function name is not "and", "or".  then one arg is column, the other is constant
-func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
+func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, [][2]int64) {
 	type argType int
 	var typeConstant argType = 0
 	var typeColumn argType = 1
@@ -254,12 +409,12 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and", "or":
-			canCompute, leftRange := computeRange(exprImpl.F.Args[0], pkIdx)
+			canCompute, leftRange := computeRangeByIntPk(exprImpl.F.Args[0], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
 
-			canCompute, rightRange := computeRange(exprImpl.F.Args[1], pkIdx)
+			canCompute, rightRange := computeRangeByIntPk(exprImpl.F.Args[1], pkIdx, funName)
 			if !canCompute {
 				return canCompute, nil
 			}
@@ -281,6 +436,11 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 				leftArg = typeColumn
@@ -312,6 +472,11 @@ func computeRange(expr *plan.Expr, pkIdx int32) (bool, [][2]int64) {
 				}
 			case *plan.Expr_Col:
 				if subExpr.Col.ColPos != pkIdx {
+					// if  pk > 10 and noPk < 10.  we just use pk > 10
+					if parentFun == "and" {
+						return true, [][2]int64{}
+					}
+					// if pk > 10 or noPk < 10,   we use all list
 					return false, nil
 				}
 
@@ -425,43 +590,59 @@ func _computeOr(leftRange [][2]int64, rightRange [][2]int64) [][2]int64 {
 	return newRange
 }
 
-func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
+func getHashValue(buf []byte) uint64 {
+	buf = append([]byte{0}, buf...)
+	var states [3]uint64
+	if l := len(buf); l < 16 {
+		buf = append(buf, hashtable.StrKeyPadding[l:]...)
+	}
+	hashtable.BytesBatchGenHashStates(&buf, &states, 1)
+	return states[0]
+}
+
+func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+	fullList := func() []int {
+		dnList := make([]int, len(list))
+		for i := range list {
+			dnList[i] = i
+		}
+		return dnList
+	}
 	listLen := uint64(len(list))
 	if listLen == 1 || len(pkRange) == 0 {
-		return list
-	}
-
-	keys := make([]byte, 8)
-	var states [3]uint64
-
-	getHashValue := func(input int64) uint64 {
-		binary.LittleEndian.PutUint64(keys, uint64(input))
-		buf := append([]byte{0}, keys...)
-		if l := len(buf); l < 16 {
-			buf = append(buf, hashtable.StrKeyPadding[l:]...)
-		}
-		hashtable.BytesBatchGenHashStates(&buf, &states, 1)
-		return states[0]
+		return []int{0}
 	}
 
 	listMap := make(map[uint64]struct{})
 	for _, r := range pkRange {
+		if r[1]-r[0] > MAX_RANGE_SIZE {
+			return fullList()
+		}
 		for i := r[0]; i <= r[1]; i++ {
-			val := getHashValue(i)
+			keys := make([]byte, 8)
+			binary.LittleEndian.PutUint64(keys, uint64(i))
+			val := getHashValue(keys)
 			modVal := val % listLen
 			listMap[modVal] = struct{}{}
 			if len(listMap) == int(listLen) {
-				return list
+				return fullList()
 			}
 		}
 	}
-
-	returnList := make([]T, len(listMap))
-	var i = 0
+	dnList := make([]int, len(listMap))
+	i := 0
 	for idx := range listMap {
-		returnList[i] = list[idx]
-		i = i + 1
+		dnList[i] = int(idx)
+		i++
 	}
+	return dnList
+}
 
-	return returnList
+func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
+	zm := index.NewZoneMap(typ)
+	err := zm.Unmarshal(meta.Zonemap[colIdx][:])
+	if err != nil {
+		return false, err
+	}
+	return zm.Contains(data), nil
 }

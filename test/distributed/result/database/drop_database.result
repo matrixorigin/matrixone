@@ -1,0 +1,11 @@
+drop database if exists test01;
+drop database if exists drop_database;
+create database test01;
+drop database test01;
+show databases;
+Database
+mo_catalog
+system
+system_metrics
+mysql
+information_schema

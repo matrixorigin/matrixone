@@ -633,7 +633,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				pos = newPos
 				vars[i] = val
 
-			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
@@ -919,7 +919,15 @@ func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint6
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
-	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	if !math.IsInf(value, 0) {
+		mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	} else {
+		if math.IsInf(value, 1) {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("+Infinity")...)
+		} else {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("-Infinity")...)
+		}
+	}
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
@@ -1586,10 +1594,8 @@ func setColLength(column *MysqlColumn, width int32) {
 		column.length = 32
 	case defines.MYSQL_TYPE_DOUBLE:
 		column.length = 64
-	case defines.MYSQL_TYPE_VARCHAR:
-		column.length = uint32(width)
-	case defines.MYSQL_TYPE_STRING:
-		column.length = uint32(width)
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+		column.length = uint32(width) * 3
 	case defines.MYSQL_TYPE_DATE:
 		column.length = 64
 	case defines.MYSQL_TYPE_DATETIME:
@@ -1597,13 +1603,22 @@ func setColLength(column *MysqlColumn, width int32) {
 	case defines.MYSQL_TYPE_TIMESTAMP:
 		column.length = 64
 	case defines.MYSQL_TYPE_JSON:
-		column.length = 2147483647
+		column.length = math.MaxUint32
 	}
 }
 
 func setColFlag(column *MysqlColumn) {
 	if column.auto_incr {
 		column.flag |= AUTO_INCREMENT_FLAG
+	}
+}
+
+func setCharacter(column *MysqlColumn) {
+	switch column.columnType {
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+		column.SetCharset(0x21)
+	default:
+		column.SetCharset(0x3f)
 	}
 }
 
@@ -1796,7 +1811,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
@@ -1938,7 +1953,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfInt64(data, value)
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2
 			} else {

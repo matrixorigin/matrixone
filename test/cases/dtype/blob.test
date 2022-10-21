@@ -47,3 +47,9 @@ SELECT LENGTH(load_file("$resources/file_test/empty.txt"));
 SELECT SUBSTRING(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
 drop table t1;
 drop table t2;
+
+drop table if exists test;
+select hex( 0x01020304FFFFFFFF0000000CAACB0000);
+create table test(a blob);
+insert into test values(0x616162636465666768202122232425303132);
+select * from test;

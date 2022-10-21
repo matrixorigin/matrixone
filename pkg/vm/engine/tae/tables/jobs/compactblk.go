@@ -139,11 +139,10 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newBlkData := newMeta.GetBlockData()
-	blockFile := newBlkData.GetBlockFile()
 
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
-		blockFile,
+		newBlkData.GetFs(),
 		task.txn.GetStartTS(),
 		newMeta,
 		preparer.Columns)
@@ -153,10 +152,13 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(), task.txn.GetStartTS(),
-		ioTask.file.GetMeta().GetExtent(),
-		uint32(preparer.Columns.Length()))
-	logutil.Infof("node: %v", metaLoc)
+	metaLoc, err := blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+		ioTask.blocks[0].GetExtent(),
+		uint32(preparer.Columns.Length()),
+		ioTask.blocks)
+	if err != nil {
+		return err
+	}
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
@@ -171,7 +173,6 @@ func (task *compactBlockTask) Execute() (err error) {
 		var data *containers.Batch
 		var deletes *containers.Batch
 		aBlkData := aBlkMeta.GetBlockData()
-		aBlockFile := aBlkData.GetBlockFile()
 		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
 		if err != nil {
 			return
@@ -186,7 +187,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		}
 		ablockTask := NewFlushABlkTask(
 			tasks.WaitableCtx,
-			aBlockFile,
+			aBlkData.GetFs(),
 			task.txn.GetStartTS(),
 			aBlkMeta,
 			data,
@@ -198,15 +199,26 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
-			ablockTask.file.GetMeta().GetExtent(),
-			uint32(data.Length()))
+		var metaLocABlk string
+		metaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+			ablockTask.blocks[0].GetExtent(),
+			uint32(data.Length()),
+			ablockTask.blocks)
+		if err != nil {
+			return
+		}
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
 		if deletes != nil {
-			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(), task.txn.GetStartTS(),
-				ablockTask.file.GetDelta().GetExtent())
+			var deltaLocABlk string
+			deltaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+				ablockTask.blocks[1].GetExtent(),
+				0,
+				ablockTask.blocks)
+			if err != nil {
+				return
+			}
 			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
 				return err
 			}

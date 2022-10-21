@@ -63,7 +63,7 @@ func (c *clientWithRecord) Close() {
 }
 
 func (c *clientWithRecord) TryResize(size int) {
-	if c.record.Size() < size {
+	if len(c.record.Payload()) < size {
 		c.record = c.c.GetLogRecord(size)
 	}
 }

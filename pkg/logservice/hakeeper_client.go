@@ -40,6 +40,8 @@ type CNHAKeeperClient interface {
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error
 	// AllocateID allocate a globally unique ID
 	AllocateID(ctx context.Context) (uint64, error)
+	// GetClusterState queries the cluster state
+	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
 // DNHAKeeperClient is the HAKeeper client used by a DN store.
@@ -154,6 +156,22 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 			continue
 		}
 		return cd, err
+	}
+}
+
+func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CheckerState{}, err
+		}
+		s, err := c.client.getClusterState(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
 	}
 }
 
@@ -382,6 +400,17 @@ func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetai
 		return pb.ClusterDetails{}, err
 	}
 	return *resp.ClusterDetails, nil
+}
+
+func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, error) {
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_STATE,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return pb.CheckerState{}, err
+	}
+	return *resp.CheckerState, nil
 }
 
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {

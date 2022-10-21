@@ -18,7 +18,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
@@ -41,6 +40,7 @@ type Txn2PC interface {
 type TxnReader interface {
 	RLock()
 	RUnlock()
+	IsReplay() bool
 	Is2PC() bool
 	GetID() string
 	GetCtx() []byte
@@ -56,6 +56,7 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
+	GetMemo() *TxnMemo
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -67,10 +68,10 @@ type TxnHandle interface {
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
 	CreateDatabase(name string) (handle.Database, error)
+	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
-	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {
@@ -93,6 +94,9 @@ type TxnChanger interface {
 	SetCommitTS(cts types.TS) error
 	SetParticipants(ids []uint64) error
 	SetError(error)
+
+	CommittingInRecovery() error
+	CommitInRecovery() error
 }
 
 type TxnWriter interface {
@@ -214,10 +218,12 @@ type TxnStore interface {
 	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
+	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)
 	DropRelationByName(dbId uint64, name string) (handle.Relation, error)
 	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 
 	CreateDatabase(name string) (handle.Database, error)
+	CreateDatabaseWithID(name string, id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
@@ -240,12 +246,6 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
-
-	HasAnyTableDataChanges() bool
-	HasTableDataChanges(id uint64) bool
-	HasCatalogChanges() bool
-	GetDirtyTableByID(id uint64) *common.TableTree
-	GetDirty() *common.Tree
 }
 
 type TxnEntryType int16

@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -61,7 +64,17 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-	rand.Seed(time.Now().UnixNano())
+	if *httpListenAddr != "" {
+		go func() {
+			http.ListenAndServe(*httpListenAddr, nil)
+		}()
+	}
+
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
@@ -131,6 +144,9 @@ func startCNService(
 	fileService fileservice.FileService,
 	taskService taskservice.TaskService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
@@ -166,6 +182,9 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
+	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
@@ -222,8 +241,12 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
-	ServerType := strings.ToUpper(cfg.ServiceType)
-	switch ServerType {
+	ServiceType := strings.ToUpper(cfg.ServiceType)
+	nodeRole := ServiceType
+	if *launchFile != "" {
+		nodeRole = "ALL"
+	}
+	switch ServiceType {
 	case cnServiceType:
 		// validate node_uuid
 		var uuidErr error
@@ -243,14 +266,14 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
+		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = trace.Init(ctx,
 				trace.WithMOVersion(SV.MoVersion),
-				trace.WithNode(UUID, ServerType),
+				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
@@ -272,9 +295,30 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory),
+		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
+	}
+	if SV.MergeCycle > 0 {
+		stopper.RunNamedTask("merge", func(ctx context.Context) {
+			merge, inited := export.NewMergeService(ctx,
+				export.WithDB(metric.MetricDBConst),
+				export.WithTable(metric.SingleMetricTable),
+				export.WithFileService(fs),
+				export.WithMinFilesMerge(1),
+			)
+			if inited {
+				return
+			}
+			if merge == nil {
+				panic(moerr.NewInternalError("MergeService init failed."))
+			}
+			cycle := time.Duration(SV.MergeCycle) * time.Second
+			logutil.Infof("merge cycle: %v", cycle)
+			go merge.Start(cycle)
+			<-ctx.Done()
+			merge.Stop()
+		})
 	}
 	return nil
 }
