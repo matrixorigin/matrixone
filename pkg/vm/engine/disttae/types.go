@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -46,6 +47,7 @@ const (
 	MO_TABLE_ID_ACCOUNT_IDX       = 3
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
+	MO_PRIMARY_OFF                = 2
 )
 
 type DNStore = logservice.DNStore
@@ -77,7 +79,7 @@ type IDGenerator interface {
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, bat *api.Batch) error
+	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries []Entry) []BlockMeta
@@ -103,7 +105,6 @@ type Engine struct {
 type DB struct {
 	sync.RWMutex
 	dnMap      map[string]int
-	cli        client.TxnClient
 	metaTables map[string]Partitions
 	tables     map[[2]uint64]Partitions
 }
@@ -131,6 +132,7 @@ type Transaction struct {
 	// use for solving halloween problem
 	statementId uint64
 	meta        txn.TxnMeta
+	op          client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
@@ -211,11 +213,12 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	viewdef   string
-	comment   string
-	partition string
-	relKind   string
-	createSql string
+	primaryIdx int
+	viewdef    string
+	comment    string
+	partition  string
+	relKind    string
+	createSql  string
 }
 
 type column struct {
@@ -244,6 +247,7 @@ type blockReader struct {
 	blks     []BlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService
+	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
 }
 
@@ -252,4 +256,19 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
+}
+
+type BlockMeta struct {
+	info    catalog.BlockInfo
+	zonemap [][64]byte
+}
+
+type Columns []column
+
+func (cols Columns) Len() int           { return len(cols) }
+func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
+func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
+
+func (a BlockMeta) Eq(b BlockMeta) bool {
+	return a.info.BlockID == b.info.BlockID
 }

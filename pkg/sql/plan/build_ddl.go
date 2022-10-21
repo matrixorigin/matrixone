@@ -52,7 +52,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Headings))
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
 	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
 		cols[idx] = &plan.ColDef{
 			Name: query.Headings[idx],
@@ -283,6 +283,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
+						return moerr.NewNotSupported("blob type in primary key")
+					}
+					if colType.GetId() == int32(types.T_text) {
 						return moerr.NewNotSupported("text type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
@@ -438,6 +441,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	// for example, the text type don't support index
 	for _, str := range indexs {
 		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return moerr.NewNotSupported("blob type in index")
+		}
+		if colMap[str].Typ.Id == int32(types.T_text) {
 			return moerr.NewNotSupported("text type in index")
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
@@ -530,6 +536,42 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		},
 	})
 	return nil
+}
+
+func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
+	truncateTable := &plan.TruncateTable{}
+
+	truncateTable.Database = string(stmt.Name.SchemaName)
+	if truncateTable.Database == "" {
+		truncateTable.Database = ctx.DefaultDatabase()
+	}
+	truncateTable.Table = string(stmt.Name.ObjectName)
+	_, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+	} else {
+		isView := false
+		for _, def := range tableDef.Defs {
+			if _, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+				isView = true
+				break
+			}
+		}
+		if isView {
+			return nil, moerr.NewNoSuchTable(truncateTable.Database, truncateTable.Table)
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+				Definition: &plan.DataDefinition_TruncateTable{
+					TruncateTable: truncateTable,
+				},
+			},
+		},
+	}, nil
 }
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {

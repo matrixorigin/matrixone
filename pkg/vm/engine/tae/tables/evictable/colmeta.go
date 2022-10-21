@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -30,16 +29,18 @@ type ColumnMetaNode struct {
 	objectio.ColumnObject
 	Zonemap *index.ZoneMap
 	typ     types.Type
-	// used to load data
-	col     file.ColumnBlock
+	// the index number of the column
+	idx     uint16
 	metaloc string
+	fs      *objectio.ObjectFS
 }
 
-func NewColumnMetaNode(mgr base.INodeManager, metaKey string, col file.ColumnBlock, metaloc string, typ types.Type) *ColumnMetaNode {
+func NewColumnMetaNode(mgr base.INodeManager, metaKey string, fs *objectio.ObjectFS, idx uint16, metaloc string, typ types.Type) *ColumnMetaNode {
 	node := &ColumnMetaNode{
-		col:     col,
+		idx:     idx,
 		metaloc: metaloc,
 		typ:     typ,
+		fs:      fs,
 	}
 	_, ext, _ := blockio.DecodeMetaLoc(metaloc)
 	baseNode := buffer.NewNode(node, mgr, metaKey, uint64(ext.OriginSize()))
@@ -55,7 +56,11 @@ func (n *ColumnMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	meta := n.col.GetDataObject(n.metaloc)
+	reader, err := blockio.NewReader(n.fs, n.metaloc)
+	if err != nil {
+		panic(err)
+	}
+	meta := reader.GetDataObject(n.idx, nil)
 	n.ColumnObject = meta
 
 	// deserialize zonemap

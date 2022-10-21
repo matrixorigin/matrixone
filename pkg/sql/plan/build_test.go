@@ -740,6 +740,10 @@ func TestDdl(t *testing.T) {
 		"drop table if exists tpch.tbl_not_exist",
 		"drop table if exists db_not_exist.tbl",
 		"drop view v1",
+		"truncate nation",
+		"truncate tpch.nation",
+		"truncate table nation",
+		"truncate table tpch.nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -858,7 +862,7 @@ func TestResultColumns(t *testing.T) {
 		"show create table nation":  "Table,Create Table",
 		"show databases":            "Database",
 		"show tables":               "Tables_in_tpch",
-		"show columns from nation":  "Field,Type,Null,Key,Default,Comment",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Extra,Comment",
 	}
 	for sql, colsStr := range returnColumnsSQL {
 		cols := strings.Split(colsStr, ",")

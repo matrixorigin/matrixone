@@ -68,9 +68,9 @@ event_priv    VARCHAR    NO        NULL
 trigger_priv    VARCHAR    NO        NULL    
 create_tablespace_priv    VARCHAR    NO        NULL    
 ssl_type    VARCHAR    NO        NULL    
-ssl_cipher    TEXT    NO        NULL    
-x509_issuer    TEXT    NO        NULL    
-x509_subject    TEXT    NO        NULL    
+ssl_cipher    BLOB    NO        NULL    
+x509_issuer    BLOB    NO        NULL    
+x509_subject    BLOB    NO        NULL    
 max_questions    INT UNSIGNED    NO        NULL    
 max_updates    INT UNSIGNED    NO        NULL    
 max_connections    INT UNSIGNED    NO        NULL    
@@ -172,7 +172,7 @@ db    VARCHAR    YES        NULL
 command    VARCHAR    NO        NULL    
 time    INT    NO        NULL    
 state    VARCHAR    YES        NULL    
-info    TEXT    YES        NULL    
+info    BLOB    YES        NULL    
 show columns from `USER_PRIVILEGES`;
 no such table information_schema.USER_PRIVILEGES
 show columns from `SCHEMATA`;

@@ -18,21 +18,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type dataTable struct {
-	meta        *catalog.TableEntry
-	fileFactory file.SegmentFactory
-	bufMgr      base.INodeManager
-	aBlk        *dataBlock
+	meta   *catalog.TableEntry
+	bufMgr base.INodeManager
+	aBlk   *dataBlock
 }
 
-func newTable(meta *catalog.TableEntry, fileFactory file.SegmentFactory, bufMgr base.INodeManager) *dataTable {
+func newTable(meta *catalog.TableEntry, bufMgr base.INodeManager) *dataTable {
 	return &dataTable{
-		meta:        meta,
-		fileFactory: fileFactory,
-		bufMgr:      bufMgr,
+		meta:   meta,
+		bufMgr: bufMgr,
 	}
 }
 

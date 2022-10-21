@@ -20,13 +20,19 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"math"
+	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,9 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/simdcsv"
 	"github.com/pierrec/lz4"
-	"math"
-	"strconv"
-	"time"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -56,7 +59,7 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return err
 	}
 	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
@@ -65,7 +68,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}*/
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
-			param.End = true
+			param.Fileparam.End = true
 			return moerr.NewNotSupported("the jsonline format '%s' is not supported now", param.extern.JsonData)
 		}
 	}
@@ -74,29 +77,41 @@ func Prepare(proc *process.Process, arg any) error {
 	param.IgnoreLine = param.IgnoreLineTag
 	fileList, err := ReadDir(param.extern)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return err
 	}
 
 	if len(fileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
-		param.End = true
+		param.Fileparam.End = true
 	}
 	param.FileList = fileList
-	param.FileCnt = len(fileList)
+	param.extern.Filepath = ""
+	param.Fileparam.FileCnt = len(fileList)
 	return nil
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.End {
+	param.Fileparam.mu.Lock()
+	if param.Fileparam.End {
+		param.Fileparam.mu.Unlock()
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	param.extern.Filepath = param.FileList[param.FileIndex]
+	if param.extern.Filepath == "" {
+		if param.Fileparam.FileIndex >= len(param.FileList) {
+			param.Fileparam.mu.Unlock()
+			proc.SetInputBatch(nil)
+			return true, nil
+		}
+		param.extern.Filepath = param.FileList[param.Fileparam.FileIndex]
+		param.Fileparam.FileIndex++
+	}
+	param.Fileparam.mu.Unlock()
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
-		param.End = true
+		param.Fileparam.End = true
 		return false, err
 	}
 	proc.SetInputBatch(bat)
@@ -104,24 +119,51 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
-	dir, pattern := path.Split(param.Filepath)
-	fs, readPath, err := fileservice.GetForETL(param.FileService, dir+"/")
-	if err != nil {
-		return nil, err
-	}
 	ctx := context.TODO()
-	entries, err := fs.List(ctx, readPath)
-	if err != nil {
-		return nil, err
+
+	filePath := strings.TrimSpace(param.Filepath)
+	pathDir := strings.Split(filePath, "/")
+	l := list.New()
+	if pathDir[0] == "" {
+		l.PushBack("/")
+	} else {
+		l.PushBack(pathDir[0])
 	}
-	for _, entry := range entries {
-		matched, _ := path.Match(pattern, entry.Name)
-		if !matched {
-			continue
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := fs.List(ctx, readPath)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, _ := filepath.Match(pathDir[i], entry.Name)
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+			}
+			l.Remove(l.Front())
 		}
-		fileList = append(fileList, path.Join(dir, entry.Name))
 	}
-	return
+	len := l.Len()
+	for j := 0; j < len; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+	}
+	return fileList, err
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
@@ -207,6 +249,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
+		vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -314,7 +357,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
@@ -326,10 +369,13 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 		plh.simdCsvReader.Close()
 		param.plh = nil
-		param.FileIndex++
-		if param.FileIndex >= param.FileCnt {
-			param.End = true
+		param.Fileparam.mu.Lock()
+		param.Fileparam.FileFin++
+		param.extern.Filepath = ""
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
 		}
+		param.Fileparam.mu.Unlock()
 	}
 	if param.IgnoreLine != 0 {
 		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
@@ -437,7 +483,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		}
 		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
@@ -657,7 +703,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -754,6 +800,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_uuid:
+			cols := vector.MustTCols[types.Uuid](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseUuid(field)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not uuid type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}

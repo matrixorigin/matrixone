@@ -16,25 +16,26 @@ package jobs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type flushBlkTask struct {
 	*tasks.BaseTask
-	data *containers.Batch
-	meta *catalog.BlockEntry
-	file file.Block
-	ts   types.TS
+	data   *containers.Batch
+	meta   *catalog.BlockEntry
+	fs     *objectio.ObjectFS
+	ts     types.TS
+	blocks []objectio.BlockObject
 }
 
 func NewFlushBlkTask(
 	ctx *tasks.Context,
-	bf file.Block,
+	fs *objectio.ObjectFS,
 	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
@@ -43,7 +44,7 @@ func NewFlushBlkTask(
 		ts:   ts,
 		data: data,
 		meta: meta,
-		file: bf,
+		fs:   fs,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -52,15 +53,15 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
-	defer task.file.FreeWriter()
 	name := blockio.EncodeBlkName(task.meta.AsCommonID(), task.ts)
-	task.file.UpdateName(name)
-	block, err := task.file.WriteBatch(task.data, task.ts)
+	writer := blockio.NewWriter(task.fs, name)
+	block, err := writer.WriteBlock(task.data)
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, true); err != nil {
+	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta, task.data, true); err != nil {
 		return err
 	}
-	return task.file.Sync()
+	task.blocks, err = writer.Sync()
+	return err
 }

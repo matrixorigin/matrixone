@@ -74,6 +74,18 @@ func TestLikeVarchar(t *testing.T) {
 			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
+		{
+			name:      "TEST08",
+			vecs:      makeLikeVectors("**", "*", true, true),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			wantBytes: []bool{false},
+		},
+		{
+			name:      "TEST09",
+			vecs:      makeLikeVectors("*", "*", true, true),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			wantBytes: []bool{true},
+		},
 	}
 
 	for _, c := range cases {
@@ -143,6 +155,27 @@ func TestLikeVarchar2(t *testing.T) {
 			vecs:       makeLikeVectors("hello@world", "hello_world", false, true),
 			proc:       procs,
 			wantBytes:  []bool{true},
+			wantScalar: false,
+		},
+		{
+			name:       "TEST08",
+			vecs:       makeLikeVectors("a", "a", false, true),
+			proc:       procs,
+			wantBytes:  []bool{true},
+			wantScalar: false,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeLikeVectors("*", "*", false, true),
+			proc:       procs,
+			wantBytes:  []bool{true},
+			wantScalar: false,
+		},
+		{
+			name:       "TEST10",
+			vecs:       makeLikeVectors("*/", "*", false, true),
+			proc:       procs,
+			wantBytes:  []bool{false},
 			wantScalar: false,
 		},
 	}

@@ -3,7 +3,7 @@
 -- @case
 -- @desc:Test prepared statements with signed and unsigned integer user variables
 -- @label:bvt
-
+set time_zone="+08:00";
 drop table if exists numbers;
 CREATE TABLE numbers
 (pk INTEGER PRIMARY KEY,
@@ -15,9 +15,7 @@ INSERT INTO numbers VALUES
 (0, 0, -9223372036854775808), (1, 18446744073709551615, 9223372036854775807);
 
 
--- @bvt:issue#4491
 SET @ui_min = CAST(0 AS UNSIGNED);
--- @bvt:issue
 
 SET @ui_min = 0;
 SET @ui_max = 18446744073709551615;
@@ -157,25 +155,19 @@ create table t2 (
     time3 TIMESTAMP
 );
 
--- @bvt:issue#4510
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
 insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
--- @bvt:issue
 
--- @bvt:issue#3703
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
--- @bvt:issue
 
 insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:01.000000');
 insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
 insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:01.000000');
 
--- @bvt:issue#4510
 select * from t2;
--- @bvt:issue
 
 set @max_date='9999-12-31';
 set @min_date='1000-01-01';
@@ -189,9 +181,7 @@ set @min_timestamp='2038-01-19 03:14:07.999999';
 prepare s1 from 'select * from t2 where time1=?';
 
 execute s1 using @max_date;
--- @bvt:issue#4604
 execute s1 using @min_date;
--- @bvt:issue
 execute s1 using @max_datetime;
 execute s1 using @min_datetime;
 execute s1 using @max_timestamp;
@@ -205,9 +195,7 @@ prepare s2 from 'select * from t2 where time2=?';
 execute s2 using @max_date;
 execute s2 using @min_date;
 execute s2 using @max_datetime;
--- @bvt:issue#4604
 execute s2 using @min_datetime;
--- @bvt:issue
 execute s2 using @max_timestamp;
 execute s2 using @min_timestamp;
 
@@ -240,9 +228,7 @@ execute s4 using @time1;
 execute s5 using @time2;
 execute s6 using @time3;
 
--- @bvt:issue#4510
 select * from t2;
--- @bvt:issue
 
 DEALLOCATE PREPARE s4;
 DEALLOCATE PREPARE s5;

@@ -96,20 +96,3 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	}
 	panic(any("Key not found"))
 }
-
-func (rel *txnRelation) Truncate(ctx context.Context) (uint64, error) {
-	rows, err := rel.Rows(ctx)
-	if err != nil {
-		return 0, err
-	}
-	name := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
-	db, err := rel.handle.GetDB()
-	if err != nil {
-		return 0, err
-	}
-	_, err = db.TruncateByName(name)
-	if err != nil {
-		return 0, err
-	}
-	return uint64(rows), nil
-}

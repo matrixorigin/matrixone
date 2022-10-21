@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package tree
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-)
+// truncate table statement
+type TruncateTable struct {
+	statementImpl
+	Name *TableName
+}
 
-type Segment interface {
-	Base
-	Name() string
-	OpenBlock(id uint64, colCnt int) (Block, error)
-	String() string
-	GetFs() *objectio.ObjectFS
+func NewTruncateTable(name *TableName) *TruncateTable {
+	return &TruncateTable{Name: name}
+}
+
+func (node *TruncateTable) Format(ctx *FmtCtx) {
+	ctx.WriteString("truncate table")
+	ctx.WriteByte(' ')
+	node.Name.Format(ctx)
 }

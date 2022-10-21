@@ -42,7 +42,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/log1"
+data-dir = "mo-data/etl"
 
 [observability]
 statusPort = 7001
