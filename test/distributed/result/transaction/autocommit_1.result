@@ -1,0 +1,535 @@
+SELECT @@session.autocommit;
+@@autocommit
+on
+SET @@session.autocommit=1;
+SELECT @@session.autocommit;
+@@autocommit
+1
+SET @@session.autocommit= 0;
+SELECT @@session.autocommit;
+@@autocommit
+0
+SET @@session.autocommit=OFF;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+0
+SET @@session.autocommit=ON;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+0
+SET @@session.autocommit=foo;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+0
+commit;
+SET @@session.autocommit=OFF;
+SELECT @@session.autocommit;
+@@autocommit
+0
+commit;
+SET @@session.autocommit=ON;
+SELECT @@session.autocommit;
+@@autocommit
+1
+commit;
+SET @@session.autocommit=foo;
+internal error: convert to the system variable bool type failed
+SELECT @@session.autocommit;
+@@autocommit
+1
+commit;
+set autocommit=0;
+select @@autocommit;
+@@autocommit
+0
+commit;
+drop database if exists db;
+create database db;
+show databases like 'db';
+Database
+db
+use db;
+create table tab1(a int, b int);
+create index index_tab1 on tab1(a);
+not supported: statement: 'create index index_tab1 on tab1 (a)'
+create view view_tab1 as select * from tab1;
+insert into tab1 values (2000, 3000);
+rollback;
+drop database if exists db;
+create database db;
+show databases like 'db';
+Database
+db
+use db;
+create table tab1(a int, b int);
+create index index_tab1 on tab1(a);
+not supported: statement: 'create index index_tab1 on tab1 (a)'
+insert into tab1 values (2000, 3000);
+insert into tab1 values (10, 10);
+commit;
+select * from tab1;
+a	b
+2000	3000
+10	10
+update tab1 set a=100000 where b=3000;
+select * from tab1;
+a	b
+100000	3000
+10	10
+rollback;
+select * from tab1;
+a	b
+2000	3000
+10	10
+update tab1 set a=100000 where b=3000;
+commit;
+select * from tab1;
+a	b
+10	10
+100000	3000
+delete from tab1 where a=10;
+rollback;
+select * from tab1;
+a	b
+10	10
+100000	3000
+delete from tab1 where a=10;
+commit;
+select * from tab1;
+a	b
+100000	3000
+create view view_tab1 as select * from tab1;
+select * from view_tab1;
+a	b
+100000	3000
+insert into view_tab1 values (200, 300);
+invalid input: cannot insert into view 'view_tab1'
+insert into view_tab1 values (10, 10);
+invalid input: cannot insert into view 'view_tab1'
+commit;
+select * from view_tab1;
+a	b
+100000	3000
+update view_tab1 set a=100000 where b=3000;
+internal error: view is not support update operation
+select * from view_tab1;
+a	b
+100000	3000
+rollback;
+select * from view_tab1;
+a	b
+100000	3000
+update view_tab1 set a=100000 where b=3000;
+internal error: view is not support update operation
+commit;
+select * from view_tab1;
+a	b
+100000	3000
+delete from view_tab1 where a=10;
+invalid input: cannot delete from view
+rollback;
+select * from view_tab1;
+a	b
+100000	3000
+delete from view_tab1 where a=10;
+invalid input: cannot delete from view
+commit;
+select * from view_tab1;
+a	b
+100000	3000
+commit;
+drop database db;
+use autocommit_1;
+commit;
+drop table if exists t1;
+create table t1(col1 varchar(255));
+insert into t1 values ('helloworld');
+rollback;
+select * from t1;
+SQL parser error: table "t1" does not exist
+commit;
+drop table if exists t2;
+create table t2 (a varchar(255));
+insert into t2 values ('hello');
+commit;
+select * from t2;
+a
+hello
+commit;
+drop table t2;
+drop table if exists t3;
+create table t3(a int);
+insert into t3 values (10),(20),(30);
+set @@autocommit=ON;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=OFF;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=1;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=0;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+rollback;
+drop table if exists tab3;
+create table tab3 (a int, b varchar(25));
+insert into tab3 values (10, 'aa'),(20, 'bb'),(30, 'cc');
+set @@autocommit=ON;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=OFF;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=1;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+select @@autocommit;
+@@autocommit
+0
+set @@autocommit=0;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+commit;
+select * from tab3;
+a	b
+10	aa
+20	bb
+30	cc
+update tab3 set a=1000 where b='aa';
+select * from tab3;
+a	b
+20	bb
+30	cc
+1000	aa
+rollback;
+delete from tab3 where b='cc';
+select * from tab3;
+a	b
+10	aa
+20	bb
+commit;
+select * from tab3;
+a	b
+10	aa
+20	bb
+commit;
+drop table tab3;
+drop table if exists t4;
+create table t4(a varchar(225), b int);
+insert into t4 values ('aa', 1000),('bb', 2000);
+begin;
+select * from t4;
+a	b
+aa	1000
+bb	2000
+update t4 set a='xxxx' where b=1000;
+select * from t4;
+a	b
+xxxx	1000
+bb	2000
+rollback;
+select * from t4;
+a	b
+aa	1000
+bb	2000
+update t4 set a='xxxx' where b=1000;
+select * from t4;
+a	b
+bb	2000
+xxxx	1000
+commit;
+select * from t4;
+a	b
+bb	2000
+xxxx	1000
+create view view_t4 as select * from t4;
+begin;
+select * from view_t4;
+a	b
+bb	2000
+xxxx	1000
+delete from t4 where a='bb';
+rollback;
+select * from t4;
+a	b
+bb	2000
+xxxx	1000
+select * from view_t4;
+a	b
+bb	2000
+xxxx	1000
+commit;
+set autocommit=1;
+select @@autocommit;
+@@autocommit
+1
+drop database if exists test_xx;
+begin;
+create database test_xx;
+SET @@session.autocommit=1;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+1
+SET @@session.autocommit= 0;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+1
+SET @@session.autocommit=OFF;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+1
+SET @@session.autocommit=ON;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+SELECT @@session.autocommit;
+@@autocommit
+1
+commit;
+show databases like 'test_xx';
+Database
+test_xx
+commit;
+drop database test_xx;
+drop database if exists db;
+begin;
+create database db;
+show databases like 'db';
+Database
+db
+use db;
+create table table3(a int, b int);
+create index index_table3 on tab1(a);
+not supported: statement: 'create index index_table3 on tab1 (a)'
+insert into table3 values (2000, 3000);
+create view view_table3 as select * from table3;
+select * from table3;
+a	b
+2000	3000
+select * from view_table3;
+a	b
+2000	3000
+rollback;
+select * from table3;
+SQL parser error: table "table3" does not exist
+select * from view_table3;
+SQL parser error: table "view_table3" does not exist
+drop database if exists db;
+begin;
+create database db;
+show databases like 'db';
+Database
+db
+use db;
+create table table3(a int, b int);
+create index index_table3 on table3(a);
+not supported: statement: 'create index index_table3 on table3 (a)'
+insert into table3 values (2000, 3000);
+insert into table3 values (10, 10);
+commit;
+select * from table3;
+a	b
+2000	3000
+10	10
+begin;
+update table3 set a=100000 where b=3000;
+select * from table3;
+a	b
+10	10
+100000	3000
+rollback;
+select * from table3;
+a	b
+2000	3000
+10	10
+begin;
+update table3 set a=100000 where b=3000;
+commit;
+select * from table3;
+a	b
+10	10
+100000	3000
+begin;
+delete from table3 where a=10;
+rollback;
+select * from table3;
+a	b
+10	10
+100000	3000
+begin;
+delete from table3 where a=10;
+commit;
+select * from table3;
+a	b
+100000	3000
+drop table if exists t3;
+start transaction;
+create table t3 (b varchar(255));
+insert into t3 values ('helloworld');
+rollback ;
+select * from t3;
+SQL parser error: table "t3" does not exist
+drop table if exists t4;
+start transaction;
+create table t4 (a int);
+insert into t4 values (10),(20);
+commit;
+select * from t4;
+a
+10
+20
+drop table t4;
+drop table if exists t5;
+start transaction;
+create table t5(a int);
+insert into t5 values(10),(20),(30);
+drop table t5;
+internal error: Only CREATE of DDL is supported in transactions
+start transaction;
+insert into t5 values(100),(2000),(3000);
+set @autocommit=0;
+internal error: Uncommitted transaction exists. Please commit or rollback first.
+begin;
+select * from t5;
+a
+10
+20
+30
+100
+2000
+3000
+insert into t5 values(1),(2),(3);
+rollback;
+select * from t5;
+a
+10
+20
+30
+100
+2000
+3000
+begin;
+select * from t5;
+a
+10
+20
+30
+100
+2000
+3000
+insert into t5 values(100),(2000),(3000);
+delete from t5;
+begin;
+select * from t5;
+a
+rollback;
+select * from t5;
+a
+drop table t5
+start transaction;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 6 near "
+start transaction;";
+set @@a=0;
+internal error: the system variable does not exist
+rollback;
+set @@b=0;
+internal error: the system variable does not exist
+commit;
+select @@b;
+internal error: the system variable does not exist
+drop database if exists db;
+create database db;
+show databases like 'db';
+Database
+db
+use db;
+create table t6(a int, b int);
+create index index_t6 on t6(a);
+not supported: statement: 'create index index_t6 on t6 (a)'
+insert into t6 values (2000, 3000);
+insert into t6 values (10, 10);
+select * from t6;
+a	b
+2000	3000
+10	10
+update t6 set a=100000 where b=3000;
+select * from t6;
+a	b
+10	10
+100000	3000
+delete from t6 where a=10;
+select * from t6;
+a	b
+100000	3000
+create view view_t6 as select * from t6;
+select * from view_t6;
+a	b
+100000	3000
+insert into view_t6 values (200, 300);
+insert into view_t6 values (10, 10);
+select * from view_t6;
+a	b
+100000	3000
+update view_t6 set a=100000 where b=3000;
+missing FROM-clause entry for table "view_t6"
+select * from view_t6;
+a	b
+100000	3000
+delete from view_t6 where a=10;
+missing FROM-clause entry for table "view_t6"
+select * from view_t6;
+a	b
+100000	3000
+drop database db;
+use autocommit_1;
+set @@autocommit=0;
+select @@autocommit;
+@@autocommit
+0
+create table t7(a int);
+insert into t7 values (500);
+commit;
+begin;
+insert into t7 values (1000);
+commit;
+insert into t7 values (2000);
+rollback;
+select * from t7;
+a
+500
+1000
+drop table t7;
+internal error: Only CREATE of DDL is supported in transactions
+commit;
+drop table t7;
+create table t8(a int);
+insert into t8 values (500);
+rollback;
+begin;
+insert into t8 values (1000);
+invalid input: insert table is invalid 't8'
+create table t9 (a char(25));
+commit;
+insert into t9 values ('hello');
+rollback;
+select * from t9;
+a
+commit;
+drop table t9;
+set @@autocommit=on;

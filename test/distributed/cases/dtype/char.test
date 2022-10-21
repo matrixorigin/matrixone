@@ -1,0 +1,207 @@
+-- @suite                                                                                                                                                                                
+-- @case
+-- @desc:test for char datatype
+-- @label:bvt
+
+#Test cases of  query without tables
+select 'test',"test";
+select 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+-- @bvt:issue#3247
+SELECT CONCAT_WS(2,' test');
+-- @bvt:issue
+SELECT 38.8, CAST(38.8 AS CHAR);
+SELECT '9223372036854775807' = 9223372036854775807;
+SELECT '9223372036854775807' = "9223372036854775807";
+SELECT CAST('9223372036854775807' AS UNSIGNED) = 9223372036854775806;
+SELECT CAST("2017-08-29" AS DATE);
+SELECT CAST(150 AS CHAR);
+SELECT CAST(5-10 AS CHAR);
+SELECT CONCAT_WS('My', 'S', 'QL');
+SELECT CONCAT_WS('My', NULL, 'QL');
+-- @bvt:issue#3247
+SELECT CONCAT_WS(14,'.3');
+-- @bvt:issue
+SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));
+
+#Test cases of query with single table and operators
+drop table if exists t1;
+create table t1 (a char(10));
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by a desc;
+select * from t1 where a not like 'a%' order by 1 asc;
+select * from t1 where a like "\__cdef" order by 1 desc;
+select * from t1 where a not like "%d_\_";
+CREATE TABLE Demochar
+(
+LastName char(10) primary key,
+FirstName char(10),
+Gender char(1),
+DepartmentName char(20),
+Age int
+);
+INSERT INTO Demochar VALUES('Gilbert', 'Kevin','M','Tool Design',33);
+INSERT INTO Demochar VALUES('Tamburello', 'Andrea','F','Marketing',45);
+INSERT INTO Demochar VALUES('Johnson', 'David','M','Engineering',66);
+INSERT INTO Demochar VALUES('Sharma', 'Bradley','M','Production',27);
+INSERT INTO Demochar VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
+INSERT INTO Demochar VALUES('Martin', 'Kelly','F','Information Services',54);
+INSERT INTO Demochar VALUES('Poland', 'Carole','F','Production Control',29);
+SELECT * FROM Demochar;
+select concat_ws(LastName,FirstName) from Demochar where Age > 40 order by 1 asc;
+select concat_ws(LastName,FirstName) as fullname from Demochar where Age > 40 order by fullname desc;
+select concat_ws(LastName,FirstName),Gender,Age from Demochar where Gender='F' order by Age asc;
+select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_' order by 1;
+-- @bvt:issue#3252
+select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge asc;
+-- @bvt:issue
+CREATE TABLE employees (
+  employeeNumber int(11) NOT NULL,
+  lastName char(50) NOT NULL,
+  firstName char(50) NOT NULL,
+  extension char(10) NOT NULL,
+  email char(100) NOT NULL,
+  officeCode char(10) NOT NULL,
+  reportsTo int(11) DEFAULT NULL,
+  jobTitle char(50) NOT NULL,
+  PRIMARY KEY (employeeNumber)
+  );
+insert  into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values 
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing'),
+(1088,'Patterson','William','x4871','wpatterson@classicmodelcars.com','6',1056,'Sales Manager (APAC)'),
+(1102,'Bondur','Gerard','x5408','gbondur@classicmodelcars.com','4',1056,'Sale Manager (EMEA)'),
+(1143,'Bow','Anthony','x5428','abow@classicmodelcars.com','1',1056,'Sales Manager (NA)'),
+(1165,'Jennings','Leslie','x3291','ljennings@classicmodelcars.com','1',1143,'Sales Rep'),
+(1166,'Thompson','Leslie','x4065','lthompson@classicmodelcars.com','1',1143,'Sales Rep'),
+(1188,'Firrelli','Julie','x2173','jfirrelli@classicmodelcars.com','2',1143,'Sales Rep'),
+(1216,'Patterson','Steve','x4334','spatterson@classicmodelcars.com','2',1143,'Sales Rep'),
+(1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
+(1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
+(1337,'Bondur','Loui','x6493','lbondur@classicmodelcars.com','4',1102,'Sales Rep'),
+(1370,'Hernandez','Gerard','x2028','ghernande@classicmodelcars.com','4',1102,'Sales Rep'),
+(1401,'Castillo','Pamela','x2759','pcastillo@classicmodelcars.com','4',1102,'Sales Rep'),
+(1501,'Bott','Larry','x2311','lbott@classicmodelcars.com','7',1102,'Sales Rep'),
+(1504,'Jones','Barry','x102','bjones@classicmodelcars.com','7',1102,'Sales Rep'),                                                                                                        
+(1611,'Fixter','Andy','x101','afixter@classicmodelcars.com','6',1088,'Sales Rep');
+select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2 order by 1 asc,2 desc;
+select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1;
+select max(lastName),min(lastName) from employees;
+select max(lastName),min(lastName),JobTitle from employees group by JobTitle;
+select lastName,firstName from employees where lastName>=firstName;
+select lastName,firstName from employees where lastName between firstName and JobTitle;
+select * from employees where officeCode in ('2','3','4') order by 1 asc,3 desc limit 1,2;
+select * from employees where officeCode not in ('5','7','1');
+select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
+select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
+#Test cases of query with multi tables
+create table job(
+jobid int primary key,
+jobTitle char(50)
+);
+insert into job values
+(1,'President'),
+(2,'VP Sales'),
+(3,'VP Marketing'),
+(4,'Sales Manager (APAC)'),
+(5,'Sale Manager (EMEA)'),
+(6,'Sales Manager (NA)'),
+(7,'Sales Rep'),
+(8,'Marketing');
+select employeeNumber,e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle;
+select distinct e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle;
+select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by e.jobTitle having sum(jobid)>5;
+select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by e.jobTitle having sum(jobid)>5 order by 2 desc;
+
+
+#Test cases of update with single table
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a char(3), b int primary key);
+INSERT INTO t1 VALUES ('1',1),('1',2);
+-- @ignore{
+update t1 set a=2 where a='1' limit 1;
+select * from t1;
+INSERT INTO t1 VALUES ('1',3);
+update t1 set a='a' where a='1';
+select * from t1;
+-- @ignore}
+drop table t1;
+create table t1 (
+a char(10) not null,
+b char(10) not null default '0',
+c char(10) not null default '0',
+d char(10) not null default '0',
+e char(10) not null default '0',
+f char(10) not null default '0',
+g char(10) not null default '0',
+h char(10) not null default '0',
+i char(10) not null default '0',
+j char(10) not null default '0',
+primary key (a));
+insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
+-- @bvt:issue#3245
+update t1 set a=a+'101';
+select a,b from t1;
+-- @bvt:issue
+update t1 set a='127' where a='25';
+select a,b from t1;
+-- @bvt:issue#3245
+update t1 set a=a+'a' where 1 > 2;
+select a,b from t1;
+update t1 set a=a+a where 3 > 2;
+select a,b from t1;
+-- @bvt:issue
+drop table t1;
+create table t1 (a char(10) primary key, b char(32));
+insert into t1 values ('abc','apple'), ('ab','apple');
+select * from t1;
+
+#Test cases of delete with single table
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a char(3), b char(5) primary key);
+INSERT INTO t1 VALUES ('1','1'),('1','2');
+delete from t1 where a=1 limit 1;
+select * from t1;
+INSERT INTO t1 VALUES ('1','3');
+delete from t1 where a=1;
+select * from t1;
+drop table t1;
+create table t1 (
+a char(10) not null,
+b char(10) not null default '0',
+c char(10) not null default '0',
+d char(10) not null default '0',
+e char(10) not null default '0',
+f char(10) not null default '0',
+g char(10) not null default '0',
+h char(10) not null default '0',
+i char(10) not null default '0',
+j char(10) not null default '0',
+primary key (a));
+insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
+delete from t1 where a=2+2;
+select a,b from t1;
+delete from t1 where  a=24;
+select a,b from t1;
+delete from t1 where  3 < 2;
+select a,b from t1;
+delete from t1 where  1 < 2;
+select a,b from t1;
+drop table t1;
+create table t1 (a char(10) primary key, b char(32));
+insert into t1 values ('abc','apple'), ('ab','apple');
+select * from t1;
