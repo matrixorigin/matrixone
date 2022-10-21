@@ -211,6 +211,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	moSchema["mo_database"] = &Schema{
 		cols: []col{
 			{"datname", types.T_varchar, false, 50, 0},
+			{"account_id", types.T_uint32, false, 0, 0},
 		},
 	}
 	moSchema["mo_tables"] = &Schema{
@@ -218,6 +219,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"reldatabase", types.T_varchar, false, 50, 0},
 			{"relname", types.T_varchar, false, 50, 0},
 			{"relkind", types.T_varchar, false, 50, 0},
+			{"account_id", types.T_uint32, false, 0, 0},
 		},
 	}
 	moSchema["mo_columns"] = &Schema{
@@ -232,6 +234,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"att_constraint_type", types.T_char, false, 1, 0},
 			{"att_default", types.T_varchar, false, 1024, 0},
 			{"att_comment", types.T_varchar, false, 1024, 0},
+			{"account_id", types.T_uint32, false, 0, 0},
 		},
 	}
 
@@ -353,6 +356,10 @@ func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *Co
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	return m.costs[obj.ObjName]
+}
+
+func (m *MockCompilerContext) GetAccountId() uint32 {
+	return 0
 }
 
 type MockOptimizer struct {
