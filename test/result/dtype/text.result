@@ -239,3 +239,62 @@ ab_def
 abc_ef
 abcd_f
 drop table t1;
+
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+create table t1 (a blob);
+create table t2 (a int);
+create table t3 (a varchar(20));
+create table t4 (a text);
+insert into t1 values('abc');
+insert into t1 values(0x6161);
+insert into t1 values(NULL);
+insert into t3 select * from t1;
+insert into t4 select * from t1;
+select * from t3;
+a
+abc
+aa
+null
+select * from t4;
+a
+abc
+aa
+null
+delete from t1;
+insert into t1 values(0x3132);
+insert into t2 select * from t1;
+select * from t2;
+a
+12
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+create table t1 (a text);
+create table t2 (a int);
+create table t3 (a varchar(20));
+create table t4 (a blob);
+insert into t1 values('abc');
+insert into t1 values(0x6161);
+insert into t1 values(NULL);
+insert into t3 select * from t1;
+insert into t4 select * from t1;
+select * from t3;
+a
+abc
+aa
+null
+select * from t4;
+a
+abc
+aa
+null
+delete from t1;
+insert into t1 values('12');
+insert into t2 select * from t1;
+select * from t2;
+a
+12

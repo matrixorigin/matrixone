@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -389,6 +390,12 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	bat.Shrink(sels)
 	txn.proc.Mp().PutSels(sels)
 	return bat
+}
+
+func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return txn.idGen.AllocateID(ctx)
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
