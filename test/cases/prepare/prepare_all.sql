@@ -3,7 +3,7 @@
 -- @case
 -- @desc:Test prepared statements with signed and unsigned integer user variables
 -- @label:bvt
-
+set time_zone="+08:00";
 drop table if exists numbers;
 CREATE TABLE numbers
 (pk INTEGER PRIMARY KEY,
