@@ -43,12 +43,12 @@ func (visitor *stringVisitor) VisitTable(dbID, id uint64) (err error) {
 }
 
 func (visitor *stringVisitor) VisitSegment(dbID, tableID, id uint64) (err error) {
-	_, _ = visitor.buf.WriteString(fmt.Sprintf("\n[SEG-%d]", id))
+	_, _ = visitor.buf.WriteString(fmt.Sprintf("\nTree-SEG[%d]", id))
 	return
 }
 
 func (visitor *stringVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
-	_, _ = visitor.buf.WriteString(fmt.Sprintf(" BLK-%d", id))
+	_, _ = visitor.buf.WriteString(fmt.Sprintf(" BLK[%d]", id))
 	return
 }
 
@@ -192,12 +192,32 @@ func (tree *Tree) AddBlock(dbID, tableID, segID, id uint64) {
 	tree.Tables[tableID].AddBlock(segID, id)
 }
 
+func (tree *Tree) Shrink(tableID uint64) (empty bool) {
+	delete(tree.Tables, tableID)
+	empty = tree.IsEmpty()
+	return
+}
+
 func (tree *Tree) GetSegment(tableID, segID uint64) *SegmentTree {
 	table := tree.GetTable(tableID)
 	if table == nil {
 		return nil
 	}
 	return table.GetSegment(segID)
+}
+
+func (tree *Tree) Compact() (empty bool) {
+	toDelete := make([]uint64, 0)
+	for id, table := range tree.Tables {
+		if table.Compact() {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(tree.Tables, id)
+	}
+	empty = tree.IsEmpty()
+	return
 }
 
 func (tree *Tree) Merge(ot *Tree) {
@@ -263,6 +283,30 @@ func (ttree *TableTree) AddSegment(id uint64) {
 func (ttree *TableTree) AddBlock(segID, id uint64) {
 	ttree.AddSegment(segID)
 	ttree.Segs[segID].AddBlock(id)
+}
+
+func (ttree *TableTree) IsEmpty() bool {
+	return len(ttree.Segs) == 0
+}
+
+func (ttree *TableTree) Shrink(segID uint64) (empty bool) {
+	delete(ttree.Segs, segID)
+	empty = len(ttree.Segs) == 0
+	return
+}
+
+func (ttree *TableTree) Compact() (empty bool) {
+	toDelete := make([]uint64, 0)
+	for id, seg := range ttree.Segs {
+		if len(seg.Blks) == 0 {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(ttree.Segs, id)
+	}
+	empty = len(ttree.Segs) == 0
+	return
 }
 
 func (ttree *TableTree) Merge(ot *TableTree) {
@@ -409,6 +453,16 @@ func (stree *SegmentTree) WriteTo(w io.Writer) (n int64, err error) {
 		n += 8
 	}
 	return
+}
+
+func (stree *SegmentTree) Shrink(id uint64) (empty bool) {
+	delete(stree.Blks, id)
+	empty = len(stree.Blks) == 0
+	return
+}
+
+func (stree *SegmentTree) IsEmpty() bool {
+	return len(stree.Blks) == 0
 }
 
 func (stree *SegmentTree) ReadFrom(r io.Reader) (n int64, err error) {

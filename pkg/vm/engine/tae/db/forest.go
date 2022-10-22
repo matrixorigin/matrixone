@@ -166,6 +166,9 @@ func (d *dirtyForest) tryShrink() {
 		if err := d.tryShrinkATree(d.visitor, item.tree); err != nil {
 			logutil.Warnf("error: visitor on dirty tree: %v", err)
 		}
+		if item.tree.IsEmpty() {
+			forestToDelete = append(forestToDelete, item)
+		}
 		return true
 	})
 
@@ -182,39 +185,39 @@ func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tre
 		seg *catalog.SegmentEntry
 		blk *catalog.BlockEntry
 	)
-	for id, tblDirty := range tree.Tables {
+	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
-		if len(tblDirty.Segs) == 0 {
-			delete(tree.Tables, id)
-			return
-		}
-		if db, err = d.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-				err = nil
-				delete(tree.Tables, id)
-				continue
-			}
-			return
-		}
-		if tbl, err = db.GetTableEntryByID(tblDirty.ID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-				err = nil
-				delete(tree.Tables, id)
-				continue
-			}
-			return
+		if dirtyTable.Compact() {
+			tree.Shrink(id)
+			continue
 		}
 
-		for id, dirtySeg := range tblDirty.Segs {
+		if db, err = d.catalog.GetDatabaseByID(dirtyTable.DbID); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+				tree.Shrink(id)
+				err = nil
+				continue
+			}
+			break
+		}
+		if tbl, err = db.GetTableEntryByID(dirtyTable.ID); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+				tree.Shrink(id)
+				err = nil
+				continue
+			}
+			break
+		}
+
+		for id, dirtySeg := range dirtyTable.Segs {
 			// remove empty segs
-			if len(dirtySeg.Blks) == 0 {
-				delete(tblDirty.Segs, id)
+			if dirtySeg.IsEmpty() {
+				dirtyTable.Shrink(id)
 				continue
 			}
-
 			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-					delete(tblDirty.Segs, id)
+					dirtyTable.Shrink(id)
 					err = nil
 					continue
 				}
@@ -223,16 +226,14 @@ func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tre
 			for id := range dirtySeg.Blks {
 				if blk, err = seg.GetBlockEntryByID(id); err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-						delete(dirtySeg.Blks, id)
+						dirtySeg.Shrink(id)
 						err = nil
 						continue
 					}
 					return
 				}
-				// if blk has been flushed, remove it
-				// if blk.GetMetaLoc() != "" {
 				if blk.GetBlockData().RunCalibration() == 0 {
-					delete(dirtySeg.Blks, id)
+					dirtySeg.Shrink(id)
 					continue
 				}
 				if err = visitor.OnBlock(blk); err != nil {
@@ -241,6 +242,7 @@ func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tre
 			}
 		}
 	}
+	tree.Compact()
 	return
 }
 

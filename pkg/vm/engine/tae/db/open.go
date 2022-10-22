@@ -16,10 +16,12 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -132,9 +134,11 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			forest.Run()
 			dirtyTree := forest.MergeForest()
 			if dirtyTree.IsEmpty() {
+				logutil.Info("No dirty block found")
 				return
 			}
-			// logutil.Infof(dirtyTree.String())
+			logutil.Infof(dirtyTree.String())
+			// logutil.Info(db.Catalog.SimplePPString(common.PPL1))
 		}, nil)
 		hb.Start()
 		<-ctx.Done()
