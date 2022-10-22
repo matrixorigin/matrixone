@@ -367,7 +367,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 		}
 
 		partitionAst := genPartitionAst(exprs, int64(partitionInfo.PartitionNum))
-
 		partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
 		if err != nil {
 			return err
@@ -392,7 +391,6 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 			if err != nil {
 				return err
 			}
-			fmt.Println(tree.String(partitionExprAst, dialect.MYSQL))
 			partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
 			if err != nil {
 				return err
@@ -400,7 +398,7 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 			partitionInfo.PartitionExpression = partitionExpression
 		} else {
 			// For the Range Columns partition, convert the partition information into the expression, such as:
-			// case when col1 < 10 and col2 < 5 then 0 when col1 < 20 and col3 < 10 then 1 when true and true then 4 else -1 end
+			// (a, b, c) < (x0, x1, x2) -->  a < x0 || (a = x0 && (b < x1 || b = x1 && c < x2))
 			columnsExpr := partitionType.ColumnList
 			partitionExprAst, err := buildRangeColumnsCaseWhenExpr(columnsExpr, partitionOp.Partitions)
 			if err != nil {
@@ -448,6 +446,18 @@ func buildEvalPartitionExpression(partitionBinder *PartitionBinder, stmt *tree.C
 	return nil
 }
 
+// This method is used to convert the list columns partition into case when expression,such as:
+// PARTITION BY LIST COLUMNS(a,b) (
+// PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+// PARTITION p1 VALUES IN( (0,1), (0,2) ),
+// PARTITION p2 VALUES IN( (1,0), (2,0) )
+// );-->
+// case
+// when a = 0 and b = 0 or a = null and b = null then 0
+// when a = 0 and b = 1 or a = 0 and b = 2 then 1
+// when a = 1 and b = 0 or a = 2 and b = 0 then 2
+// else -1
+// end
 func buildListColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tree.Partition) (*tree.CaseExpr, error) {
 	whens := make([]*tree.When, len(defs))
 
@@ -523,6 +533,13 @@ func buildListColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tr
 	return caseWhenExpr, nil
 }
 
+// This method is used to convert the range partition into case when expression,such as:
+// PARTITION BY RANGE (code + 5) (
+// PARTITION p0 VALUES LESS THAN (6),
+// PARTITION p1 VALUES LESS THAN (11),
+// PARTITION p2 VALUES LESS THAN (MAXVALUE),
+// ); -->
+// case when (code + 5) < 6 then 0 when (code + 5) < 11 then 1 when true then 3 else -1 end
 func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.CaseExpr, error) {
 	whens := make([]*tree.When, len(defs))
 	for i, partition := range defs {
@@ -555,6 +572,8 @@ func buildRangeCaseWhenExpr(pexpr tree.Expr, defs []*tree.Partition) (*tree.Case
 	return caseWhenExpr, nil
 }
 
+// This method is used to optimize the row constructor expression in range columns partition item into a common logical operation expression,
+// such as: (a, b, c) < (x0, x1, x2) ->  a < x0 || (a = x0 && (b < x1 || b = x1 && c < x2))
 func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*tree.Partition) (*tree.CaseExpr, error) {
 	whens := make([]*tree.When, len(defs))
 	for i, partition := range defs {
@@ -564,39 +583,47 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 			panic("the number of less value expression parameters does not match")
 		}
 
-		elements := make([]tree.Expr, len(valuesLessThan.ValueList))
-		for j, valueExpr := range valuesLessThan.ValueList {
-			if _, ok := valueExpr.(*tree.MaxValue); ok {
-				trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
-				elements[j] = trueExpr
-			} else {
-				lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
-				elements[j] = lessThanExpr
-			}
-		}
-
-		var conditionExpr tree.Expr
-		if len(valuesLessThan.ValueList) == 1 {
-			conditionExpr = elements[0]
-		}
-
-		if len(valuesLessThan.ValueList) > 1 {
-			for m := 1; m < len(elements); m++ {
-				if m == 1 {
-					conditionExpr = tree.NewAndExpr(elements[m-1], elements[m])
+		var tempExpr tree.Expr
+		for j := len(valuesLessThan.ValueList) - 1; j >= 0; j-- {
+			valueExpr := valuesLessThan.ValueList[j]
+			if j == len(valuesLessThan.ValueList)-1 {
+				if _, ok := valueExpr.(*tree.MaxValue); ok {
+					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					tempExpr = trueExpr
 				} else {
-					conditionExpr = tree.NewAndExpr(conditionExpr, elements[m])
+					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
+					tempExpr = lessThanExpr
 				}
+				continue
+			} else {
+				var firstExpr tree.Expr
+				if _, ok := valueExpr.(*tree.MaxValue); ok {
+					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					firstExpr = trueExpr
+				} else {
+					lessThanExpr := tree.NewComparisonExpr(tree.LESS_THAN, columnsExpr[j], valueExpr)
+					firstExpr = lessThanExpr
+				}
+
+				var middleExpr tree.Expr
+				if _, ok := valueExpr.(*tree.MaxValue); ok {
+					trueExpr := tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
+					middleExpr = trueExpr
+				} else {
+					equalExpr := tree.NewComparisonExpr(tree.EQUAL, columnsExpr[j], valueExpr)
+					middleExpr = equalExpr
+				}
+				secondExpr := tree.NewAndExpr(middleExpr, tempExpr)
+				tempExpr = tree.NewOrExpr(firstExpr, secondExpr)
 			}
 		}
 
 		when := &tree.When{
-			Cond: conditionExpr,
+			Cond: tempExpr,
 			Val:  tree.NewNumValWithType(constant.MakeInt64(int64(i)), fmt.Sprintf("%v", i), false, tree.P_int64),
 		}
 		whens[i] = when
 	}
-
 	caseWhenExpr := &tree.CaseExpr{
 		Expr:  nil,
 		Whens: whens,
@@ -605,6 +632,12 @@ func buildRangeColumnsCaseWhenExpr(columnsExpr []*tree.UnresolvedName, defs []*t
 	return caseWhenExpr, nil
 }
 
+// This method is used to convert the list columns partition into an case when expression,such as:
+// PARTITION BY LIST (expr) (
+// PARTITION p0 VALUES IN(1, 5, 9, 13, 17),
+// PARTITION p1 VALUES IN (2, 6, 10, 14, 18)
+// );-->
+// case when expr in (1, 5, 9, 13, 17) then 0 when expr in (2, 6, 10, 14, 18) then 1 else -1 end
 func buildListCaseWhenExpr(listExpr tree.Expr, defs []*tree.Partition) (*tree.CaseExpr, error) {
 	whens := make([]*tree.When, len(defs))
 	for i, partition := range defs {
