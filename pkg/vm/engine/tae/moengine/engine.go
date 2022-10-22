@@ -69,6 +69,15 @@ func (e *txnEngine) DropDatabase(ctx context.Context, name string, txnHandle Txn
 	return
 }
 
+func (e *txnEngine) DropDatabaseByID(ctx context.Context, id uint64, txnHandle Txn) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	_, err = txn.DropDatabaseByID(id)
+	return
+}
+
 func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {
@@ -147,6 +156,21 @@ func (e *txnEngine) GetDatabase(ctx context.Context, name string, txnHandle Txn)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
 	h, err := txn.GetDatabase(name)
+	if err != nil {
+		return nil, err
+	}
+	db := newDatabase(h)
+	return db, nil
+}
+
+func (e *txnEngine) GetDatabaseByID(_ context.Context, id uint64, txnHandle Txn) (Database, error) {
+	var err error
+	var txn txnif.AsyncTxn
+
+	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
+		panic(err)
+	}
+	h, err := txn.GetDatabaseByID(id)
 	if err != nil {
 		return nil, err
 	}
