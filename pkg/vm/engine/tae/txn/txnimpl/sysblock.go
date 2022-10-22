@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -310,7 +311,18 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID)
 	case pkgcatalog.SystemRelAttr_Constraint:
-		colData.Append([]byte(""))
+		if len(schema.IndexInfos) != 0 {
+			indexDef := new(engine.ComputeIndexDef)
+			for _, indexInfo := range schema.IndexInfos {
+				indexDef.Names = append(indexDef.Names, indexInfo.Name)
+				indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
+				indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
+			}
+			bs, _ := types.Encode(indexDef)
+			colData.Append(bs)
+		} else {
+			colData.Append([]byte(""))
+		}
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

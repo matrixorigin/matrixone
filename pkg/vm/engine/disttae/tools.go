@@ -716,6 +716,7 @@ func genTableDefOfConstraint(constraint string) engine.TableDef {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("------ cn get constraint %+v\n", constraintDef)
 	return constraintDef
 }
 
