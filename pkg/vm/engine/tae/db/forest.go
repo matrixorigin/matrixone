@@ -16,7 +16,6 @@ package db
 
 import (
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,72 +28,63 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type TimeRangedTree struct {
+type DirtyTreeEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	tree       *common.Tree
 }
 
-type dirtyForest struct {
-	// collect dirty
-	interval struct {
-		sync.Mutex
-		prevStart types.TS
-		alloc     *types.TsAlloctor
-		delay     time.Duration
-	}
+type dirtyCollector struct {
+	// sourcer
 	sourcer *logtail.LogtailMgr
 
-	// consume dirty
-	catalog *catalog.Catalog
-	visitor catalog.Processor
+	// context
+	catalog     *catalog.Catalog
+	clock       *types.TsAlloctor
+	interceptor catalog.Processor
 
-	// dirty
-	trees *btree.Generic[*TimeRangedTree]
+	// storage
+	storage struct {
+		sync.RWMutex
+		entries *btree.BTreeG[*DirtyTreeEntry]
+		maxTs   types.TS
+	}
 }
 
-func newDirtyForest(
+func newDirtyCollector(
 	sourcer *logtail.LogtailMgr,
 	clock clock.Clock,
 	catalog *catalog.Catalog,
-	visitor catalog.Processor) *dirtyForest {
-	watch := &dirtyForest{
-		sourcer: sourcer,
-		catalog: catalog,
-		visitor: visitor,
-		trees: btree.NewGeneric(func(a, b *TimeRangedTree) bool {
-			return a.start.Less(b.start) && a.end.Less(b.end)
-		}),
+	interceptor catalog.Processor) *dirtyCollector {
+	watch := &dirtyCollector{
+		sourcer:     sourcer,
+		catalog:     catalog,
+		interceptor: interceptor,
+		clock:       types.NewTsAlloctor(clock),
 	}
-	watch.interval.alloc = types.NewTsAlloctor(clock)
+	watch.storage.entries = btree.NewBTreeGOptions[*DirtyTreeEntry](
+		func(a, b *DirtyTreeEntry) bool {
+			return a.start.Less(b.start) && a.end.Less(b.end)
+		}, btree.Options{
+			NoLocks: true,
+		})
 	return watch
 }
 
-func (d *dirtyForest) Run() {
-	start, end := d.getTimeRange()
-	// end is empty means range is invalid if considering delay
-	if end.IsEmpty() {
+func (d *dirtyCollector) Run() {
+	from, to := d.findRange()
+
+	// stale range found, skip this run
+	if to.IsEmpty() {
 		return
 	}
-	d.tryExpand(start, end)
-	d.tryShrink()
-}
 
-func (d *dirtyForest) WithStartTS(start types.TS) {
-	d.interval.Lock()
-	defer d.interval.Unlock()
-	d.interval.prevStart = start
-}
-
-// WithDelay to avoid waiting when get logtail dirty, Physical is nanosecond of wall time
-func (d *dirtyForest) WithDelay(delay time.Duration) {
-	d.interval.Lock()
-	defer d.interval.Unlock()
-	d.interval.delay = delay
+	d.collectAndStoreNew(from, to)
+	d.scanAndCleanStale()
 }
 
 // DirtyCount returns unflushed table, segment, block count
-func (d *dirtyForest) DirtyCount() (tblCnt, segCnt, blkCnt int) {
+func (d *dirtyCollector) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	merged := d.MergeForest()
 	tblCnt = merged.TableCount()
 	for _, tblTree := range merged.Tables {
@@ -106,79 +96,130 @@ func (d *dirtyForest) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	return
 }
 
-func (d *dirtyForest) String() string {
+func (d *dirtyCollector) String() string {
 	tree := d.MergeForest()
 	return tree.String()
 }
 
-func (d *dirtyForest) MergeForest() *common.Tree {
+func (d *dirtyCollector) MergeForest() *common.Tree {
 	merged := common.NewTree()
-	trees := d.trees.Copy()
-	trees.Scan(func(item *TimeRangedTree) bool {
-		item.RLock()
-		defer item.RUnlock()
-		merged.Merge(item.tree)
+
+	// get storage snapshot and work on it
+	snapshot := d.getStorageSnapshot()
+
+	// scan base on the snapshot
+	// merge all trees of the entry
+	snapshot.Scan(func(entry *DirtyTreeEntry) bool {
+		entry.RLock()
+		defer entry.RUnlock()
+		merged.Merge(entry.tree)
 		return true
 	})
+
 	return merged
 }
 
-func (d *dirtyForest) getTimeRange() (start, end types.TS) {
-	r := &d.interval
-	r.Lock()
-	defer r.Unlock()
-	now := r.alloc.Alloc()
-	now = types.BuildTS(now.Physical()-int64(r.delay), now.Logical())
-	if now.LessEq(r.prevStart) {
+func (d *dirtyCollector) findRange() (from, to types.TS) {
+	now := d.clock.Alloc()
+	d.storage.RLock()
+	defer d.storage.RUnlock()
+	if now.LessEq(d.storage.maxTs) {
 		return
 	}
-	start = r.prevStart
-	end = now
-	r.prevStart = end
+	from, to = d.storage.maxTs.Next(), now
 	return
 }
 
-func (d *dirtyForest) tryExpand(start, end types.TS) {
-	reader := d.sourcer.GetReader(start, end)
+func (d *dirtyCollector) collectAndStoreNew(from, to types.TS) (updated bool) {
+	// collect dirty from sourcer
+	reader := d.sourcer.GetReader(from, to)
 	tree := reader.GetDirty()
-	dirty := &TimeRangedTree{
-		start: start,
-		end:   end,
+
+	// make a entry
+	entry := &DirtyTreeEntry{
+		start: from,
+		end:   to,
 		tree:  tree,
 	}
-	d.trees.Set(dirty)
+
+	// try to store the entry
+	updated = d.tryStoreEntry(entry)
+	return
 }
 
-// Scan current dirty trees, remove all flushed or not found ones, and drive visitor on remaining block entries.
-func (d *dirtyForest) tryShrink() {
-	forestToDelete := make([]*TimeRangedTree, 0)
+func (d *dirtyCollector) tryStoreEntry(entry *DirtyTreeEntry) (ok bool) {
+	ok = true
+	d.storage.Lock()
+	defer d.storage.Unlock()
 
-	trees := d.trees.Copy()
-	trees.Scan(func(item *TimeRangedTree) bool {
-		item.Lock()
-		defer item.Unlock()
+	// storage was updated before
+	if !entry.start.Equal(d.storage.maxTs.Next()) {
+		ok = false
+		return
+	}
+
+	// update storage maxTs
+	d.storage.maxTs = entry.end
+
+	// don't store empty entry
+	if entry.tree.IsEmpty() {
+		return
+	}
+
+	d.storage.entries.Set(entry)
+	return
+}
+
+func (d *dirtyCollector) getStorageSnapshot() *btree.BTreeG[*DirtyTreeEntry] {
+	d.storage.RLock()
+	defer d.storage.RUnlock()
+	return d.storage.entries.Copy()
+}
+
+// Scan current dirty entries, remove all flushed or not found ones, and drive interceptor on remaining block entries.
+func (d *dirtyCollector) scanAndCleanStale() {
+	toDeletes := make([]*DirtyTreeEntry, 0)
+
+	// get a snapshot of entries
+	entries := d.getStorageSnapshot()
+
+	// scan all entries in the storage
+	// try compact the dirty tree for each entry
+	// if the dirty tree is empty, delete the specified entry from the storage
+	entries.Scan(func(entry *DirtyTreeEntry) bool {
+		entry.Lock()
+		defer entry.Unlock()
 		// dirty blocks within the time range has been flushed
 		// exclude the related dirty tree from the foreset
-		if item.tree.IsEmpty() {
-			forestToDelete = append(forestToDelete, item)
+		if entry.tree.IsEmpty() {
+			toDeletes = append(toDeletes, entry)
 			return true
 		}
-		if err := d.tryShrinkATree(d.visitor, item.tree); err != nil {
-			logutil.Warnf("error: visitor on dirty tree: %v", err)
+		if err := d.tryCompactTree(d.interceptor, entry.tree); err != nil {
+			logutil.Warnf("error: interceptor on dirty tree: %v", err)
 		}
-		if item.tree.IsEmpty() {
-			forestToDelete = append(forestToDelete, item)
+		if entry.tree.IsEmpty() {
+			toDeletes = append(toDeletes, entry)
 		}
 		return true
 	})
 
-	for _, tree := range forestToDelete {
-		d.trees.Delete(tree)
+	if len(toDeletes) == 0 {
+		return
+	}
+
+	// remove entries with empty dirty tree from the storage
+	d.storage.Lock()
+	defer d.storage.Unlock()
+	for _, tree := range toDeletes {
+		d.storage.entries.Delete(tree)
 	}
 }
 
-// iter the tree and call visitor to process block. flushed block, empty seg and table will be removed from the tree
-func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tree) (err error) {
+// iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
+func (d *dirtyCollector) tryCompactTree(
+	interceptor catalog.Processor,
+	tree *common.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
@@ -236,7 +277,7 @@ func (d *dirtyForest) tryShrinkATree(visitor catalog.Processor, tree *common.Tre
 					dirtySeg.Shrink(id)
 					continue
 				}
-				if err = visitor.OnBlock(blk); err != nil {
+				if err = interceptor.OnBlock(blk); err != nil {
 					return
 				}
 			}
