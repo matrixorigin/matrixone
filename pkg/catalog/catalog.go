@@ -183,7 +183,6 @@ func genCreateTables(rows [][]any) []CreateTable {
 			if err != nil {
 				panic(err)
 			}
-			println(cmds[i].Constraint)
 		}
 	}
 	return cmds

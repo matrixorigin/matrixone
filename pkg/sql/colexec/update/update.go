@@ -79,6 +79,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		// in update, we can get a batch[b(update), b(old)]
 		// we should use old b as delete info
+		var err error
 		for i, info := range updateCtx.ComputeIndexInfos {
 			rel := updateCtx.ComputeIndexTables[i]
 			var attrs []string = nil
@@ -87,7 +88,11 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			attrs = append(attrs, updateCtx.IndexAttrs...)
 			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
 			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+				oldBatch, err = colexec.BuildRowidBatch(ctx, rel, oldBatch, proc)
+				if err != nil {
+					return false, err
+				}
+				err = rel.Delete(ctx, oldBatch, oldBatch.Attrs[0])
 				if err != nil {
 					return false, err
 				}
@@ -98,7 +103,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		delBat := &batch.Batch{}
 		delBat.Vecs = []*vector.Vector{tmpBat.GetVector(0)}
 		delBat.SetZs(delBat.GetVector(0).Length(), proc.Mp())
-		err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
+		err = updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
 		if err != nil {
 			delBat.Clean(proc.Mp())
 			tmpBat.Clean(proc.Mp())

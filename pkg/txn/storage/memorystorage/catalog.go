@@ -189,6 +189,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = r.ID.ToRowID()
 	case catalog.SystemRelAttr_ViewDef:
 		ret.Value = []byte(r.ViewDef)
+	case catalog.SystemRelAttr_Constraint:
+		ret.Value = []byte("") //TODO
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}

@@ -175,6 +175,16 @@ func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 		viewDef.View = tbl.viewdef
 		defs = append(defs, viewDef)
 	}
+
+	if tbl.constraint != "" {
+		constraintDef := new(engine.ComputeIndexDef)
+		err := types.Decode([]byte(tbl.constraint), constraintDef)
+		if err != nil {
+			panic(err)
+		}
+		defs = append(defs, constraintDef)
+	}
+
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			if attr.Attr.Name != catalog.Row_ID {

@@ -17,6 +17,7 @@ package deletion
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"sync/atomic"
 
@@ -99,11 +100,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			tmpBat.Clean(proc.Mp())
 		}
+		var err error
 		for infoNum, info := range p.DeleteCtxs[i].ComputeIndexInfos {
 			rel := p.DeleteCtxs[i].ComputeIndexTables[infoNum]
 			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, info.Cols, proc)
 			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+				oldBatch, err = colexec.BuildRowidBatch(ctx, rel, oldBatch, proc)
+				if err != nil {
+					return false, err
+				}
+				err = rel.Delete(ctx, oldBatch, oldBatch.Attrs[0])
 				if err != nil {
 					return false, err
 				}
