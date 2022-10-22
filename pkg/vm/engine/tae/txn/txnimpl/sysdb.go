@@ -35,6 +35,7 @@ func init() {
 	sysTableNames[pkgcatalog.MO_TABLES] = true
 	sysTableNames[pkgcatalog.MO_DATABASE] = true
 
+	sysTableIds = make(map[uint64]bool)
 	sysTableIds[pkgcatalog.MO_TABLES_ID] = true
 	sysTableIds[pkgcatalog.MO_DATABASE_ID] = true
 	sysTableIds[pkgcatalog.MO_COLUMNS_ID] = true
