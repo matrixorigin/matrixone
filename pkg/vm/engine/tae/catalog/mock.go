@@ -80,6 +80,10 @@ func (store *mockTxnStore) ApplyCommit() error {
 	return nil
 }
 
+func (store *mockTxnStore) DropDatabaseByID(id uint64) (handle.Database, error) {
+	return nil, nil
+}
+
 type mockDBHandle struct {
 	*txnbase.TxnDatabase
 	catalog *Catalog
@@ -223,6 +227,14 @@ func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
 	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
+func (txn *mockTxn) GetDatabaseByID(id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.TxnGetDBEntryByID(id, txn)
+	if err != nil {
+		return nil, err
+	}
+	return newMockDBHandle(txn.catalog, txn, entry), nil
+}
+
 func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	_, entry, err := txn.catalog.DropDBEntry(name, txn)
 	if err != nil {
@@ -233,7 +245,12 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 }
 
 func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
-	panic(moerr.NewNYI("DropDatabaseById is not implemented"))
+	_, entry, err := txn.catalog.DropDBEntryByID(id, txn)
+	if err != nil {
+		return nil, err
+	}
+	txn.Store.AddTxnEntry(0, entry)
+	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {

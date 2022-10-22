@@ -200,11 +200,6 @@ func (h *Handle) HandlePreCommit(
 				req := db.DropDatabaseReq{
 					Name: cmd.Name,
 					ID:   cmd.Id,
-					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
-					},
 				}
 				if err = h.HandleDropDatabase(ctx, meta, req,
 					new(db.DropDatabaseResp)); err != nil {
@@ -214,11 +209,6 @@ func (h *Handle) HandlePreCommit(
 		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
 				req := db.DropOrTruncateRelationReq{
-					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
-					},
 					IsDrop:       cmd.IsDrop,
 					Name:         cmd.Name,
 					ID:           cmd.Id,
@@ -239,12 +229,8 @@ func (h *Handle) HandlePreCommit(
 				panic(err)
 			}
 			req := db.WriteReq{
-				AccessInfo: db.AccessInfo{
-					UserID:    req.UserId,
-					RoleID:    req.RoleId,
-					AccountID: req.AccountId,
-				},
 				Type:         db.EntryType(pe.EntryType),
+				DatabaseId:   pe.GetDatabaseId(),
 				TableID:      pe.GetTableId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
@@ -275,7 +261,6 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -283,11 +268,7 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return
 	}
-	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
-	if err != nil {
-		return
-	}
-	resp.ID = db.GetDatabaseID(ctx)
+	resp.ID = req.DatabaseId
 	return
 }
 
@@ -302,20 +283,10 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-
-	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
-	if err != nil {
+	if err = h.eng.DropDatabaseByID(ctx, req.ID, txn); err != nil {
 		return
 	}
-
-	if err = h.eng.DropDatabase(ctx, req.Name, txn); err != nil {
-		return
-	}
-
-	resp.ID = db.GetDatabaseID(ctx)
+	resp.ID = req.ID
 	return
 }
 
@@ -330,7 +301,7 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	//ctx := context.Background()
+
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -338,16 +309,13 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
+
 	err = db.CreateRelationWithID(context.TODO(), req.Name, req.RelationId, req.Defs)
 	if err != nil {
 		return
 	}
 
-	tb, err := db.GetRelation(context.TODO(), req.Name)
-	if err != nil {
-		return
-	}
-	resp.ID = tb.GetRelationID(context.TODO())
+	resp.ID = req.RelationId
 	return
 }
 
@@ -362,16 +330,8 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	if err != nil {
 		return
 	}
-	//ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	db, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
-	if err != nil {
-		return
-	}
 
-	_, err = db.GetRelation(ctx, req.Name)
+	db, err := h.eng.GetDatabaseByID(ctx, req.DatabaseID, txn)
 	if err != nil {
 		return
 	}
@@ -400,11 +360,7 @@ func (h *Handle) HandleWrite(
 		return err
 	}
 
-	//ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	dbase, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
+	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}

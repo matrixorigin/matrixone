@@ -645,6 +645,18 @@ func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, e
 	return n.GetPayload(), nil
 }
 
+func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+	dbEntry, err := catalog.GetDatabaseByID(id)
+	if err != nil {
+		return nil, err
+	}
+	visiable, dropped := dbEntry.GetVisibility(txn.GetStartTS())
+	if !visiable || dropped {
+		return nil, moerr.NewNotFound()
+	}
+	return dbEntry, nil
+}
+
 func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == pkgcatalog.MO_CATALOG {
 		err = moerr.NewTAEError("not permitted")
@@ -655,6 +667,23 @@ func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry b
 		return
 	}
 	entry := dn.GetPayload()
+	entry.Lock()
+	defer entry.Unlock()
+	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
+		deleted = entry
+	}
+	return
+}
+
+func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
+	if id == pkgcatalog.MO_CATALOG_ID {
+		err = moerr.NewTAEError("not permitted")
+		return
+	}
+	entry, err := catalog.TxnGetDBEntryByID(id, txn)
+	if err != nil {
+		return
+	}
 	entry.Lock()
 	defer entry.Unlock()
 	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
