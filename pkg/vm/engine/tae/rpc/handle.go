@@ -310,7 +310,7 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	err = db.CreateRelationWithID(context.TODO(), req.Name, req.RelationId, req.Defs)
+	err = db.CreateRelationWithID(ctx, req.Name, req.RelationId, req.Defs)
 	if err != nil {
 		return
 	}
@@ -337,13 +337,13 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	}
 
 	if req.IsDrop {
-		err = db.DropRelation(context.TODO(), req.Name)
+		err = db.DropRelationByID(ctx, req.ID)
 		if err != nil {
 			return
 		}
 		return
 	}
-	err = db.TruncateRelation(context.TODO(), req.Name, req.NewId)
+	err = db.TruncateRelationByID(ctx, req.ID, req.NewId)
 	return err
 }
 
@@ -365,7 +365,7 @@ func (h *Handle) HandleWrite(
 		return
 	}
 
-	tb, err := dbase.GetRelation(context.TODO(), req.TableName)
+	tb, err := dbase.GetRelationByID(ctx, req.TableID)
 	if err != nil {
 		return
 	}
@@ -379,7 +379,7 @@ func (h *Handle) HandleWrite(
 		}
 		//Add a batch into table
 		//TODO::add a parameter to Append for PreCommit-Append?
-		err = tb.Write(context.TODO(), req.Batch)
+		err = tb.Write(ctx, req.Batch)
 		return
 	}
 
@@ -387,7 +387,7 @@ func (h *Handle) HandleWrite(
 
 	//Vecs[0]--> rowid
 	//Vecs[1]--> PrimaryKey
-	err = tb.DeleteByPhyAddrKeys(context.TODO(), req.Batch.GetVector(0))
+	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
 	return
 
 }

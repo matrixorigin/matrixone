@@ -637,7 +637,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) 
 	return node.TxnGetNodeLocked(txn)
 }
 
-func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	n, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return nil, err
@@ -680,7 +680,7 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	entry, err := catalog.TxnGetDBEntryByID(id, txn)
+	entry, err := catalog.GetDatabaseByID(id)
 	if err != nil {
 		return
 	}

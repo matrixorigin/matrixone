@@ -251,7 +251,7 @@ func (store *txnStore) UnsafeGetDatabase(id uint64) (h handle.Database, err erro
 }
 
 func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
-	meta, err := store.catalog.GetDBEntry(name, store.txn)
+	meta, err := store.catalog.TxnGetDBEntryByName(name, store.txn)
 	if err != nil {
 		return
 	}
@@ -368,6 +368,14 @@ func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation ha
 	return db.DropRelationByName(name)
 }
 
+func (store *txnStore) DropRelationByID(dbId uint64, id uint64) (relation handle.Relation, err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return nil, err
+	}
+	return db.DropRelationByID(id)
+}
+
 func (store *txnStore) UnsafeGetRelation(dbId, id uint64) (relation handle.Relation, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -382,6 +390,14 @@ func (store *txnStore) GetRelationByName(dbId uint64, name string) (relation han
 		return nil, err
 	}
 	return db.GetRelationByName(name)
+}
+
+func (store *txnStore) GetRelationByID(dbId uint64, id uint64) (relation handle.Relation, err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return nil, err
+	}
+	return db.GetRelationByID(id)
 }
 
 func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
