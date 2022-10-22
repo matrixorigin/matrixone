@@ -879,11 +879,10 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db string) error {
-	ses := mce.GetSession()
+func doUse(ctx context.Context, ses *Session, db string) error {
 	txnHandler := ses.GetTxnHandler()
 	//TODO: check meta data
-	if _, err := ses.GetParameterUnit().StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
+	if _, err := ses.GetParameterUnit().StorageEngine.Database(ctx, db, txnHandler.GetTxn()); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(db)
 	}
@@ -893,6 +892,10 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	logutil.Infof("User %s change database from [%s] to [%s]\n", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db string) error {
+	return doUse(requestCtx, mce.GetSession(), db)
 }
 
 /*
@@ -944,12 +947,8 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	return err
 }
 
-/*
-handle Load DataSource statement
-*/
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
+func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
 	var err error
-	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
 	logutil.Infof("+++++load data")
@@ -957,14 +956,14 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 		TODO:support LOCAL
 	*/
 	if load.Local {
-		return moerr.NewInternalError("LOCAL is unsupported now")
+		return nil, moerr.NewInternalError("LOCAL is unsupported now")
 	}
 	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
 		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 
 	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
-		return moerr.NewInternalError("EscapedBy field is unsupported now")
+		return nil, moerr.NewInternalError("EscapedBy field is unsupported now")
 	}
 
 	/*
@@ -972,11 +971,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	*/
 	exist, isfile, err := PathExists(load.Param.Filepath)
 	if err != nil || !exist {
-		return moerr.NewInternalError("file %s does exist. err:%v", load.Param.Filepath, err)
+		return nil, moerr.NewInternalError("file %s does exist. err:%v", load.Param.Filepath, err)
 	}
 
 	if !isfile {
-		return moerr.NewInternalError("file %s is a directory", load.Param.Filepath)
+		return nil, moerr.NewInternalError("file %s is a directory", load.Param.Filepath)
 	}
 
 	/*
@@ -986,7 +985,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	loadTable := string(load.Table.Name())
 	if loadDb == "" {
 		if proto.GetDatabaseName() == "" {
-			return moerr.NewInternalError("load data need database")
+			return nil, moerr.NewInternalError("load data need database")
 		}
 
 		//then, it uses the database name in the session
@@ -995,12 +994,12 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 
 	txnHandler := ses.GetTxnHandler()
 	if ses.InMultiStmtTransactionMode() {
-		return moerr.NewInternalError("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+		return nil, moerr.NewInternalError("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
 	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
-		return moerr.NewBadDB(loadDb)
+		return nil, moerr.NewBadDB(loadDb)
 	}
 
 	//change db to the database in the LOAD DATA statement if necessary
@@ -1016,23 +1015,30 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
 		//echo client. no such table
-		return moerr.NewNoSuchTable(loadDb, loadTable)
+		return nil, moerr.NewNoSuchTable(loadDb, loadTable)
 	}
 
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(requestCtx, proc, load, dbHandler, tableHandler, loadDb)
+	return LoadLoop(requestCtx, ses, proc, load, dbHandler, tableHandler, loadDb)
+}
+
+/*
+handle Load DataSource statement
+*/
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
+	ses := mce.GetSession()
+	result, err := doLoadData(requestCtx, ses, proc, load)
 	if err != nil {
 		return err
 	}
-
 	/*
 		response
 	*/
 	info := moerr.NewLoadInfo(result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
 	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
-	if err = proto.SendResponse(resp); err != nil {
+	if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return nil
@@ -1133,14 +1139,8 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	return err
 }
 
-/*
-handle setvar
-*/
-func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
+func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
@@ -1174,7 +1174,6 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 		}
 		return nil
 	}
-
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
@@ -1204,9 +1203,21 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 			}
 		}
 	}
+	return err
+}
+
+/*
+handle setvar
+*/
+func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) error {
+	ses := mce.GetSession()
+	err := doSetVar(ctx, ses, sv)
+	if err != nil {
+		return err
+	}
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
-	if err = proto.SendResponse(resp); err != nil {
+	if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return nil
@@ -1252,6 +1263,11 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
+}
+
+func doShowVariables(sv *tree.ShowVariables, ses *Session, proc *process.Process) error {
+	//TODO:
+	return nil
 }
 
 /*
@@ -1496,16 +1512,14 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	return nil
 }
 
-// handlePrepareStmt
-func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareStmt, error) {
-	ses := mce.GetSession()
+func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*PrepareStmt, error) {
 	switch st.Stmt.(type) {
 	case *tree.Update:
 		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
 	case *tree.Delete:
 		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
-	preparePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
+	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
 	}
@@ -1520,9 +1534,12 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareSt
 	return prepareStmt, err
 }
 
-// handlePrepareString
-func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*PrepareStmt, error) {
-	ses := mce.GetSession()
+// handlePrepareStmt
+func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt) (*PrepareStmt, error) {
+	return doPrepareStmt(ctx, mce.GetSession(), st)
+}
+
+func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
 	stmts, err := mysql.Parse(st.Sql)
 	if err != nil {
 		return nil, err
@@ -1549,15 +1566,23 @@ func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*Prepa
 	return prepareStmt, err
 }
 
-// handleDeallocate
-func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
-	ses := mce.GetSession()
-	deallocatePlan, err := buildPlan(ses.GetRequestContext(), ses, ses.GetTxnCompileCtx(), st)
+// handlePrepareString
+func (mce *MysqlCmdExecutor) handlePrepareString(ctx context.Context, st *tree.PrepareString) (*PrepareStmt, error) {
+	return doPrepareString(ctx, mce.GetSession(), st)
+}
+
+func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error {
+	deallocatePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
 	ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 	return nil
+}
+
+// handleDeallocate
+func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
+	return doDeallocate(ctx, mce.GetSession(), st)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1958,13 +1983,13 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 }
 
 var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]StmtExecutor, error) {
-	var seList []StmtExecutor = nil
+	var stmtExecList []StmtExecutor = nil
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
 
-	appendSe := func(se StmtExecutor) {
-		seList = append(seList, se)
+	appendStmtExec := func(se StmtExecutor) {
+		stmtExecList = append(stmtExecList, se)
 	}
 
 	if isCmdFieldListSql(sql) {
@@ -1986,19 +2011,402 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		base.TxnComputationWrapper = cw
 		switch st := stmt.(type) {
 		case *tree.Select:
-			result := &resultSetStmtExecutor{
-				father: base,
-			}
-			selExec := &selectExecutor{
-				father: result,
-				sel:    st,
-			}
-			appendSe(selExec)
+			appendStmtExec(&SelectExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sel: st,
+			})
+		case *tree.ShowCreateTable:
+			appendStmtExec(&ShowCreateTableExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sct: st,
+			})
+		case *tree.ShowCreateDatabase:
+			appendStmtExec(&ShowCreateDatabaseExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				scd: st,
+			})
+		case *tree.ShowTables:
+			appendStmtExec(&ShowTablesExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				st: st,
+			})
+		case *tree.ShowDatabases:
+			appendStmtExec(&ShowDatabasesExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sd: st,
+			})
+		case *tree.ShowColumns:
+			appendStmtExec(&ShowColumnsExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sc: st,
+			})
+		case *tree.ShowProcessList:
+			appendStmtExec(&ShowProcessListExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				spl: st,
+			})
+		case *tree.ShowStatus:
+			appendStmtExec(&ShowStatusExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				ss: st,
+			})
+		case *tree.ShowTableStatus:
+			appendStmtExec(&ShowTableStatusExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sts: st,
+			})
+		case *tree.ShowGrants:
+			appendStmtExec(&ShowGrantsExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sg: st,
+			})
+		case *tree.ShowIndex:
+			appendStmtExec(&ShowIndexExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				si: st,
+			})
+		case *tree.ShowCreateView:
+			appendStmtExec(&ShowCreateViewExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				scv: st,
+			})
+		case *tree.ShowTarget:
+			appendStmtExec(&ShowTargetExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				st: st,
+			})
+		case *tree.ExplainFor:
+			appendStmtExec(&ExplainForExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				ef: st,
+			})
+		case *tree.ExplainStmt:
+			appendStmtExec(&ExplainStmtExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				es: st,
+			})
+		case *tree.ShowVariables:
+			appendStmtExec(&ShowVariablesExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sv: st,
+			})
+		case *tree.ShowErrors:
+			appendStmtExec(&ShowErrorsExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				se: st,
+			})
+		case *tree.ShowWarnings:
+			appendStmtExec(&ShowWarningsExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				sw: st,
+			})
+		case *tree.AnalyzeStmt:
+			appendStmtExec(&AnalyzeStmtExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				as: st,
+			})
+		case *tree.ExplainAnalyze:
+			appendStmtExec(&ExplainAnalyzeExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				ea: st,
+			})
+		case *InternalCmdFieldList:
+			appendStmtExec(&InternalCmdFieldListExecutor{
+				resultSetStmtExecutor: &resultSetStmtExecutor{
+					base,
+				},
+				icfl: st,
+			})
+		case *tree.BeginTransaction:
+			appendStmtExec(&BeginTxnExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				bt: st,
+			})
+		case *tree.CommitTransaction:
+			appendStmtExec(&CommitTxnExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ct: st,
+			})
+		case *tree.RollbackTransaction:
+			appendStmtExec(&RollbackTxnExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				rt: st,
+			})
+		case *tree.SetRole:
+			appendStmtExec(&SetRoleExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				sr: st,
+			})
+		case *tree.Use:
+			appendStmtExec(&UseExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				u: st,
+			})
+		case *tree.DropDatabase:
+			appendStmtExec(&DropDatabaseExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				dd: st,
+			})
+		case *tree.Import:
+			appendStmtExec(&ImportExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				i: st,
+			})
+		case *tree.PrepareStmt:
+			appendStmtExec(&PrepareStmtExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ps: st,
+			})
+		case *tree.PrepareString:
+			appendStmtExec(&PrepareStringExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ps: st,
+			})
+		case *tree.Deallocate:
+			appendStmtExec(&DeallocateExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				d: st,
+			})
+		case *tree.SetVar:
+			appendStmtExec(&SetVarExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				sv: st,
+			})
+		case *tree.Delete:
+			appendStmtExec(&DeleteExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				d: st,
+			})
+		case *tree.Update:
+			appendStmtExec(&UpdateExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				u: st,
+			})
+		case *tree.CreateAccount:
+			appendStmtExec(&CreateAccountExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ca: st,
+			})
+		case *tree.DropAccount:
+			appendStmtExec(&DropAccountExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				da: st,
+			})
+		case *tree.AlterAccount:
+			appendStmtExec(&AlterAccountExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				aa: st,
+			})
+		case *tree.CreateUser:
+			appendStmtExec(&CreateUserExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				cu: st,
+			})
+		case *tree.DropUser:
+			appendStmtExec(&DropUserExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				du: st,
+			})
+		case *tree.AlterUser:
+			appendStmtExec(&AlterUserExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				au: st,
+			})
+		case *tree.CreateRole:
+			appendStmtExec(&CreateRoleExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				cr: st,
+			})
+		case *tree.DropRole:
+			appendStmtExec(&DropRoleExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				dr: st,
+			})
+		case *tree.Grant:
+			appendStmtExec(&GrantExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				g: st,
+			})
+		case *tree.Revoke:
+			appendStmtExec(&RevokeExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				r: st,
+			})
+		case *tree.CreateTable:
+			appendStmtExec(&CreateTableExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ct: st,
+			})
+		case *tree.DropTable:
+			appendStmtExec(&DropTableExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				dt: st,
+			})
+		case *tree.CreateDatabase:
+			appendStmtExec(&CreateDatabaseExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				cd: st,
+			})
+		case *tree.CreateIndex:
+			appendStmtExec(&CreateIndexExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				ci: st,
+			})
+		case *tree.DropIndex:
+			appendStmtExec(&DropIndexExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				di: st,
+			})
+		case *tree.CreateView:
+			appendStmtExec(&CreateViewExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				cv: st,
+			})
+		case *tree.DropView:
+			appendStmtExec(&DropViewExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				dv: st,
+			})
+		case *tree.Insert:
+			appendStmtExec(&InsertExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				i: st,
+			})
+		case *tree.Load:
+			appendStmtExec(&LoadExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				l: st,
+			})
+		case *tree.SetDefaultRole:
+			appendStmtExec(&SetDefaultRoleExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				sdr: st,
+			})
+		case *tree.SetPassword:
+			appendStmtExec(&SetPasswordExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				sp: st,
+			})
+		case *tree.TruncateTable:
+			appendStmtExec(&TruncateTableExecutor{
+				statusStmtExecutor: &statusStmtExecutor{
+					base,
+				},
+				tt: st,
+			})
 		default:
 			return nil, moerr.NewInternalError("no such statement %s", stmt.String())
 		}
 	}
-	return seList, nil
+	return stmtExecList, nil
 }
 
 func incStatementCounter(tenant string, stmt tree.Statement) {
@@ -2264,7 +2672,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareStmt:
 			selfHandle = true
-			prepareStmt, err = mce.handlePrepareStmt(st)
+			prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2274,7 +2682,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.PrepareString:
 			selfHandle = true
-			prepareStmt, err = mce.handlePrepareString(st)
+			prepareStmt, err = mce.handlePrepareString(requestCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2284,13 +2692,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.Deallocate:
 			selfHandle = true
-			err = mce.handleDeallocate(st)
+			err = mce.handleDeallocate(requestCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.SetVar:
 			selfHandle = true
-			err = mce.handleSetVar(st)
+			err = mce.handleSetVar(requestCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2760,7 +3168,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	for _, exec := range stmtExecs {
-		err = exec.Execute(requestCtx, ses, proc, beginInstant)
+		err = Execute(requestCtx, ses, proc, exec, beginInstant)
 		if err != nil {
 			return err
 		}
