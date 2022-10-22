@@ -2689,6 +2689,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
+	ses.SetCmd(req.GetCmd())
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
 		/*resp = NewResponse(
