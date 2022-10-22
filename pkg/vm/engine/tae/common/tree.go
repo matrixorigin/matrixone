@@ -52,7 +52,12 @@ func (visitor *stringVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (e
 	return
 }
 
-func (visitor *stringVisitor) String() string { return visitor.buf.String() }
+func (visitor *stringVisitor) String() string {
+	if visitor.buf.Len() == 0 {
+		return fmt.Sprintf("<Empty Tree>")
+	}
+	return visitor.buf.String()
+}
 
 type Tree struct {
 	Tables map[uint64]*TableTree

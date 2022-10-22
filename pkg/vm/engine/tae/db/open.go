@@ -130,7 +130,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
 	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
 		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
+		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval*5)*time.Millisecond, func() {
 			forest.Run()
 			dirtyTree := forest.MergeForest()
 			if dirtyTree.IsEmpty() {
