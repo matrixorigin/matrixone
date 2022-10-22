@@ -171,8 +171,8 @@ func (d *dirtyCollector) tryStoreEntry(entry *DirtyTreeEntry) (ok bool) {
 }
 
 func (d *dirtyCollector) getStorageSnapshot() *btree.BTreeG[*DirtyTreeEntry] {
-	d.storage.RLock()
-	defer d.storage.RUnlock()
+	d.storage.Lock()
+	defer d.storage.Unlock()
 	return d.storage.entries.Copy()
 }
 
