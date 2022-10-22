@@ -50,9 +50,16 @@ func (store *NoopTxnStore) CreateRelationWithTableId(dbId uint64, tableId uint64
 func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
+func (store *NoopTxnStore) DropRelationByID(dbId uint64, id uint64) (rel handle.Relation, err error) {
+	return
+}
 func (store *NoopTxnStore) GetRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
+func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.Relation, err error) {
+	return
+}
+
 func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
 	return

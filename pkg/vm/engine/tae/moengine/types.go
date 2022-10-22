@@ -70,9 +70,12 @@ type Relation interface {
 type Database interface {
 	RelationNames(context.Context) ([]string, error)
 	GetRelation(context.Context, string) (Relation, error)
+	GetRelationByID(context.Context, uint64) (Relation, error)
 
 	DropRelation(context.Context, string) error
-	TruncateRelation(context.Context, string, uint64) error
+	DropRelationByID(context.Context, uint64) error
+	TruncateRelationWithID(context.Context, string, uint64) error
+	TruncateRelationByID(context.Context, uint64, uint64) error
 
 	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
 	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
