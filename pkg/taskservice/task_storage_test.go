@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/util/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,13 +47,6 @@ func createMysql(t *testing.T) TaskStorage {
 }
 
 func TestAddTask(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -71,13 +63,6 @@ func TestAddTask(t *testing.T) {
 }
 
 func TestUpdateTask(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -96,13 +81,6 @@ func TestUpdateTask(t *testing.T) {
 }
 
 func TestUpdateTaskWithConditions(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -126,13 +104,6 @@ func TestUpdateTaskWithConditions(t *testing.T) {
 }
 
 func TestDeleteTaskWithConditions(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -157,13 +128,6 @@ func TestDeleteTaskWithConditions(t *testing.T) {
 }
 
 func TestQueryTaskWithConditions(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -189,13 +153,6 @@ func TestQueryTaskWithConditions(t *testing.T) {
 }
 
 func TestAddAndQueryCronTask(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -217,13 +174,6 @@ func TestAddAndQueryCronTask(t *testing.T) {
 }
 
 func TestUpdateCronTask(t *testing.T) {
-	mysql, err := mysql.NewMySQLServer(12345, "root", "root")
-	require.NoError(t, err)
-	require.NoError(t, mysql.Start())
-	defer func() {
-		require.NoError(t, mysql.Stop())
-	}()
-
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
