@@ -623,6 +623,10 @@ func (ses *Session) GetConnectionID() uint32 {
 	return ses.GetMysqlProtocol().ConnectionID()
 }
 
+func (ses *Session) GetPeer() (string, string) {
+	return ses.GetMysqlProtocol().Peer()
+}
+
 func (ses *Session) SetOptionBits(bit uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
