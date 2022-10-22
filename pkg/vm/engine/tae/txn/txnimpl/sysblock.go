@@ -309,6 +309,8 @@ func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vec
 		colData.Append(schema.AcInfo.CreateAt)
 	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID)
+	case pkgcatalog.SystemRelAttr_Constraint:
+		colData.Append([]byte(""))
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

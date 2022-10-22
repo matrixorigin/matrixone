@@ -187,7 +187,11 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		if err := bat.Vecs[idx].Append([]byte(tbl.viewdef), false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_TABLES_CONSTRAINT_IDX
+		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // viewdef
+		if err := bat.Vecs[idx].Append([]byte(tbl.constraint), false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
@@ -704,6 +708,15 @@ func genTableDefOfComment(comment string) engine.TableDef {
 	return &engine.CommentDef{
 		Comment: comment,
 	}
+}
+
+func genTableDefOfConstraint(constraint string) engine.TableDef {
+	constraintDef := new(engine.ComputeIndexDef)
+	err := types.Decode([]byte(constraint), constraintDef)
+	if err != nil {
+		panic(err)
+	}
+	return constraintDef
 }
 
 func getColumnsFromRows(rows [][]any) []column {

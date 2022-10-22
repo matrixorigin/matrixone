@@ -68,6 +68,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
+	tbl.constraint = string(row[catalog.MO_TABLES_CONSTRAINT_IDX].([]byte))
 	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
 		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
@@ -76,6 +77,9 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	}
 	cols := getColumnsFromRows(rows)
 	defs := make([]engine.TableDef, 0, len(cols))
+	if len(tbl.constraint) > 0 {
+		defs = append(defs, genTableDefOfConstraint(tbl.constraint))
+	}
 	defs = append(defs, genTableDefOfComment(string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))))
 	for i, col := range cols {
 		if col.constraintType == catalog.SystemColPKConstraint {

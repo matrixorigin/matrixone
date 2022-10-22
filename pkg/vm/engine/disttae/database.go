@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"time"
 
@@ -162,6 +163,9 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 				tbl.viewdef = defVal.View
 			case *engine.PartitionDef:
 				tbl.partition = defVal.Partition
+			case *engine.ComputeIndexDef:
+				data, _ := types.Encode(defVal)
+				tbl.constraint = string(data)
 			}
 		}
 	}

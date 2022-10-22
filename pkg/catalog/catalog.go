@@ -104,6 +104,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 					Partition: cmds[i].Partition,
 				})
 			}
+			if cmds[i].Constraint != nil {
+				cmds[i].Defs = append(cmds[i].Defs, cmds[i].Constraint)
+			}
 			pro := new(engine.PropertiesDef)
 			pro.Properties = append(pro.Properties, engine.Property{
 				Key:   SystemRelAttr_Kind,
@@ -174,6 +177,14 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
+		if data := row[MO_TABLES_CONSTRAINT_IDX].([]byte); len(data) > 0 {
+			cmds[i].Constraint = new(engine.ComputeIndexDef)
+			err := types.Decode(data, cmds[i].Constraint)
+			if err != nil {
+				panic(err)
+			}
+			println(cmds[i].Constraint)
+		}
 	}
 	return cmds
 }

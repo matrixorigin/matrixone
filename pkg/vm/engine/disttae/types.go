@@ -221,6 +221,7 @@ type table struct {
 	partition  string
 	relKind    string
 	createSql  string
+	constraint string
 }
 
 type column struct {
