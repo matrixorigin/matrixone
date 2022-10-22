@@ -769,8 +769,8 @@ func NewTAERead() *Error {
 	return newWithDepth(Context(), ErrTAERead)
 }
 
-func NewRpcError() *Error {
-	return newWithDepth(Context(), ErrRpcError)
+func NewRpcError(msg string) *Error {
+	return newWithDepth(Context(), ErrRpcError, msg)
 }
 
 func NewWaitTxn() *Error {

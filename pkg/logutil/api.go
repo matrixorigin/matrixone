@@ -132,7 +132,6 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 		cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 	}
 
-	GetLevelChangeFunc()(level)
 	return zap.New(zapcore.NewTee(cores...), options...)
 }
 

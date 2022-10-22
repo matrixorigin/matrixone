@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/simdcsv"
 )
 
@@ -37,22 +36,28 @@ import (
 // ========================
 
 // Merge like a compaction, merge input files into one/two/... files.
+//   - `NewMergeService` init merge as service, with param `serviceInit` to avoid multi init.
+//   - `NewMerge` handle merge obj init.
+//   - `Merge::Start` as service loop, trigger `Merge::Main` each cycle
+//   - `Merge::Main` handle handle job,
+//     1. foreach account, build `rootPath` with tuple {account, date, Table }
+//     2. call `Merge::doMergeFiles` with all files in `rootPath`,  do merge job
+//   - `Merge::doMergeFiles` handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
-	Table       *Table                  // see WithTable
-	DB          string                  // see WithDB
-	FS          fileservice.FileService // see WithFileService
-	FSName      string                  // see WithFileServiceName, cooperate with FS
+	Table       *Table                  // WithTable
+	FS          fileservice.FileService // WithFileService
+	FSName      string                  // WithFileServiceName, cooperate with FS
 	datetime    time.Time               // see Main
-	pathBuilder PathBuilder             // const as NewMetricLogPathBuilder()
+	pathBuilder PathBuilder             // const as NewAccountDatePathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小, default: 128 MB
-	MaxFileSize int64 // see WithMaxFileSize
+	MaxFileSize int64 // WithMaxFileSize
 	// MaxMergeJobs 允许进行的Merge的任务个数，default: 16
-	MaxMergeJobs int64 // see WithMaxMergeJobs
+	MaxMergeJobs int64 // WithMaxMergeJobs
 	// MinFilesMerge 控制Merge最少合并文件个数，default：2
 	//
 	// Deprecated: useless in Merge all in one file
-	MinFilesMerge int // see WithMinFilesMerge
+	MinFilesMerge int // WithMinFilesMerge
 	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 16 MB
 	//
 	// Deprecated: useless while NOT support multiParts upload
@@ -74,11 +79,6 @@ func (opt MergeOption) Apply(m *Merge) {
 func WithTable(tbl *Table) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.Table = tbl
-	})
-}
-func WithDB(db string) MergeOption {
-	return MergeOption(func(m *Merge) {
-		m.DB = db
 	})
 }
 func WithFileService(fs fileservice.FileService) MergeOption {
@@ -123,7 +123,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
 		FSName:        etlFileServiceName,
 		datetime:      time.Now(),
-		pathBuilder:   NewMetricLogPathBuilder(),
+		pathBuilder:   NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 2,
@@ -184,7 +184,7 @@ func (m *Merge) Main(ts time.Time) error {
 	if m.datetime.IsZero() {
 		return moerr.NewInternalError("Merge Task missing input 'datetime'")
 	}
-	logutil.Debugf("Merge start on %s.%s, %v", m.DB, m.Table.GetName(), m.datetime)
+	logutil.Debugf("Merge start on %s, %v", m.Table.GetIdentify(), m.datetime)
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
@@ -194,7 +194,7 @@ func (m *Merge) Main(ts time.Time) error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLog, m.datetime, m.DB, m.Table.GetName())
+		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLog, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 		// get all file entry
 
 		fileEntrys, err := m.FS.List(m.ctx, rootPath)
@@ -255,7 +255,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 	timestampEnd := timestamps[len(timestamps)-1]
 
 	// Step 2. new filename, file writer
-	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.DB, m.Table.GetName())
+	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
 	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath)

@@ -46,6 +46,15 @@ func isSysRelation(name string) bool {
 	return false
 }
 
+func isSysRelationId(id uint64) bool {
+	if id == catalog.MO_DATABASE_ID ||
+		id == catalog.MO_TABLES_ID ||
+		id == catalog.MO_COLUMNS_ID {
+		return true
+	}
+	return false
+}
+
 func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
 	return ErrReadOnly
 }
