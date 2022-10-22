@@ -1360,6 +1360,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 					AutoIncr:  attr.Attr.AutoIncrement,
+					Table:     tableName,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,

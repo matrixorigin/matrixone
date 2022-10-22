@@ -30,8 +30,8 @@ type Column interface {
 	Name() string
 
 	//data type: MYSQL_TYPE_XXXX
-	SetColumnType(uint8)
-	ColumnType() uint8
+	SetColumnType(defines.MysqlType)
+	ColumnType() defines.MysqlType
 
 	//the max count of spaces
 	SetLength(uint32)
@@ -49,17 +49,17 @@ type ColumnImpl struct {
 	name string
 
 	//the data type of the column
-	columnType uint8
+	columnType defines.MysqlType
 
 	//maximum length in bytes of the field
 	length uint32
 }
 
-func (ci *ColumnImpl) ColumnType() uint8 {
+func (ci *ColumnImpl) ColumnType() defines.MysqlType {
 	return ci.columnType
 }
 
-func (ci *ColumnImpl) SetColumnType(colType uint8) {
+func (ci *ColumnImpl) SetColumnType(colType defines.MysqlType) {
 	ci.columnType = colType
 }
 

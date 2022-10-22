@@ -37,7 +37,7 @@ func appendQueryNode(query *Query, node *Node) int32 {
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
-		switch uint8(n.InternalType.Oid) {
+		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1}, nil

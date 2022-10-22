@@ -818,7 +818,7 @@ func makeMysqlDatetimeResult() *MysqlExecutionResult {
 func make8ColumnsResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	var columnTypes = []uint8{
+	var columnTypes = []defines.MysqlType{
 		defines.MYSQL_TYPE_TINY,
 		defines.MYSQL_TYPE_SHORT,
 		defines.MYSQL_TYPE_LONG,
@@ -884,7 +884,7 @@ func makeMysql8ColumnsResult() *MysqlExecutionResult {
 func makeMoreThan16MBResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	var columnTypes = []uint8{
+	var columnTypes = []defines.MysqlType{
 		defines.MYSQL_TYPE_LONGLONG,
 		defines.MYSQL_TYPE_DOUBLE,
 		defines.MYSQL_TYPE_VARCHAR,
@@ -1828,10 +1828,10 @@ func FuzzParseExecuteData(f *testing.F) {
 	for i := 0; i < nullBitmapLen; i++ {
 		testData = append(testData, 0)
 	}
-	testData = append(testData, 1)                       // new param bound flag
-	testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-	testData = append(testData, 0)                       //is unsigned
-	testData = append(testData, 10)                      //tiny value
+	testData = append(testData, 1)                              // new param bound flag
+	testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+	testData = append(testData, 0)                              //is unsigned
+	testData = append(testData, 10)                             //tiny value
 
 	f.Add(testData)
 
@@ -1843,10 +1843,10 @@ func FuzzParseExecuteData(f *testing.F) {
 	for i := 0; i < nullBitmapLen; i++ {
 		testData = append(testData, 0)
 	}
-	testData = append(testData, 1)                       // new param bound flag
-	testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-	testData = append(testData, 0)                       //is unsigned
-	testData = append(testData, 4)                       //tiny value
+	testData = append(testData, 1)                              // new param bound flag
+	testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+	testData = append(testData, 0)                              //is unsigned
+	testData = append(testData, 4)                              //tiny value
 	f.Add(testData)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -1893,10 +1893,10 @@ func TestParseExecuteData(t *testing.T) {
 		for i := 0; i < nullBitmapLen; i++ {
 			testData = append(testData, 0)
 		}
-		testData = append(testData, 1)                       // new param bound flag
-		testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-		testData = append(testData, 0)                       //is unsigned
-		testData = append(testData, 10)                      //tiny value
+		testData = append(testData, 1)                              // new param bound flag
+		testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+		testData = append(testData, 0)                              //is unsigned
+		testData = append(testData, 10)                             //tiny value
 
 		names, vars, err := proto.ParseExecuteData(prepareStmt, testData, 0)
 		convey.So(err, convey.ShouldBeNil)

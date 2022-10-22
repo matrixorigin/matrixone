@@ -545,7 +545,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			tp := stmt.ParamTypes[i<<1]
 			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
 
-			switch tp {
+			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
 				vars[i] = nil
 
@@ -1579,43 +1579,18 @@ func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 }
 
 func setColLength(column *MysqlColumn, width int32) {
-	switch column.columnType {
-	case defines.MYSQL_TYPE_DECIMAL:
-		column.length = uint32(width)
-	case defines.MYSQL_TYPE_TINY:
-		column.length = 8
-	case defines.MYSQL_TYPE_SHORT:
-		column.length = 16
-	case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
-		column.length = 32
-	case defines.MYSQL_TYPE_LONGLONG:
-		column.length = 64
-	case defines.MYSQL_TYPE_FLOAT:
-		column.length = 32
-	case defines.MYSQL_TYPE_DOUBLE:
-		column.length = 64
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
-		column.length = uint32(width) * 3
-	case defines.MYSQL_TYPE_DATE:
-		column.length = 64
-	case defines.MYSQL_TYPE_DATETIME:
-		column.length = 64
-	case defines.MYSQL_TYPE_TIMESTAMP:
-		column.length = 64
-	case defines.MYSQL_TYPE_JSON:
-		column.length = math.MaxUint32
-	}
+	column.length = column.columnType.GetLength(width)
 }
 
 func setColFlag(column *MysqlColumn) {
 	if column.auto_incr {
-		column.flag |= AUTO_INCREMENT_FLAG
+		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
 	}
 }
 
 func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 		column.SetCharset(0x21)
 	default:
 		column.SetCharset(0x3f)
@@ -1666,7 +1641,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	pos = mp.io.WriteUint32(data, pos, column.Length())
 
 	//int<1>              type
-	pos = mp.io.WriteUint8(data, pos, column.ColumnType())
+	pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 
 	//int<2>              flags
 	pos = mp.io.WriteUint16(data, pos, column.Flag())
@@ -1811,7 +1786,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
