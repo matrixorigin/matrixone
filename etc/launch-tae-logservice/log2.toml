@@ -42,7 +42,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/log2"
+data-dir = "mo-data/etl"
 
 [hakeeper-client]
 service-addresses = [

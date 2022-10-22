@@ -30,15 +30,16 @@ const (
 	OpDeleteDatabase
 	OpCreateRelation
 	OpDeleteRelation
+	OpTruncateRelation
 	OpOpenRelation
 	OpGetRelations
 	OpAddTableDef
 	OpDelTableDef
 	OpDelete
 	OpGetPrimaryKeys
+	OpGetTableColumns
 	OpGetTableDefs
 	OpGetHiddenKeys
-	OpTruncate
 	OpUpdate
 	OpWrite
 	OpNewTableIter
@@ -55,6 +56,7 @@ type ReadRequest interface {
 		OpenRelationReq |
 		GetRelationsReq |
 		GetPrimaryKeysReq |
+		GetTableColumnsReq |
 		GetTableDefsReq |
 		GetHiddenKeysReq |
 		NewTableIterReq |
@@ -69,10 +71,10 @@ type WriteReqeust interface {
 		DeleteDatabaseReq |
 		CreateRelationReq |
 		DeleteRelationReq |
+		TruncateRelationReq |
 		AddTableDefReq |
 		DelTableDefReq |
 		DeleteReq |
-		TruncateReq |
 		UpdateReq |
 		WriteReq
 }
@@ -88,15 +90,16 @@ type Response interface {
 		DeleteDatabaseResp |
 		CreateRelationResp |
 		DeleteRelationResp |
+		TruncateRelationResp |
 		OpenRelationResp |
 		GetRelationsResp |
 		AddTableDefResp |
 		DelTableDefResp |
 		DeleteResp |
 		GetPrimaryKeysResp |
+		GetTableColumnsResp |
 		GetTableDefsResp |
 		GetHiddenKeysResp |
-		TruncateResp |
 		UpdateResp |
 		WriteResp |
 		NewTableIterResp |
@@ -162,7 +165,19 @@ type DeleteRelationReq struct {
 	Name         string
 }
 
+type TruncateRelationReq struct {
+	NewTableID   ID
+	OldTableID   ID
+	DatabaseID   ID
+	DatabaseName string
+	Name         string
+}
+
 type DeleteRelationResp struct {
+	ID ID
+}
+
+type TruncateRelationResp struct {
 	ID ID
 }
 
@@ -231,6 +246,14 @@ type GetTableDefsReq struct {
 	TableID ID
 }
 
+type GetTableColumnsReq struct {
+	TableID ID
+}
+
+type GetTableColumnsResp struct {
+	Attrs []*engine.Attribute
+}
+
 type GetTableDefsResp struct {
 	Defs []engine.TableDef
 }
@@ -243,15 +266,15 @@ type GetHiddenKeysResp struct {
 	Attrs []*engine.Attribute
 }
 
-type TruncateReq struct {
-	TableID      ID
-	DatabaseName string
-	TableName    string
-}
-
-type TruncateResp struct {
-	AffectedRows int64
-}
+//type TruncateReq struct {
+//	TableID      ID
+//	DatabaseName string
+//	TableName    string
+//}
+//
+//type TruncateResp struct {
+//	AffectedRows int64
+//}
 
 type UpdateReq struct {
 	TableID      ID

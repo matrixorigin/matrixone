@@ -106,8 +106,16 @@ var (
 		return cwGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
 	}
 
-	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	CaseWhenUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
+	}
+
+	CaseWhenBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwString(vs, proc, types.Type{Oid: types.T_blob})
+	}
+
+	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_text})
 	}
 )
 
@@ -143,7 +151,7 @@ type OrderedValue interface {
 
 type NormalType interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-		types.Decimal64 | types.Decimal128 | types.Timestamp
+		types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid
 }
 
 // cwGeneral is a general evaluate function for case-when operator

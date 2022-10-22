@@ -574,6 +574,12 @@ func (rb *remoteBackend) requestDone(response Message, cb func()) {
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		st.done(response)
+	} else {
+		// future has been removed, e.g. it has timed out.
+		rb.mu.Unlock()
+		if cb != nil {
+			cb()
+		}
 	}
 }
 

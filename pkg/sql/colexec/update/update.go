@@ -40,12 +40,21 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
+// the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	p := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+
+	// last batch of block
+	if bat == nil {
+		return true, nil
+	}
+
+	// empty batch
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
+
 	var affectedRows uint64 = 0
 	batLen := batch.Length(bat)
 	// Fill vector for constant value
@@ -106,7 +115,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 
 		for j := range tmpBat.Vecs {
-			if p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].AutoIncrement {
+			// Not-null check, for more information, please refer to the comments in func InsertValues
+			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].AutoIncrement) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}
@@ -285,7 +295,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 			vs := vector.MustBytesCols(vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
 				proc, m, rows); err != nil {

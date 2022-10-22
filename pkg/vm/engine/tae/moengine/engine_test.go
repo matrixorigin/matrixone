@@ -247,7 +247,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	rows, err := rel.Rows(ctx)
+	//rows, err := rel.Rows(ctx)
 	assert.Nil(t, err)
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mpool.MustNewZero()
@@ -260,9 +260,10 @@ func TestEngineAllType(t *testing.T) {
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
-	delRows, err := rel.Truncate(ctx)
+	//delRows, err := rel.Truncate(ctx)
+	err = dbase.Truncate(ctx, schema.Name)
 	assert.Nil(t, err)
-	assert.Equal(t, rows, int64(delRows))
+	//assert.Equal(t, rows, int64(delRows))
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)

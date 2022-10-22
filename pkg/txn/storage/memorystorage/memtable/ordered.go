@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package external
+package memtable
 
-const NULL_FLAG = "\\N"
+type Ordered[To any] interface {
+	Less(to To) bool
+}
+
+type min struct{}
+
+var Min min
+
+type max struct{}
+
+var Max max

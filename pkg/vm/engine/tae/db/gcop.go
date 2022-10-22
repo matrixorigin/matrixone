@@ -287,6 +287,7 @@ func (ckp *garbageCollector) PreExecute() (err error) {
 	ckp.loopState = ckp.state.Load()
 	// If scheduled done, we need to refresh a new gc epoch
 	if ckp.loopState == GCState_ScheduledDone {
+		ckp.refreshRunTime()
 		ckp.refreshEpoch()
 		ckp.ResetState()
 		ckp.loopState = GCState_Active

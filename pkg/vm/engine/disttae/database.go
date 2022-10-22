@@ -59,14 +59,16 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if err != nil {
 		return nil, err
 	}
+	tbl.defs = defs
+	tbl.tableDef = nil
 	_, ok := db.txn.createTableMap[tbl.tableId]
-	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok)
+	columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(tbl.tableId), !ok, columnLength)
 	if err != nil {
 		return nil, err
 	}
 	parts := db.txn.db.getPartitions(db.databaseId, tbl.tableId)
 	tbl.db = db
-	tbl.defs = defs
 	tbl.meta = meta
 	tbl.parts = parts
 	tbl.tableName = name
@@ -95,12 +97,37 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+func (db *database) Truncate(ctx context.Context, name string) error {
+	newId, err := db.txn.allocateID(ctx)
+	if err != nil {
+		return err
+	}
+
+	oldId, err := db.txn.getTableId(ctx, db.databaseId, name)
+	if err != nil {
+		return err
+	}
+
+	bat, err := genTruncateTableTuple(newId, db.databaseId,
+		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	for i := range db.txn.dnStores {
+		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
 	accountId, userId, roleId := getAccessInfo(ctx)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
 	defer cancel()
-	tableId, err := db.txn.idGen.AllocateID(ctx)
+	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}

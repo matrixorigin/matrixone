@@ -214,12 +214,12 @@ func TestCsvFSCollector(t *testing.T) {
 
 	n, s := <-csvCh, <-csvCh
 	name, cnt := nameAndValueCnt(n, s, M1ValuesRe)
-	if name != singleMetricTable.GetName() || cnt != 3 {
+	if name != SingleMetricTable.GetName() || cnt != 3 {
 		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
 	}
 
 	name, cnt = nameAndValueCnt(n, s, M2ValuesRe)
-	if name != singleMetricTable.GetName() || cnt != 2 {
+	if name != SingleMetricTable.GetName() || cnt != 2 {
 		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
 	}
 }

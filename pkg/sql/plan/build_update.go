@@ -180,6 +180,10 @@ func extractSelectTable(stmt tree.TableExpr, tblName, dbName *string, ctx Compil
 		if *dbName == "" {
 			*dbName = ctx.DefaultDatabase()
 		}
+	case *tree.JoinTableExpr:
+		if s.Right == nil {
+			extractSelectTable(s.Left, tblName, dbName, ctx)
+		}
 	}
 }
 
@@ -416,10 +420,11 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 		if err := extractExprTable(t.Left, tf, ctx); err != nil {
 			return err
 		}
-		return extractExprTable(t.Right, tf, ctx)
-	default:
-		return nil
+		if t.Right != nil {
+			return extractExprTable(t.Right, tf, ctx)
+		}
 	}
+	return nil
 }
 
 func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string) ([]updateCol, error) {

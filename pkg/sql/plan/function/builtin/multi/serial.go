@@ -185,7 +185,7 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 					ps[i].EncodeDecimal128(b)
 				}
 			}
-		case types.T_json, types.T_char, types.T_varchar, types.T_blob:
+		case types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			vs := vector.GetStrVectorValues(v)
 			for i := range vs {
 				if nulls.Contains(v.Nsp, uint64(i)) {
