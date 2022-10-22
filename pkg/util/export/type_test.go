@@ -167,7 +167,7 @@ func TestPathBuilder(t *testing.T) {
 		},
 		{
 			name:  "metric_log",
-			field: field{builder: NewMetricLogPathBuilder()},
+			field: field{builder: NewAccountDatePathBuilder()},
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLog,

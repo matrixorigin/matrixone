@@ -117,6 +117,10 @@ func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err
 	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
 }
 
+func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err error) {
+	return db.Txn.GetStore().DropRelationByID(db.txnDB.entry.ID, id)
+}
+
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	newTableId := db.txnDB.entry.GetCatalog().IDAlloctor.NextTable()
 
@@ -150,8 +154,28 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 	return
 }
 
+func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
+
+	oldRel, err := db.DropRelationByID(id)
+	if err != nil {
+		err = moerr.NewInternalError("%v: truncate %d error", err, id)
+		return
+	}
+	meta := oldRel.GetMeta().(*catalog.TableEntry)
+	schema := meta.GetSchema().Clone()
+	rel, err = db.CreateRelationWithID(schema, newTableId)
+	if err != nil {
+		err = moerr.NewInternalError("%v: truncate %d error", err, id)
+	}
+	return
+}
+
 func (db *txnDatabase) GetRelationByName(name string) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().GetRelationByName(db.txnDB.entry.ID, name)
+}
+
+func (db *txnDatabase) GetRelationByID(id uint64) (rel handle.Relation, err error) {
+	return db.Txn.GetStore().GetRelationByID(db.txnDB.entry.ID, id)
 }
 
 func (db *txnDatabase) UnsafeGetRelation(id uint64) (rel handle.Relation, err error) {
