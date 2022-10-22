@@ -89,7 +89,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
-			wg.Add(1 + len(initDDLs))
+			wg.Add(1 + len(tables) + len(views))
 			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch))
 			require.Equal(t, nil, err)
 			go func() {
@@ -107,7 +107,8 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 						continue
 					}
 					idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-					require.Equal(t, 0, idx)
+					viewIdx := strings.Index(sql, "CREATE VIEW")
+					require.Equal(t, -1, idx|viewIdx)
 				} else {
 					t.Log("exec sql Done.")
 					wg.Wait()

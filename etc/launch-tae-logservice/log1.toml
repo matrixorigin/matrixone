@@ -3,7 +3,7 @@ service-type = "LOG"
 
 [log]
 level = "info"
-format = "json"
+format = "console"
 max-size = 512
 
 [logservice]

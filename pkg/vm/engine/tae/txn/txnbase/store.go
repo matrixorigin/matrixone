@@ -58,12 +58,14 @@ func (store *NoopTxnStore) CreateDatabaseWithID(name string, id uint64) (db hand
 	return
 }
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
+func (store *NoopTxnStore) DropDatabaseByID(id uint64) (db handle.Database, err error)  { return }
 func (store *NoopTxnStore) UnsafeGetDatabase(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err error) {
 	return
 }
-func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error) { return }
-func (store *NoopTxnStore) DatabaseNames() (names []string)                         { return }
+func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)   { return }
+func (store *NoopTxnStore) GetDatabaseByID(id uint64) (db handle.Database, err error) { return }
+func (store *NoopTxnStore) DatabaseNames() (names []string)                           { return }
 func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
 	return
 }
