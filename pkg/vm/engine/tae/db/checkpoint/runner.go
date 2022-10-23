@@ -21,14 +21,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
-
-type Runner interface {
-	Start() error
-	Stop() error
-}
 
 type Option func(*runner)
 
@@ -40,12 +36,15 @@ func WithCollectInterval(interval time.Duration) Option {
 
 type runner struct {
 	options struct {
-		collectInterval time.Duration
+		collectInterval     time.Duration
+		dirtyEntryQueueSize int
 	}
 
 	source logtail.Collector
 
 	stopper *stopper.Stopper
+
+	dirtyEntryQueue sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -60,6 +59,7 @@ func NewRunner(source logtail.Collector, opts ...Option) *runner {
 	}
 	r.fillDefaults()
 	r.stopper = stopper.NewStopper("CheckpointRunner")
+	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
 	return r
 }
 
@@ -68,6 +68,18 @@ func (r *runner) fillDefaults() {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
 	}
+	if r.options.dirtyEntryQueueSize <= 0 {
+		r.options.dirtyEntryQueueSize = 10000
+	}
+}
+
+func (r *runner) onDirtyEntries(entries ...any) {
+	merged := logtail.NewEmptyDirtyTreeEntry()
+	for _, entry := range entries {
+		e := entry.(*logtail.DirtyTreeEntry)
+		merged.Merge(e)
+	}
+	logutil.Infof(merged.String())
 }
 
 func (r *runner) cronCollect(ctx context.Context) {
@@ -78,7 +90,7 @@ func (r *runner) cronCollect(ctx context.Context) {
 			logutil.Info("No dirty block found")
 			return
 		}
-		logutil.Infof(entry.String())
+		r.dirtyEntryQueue.Enqueue(entry)
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
@@ -87,6 +99,7 @@ func (r *runner) cronCollect(ctx context.Context) {
 
 func (r *runner) Start() (err error) {
 	r.onceStart.Do(func() {
+		r.dirtyEntryQueue.Start()
 		if err = r.stopper.RunNamedTask("dirty-collector-job", r.cronCollect); err != nil {
 			return
 		}
@@ -97,6 +110,7 @@ func (r *runner) Start() (err error) {
 func (r *runner) Stop() (err error) {
 	r.onceStop.Do(func() {
 		r.stopper.Stop()
+		r.dirtyEntryQueue.Stop()
 	})
 	return
 }

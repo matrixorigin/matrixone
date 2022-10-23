@@ -51,6 +51,16 @@ func NewEmptyDirtyTreeEntry() *DirtyTreeEntry {
 	}
 }
 
+func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
+	if entry.start.Greater(o.start) {
+		entry.start = o.start
+	}
+	if entry.end.Less(o.end) {
+		entry.end = o.end
+	}
+	entry.tree.Merge(o.tree)
+}
+
 func (entry *DirtyTreeEntry) IsEmpty() bool {
 	return entry.tree.IsEmpty()
 }
