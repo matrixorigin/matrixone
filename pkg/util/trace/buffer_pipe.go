@@ -452,7 +452,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 	opts := export.CommonCsvOptions
 
-	ts := util.Now()
+	ts := time.Now()
 	row := i.GetRow()
 	for _, i := range in {
 		item, ok := i.(CsvFields)
