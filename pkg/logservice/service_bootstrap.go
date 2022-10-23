@@ -86,7 +86,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 }
 
 func (s *Service) createInitTasks(ctx context.Context) error {
-	var tasks []task.TaskMetadata
+	tasks := make([]task.TaskMetadata, 0, len(initTaskCodes))
 	for _, init := range initTaskCodes {
 		tasks = append(tasks, task.TaskMetadata{
 			ID:       init.String(),
