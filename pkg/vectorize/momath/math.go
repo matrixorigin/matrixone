@@ -29,7 +29,7 @@ func Asin(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v < -1 || v > 1 {
-				nulls.Add(result.Nsp, uint64(i))
+				return moerr.NewInvalidArg("Asin", v)
 			} else {
 				resCol[i] = math.Asin(v)
 			}
@@ -45,9 +45,7 @@ func Acos(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v < -1 || v > 1 {
-				// MySQL is totally F***ed.
-				// return moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("acos argument %v is not valid", v))
-				nulls.Add(result.Nsp, uint64(i))
+				return moerr.NewInvalidArg("Acos", v)
 			} else {
 				resCol[i] = math.Acos(v)
 			}
