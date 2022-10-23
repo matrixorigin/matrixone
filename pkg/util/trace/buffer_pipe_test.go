@@ -40,7 +40,6 @@ import (
 var buf = new(bytes.Buffer)
 var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
-var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * mpool.KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
 
