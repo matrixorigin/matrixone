@@ -24,10 +24,10 @@ import (
 )
 
 func (s *service) startCNStoreHeartbeat() error {
-	// TODO: always enable heartbeat task
 	if s._hakeeperClient == nil {
-		s.logger.Error("cn hakeeper client is nil, heartbeat won't start")
-		return nil
+		if _, err := s.getHAKeeperClient(); err != nil {
+			return err
+		}
 	}
 	return s.stopper.RunNamedTask("cnservice-heartbeat", s.heartbeatTask)
 }
