@@ -167,7 +167,7 @@ func TestPathBuilder(t *testing.T) {
 		},
 		{
 			name:  "metric_log",
-			field: field{builder: NewMetricLogPathBuilder()},
+			field: field{builder: NewAccountDatePathBuilder()},
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLog,
@@ -178,7 +178,7 @@ func TestPathBuilder(t *testing.T) {
 				nodeType: "node",
 			},
 			wantDir:     `user/log` + `/1970/01/01` + `/table`,
-			wantETLPath: `*/*` + `/*/*/*` + `/table/*.csv`,
+			wantETLPath: `/*/*` + `/*/*/*` + `/table/*.csv`,
 			wantLogFN:   `0_123456_node.csv`,
 		},
 	}

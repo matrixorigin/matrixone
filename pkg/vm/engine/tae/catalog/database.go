@@ -85,6 +85,27 @@ func compareTableFn(a, b *TableEntry) int {
 	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
+func NewDBEntryWithID(catalog *Catalog, name string, id uint64, txnCtx txnif.AsyncTxn) *DBEntry {
+	//id := catalog.NextDB()
+
+	e := &DBEntry{
+		DBBaseEntry: NewDBBaseEntry(id),
+		catalog:     catalog,
+		name:        name,
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
+	}
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		e.acInfo.TenantID = txnCtx.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	e.CreateWithTxn(txnCtx)
+	e.acInfo.CreateAt = types.CurrentTimestamp()
+	return e
+}
+
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
@@ -252,12 +273,25 @@ func (e *DBEntry) txnGetNodeByName(name string,
 	return node.TxnGetNodeLocked(txnCtx)
 }
 
-func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
+func (e *DBEntry) TxnGetTableEntryByName(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
 	n, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
 	entry = n.GetPayload()
+	return
+}
+
+func (e *DBEntry) TxnGetTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
+	entry, err = e.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	//check whether visible and dropped.
+	visible, dropped := entry.GetVisibility(txnCtx.GetStartTS())
+	if !visible || dropped {
+		return nil, moerr.NewNotFound()
+	}
 	return
 }
 
@@ -285,9 +319,37 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (newEntry b
 	return
 }
 
+func (e *DBEntry) DropTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
+	entry, err := e.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+
+	entry.Lock()
+	defer entry.Unlock()
+	newEntry, err = entry.DropEntryLocked(txnCtx)
+	if err == nil {
+		deleted = entry
+	}
+	return
+}
+
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
+	err = e.AddEntryLocked(created, txnCtx)
+	e.Unlock()
+
+	return created, err
+}
+
+func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
+	e.Lock()
+	//Deduplicate for tableId
+	if _, exist := e.entries[tableId]; exist {
+		return nil, moerr.NewDuplicate()
+	}
+	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txnCtx)
 	e.Unlock()
 

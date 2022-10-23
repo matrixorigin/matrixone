@@ -1,0 +1,90 @@
+
+-- @label:bvt
+drop table if exists t1;
+create table t1 (a int, b int);
+prepare stmt1 from 'select * from t1 where a > ?';
+insert into t1 values (1, 11), (2, 22), (3, 33);
+set @a_var = 1;
+execute stmt1 using @a_var;
+set @a_var = 2;
+execute stmt1 using @a_var;
+insert into t1 values (4, 44);
+execute stmt1 using @a_var;
+delete from t1 where a > 3;
+execute stmt1 using @a_var;
+deallocate prepare stmt1;
+execute stmt1 using @a_var;
+
+prepare stmt1 from 'update t1 set a=999 where b = ?';
+set @b_var = 33;
+execute stmt1 using @b_var;
+select * from t1;
+deallocate prepare stmt1;
+
+prepare stmt1 from 'delete from t1 where b = ?';
+execute stmt1 using @b_var;
+select * from t1;
+deallocate prepare stmt1;
+
+prepare stmt1 from "insert into t1 values (?, ?), (?, 99)";
+set @a_var=5;
+set @b_var=55;
+set @c_var=9;
+execute stmt1 using @a_var, @b_var, @c_var;
+select * from t1;
+deallocate prepare stmt1;
+
+drop table t1;
+
+create table t1(a timestamp);
+prepare stmt1 from "insert into t1 values (current_timestamp())";
+execute stmt1;
+execute stmt1;
+select count(*) from (select distinct a from t1) t;
+drop table t1;
+
+prepare stmt2 from 'select @var_t1';
+set @var_t1 = 0;
+execute stmt2;
+set @var_t1= 'aa';
+execute stmt2;
+deallocate prepare stmt2;
+
+create table t1 (a decimal(20,4), b int);
+insert into t1 values (12.2222, 1);
+prepare stmt1 from 'update t1 set a=a+? where b = 1';
+set @a=0.1111;
+execute stmt1 using @a;
+select a, b from t1;
+
+drop table if exists t1;
+create table t1 (a decimal(12,2));
+insert into t1 values (30000);
+prepare stmt1 from 'update t1 set a = a + ?';
+set @a=4418.59;
+execute stmt1;
+execute stmt1 using @a;
+select a from t1;
+drop table if exists t1;
+prepare s6 from 'create table t1(a int)';
+execute s6;
+show tables;
+prepare s7 from 'drop table t1';
+execute s7;
+show tables;
+drop table if exists t1;
+create table t1(a int);
+set autocommit=0;
+insert into t1 values (1);
+prepare s1 from "create table t2(a int)";
+prepare s1 from "drop table t1";
+rollback;
+prepare s1 from "create table t2(a int)";
+commit;
+prepare s2 from "drop table t1";
+commit;
+insert into t1 values (1);
+execute s1;
+execute s2;
+rollback;
+set autocommit=1;

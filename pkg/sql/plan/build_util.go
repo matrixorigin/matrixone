@@ -97,8 +97,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_bool), Size: 1}, nil
 		case defines.MYSQL_TYPE_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: 24}, nil
+		case defines.MYSQL_TYPE_TEXT:
+			return &plan.Type{Id: int32(types.T_text), Size: 24}, nil
 		case defines.MYSQL_TYPE_JSON:
-			return &plan.Type{Id: int32(types.T_json)}, nil
+			return &plan.Type{Id: int32(types.T_json), Size: types.VarlenaSize}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:

@@ -688,3 +688,40 @@ func clearBinding(ctx *BindContext) {
 	ctx.bindingTree = &BindingTreeNode{}
 	ctx.bindings = make([]*Binding, 0)
 }
+
+func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
+	if idx == len(leftExprs)-1 {
+		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			leftExprs[idx],
+			rightExprs[idx],
+		})
+	}
+
+	expr, err := bindFuncExprImplByPlanExpr(nonEqOp, []*plan.Expr{
+		DeepCopyExpr(leftExprs[idx]),
+		DeepCopyExpr(rightExprs[idx]),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+		leftExprs[idx],
+		rightExprs[idx],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err := unwindTupleComparison(nonEqOp, op, leftExprs, rightExprs, idx+1)
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	if err != nil {
+		return nil, err
+	}
+
+	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+}

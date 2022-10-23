@@ -80,6 +80,10 @@ func (store *mockTxnStore) ApplyCommit() error {
 	return nil
 }
 
+func (store *mockTxnStore) DropDatabaseByID(id uint64) (handle.Database, error) {
+	return nil, nil
+}
+
 type mockDBHandle struct {
 	*txnbase.TxnDatabase
 	catalog *Catalog
@@ -137,8 +141,27 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	return
 }
 
+func (h *mockDBHandle) CreateRelationWithID(def any, id uint64) (rel handle.Relation, err error) {
+	schema := def.(*Schema)
+	tbl, err := h.entry.CreateTableEntryWithTableId(schema, h.Txn, nil, id)
+	if err != nil {
+		return nil, err
+	}
+	h.Txn.GetStore().AddTxnEntry(0, tbl)
+	rel = newMockTableHandle(h.catalog, h.Txn, tbl)
+	return
+}
+
 func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
 	panic("not implemented")
+}
+
+func (h *mockDBHandle) TruncateWithID(name string, newTableId uint64) (rel handle.Relation, err error) {
+	panic(moerr.NewNYI("Pls implement me!!"))
+}
+
+func (h *mockDBHandle) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
+	panic(moerr.NewNYI("Pls implement me!!"))
 }
 
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
@@ -151,16 +174,24 @@ func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err
 	return
 }
 
+func (h *mockDBHandle) DropRelationByID(id uint64) (rel handle.Relation, err error) {
+	return nil, nil
+}
+
 func (h *mockDBHandle) String() string {
 	return h.entry.String()
 }
 
 func (h *mockDBHandle) GetRelationByName(name string) (rel handle.Relation, err error) {
-	entry, err := h.entry.GetTableEntry(name, h.Txn)
+	entry, err := h.entry.TxnGetTableEntryByName(name, h.Txn)
 	if err != nil {
 		return nil, err
 	}
 	return newMockTableHandle(h.catalog, h.Txn, entry), nil
+}
+
+func (h *mockDBHandle) GetRelationByID(id uint64) (rel handle.Relation, err error) {
+	return nil, nil
 }
 
 func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
@@ -186,12 +217,30 @@ func (txn *mockTxn) CreateDatabase(name string) (handle.Database, error) {
 	return h, nil
 }
 
+func (txn *mockTxn) CreateDatabaseWithID(name string, id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntryWithID(name, id, txn)
+	if err != nil {
+		return nil, err
+	}
+	txn.Store.AddTxnEntry(0, entry)
+	h := newMockDBHandle(txn.catalog, txn, entry)
+	return h, nil
+}
+
 func (txn *mockTxn) CreateDatabaseByDef(def any) (handle.Database, error) {
 	panic(moerr.NewNYI("CreateDatabaseByID is not implemented yet"))
 }
 
 func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
-	entry, err := txn.catalog.GetDBEntry(name, txn)
+	entry, err := txn.catalog.TxnGetDBEntryByName(name, txn)
+	if err != nil {
+		return nil, err
+	}
+	return newMockDBHandle(txn.catalog, txn, entry), nil
+}
+
+func (txn *mockTxn) GetDatabaseByID(id uint64) (handle.Database, error) {
+	entry, err := txn.catalog.TxnGetDBEntryByID(id, txn)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +257,12 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 }
 
 func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
-	panic(moerr.NewNYI("DropDatabaseById is not implemented"))
+	_, entry, err := txn.catalog.DropDBEntryByID(id, txn)
+	if err != nil {
+		return nil, err
+	}
+	txn.Store.AddTxnEntry(0, entry)
+	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {

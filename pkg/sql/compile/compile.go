@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,6 +107,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return c.scope.CreateTable(c)
 	case DropTable:
 		return c.scope.DropTable(c)
+	case TruncateTable:
+		return c.scope.TruncateTable(c)
 	case Deletion:
 		defer c.fillAnalyzeInfo()
 		affectedRows, err := c.scope.Delete(c)
@@ -164,6 +168,11 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return &Scope{
 				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_TRUNCATE_TABLE:
+			return &Scope{
+				Magic: TruncateTable,
 				Plan:  pn,
 			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
@@ -340,7 +349,10 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ss := c.compileExternScan(n)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
-		ss := c.compileTableScan(n)
+		ss, err := c.compileTableScan(n)
+		if err != nil {
+			return nil, err
+		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER:
 		curr := c.anal.curr
@@ -489,9 +501,10 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+func (c *Compile) ConstructScope() *Scope {
 	ds := &Scope{Magic: Normal}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	ds.Proc.LoadTag = true
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
@@ -499,12 +512,22 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		bat.InitZsOne(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
-	ss := []*Scope{ds}
-	for i := range ss {
+	return ds
+}
+
+func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+	mcpu := c.NumCPU()
+	if mcpu < 1 {
+		mcpu = 1
+	}
+	ss := make([]*Scope, mcpu)
+	fileparam := &external.ExternalFileparam{}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.ConstructScope()
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
 			Idx: c.anal.curr,
-			Arg: constructExternal(n, c.ctx),
+			Arg: constructExternal(n, c.ctx, fileparam),
 		})
 	}
 	return ss
@@ -514,6 +537,8 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
 		return c.compileUnnest(n, ss)
+	case "generate_series":
+		return c.compileGenerateSeries(n, ss)
 	default:
 		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
@@ -530,12 +555,27 @@ func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	return ss, nil
 }
 
-func (c *Compile) compileTableScan(n *plan.Node) []*Scope {
-	ss := make([]*Scope, 0, len(c.cnList))
-	for i := range c.cnList {
-		ss = append(ss, c.compileTableScanWithNode(n, c.cnList[i]))
+func (c *Compile) compileGenerateSeries(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.GenerateSeries,
+			Idx: c.anal.curr,
+			Arg: constructGenerateSeries(n, c.ctx),
+		})
 	}
-	return ss
+	return ss, nil
+}
+
+func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+	nodes, err := c.generateNodes(n)
+	if err != nil {
+		return nil, err
+	}
+	ss := make([]*Scope, 0, len(nodes))
+	for i := range nodes {
+		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
+	}
+	return ss, nil
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
@@ -886,6 +926,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		cnt++
 	}
 	rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, cnt, c.anal.Nodes())
+	if len(ss) > 0 {
+		rs.Proc.LoadTag = ss[0].Proc.LoadTag
+	}
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Merge,
 		Arg: &merge.Argument{},
@@ -1048,6 +1091,70 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
 	}
+}
+
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+	var err error
+	var ranges [][]byte
+	var nodes engine.Nodes
+
+	db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := db.Relation(c.ctx, n.TableDef.Name)
+	if err != nil {
+		return nil, err
+	}
+	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
+	if err != nil {
+		return nil, err
+	}
+	if len(ranges) == 0 {
+		return c.cnList, nil
+	}
+	if len(ranges[0]) == 0 {
+		if c.info.Typ == plan2.ExecTypeTP {
+			nodes = append(nodes, engine.Node{Mcpu: 1})
+		} else {
+			nodes = append(nodes, engine.Node{Mcpu: c.NumCPU()})
+		}
+		ranges = ranges[1:]
+	}
+	if len(ranges) == 0 {
+		return nodes, nil
+	}
+	step := len(ranges) / len(c.cnList)
+	if step <= 0 {
+		for i := range ranges {
+			nodes = append(nodes, engine.Node{
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.cnList[i].Mcpu,
+				Data: [][]byte{ranges[i]},
+			})
+		}
+	} else {
+		for i := 0; i < len(ranges); i += step {
+			j := i / step
+			if i+step >= len(ranges) {
+				nodes = append(nodes, engine.Node{
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.cnList[j].Mcpu,
+					Data: ranges[i:],
+				})
+			} else {
+				nodes = append(nodes, engine.Node{
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.cnList[j].Mcpu,
+					Data: ranges[i : i+step],
+				})
+			}
+		}
+	}
+	return nodes, nil
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {

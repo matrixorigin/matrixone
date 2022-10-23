@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -86,6 +87,22 @@ func (db *txnDatabase) GetRelation(_ context.Context, name string) (Relation, er
 	return rel, nil
 }
 
+func (db *txnDatabase) GetRelationByID(_ context.Context, id uint64) (Relation, error) {
+	var err error
+	var rel Relation
+
+	h, err := db.handle.GetRelationByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if isSysRelationId(id) {
+		rel = newSysRelation(h)
+		return rel, nil
+	}
+	rel = newRelation(h)
+	return rel, nil
+}
+
 func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.TableDef) error {
 	schema, err := DefsToSchema(name, defs)
 	if err != nil {
@@ -94,6 +111,21 @@ func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.Tabl
 	schema.BlockMaxRows = 40000
 	schema.SegmentMaxBlocks = 20
 	_, err = db.handle.CreateRelation(schema)
+	return err
+}
+
+func (db *txnDatabase) Truncate(_ context.Context, name string) error {
+	_, err := db.handle.TruncateByName(name)
+	return err
+}
+
+func (db *txnDatabase) TruncateRelationWithID(_ context.Context, name string, id uint64) error {
+	_, err := db.handle.TruncateWithID(name, id)
+	return err
+}
+
+func (db *txnDatabase) TruncateRelationByID(_ context.Context, id uint64, newId uint64) error {
+	_, err := db.handle.TruncateByID(id, newId)
 	return err
 }
 
@@ -108,6 +140,19 @@ func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []eng
 	return err
 }
 
+func (db *txnDatabase) CreateRelationWithID(_ context.Context, name string,
+	id uint64, defs []engine.TableDef) error {
+	// schema, err := DefsToSchema(name, defs)
+	schema, err := HandleDefsToSchema(name, defs)
+	if err != nil {
+		return err
+	}
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 20
+	_, err = db.handle.CreateRelationWithID(schema, id)
+	return err
+}
+
 func (db *txnDatabase) Delete(_ context.Context, name string) error {
 	_, err := db.handle.DropRelationByName(name)
 	return err
@@ -115,6 +160,11 @@ func (db *txnDatabase) Delete(_ context.Context, name string) error {
 
 func (db *txnDatabase) DropRelation(_ context.Context, name string) error {
 	_, err := db.handle.DropRelationByName(name)
+	return err
+}
+
+func (db *txnDatabase) DropRelationByID(_ context.Context, id uint64) error {
+	_, err := db.handle.DropRelationByID(id)
 	return err
 }
 

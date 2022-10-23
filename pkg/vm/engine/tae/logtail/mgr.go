@@ -67,7 +67,7 @@ func NewLogtailMgr(pageSize int32, clock clock.Clock) *LogtailMgr {
 }
 
 // LogtailMgr as a commit listener
-func (l *LogtailMgr) OnEndPrePrepare(op *txnbase.OpTxn) { l.AddTxn(op.Txn) }
+func (l *LogtailMgr) OnEndPrePrepare(txn txnif.AsyncTxn) { l.AddTxn(txn) }
 
 // Notes:
 // 1. AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.

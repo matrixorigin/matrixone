@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -56,6 +57,38 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 	)
 	if err != nil {
 		return nil
+	}
+
+	return nil
+}
+
+func (d *Database) Truncate(ctx context.Context, relName string) error {
+	newId, err := d.engine.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+	rel, err := d.Relation(ctx, relName)
+	if err != nil {
+		return err
+	}
+	oldId, _ := strconv.ParseInt(rel.GetTableID(ctx), 10, 64)
+
+	_, err = DoTxnRequest[TruncateRelationResp](
+		ctx,
+		d.txnOperator,
+		false,
+		d.engine.allShards,
+		OpTruncateRelation,
+		TruncateRelationReq{
+			NewTableID:   newId,
+			OldTableID:   ID(oldId),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
+		},
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil

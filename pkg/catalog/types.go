@@ -25,6 +25,10 @@ const (
 )
 
 const (
+	Meta_Length = 6
+)
+
+const (
 	System_User    = uint32(0)
 	System_Role    = uint32(0)
 	System_Account = uint32(0)
@@ -83,7 +87,11 @@ const (
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
 
-	BlockMeta_ID = "ID"
+	BlockMeta_ID         = "block_id"
+	BlockMeta_EntryState = "entry_state"
+	BlockMeta_MetaLoc    = "meta_loc"
+	BlockMeta_DeltaLoc   = "delta_loc"
+	BlockMeta_CommitTs   = "committs"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -155,7 +163,21 @@ const (
 	MO_COLUMNS_ATT_IS_HIDDEN_IDX         = 18
 	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
+
+	BLOCKMETA_ID_IDX         = 0
+	BLOCKMETA_ENTRYSTATE_IDX = 1
+	BLOCKMETA_METALOC_IDX    = 2
+	BLOCKMETA_DELTALOC_IDX   = 3
+	BLOCKMETA_COMMITTS_IDX   = 4
 )
+
+type BlockInfo struct {
+	BlockID    uint64
+	EntryState bool
+	MetaLoc    string
+	DeltaLoc   string
+	CommitTs   types.TS
+}
 
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table
@@ -252,6 +274,10 @@ var (
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
+		BlockMeta_EntryState,
+		BlockMeta_MetaLoc,
+		BlockMeta_DeltaLoc,
+		BlockMeta_CommitTs,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
@@ -303,7 +329,11 @@ var (
 		types.New(types.T_varchar, 1024, 0, 0), // att_update
 	}
 	MoTableMetaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0, 0), // ID
+		types.New(types.T_uint64, 0, 0, 0),  // block_id
+		types.New(types.T_bool, 0, 0, 0),    // entry_state, true for appendable
+		types.New(types.T_varchar, 0, 0, 0), // meta_loc
+		types.New(types.T_varchar, 0, 0, 0), // delta_loc
+		types.New(types.T_TS, 0, 0, 0),      // committs
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

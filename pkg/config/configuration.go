@@ -16,6 +16,7 @@ package config
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -113,6 +114,15 @@ var (
 	defaultDNReplicaID = 1
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
+
+	// defaultMergeCycle default: 0 sec, means disable merge as service
+	defaultMergeCycle = 0
+
+	// defaultPathBuilder, val in [DBTable, AccountDate]
+	defaultPathBuilder = "AccountDate"
+
+	// defaultSessionTimeout default: 10 minutes
+	defaultSessionTimeout = 10 * time.Minute
 )
 
 // FrontendParameters of the frontend
@@ -233,6 +243,9 @@ type FrontendParameters struct {
 
 	//default is 1
 	DNReplicaID uint64 `toml:"dnreplicalid"`
+
+	//timeout of the session. the default is 10minutes
+	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -327,6 +340,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.LogShardID == 0 {
 		fp.LogShardID = uint64(defaultLogShardID)
 	}
+
+	if fp.SessionTimeout.Duration == 0 {
+		fp.SessionTimeout.Duration = defaultSessionTimeout
+	}
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
@@ -380,6 +397,11 @@ type ObservabilityParameters struct {
 
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
+
+	MergeCycle int `toml:"mergeCycle"`
+
+	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
+	PathBuilder string `toml:"PathBuilder"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -407,6 +429,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MetricGatherInterval <= 0 {
 		op.MetricGatherInterval = defaultMetricGatherInterval
+	}
+
+	if op.MergeCycle <= 0 {
+		op.MergeCycle = defaultMergeCycle
+	}
+
+	if op.PathBuilder == "" {
+		op.PathBuilder = defaultPathBuilder
 	}
 }
 

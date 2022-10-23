@@ -101,7 +101,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 			Query: query,
 		},
 	}
-
+	pn.GetQuery().LoadTag = true
 	return pn, nil
 }
 

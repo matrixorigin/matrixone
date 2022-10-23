@@ -17,13 +17,16 @@ package compile
 import (
 	"context"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -267,6 +270,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 
 		ds[i] = &deletion.DeleteCtx{
 			TableSource:        relation,
+			TableName:          n.DeleteTablesCtx[i].TblName,
+			DbName:             n.DeleteTablesCtx[i].DbName,
 			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
 			IsHideKey:          n.DeleteTablesCtx[i].IsHideKey,
@@ -306,6 +311,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:             eg,
 		DB:                 db,
 		TableID:            relation.GetTableID(ctx),
+		DBName:             n.ObjRef.SchemaName,
+		TableName:          n.TableDef.Name,
 		CPkeyColDef:        n.TableDef.CompositePkey,
 		ComputeIndexTables: computeIndexTables,
 		ComputeIndexInfos:  n.TableDef.ComputeIndexInfos,
@@ -379,7 +386,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -391,6 +398,7 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
+			Fileparam:     fileparam,
 		},
 	}
 }
@@ -408,6 +416,20 @@ func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
 		},
 	}
 }
+
+func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	return &generate_series.Argument{
+		Es: &generate_series.Param{
+			Attrs: attrs,
+			Cols:  n.TableDef.Cols,
+		},
+	}
+}
+
 func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {

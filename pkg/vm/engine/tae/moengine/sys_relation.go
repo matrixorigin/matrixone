@@ -46,6 +46,15 @@ func isSysRelation(name string) bool {
 	return false
 }
 
+func isSysRelationId(id uint64) bool {
+	if id == catalog.MO_DATABASE_ID ||
+		id == catalog.MO_TABLES_ID ||
+		id == catalog.MO_COLUMNS_ID {
+		return true
+	}
+	return false
+}
+
 func (s *sysRelation) Write(_ context.Context, _ *batch.Batch) error {
 	return ErrReadOnly
 }
@@ -56,10 +65,6 @@ func (s *sysRelation) Update(_ context.Context, _ *batch.Batch) error {
 
 func (s *sysRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error {
 	return ErrReadOnly
-}
-
-func (s *sysRelation) Truncate(_ context.Context) (uint64, error) {
-	return 0, ErrReadOnly
 }
 
 func (s *sysRelation) DeleteByPhyAddrKeys(_ context.Context, _ *vector.Vector) error {

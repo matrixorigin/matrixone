@@ -180,6 +180,10 @@ func extractSelectTable(stmt tree.TableExpr, tblName, dbName *string, ctx Compil
 		if *dbName == "" {
 			*dbName = ctx.DefaultDatabase()
 		}
+	case *tree.JoinTableExpr:
+		if s.Right == nil {
+			extractSelectTable(s.Left, tblName, dbName, ctx)
+		}
 	}
 }
 
@@ -282,11 +286,8 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			if !isUpdateCol {
 				if col.OnUpdate != nil {
 					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
 				} else {
 					otherAttrs = append(otherAttrs, col.Name)
-					e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 				}
 			}
 		}
@@ -303,8 +304,6 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			}
 			if !find {
 				indexAttrs = append(indexAttrs, indexColName)
-				e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, indexColName)
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 			}
 		}
 		offset += int32(len(orderAttrs)) + 1
@@ -325,6 +324,15 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		}
 		for _, u := range onUpdateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
+		}
+		for _, o := range otherAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, o)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+		}
+		for _, attr := range indexAttrs {
+			e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, attr)
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 		}
 		if len(priKeys) > 0 && priKeys[0].IsCPkey {
 			ct.CompositePkey = priKeys[0]
@@ -412,10 +420,11 @@ func extractExprTable(expr tree.TableExpr, tf *tableInfo, ctx CompilerContext) e
 		if err := extractExprTable(t.Left, tf, ctx); err != nil {
 			return err
 		}
-		return extractExprTable(t.Right, tf, ctx)
-	default:
-		return nil
+		if t.Right != nil {
+			return extractExprTable(t.Right, tf, ctx)
+		}
 	}
+	return nil
 }
 
 func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []*TableDef, baseNameMap map[string]string) ([]updateCol, error) {

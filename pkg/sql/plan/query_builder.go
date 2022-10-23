@@ -158,16 +158,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 		if node.NodeType == plan.Node_TABLE_FUNCTION {
-			if len(node.Children) > 0 {
-				childId := node.Children[0]
-				childNode := builder.qry.Nodes[childId]
-				if childNode.NodeType != plan.Node_PROJECT {
-					break
-				}
-				_, err := builder.remapAllColRefs(childId, colRefCnt)
-				if err != nil {
-					return nil, err
-				}
+			childId := node.Children[0]
+			childNode := builder.qry.Nodes[childId]
+			if childNode.NodeType != plan.Node_PROJECT {
+				break
+			}
+			_, err := builder.remapAllColRefs(childId, colRefCnt)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -1538,6 +1536,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		if err != nil {
 			return 0, err
 		}
+
 		leftChildID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{leftChildID, rightChildID},
@@ -1721,6 +1720,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		}, ctx)
 
 	case *tree.JoinTableExpr:
+		if tbl.Right == nil {
+			return builder.buildTable(tbl.Left, ctx)
+		}
 		return builder.buildJoinTable(tbl, ctx)
 	case *tree.TableFunction:
 		return builder.buildTableFunction(tbl, ctx)
@@ -2216,14 +2218,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		node.FilterList = append(node.FilterList, filters...)
 	case plan.Node_TABLE_FUNCTION:
 		node.FilterList = append(node.FilterList, filters...)
-		if len(node.Children) > 0 {
-			childId := node.Children[0]
-			childId, err := builder.pushdownFilters(childId, nil)
-			if err != nil {
-				return 0, err
-			}
-			node.Children[0] = childId
+		childId := node.Children[0]
+		childId, err := builder.pushdownFilters(childId, nil)
+		if err != nil {
+			return 0, err
 		}
+		node.Children[0] = childId
 
 	default:
 		if len(node.Children) > 0 {
@@ -2256,62 +2256,14 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		if err != nil {
 			return 0, err
 		}
-		//// rewrite right join to left join
-		//builder.rewriteRightJoinToLeftJoin(childId)
-		//selectList, _, err := ctx.unfoldStar("")
-		//if err != nil {
-		//	return 0, err
-		//}
-		//tag := builder.genNewTag() //TODO: check
-		//projectionBinder := NewProjectionBinder(builder, ctx, nil)
-		//for i, selectExpr := range selectList {
-		//	astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
-		//	if err != nil {
-		//		return 0, err
-		//	}
-		//
-		//	expr, err := projectionBinder.BindExpr(astExpr, 0, false) //TODO: check isRoot
-		//	if err != nil {
-		//		return 0, err
-		//	}
-		//
-		//	builder.nameByColRef[[2]int32{tag, int32(i)}] = tree.String(astExpr, dialect.MYSQL) //TODO: check tag
-		//
-		//	alias := string(selectExpr.As)
-		//	if len(alias) > 0 {
-		//		ctx.aliasMap[alias] = int32(len(ctx.projects))
-		//	}
-		//	ctx.projects = append(ctx.projects, expr)
-		//}
-		//// append PROJECT node
-		//for i, proj := range ctx.projects {
-		//	childId, proj, err = builder.flattenSubqueries(childId, proj, ctx)
-		//	if err != nil {
-		//		return 0, err
-		//	}
-		//
-		//	if proj == nil {
-		//		// TODO: implement MARK join to better support non-scalar subqueries
-		//		return 0, moerr.NewNYI("non-scalar subquery in SELECT clause")
-		//	}
-		//
-		//	ctx.projects[i] = proj
-		//}
-		//
-		//projectNode := &plan.Node{
-		//	NodeType:    plan.Node_PROJECT,
-		//	Children:    []int32{childId},
-		//	ProjectList: ctx.projects,
-		//	BindingTags: []int32{tag}, //TODO: check tag
-		//}
-		//childId = builder.appendNode(projectNode, ctx)
-		//ctx.projects = nil
 	}
 
 	id := tbl.Id()
 	switch id {
 	case "unnest":
 		return builder.buildUnnest(tbl, ctx, childId)
+	case "generate_series":
+		return builder.buildGenerateSeries(tbl, ctx)
 	default:
 		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
 	}

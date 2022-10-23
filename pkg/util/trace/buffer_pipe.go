@@ -26,11 +26,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/uuid"
@@ -75,8 +77,6 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	switch name {
 	case MOSpanType:
 		f = genSpanBatchSql
-	case MORawLogType:
-		f = genLogBatchSql
 	case MOLogType:
 		f = genZapLogBatchSql
 	case MOStatementType:
@@ -189,50 +189,6 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 }
 
 var logStackFormatter atomic.Value
-
-func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
-	buf.Reset()
-	if len(in) == 0 {
-		logutil.Debugf("genLogBatchSql empty")
-		return ""
-	}
-
-	buf.WriteString(fmt.Sprintf("insert into %s.%s ", StatsDatabase, logInfoTbl))
-	buf.WriteString("(")
-	buf.WriteString("`span_id`")
-	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_uuid`")
-	buf.WriteString(", `node_type`")
-	buf.WriteString(", `timestamp`")
-	buf.WriteString(", `name`")
-	buf.WriteString(", `level`")
-	buf.WriteString(", `caller`")
-	buf.WriteString(", `message`")
-	buf.WriteString(", `extra`")
-	buf.WriteString(") values ")
-
-	moNode := GetNodeResource()
-
-	for _, item := range in {
-		s, ok := item.(*MOLog)
-		if !ok {
-			panic("Not MOLog")
-		}
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.TraceID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                                                 // node_uuid
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType))                                                 // node_type
-		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.Timestamp)))                             // timestamp
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name)))                                                   // log level
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Level.String()))                                                // log level
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(fmt.Sprintf(logStackFormatter.Load().(string), s.Caller)))) // caller
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Message)))                                                // message
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Extra)))                                                  // extra
-		buf.WriteString("),")
-	}
-	return string(buf.Next(buf.Len() - 1))
-}
 
 func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
@@ -405,12 +361,12 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
-	case MOSpanType:
-	case MORawLogType:
-	case MOLogType:
-	case MOStatementType:
+	case MOStatementType, SingleStatementTable.GetName():
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
+	case MOSpanType:
+	case MOLogType:
+	case MORawLogType:
 	default:
 		panic(moerr.NewInternalError("unknown type %s", name))
 	}
@@ -461,7 +417,8 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 
 type CsvFields interface {
 	bp.HasName
-	CsvFields() []string
+	GetRow() *export.Row
+	CsvFields(row *export.Row) []string
 }
 
 var QuoteFieldFunc = func(buf *bytes.Buffer, value string, enclose rune) string {
@@ -493,16 +450,16 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
-	opts := CommonCsvOptions
+	opts := export.CommonCsvOptions
 
-	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i)
-
+	ts := util.Now()
+	row := i.GetRow()
 	for _, i := range in {
 		item, ok := i.(CsvFields)
 		if !ok {
 			panic("not MalCsv, dont support output CSV")
 		}
-		fields := item.CsvFields()
+		fields := item.CsvFields(row)
 		for idx, field := range fields {
 			if idx > 0 {
 				buf.WriteRune(opts.FieldTerminator)
@@ -517,6 +474,10 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		}
 		buf.WriteRune(opts.Terminator)
 	}
+
+	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i,
+		export.WithTimestamp(ts),
+		export.WithPathBuilder(row.Table.PathBuilder))
 	return NewCSVRequest(writer, buf.String())
 }
 
@@ -555,7 +516,7 @@ func newBuffer2Sql(opts ...bufferOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
-		sizeThreshold:  10 * MB,
+		sizeThreshold:  10 * mpool.MB,
 		filterItemFunc: noopFilterItemFunc,
 		genBatchFunc:   noopGenBatchSQL,
 	}
@@ -585,8 +546,9 @@ func (b *buffer2Sql) Add(i bp.HasName) {
 func (b *buffer2Sql) Reset() {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	for _, i := range b.buf {
+	for idx, i := range b.buf {
 		i.Free()
+		b.buf[idx] = nil
 	}
 	b.buf = b.buf[0:0]
 	b.size = 0
