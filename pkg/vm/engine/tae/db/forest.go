@@ -15,7 +15,10 @@
 package db
 
 import (
+	"bytes"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,15 +26,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/tidwall/btree"
 )
+
+type DirtyEntryInterceptor = catalog.Processor
 
 type DirtyTreeEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	tree       *common.Tree
+}
+
+func NewEmptyDirtyTreeEntry() *DirtyTreeEntry {
+	return &DirtyTreeEntry{
+		tree: common.NewTree(),
+	}
+}
+
+func (entry *DirtyTreeEntry) IsEmpty() bool {
+	return entry.tree.IsEmpty()
+}
+
+func (entry *DirtyTreeEntry) GetTimeRange() (from, to types.TS) {
+	return entry.start, entry.end
+}
+
+func (entry *DirtyTreeEntry) GetTree() (tree *common.Tree) {
+	return entry.tree
+}
+
+func (entry *DirtyTreeEntry) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString(
+		fmt.Sprintf("DirtyTreeEntry[%s=>%s]\n",
+			entry.start.ToString(),
+			entry.end.ToString()))
+	_, _ = buf.WriteString(entry.tree.String())
+	return buf.String()
 }
 
 type dirtyCollector struct {
@@ -41,7 +73,7 @@ type dirtyCollector struct {
 	// context
 	catalog     *catalog.Catalog
 	clock       *types.TsAlloctor
-	interceptor catalog.Processor
+	interceptor DirtyEntryInterceptor
 
 	// storage
 	storage struct {
@@ -49,26 +81,29 @@ type dirtyCollector struct {
 		entries *btree.BTreeG[*DirtyTreeEntry]
 		maxTs   types.TS
 	}
+	merged atomic.Pointer[DirtyTreeEntry]
 }
 
 func newDirtyCollector(
 	sourcer *logtail.LogtailMgr,
 	clock clock.Clock,
 	catalog *catalog.Catalog,
-	interceptor catalog.Processor) *dirtyCollector {
-	watch := &dirtyCollector{
+	interceptor DirtyEntryInterceptor) *dirtyCollector {
+	collector := &dirtyCollector{
 		sourcer:     sourcer,
 		catalog:     catalog,
 		interceptor: interceptor,
 		clock:       types.NewTsAlloctor(clock),
 	}
-	watch.storage.entries = btree.NewBTreeGOptions[*DirtyTreeEntry](
+	collector.storage.entries = btree.NewBTreeGOptions[*DirtyTreeEntry](
 		func(a, b *DirtyTreeEntry) bool {
 			return a.start.Less(b.start) && a.end.Less(b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})
-	return watch
+
+	collector.merged.Store(NewEmptyDirtyTreeEntry())
+	return collector
 }
 
 func (d *dirtyCollector) Run() {
@@ -81,13 +116,14 @@ func (d *dirtyCollector) Run() {
 
 	d.collectAndStoreNew(from, to)
 	d.scanAndCleanStale()
+	d.GetAndRefreshMerged()
 }
 
 // DirtyCount returns unflushed table, segment, block count
 func (d *dirtyCollector) DirtyCount() (tblCnt, segCnt, blkCnt int) {
-	merged := d.MergeForest()
-	tblCnt = merged.TableCount()
-	for _, tblTree := range merged.Tables {
+	merged := d.GetAndRefreshMerged()
+	tblCnt = merged.tree.TableCount()
+	for _, tblTree := range merged.tree.Tables {
 		segCnt += len(tblTree.Segs)
 		for _, segTree := range tblTree.Segs {
 			blkCnt += len(segTree.Blks)
@@ -97,26 +133,55 @@ func (d *dirtyCollector) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 }
 
 func (d *dirtyCollector) String() string {
-	tree := d.MergeForest()
-	return tree.String()
+	merged := d.GetAndRefreshMerged()
+	return merged.tree.String()
 }
 
-func (d *dirtyCollector) MergeForest() *common.Tree {
-	merged := common.NewTree()
+func (d *dirtyCollector) GetAndRefreshMerged() (merged *DirtyTreeEntry) {
+	merged = d.merged.Load()
+	d.storage.RLock()
+	maxTs := d.storage.maxTs
+	d.storage.RUnlock()
+	if maxTs.LessEq(merged.end) {
+		return
+	}
+	merged = d.Merge()
+	d.tryUpdateMerged(merged)
+	return
+}
 
+func (d *dirtyCollector) Merge() *DirtyTreeEntry {
 	// get storage snapshot and work on it
-	snapshot := d.getStorageSnapshot()
+	snapshot, maxTs := d.getStorageSnapshot()
+
+	merged := NewEmptyDirtyTreeEntry()
+	merged.end = maxTs
 
 	// scan base on the snapshot
 	// merge all trees of the entry
 	snapshot.Scan(func(entry *DirtyTreeEntry) bool {
 		entry.RLock()
 		defer entry.RUnlock()
-		merged.Merge(entry.tree)
+		merged.tree.Merge(entry.tree)
 		return true
 	})
 
 	return merged
+}
+
+func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) {
+	var old *DirtyTreeEntry
+	for {
+		old = d.merged.Load()
+		if old.end.GreaterEq(merged.end) {
+			break
+		}
+		if d.merged.CompareAndSwap(old, merged) {
+			updated = true
+			break
+		}
+	}
+	return
 }
 
 func (d *dirtyCollector) findRange() (from, to types.TS) {
@@ -170,10 +235,12 @@ func (d *dirtyCollector) tryStoreEntry(entry *DirtyTreeEntry) (ok bool) {
 	return
 }
 
-func (d *dirtyCollector) getStorageSnapshot() *btree.BTreeG[*DirtyTreeEntry] {
+func (d *dirtyCollector) getStorageSnapshot() (ss *btree.BTreeG[*DirtyTreeEntry], ts types.TS) {
 	d.storage.Lock()
 	defer d.storage.Unlock()
-	return d.storage.entries.Copy()
+	ss = d.storage.entries.Copy()
+	ts = d.storage.maxTs
+	return
 }
 
 // Scan current dirty entries, remove all flushed or not found ones, and drive interceptor on remaining block entries.
@@ -181,7 +248,7 @@ func (d *dirtyCollector) scanAndCleanStale() {
 	toDeletes := make([]*DirtyTreeEntry, 0)
 
 	// get a snapshot of entries
-	entries := d.getStorageSnapshot()
+	entries, _ := d.getStorageSnapshot()
 
 	// scan all entries in the storage
 	// try compact the dirty tree for each entry
@@ -218,7 +285,7 @@ func (d *dirtyCollector) scanAndCleanStale() {
 
 // iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
 func (d *dirtyCollector) tryCompactTree(
-	interceptor catalog.Processor,
+	interceptor DirtyEntryInterceptor,
 	tree *common.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
@@ -284,26 +351,5 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 	}
 	tree.Compact()
-	return
-}
-
-type DirtyBlockCalibrator struct {
-	*catalog.LoopProcessor
-	ckpDriver checkpoint.Driver
-}
-
-func NewDirtyBlockCalibrator(ckpDriver checkpoint.Driver) *DirtyBlockCalibrator {
-	v := &DirtyBlockCalibrator{ckpDriver: ckpDriver}
-	v.BlockFn = v.visitBlock
-	return v
-}
-
-func (v *DirtyBlockCalibrator) visitBlock(entry *catalog.BlockEntry) (err error) {
-	data := entry.GetBlockData()
-
-	// Run calibration and estimate score for checkpoint
-	if data.RunCalibration() > 0 {
-		v.ckpDriver.EnqueueCheckpointUnit(data)
-	}
 	return
 }

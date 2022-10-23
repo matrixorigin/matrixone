@@ -132,12 +132,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		collector := newDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
 		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval*1)*time.Millisecond, func() {
 			collector.Run()
-			dirtyTree := collector.MergeForest()
-			if dirtyTree.IsEmpty() {
+			entry := collector.GetAndRefreshMerged()
+			if entry.IsEmpty() {
 				logutil.Info("No dirty block found")
 				return
 			}
-			logutil.Infof(dirtyTree.String())
+			logutil.Infof(entry.String())
 			// logutil.Info(db.Catalog.SimplePPString(common.PPL1))
 		}, nil)
 		hb.Start()
