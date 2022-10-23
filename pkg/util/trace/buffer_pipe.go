@@ -54,10 +54,6 @@ type IBuffer2SqlItem interface {
 	Free()
 }
 
-type batchSqlHandler struct {
-	defaultOpts []bufferOption
-}
-
 type batchCSVHandler struct {
 	defaultOpts []bufferOption
 }
