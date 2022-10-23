@@ -37,7 +37,7 @@
 # make static-check
 #
 # To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module. 
-# make vendor
+# make vendor-build
 #
 
 # where am I
