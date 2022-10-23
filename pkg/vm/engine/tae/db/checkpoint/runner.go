@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -34,13 +35,43 @@ func WithCollectInterval(interval time.Duration) Option {
 	}
 }
 
+type blockVisitor struct {
+	catalog *catalog.Catalog
+}
+
+func (visitor *blockVisitor) String() string                                    { return "" }
+func (visitor *blockVisitor) VisitTable(dbID, id uint64) (err error)            { return }
+func (visitor *blockVisitor) VisitSegment(dbID, tableID, id uint64) (err error) { return }
+func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
+	db, err := visitor.catalog.GetDatabaseByID(dbID)
+	if err != nil {
+		panic(err)
+	}
+	table, err := db.GetTableEntryByID(tableID)
+	if err != nil {
+		panic(err)
+	}
+	segment, err := table.GetSegmentByID(segmentID)
+	if err != nil {
+		panic(err)
+	}
+	blk, err := segment.GetBlockEntryByID(id)
+	if err != nil {
+		panic(err)
+	}
+	score := blk.GetBlockData().RunCalibration()
+	logutil.Infof("%s [SCORE=%d]", blk.String(), score)
+	return
+}
+
 type runner struct {
 	options struct {
 		collectInterval     time.Duration
 		dirtyEntryQueueSize int
 	}
 
-	source logtail.Collector
+	source  logtail.Collector
+	catalog *catalog.Catalog
 
 	stopper *stopper.Stopper
 
@@ -50,9 +81,13 @@ type runner struct {
 	onceStop  sync.Once
 }
 
-func NewRunner(source logtail.Collector, opts ...Option) *runner {
+func NewRunner(
+	catalog *catalog.Catalog,
+	source logtail.Collector,
+	opts ...Option) *runner {
 	r := &runner{
-		source: source,
+		catalog: catalog,
+		source:  source,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -79,7 +114,15 @@ func (r *runner) onDirtyEntries(entries ...any) {
 		e := entry.(*logtail.DirtyTreeEntry)
 		merged.Merge(e)
 	}
+	if merged.IsEmpty() {
+		return
+	}
 	logutil.Infof(merged.String())
+	visitor := new(blockVisitor)
+	visitor.catalog = r.catalog
+	if err := merged.GetTree().Visit(visitor); err != nil {
+		panic(err)
+	}
 }
 
 func (r *runner) cronCollect(ctx context.Context) {

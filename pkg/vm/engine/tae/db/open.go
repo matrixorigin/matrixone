@@ -129,6 +129,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.BackgroudJobs = stopper.NewStopper("BackgroudJobs")
 	db.BackgroudJobs.RunNamedTask("BGCheckpointer", func(ctx context.Context) {
 		runner := checkpoint.NewRunner(
+			db.Catalog,
 			logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 			checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond))
 		_ = runner.Start()
