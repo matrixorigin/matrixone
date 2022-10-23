@@ -198,6 +198,7 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Precision: typ.Precision,
 		Size:      typ.Size,
 		Scale:     typ.Scale,
+		AutoIncr:  typ.AutoIncr,
 	}
 }
 
@@ -206,16 +207,15 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		Name:          col.Name,
-		Alg:           col.Alg,
-		Typ:           DeepCopyTyp(col.Typ),
-		Default:       DeepCopyDefault(col.Default),
-		AutoIncrement: col.AutoIncrement,
-		Primary:       col.Primary,
-		Pkidx:         col.Pkidx,
-		Comment:       col.Comment,
-		IsCPkey:       col.IsCPkey,
-		OnUpdate:      DeepCopyExpr(col.OnUpdate),
+		Name:     col.Name,
+		Alg:      col.Alg,
+		Typ:      DeepCopyTyp(col.Typ),
+		Default:  DeepCopyDefault(col.Default),
+		Primary:  col.Primary,
+		Pkidx:    col.Pkidx,
+		Comment:  col.Comment,
+		IsCPkey:  col.IsCPkey,
+		OnUpdate: DeepCopyExpr(col.OnUpdate),
 	}
 }
 
