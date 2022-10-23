@@ -8,6 +8,7 @@ create table table01(a int);
 -- @label:bvt
 drop table table01;
 show tables;
+-- @bvt:issue#5790
 drop table if exists t1;
 create table t1(a int, b int, unique key(a));
 drop table if exists t1;
@@ -16,3 +17,4 @@ drop table if exists t1;
 create table t1(a int, b int, unique key(a, b));
 drop table if exists t1;
 create table t1(a int, b int, unique key(a, b));
+-- @bvt:issue
