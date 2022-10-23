@@ -135,12 +135,12 @@ func (tbl *table) getTableDef() *plan.TableDef {
 						Size:      attr.Attr.Type.Size,
 						Precision: attr.Attr.Type.Precision,
 						Scale:     attr.Attr.Type.Scale,
+						AutoIncr:  attr.Attr.AutoIncrement,
 					},
-					Primary:       attr.Attr.Primary,
-					Default:       attr.Attr.Default,
-					OnUpdate:      attr.Attr.OnUpdate,
-					Comment:       attr.Attr.Comment,
-					AutoIncrement: attr.Attr.AutoIncrement,
+					Primary:  attr.Attr.Primary,
+					Default:  attr.Attr.Default,
+					OnUpdate: attr.Attr.OnUpdate,
+					Comment:  attr.Attr.Comment,
 				})
 				i++
 			}
