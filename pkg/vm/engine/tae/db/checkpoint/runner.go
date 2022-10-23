@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type Option func(*runner)
@@ -36,13 +38,80 @@ func WithCollectInterval(interval time.Duration) Option {
 	}
 }
 
+func WithFlushInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.maxFlushInterval = interval
+	}
+}
+
 type blockVisitor struct {
 	common.NoopTreeVisitor
-	catalog *catalog.Catalog
+	blockFn func(uint64, uint64, uint64, uint64) error
 }
 
 func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
-	db, err := visitor.catalog.GetDatabaseByID(dbID)
+	if visitor.blockFn != nil {
+		err = visitor.blockFn(dbID, tableID, segmentID, id)
+	}
+	return
+}
+
+type runner struct {
+	options struct {
+		collectInterval     time.Duration
+		maxFlushInterval    time.Duration
+		dirtyEntryQueueSize int
+		waitQueueSize       int
+	}
+
+	source    logtail.Collector
+	catalog   *catalog.Catalog
+	scheduler tasks.TaskScheduler
+
+	stopper *stopper.Stopper
+
+	dirtyEntryQueue sm.Queue
+	waitQueue       sm.Queue
+
+	onceStart sync.Once
+	onceStop  sync.Once
+}
+
+func NewRunner(
+	catalog *catalog.Catalog,
+	scheduler tasks.TaskScheduler,
+	source logtail.Collector,
+	opts ...Option) *runner {
+	r := &runner{
+		catalog:   catalog,
+		scheduler: scheduler,
+		source:    source,
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	r.fillDefaults()
+	r.stopper = stopper.NewStopper("CheckpointRunner")
+	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
+	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
+	return r
+}
+
+func (r *runner) fillDefaults() {
+	if r.options.collectInterval <= 0 {
+		// TODO: define default value
+		r.options.collectInterval = time.Second * 5
+	}
+	if r.options.dirtyEntryQueueSize <= 0 {
+		r.options.dirtyEntryQueueSize = 10000
+	}
+	if r.options.waitQueueSize <= 1000 {
+		r.options.waitQueueSize = 1000
+	}
+}
+
+func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error) {
+	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
 	}
@@ -58,53 +127,39 @@ func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (er
 	if err != nil {
 		panic(err)
 	}
-	score := blk.GetBlockData().RunCalibration()
+	blkData := blk.GetBlockData()
+	score := blkData.EstimateScore(r.options.maxFlushInterval)
 	logutil.Infof("%s [SCORE=%d]", blk.String(), score)
-	return
+	if score < 100 {
+		return
+	}
+
+	factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
+	if err != nil || factory == nil {
+		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
+		return nil
+	}
+
+	if _, err = r.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, factory); err != nil {
+		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
+	}
+
+	// always return nil
+	return nil
 }
 
-type runner struct {
-	options struct {
-		collectInterval     time.Duration
-		dirtyEntryQueueSize int
+func (r *runner) onWaitWaitableItems(items ...any) {
+	// TODO: change for more waitable items
+	start := time.Now()
+	for _, item := range items {
+		ckpEntry := item.(wal.LogEntry)
+		err := ckpEntry.WaitDone()
+		if err != nil {
+			panic(err)
+		}
+		ckpEntry.Free()
 	}
-
-	source  logtail.Collector
-	catalog *catalog.Catalog
-
-	stopper *stopper.Stopper
-
-	dirtyEntryQueue sm.Queue
-
-	onceStart sync.Once
-	onceStop  sync.Once
-}
-
-func NewRunner(
-	catalog *catalog.Catalog,
-	source logtail.Collector,
-	opts ...Option) *runner {
-	r := &runner{
-		catalog: catalog,
-		source:  source,
-	}
-	for _, opt := range opts {
-		opt(r)
-	}
-	r.fillDefaults()
-	r.stopper = stopper.NewStopper("CheckpointRunner")
-	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
-	return r
-}
-
-func (r *runner) fillDefaults() {
-	if r.options.collectInterval <= 0 {
-		// TODO: define default value
-		r.options.collectInterval = time.Second * 5
-	}
-	if r.options.dirtyEntryQueueSize <= 0 {
-		r.options.dirtyEntryQueueSize = 10000
-	}
+	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
 func (r *runner) onDirtyEntries(entries ...any) {
@@ -118,7 +173,8 @@ func (r *runner) onDirtyEntries(entries ...any) {
 	}
 	logutil.Infof(merged.String())
 	visitor := new(blockVisitor)
-	visitor.catalog = r.catalog
+	visitor.blockFn = r.tryCompactBlock
+
 	if err := merged.GetTree().Visit(visitor); err != nil {
 		panic(err)
 	}
@@ -139,20 +195,25 @@ func (r *runner) cronCollect(ctx context.Context) {
 	hb.Stop()
 }
 
-func (r *runner) Start() (err error) {
-	r.onceStart.Do(func() {
-		r.dirtyEntryQueue.Start()
-		if err = r.stopper.RunNamedTask("dirty-collector-job", r.cronCollect); err != nil {
-			return
-		}
-	})
+func (r *runner) EnqueueWait(item any) (err error) {
+	_, err = r.waitQueue.Enqueue(item)
 	return
 }
 
-func (r *runner) Stop() (err error) {
+func (r *runner) Start() {
+	r.onceStart.Do(func() {
+		r.waitQueue.Start()
+		r.dirtyEntryQueue.Start()
+		if err := r.stopper.RunNamedTask("dirty-collector-job", r.cronCollect); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func (r *runner) Stop() {
 	r.onceStop.Do(func() {
 		r.stopper.Stop()
 		r.dirtyEntryQueue.Stop()
+		r.waitQueue.Stop()
 	})
-	return
 }

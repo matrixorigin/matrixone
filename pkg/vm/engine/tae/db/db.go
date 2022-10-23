@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -57,11 +57,10 @@ type DB struct {
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
-	CKPDriver checkpoint.Driver
-
 	Scheduler tasks.TaskScheduler
 
-	BackgroudJobs *stopper.Stopper
+	BGScanner          wb.IHeartbeater
+	BGCheckpointRunner checkpoint.Runner
 
 	Fs *objectio.ObjectFS
 
@@ -136,8 +135,8 @@ func (db *DB) Close() error {
 		panic(err)
 	}
 	db.Closed.Store(ErrClosed)
-	db.BackgroudJobs.Stop()
-	db.CKPDriver.Stop()
+	db.BGScanner.Stop()
+	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.Wal.Close()

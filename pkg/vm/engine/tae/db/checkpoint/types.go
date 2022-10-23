@@ -19,6 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+type Runner interface {
+	Start()
+	Stop()
+	EnqueueWait(any) error
+}
+
 type Driver interface {
 	// aware.ChangeAware
 	// aware.DataMutationAware
