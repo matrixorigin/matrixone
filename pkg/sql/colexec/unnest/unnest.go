@@ -37,7 +37,6 @@ func Prepare(_ *process.Process, arg any) error {
 	if len(param.ColName) == 0 {
 		param.ColName = "UNNEST_DEFAULT"
 	}
-	param.seq = 0
 	var filters []string
 	for i := range param.Attrs {
 		denied := false
@@ -190,7 +189,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 			case "col":
 				err = vec.Append([]byte(param.ColName), false, proc.Mp())
 			case "seq":
-				err = vec.Append(param.seq, false, proc.Mp())
+				err = vec.Append(int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][param.Attrs[j]]
 				if !ok {
@@ -210,7 +209,6 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 			}
 		}
 	}
-	param.seq += 1
 	return bat, nil
 }
 func dupType(typ *plan.Type) types.Type {

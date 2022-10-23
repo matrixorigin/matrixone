@@ -24,7 +24,6 @@ type Param struct {
 	ExprList []*plan.Expr
 	ColName  string
 	filters  []string
-	seq      int32
 }
 
 type Argument struct {
