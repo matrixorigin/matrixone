@@ -29,6 +29,14 @@ import (
 	"github.com/tidwall/btree"
 )
 
+type Collector interface {
+	String() string
+	Run()
+	ScanInRange(from, to types.TS) *DirtyTreeEntry
+	GetAndRefreshMerged() *DirtyTreeEntry
+	Merge() *DirtyTreeEntry
+}
+
 type DirtyEntryInterceptor = catalog.Processor
 
 type DirtyTreeEntry struct {

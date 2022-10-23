@@ -15,10 +15,11 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -60,7 +61,7 @@ type DB struct {
 
 	Scheduler tasks.TaskScheduler
 
-	HeartBeatJobs *stopper.Stopper
+	BackgroudJobs *stopper.Stopper
 
 	Fs *objectio.ObjectFS
 
@@ -134,10 +135,8 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	// XXX PRINT
-	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.HeartBeatJobs.Stop()
+	db.BackgroudJobs.Stop()
 	db.CKPDriver.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()

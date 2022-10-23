@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -127,24 +126,17 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Start workers
 	db.CKPDriver.Start()
 
-	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
-	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
-		collector := logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval*1)*time.Millisecond, func() {
-			collector.Run()
-			entry := collector.GetAndRefreshMerged()
-			if entry.IsEmpty() {
-				logutil.Info("No dirty block found")
-				return
-			}
-			logutil.Infof(entry.String())
-			// logutil.Info(db.Catalog.SimplePPString(common.PPL1))
-		}, nil)
-		hb.Start()
+	db.BackgroudJobs = stopper.NewStopper("BackgroudJobs")
+	db.BackgroudJobs.RunNamedTask("BGCheckpointer", func(ctx context.Context) {
+		runner := checkpoint.NewRunner(
+			logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
+			checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond))
+		_ = runner.Start()
 		<-ctx.Done()
-		hb.Stop()
+		_ = runner.Stop()
 	})
-	db.HeartBeatJobs.RunNamedTask("BackgroundScanner", func(ctx context.Context) {
+
+	db.BackgroudJobs.RunNamedTask("BGScanner", func(ctx context.Context) {
 		hb := w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
 		hb.Start()
 		<-ctx.Done()
