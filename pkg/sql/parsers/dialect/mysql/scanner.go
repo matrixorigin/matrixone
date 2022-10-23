@@ -565,7 +565,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			break
 		}
 		if ch == '@' {
-			isVariable = true
+			break
 		}
 		s.inc()
 	}
@@ -664,6 +664,10 @@ func (s *Scanner) peek(dist int) uint16 {
 
 func isLetter(ch uint16) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch == '$'
+}
+
+func isStartOfString(ch uint16) bool {
+	return ch == '"' || ch == '`' || ch == '\''
 }
 
 func isCarat(ch uint16) bool {
