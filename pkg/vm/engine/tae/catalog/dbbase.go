@@ -106,9 +106,9 @@ func (be *DBBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, no
 }
 
 func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
-	var entry *DBMVCCNode
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.Delete()
+	var node *DBMVCCNode
+	isNewNode, node = be.getOrSetUpdateNode(txn)
+	node.Delete()
 	return
 }
 

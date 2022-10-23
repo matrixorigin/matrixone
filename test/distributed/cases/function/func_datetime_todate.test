@@ -1,0 +1,125 @@
+#SELECT different usage
+
+-- @bvt:issue#3203
+SELECT to_date('01,5,2013','%d,%m,%Y');
+SELECT to_date('May 1, 2013','%M %d,%Y');
+SELECT to_date('a09:30:17','a%h:%i:%s');
+SELECT to_date('a09:30:17','%h:%i:%s');
+SELECT to_date('09:30:17a','%h:%i:%s');
+SELECT to_date('abc','abc');
+SELECT to_date('9','%m');
+SELECT to_date('9','%s');
+SELECT to_date('00/00/0000', '%m/%d/%Y');
+SELECT to_date('04/31/2004', '%m/%d/%Y');
+SELECT to_date('00/00/0000', '%m/%d/%Y');
+SELECT to_date('200442 Monday', '%X%V %W');
+
+
+SELECT CAST(to_date('nope','%d-%m-%Y') AS YEAR);
+select to_date(concat_ws(' ','15-01-2001'), ' 2:59:58.999');
+-- @bvt:issue
+
+-- @bvt:issue#3203
+create table t1 (date char(30), format char(30) not null);
+insert into t1 values
+('2003-01-02 10:11:12', '%Y-%m-%d %H:%i:%S'),
+('03-01-02 8:11:2.123456', '%y-%m-%d %H:%i:%S.%#'),
+('0003-01-02 8:11:2.123456', '%Y-%m-%d %H:%i:%S.%#'),
+('03-01-02 8:11:2.123456',   '%Y-%m-%d %H:%i:%S.%#'),
+('2003-01-02 10:11:12 PM', '%Y-%m-%d %h:%i:%S %p'),
+('2003-01-02 01:11:12.12345AM', '%Y-%m-%d %h:%i:%S.%f%p'),
+('2003-01-02 02:11:12.12345AM', '%Y-%m-%d %h:%i:%S.%f %p'),
+('2003-01-02 12:11:12.12345 am', '%Y-%m-%d %h:%i:%S.%f%p'),
+('2003-01-02 11:11:12Pm', '%Y-%m-%d %h:%i:%S%p'),
+('10:20:10', '%H:%i:%s'),
+('10:20:10', '%h:%i:%s.%f'),
+('10:20:10', '%T'),
+('10:20:10AM', '%h:%i:%s%p'),
+('10:20:10AM', '%r'),
+('10:20:10.44AM', '%h:%i:%s.%f%p'),
+('15-01-2001 12:59:58', '%d-%m-%Y %H:%i:%S'),
+('15 September 2001', '%d %M %Y'),
+('15 SEPTEMB 2001', '%d %M %Y'),
+('15 MAY 2001', '%d %b %Y'),
+('15th May 2001', '%D %b %Y'),
+('Sunday 15 MAY 2001', '%W %d %b %Y'),
+('Sund 15 MAY 2001', '%W %d %b %Y'),
+('Tuesday 00 2002', '%W %U %Y'),
+('Thursday 53 1998', '%W %u %Y'),
+('Sunday 01 2001', '%W %v %x'),
+('Tuesday 52 2001', '%W %V %X'),
+('060 2004', '%j %Y'),
+('4 53 1998', '%w %u %Y'),
+('15-01-2001', '%d-%m-%Y %H:%i:%S'),
+('15-01-20', '%d-%m-%y'),
+('15-2001-1', '%d-%Y-%c');
+select date,format,to_date(date, format) as to_date from t1;
+select date,format,concat_ws(',',to_date(date, format)) as con from t1;
+select date,format,cast(to_date(date, format) as datetime) as datetime from t1;
+select date,format,DATE(to_date(date, format)) as date2 from t1;
+select concat_ws('',to_date('8:11:2.123456 03-01-02','%H:%i:%S.%f %y-%m-%d'));
+delete from t1;
+insert into t1 values
+('2003-01-02 10:11:12 PM', '%Y-%m-%d %H:%i:%S %p'),
+('2003-01-02 10:11:12.123456', '%Y-%m-%d %h:%i:%S %p'),
+('2003-01-02 10:11:12AM', '%Y-%m-%d %h:%i:%S.%f %p'),
+('2003-01-02 10:11:12AN', '%Y-%m-%d %h:%i:%S%p'),
+('2003-01-02 10:11:12 PM', '%y-%m-%d %H:%i:%S %p'),
+('10:20:10AM', '%H:%i:%s%p'),
+('15 Septembei 2001', '%d %M %Y'),
+('15 Ju 2001', '%d %M %Y'),
+('Sund 15 MA', '%W %d %b %Y'),
+('Thursdai 12 1998', '%W %u %Y'),
+('Sunday 01 2001', '%W %v %X'),
+('Tuesday 52 2001', '%W %V %x'),
+('Tuesday 52 2001', '%W %V %Y'),
+('Tuesday 52 2001', '%W %u %x'),
+('7 53 1998', '%w %u %Y');
+select date,format,to_date(date, format) as to_date from t1;
+select date,format,concat_ws(" ",to_date(date, format),'') as con from t1;
+drop table t1;
+-- @bvt:issue
+
+-- @bvt:issue#3203
+select to_date( 1, NULL );
+select to_date( NULL, 1 );
+select to_date( 1, IF(1=1,NULL,NULL) );
+
+select to_date('04 /30/2004', '%m /%d/%Y');
+select to_date('04/30 /2004', '%m /%d /%Y');
+select to_date('04/30/2004 ', '%m/%d/%Y ');
+SELECT DATE_SUB(to_date('9999-12-31 00:01:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
+SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
+select month(to_date(null, '%m')), month(to_date(null, '%m'));
+select to_date('10:00 PM', '%h:%i %p') + INTERVAL 10 MINUTE;
+select to_date('2007-10-09','%Y-%m-%d') > '2007/10/01 00:00:00 GMT-6';
+select to_date('2007-10-01','%Y-%m-%d') = '2007-10-1 00:00:00 GMT-6';
+select to_date('2007-10-01','%Y-%m-%d') = '2007-10-01 x00:00:00 GMT-6';
+select to_date('2007-10-01','%Y-%m-%d %H:%i:%s') = '2007-10-01 00:00:00 GMT-6';
+select to_date('2007-10-01','%Y-%m-%d %H:%i:%s') = '2007-10-01 00:x00:00 GMT-6';
+select to_date('1000-01-01','%Y-%m-%d') between NULL and NULL;
+select to_date('2007-10-00','%Y-%m-%d') between '' and '2007/10/20';
+select to_date('2007-10-00','%Y-%m-%d') between '2007/09/01'
+                                                and '2007/10/20';
+select to_date('2007-10-09','%Y-%m-%d') between '2007/10/01 00:00:00 GMT'
+                                                and '2007/10/20 00:00:00 GMT';
+
+
+CREATE TABLE t1 ( a datetime(2) );
+CREATE TABLE t2 ( a timestamp(2) );
+SELECT to_date('09:22', '%H:%i');
+SELECT to_date('09:22:23.33', '%H:%i:%s.%f');
+INSERT INTO t1 select( to_date('09:22', '%H:%i') );
+INSERT INTO t1 select( to_date('09:22:23.33', '%H:%i:%s.%f') );
+select * from t1;
+DELETE FROM t1;
+INSERT INTO t1 select( to_date('2019-12-31', '%Y-%m-%d') );
+INSERT INTO t2 select( to_date('09:22', '%H:%i') );
+INSERT INTO t2 select( to_date('09:22:23.33', '%H:%i:%s.%f') );
+select * from t1;
+select * from t2;
+DELETE FROM t2;
+drop table t1;
+drop table t2;
+
+-- @bvt:issue

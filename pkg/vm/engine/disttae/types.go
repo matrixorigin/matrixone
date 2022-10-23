@@ -82,10 +82,11 @@ type MVCC interface {
 	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries []Entry) []BlockMeta
+		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
 	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
-		blocks []BlockMeta, ts timestamp.Timestamp, entries []Entry) ([]engine.Reader, error)
+		tableDef *plan.TableDef, blks []ModifyBlockMeta, ts timestamp.Timestamp,
+		fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -180,6 +181,7 @@ type database struct {
 	databaseName string
 	db           *DB
 	txn          *Transaction
+	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -197,7 +199,7 @@ type databaseKey struct {
 type tableMeta struct {
 	tableName     string
 	blocks        [][]BlockMeta
-	modifedBlocks [][]BlockMeta
+	modifedBlocks [][]ModifyBlockMeta
 	defs          []engine.TableDef
 }
 
@@ -251,6 +253,15 @@ type blockReader struct {
 	tableDef *plan.TableDef
 }
 
+type blockMergeReader struct {
+	sels     []int64
+	blks     []ModifyBlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
+}
+
 type mergeReader struct {
 	rds []engine.Reader
 }
@@ -259,8 +270,14 @@ type emptyReader struct {
 }
 
 type BlockMeta struct {
-	info    catalog.BlockInfo
-	zonemap [][64]byte
+	Rows    int64
+	Info    catalog.BlockInfo
+	Zonemap [][64]byte
+}
+
+type ModifyBlockMeta struct {
+	meta    BlockMeta
+	deletes []int
 }
 
 type Columns []column
@@ -270,5 +287,5 @@ func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
-	return a.info.BlockID == b.info.BlockID
+	return a.Info.BlockID == b.Info.BlockID
 }
