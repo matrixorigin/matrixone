@@ -30,20 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type Option func(*runner)
-
-func WithCollectInterval(interval time.Duration) Option {
-	return func(r *runner) {
-		r.options.collectInterval = interval
-	}
-}
-
-func WithFlushInterval(interval time.Duration) Option {
-	return func(r *runner) {
-		r.options.maxFlushInterval = interval
-	}
-}
-
 type blockVisitor struct {
 	common.NoopTreeVisitor
 	blockFn func(uint64, uint64, uint64, uint64) error
