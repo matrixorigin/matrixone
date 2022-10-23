@@ -194,13 +194,12 @@ var EndStatement = func(ctx context.Context, err error) {
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
-	endTime := time.Now()
 	if !s.end {
 		// do report
 		s.mux.Lock()
 		defer s.mux.Unlock()
 		s.end = true
-		s.ResponseAt = endTime
+		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess
 		if err != nil {
