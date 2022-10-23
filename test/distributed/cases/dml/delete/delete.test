@@ -130,6 +130,7 @@ select * from t1;
 delete from t1 where a = 1;
 select * from t1;
 
+-- @bvt:issue#5790
 drop table if exists t1;
 create table t1(a int, b int, unique key(a));
 insert into t1 values(1, 1);
@@ -153,5 +154,6 @@ select * from t1;
 insert into t1 values(1, 2);
 insert into t1 values(1, null);
 delete from t1 where a = 1;
+-- @bvt:issue
 
 drop database if exists db1;
