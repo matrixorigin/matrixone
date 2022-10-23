@@ -30,6 +30,16 @@ type TreeVisitor interface {
 	String() string
 }
 
+type NoopTreeVisitor struct{}
+
+func (visitor *NoopTreeVisitor) String() string { return "" }
+
+func (visitor *NoopTreeVisitor) VisitTable(_, _ uint64) (err error) { return }
+
+func (visitor *NoopTreeVisitor) VisitSegment(_, _, _ uint64) (err error) { return }
+
+func (visitor *NoopTreeVisitor) VisitBlock(_, _, _, _ uint64) (err error) { return }
+
 type stringVisitor struct {
 	buf bytes.Buffer
 }

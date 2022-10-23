@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -36,12 +37,10 @@ func WithCollectInterval(interval time.Duration) Option {
 }
 
 type blockVisitor struct {
+	common.NoopTreeVisitor
 	catalog *catalog.Catalog
 }
 
-func (visitor *blockVisitor) String() string                                    { return "" }
-func (visitor *blockVisitor) VisitTable(dbID, id uint64) (err error)            { return }
-func (visitor *blockVisitor) VisitSegment(dbID, tableID, id uint64) (err error) { return }
 func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
 	db, err := visitor.catalog.GetDatabaseByID(dbID)
 	if err != nil {
