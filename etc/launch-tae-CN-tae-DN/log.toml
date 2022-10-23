@@ -1,7 +1,7 @@
 service-type = "LOG"
 
 [log]
-level = "error"
+level = "info"
 format = "json"
 max-size = 512
 

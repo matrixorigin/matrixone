@@ -160,6 +160,10 @@ func (h *mockDBHandle) TruncateWithID(name string, newTableId uint64) (rel handl
 	panic(moerr.NewNYI("Pls implement me!!"))
 }
 
+func (h *mockDBHandle) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
+	panic(moerr.NewNYI("Pls implement me!!"))
+}
+
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
 	_, entry, err := h.entry.DropTableEntry(name, h.Txn)
 	if err != nil {
@@ -170,16 +174,24 @@ func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err
 	return
 }
 
+func (h *mockDBHandle) DropRelationByID(id uint64) (rel handle.Relation, err error) {
+	return nil, nil
+}
+
 func (h *mockDBHandle) String() string {
 	return h.entry.String()
 }
 
 func (h *mockDBHandle) GetRelationByName(name string) (rel handle.Relation, err error) {
-	entry, err := h.entry.GetTableEntry(name, h.Txn)
+	entry, err := h.entry.TxnGetTableEntryByName(name, h.Txn)
 	if err != nil {
 		return nil, err
 	}
 	return newMockTableHandle(h.catalog, h.Txn, entry), nil
+}
+
+func (h *mockDBHandle) GetRelationByID(id uint64) (rel handle.Relation, err error) {
+	return nil, nil
 }
 
 func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
@@ -220,7 +232,7 @@ func (txn *mockTxn) CreateDatabaseByDef(def any) (handle.Database, error) {
 }
 
 func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
-	entry, err := txn.catalog.GetDBEntry(name, txn)
+	entry, err := txn.catalog.TxnGetDBEntryByName(name, txn)
 	if err != nil {
 		return nil, err
 	}

@@ -124,7 +124,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	*/
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
-		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
