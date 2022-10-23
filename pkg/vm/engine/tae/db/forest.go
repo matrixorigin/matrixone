@@ -114,9 +114,22 @@ func (d *dirtyCollector) Run() {
 		return
 	}
 
-	d.collectAndStoreNew(from, to)
-	d.scanAndCleanStale()
+	d.rangeScanAndUpdate(from, to)
+	d.cleanupStorage()
 	d.GetAndRefreshMerged()
+}
+
+func (d *dirtyCollector) ScanInRange(from, to types.TS) (entry *DirtyTreeEntry) {
+	reader := d.sourcer.GetReader(from, to)
+	tree := reader.GetDirty()
+
+	// make a entry
+	entry = &DirtyTreeEntry{
+		start: from,
+		end:   to,
+		tree:  tree,
+	}
+	return
 }
 
 // DirtyCount returns unflushed table, segment, block count
@@ -195,17 +208,8 @@ func (d *dirtyCollector) findRange() (from, to types.TS) {
 	return
 }
 
-func (d *dirtyCollector) collectAndStoreNew(from, to types.TS) (updated bool) {
-	// collect dirty from sourcer
-	reader := d.sourcer.GetReader(from, to)
-	tree := reader.GetDirty()
-
-	// make a entry
-	entry := &DirtyTreeEntry{
-		start: from,
-		end:   to,
-		tree:  tree,
-	}
+func (d *dirtyCollector) rangeScanAndUpdate(from, to types.TS) (updated bool) {
+	entry := d.ScanInRange(from, to)
 
 	// try to store the entry
 	updated = d.tryStoreEntry(entry)
@@ -244,7 +248,7 @@ func (d *dirtyCollector) getStorageSnapshot() (ss *btree.BTreeG[*DirtyTreeEntry]
 }
 
 // Scan current dirty entries, remove all flushed or not found ones, and drive interceptor on remaining block entries.
-func (d *dirtyCollector) scanAndCleanStale() {
+func (d *dirtyCollector) cleanupStorage() {
 	toDeletes := make([]*DirtyTreeEntry, 0)
 
 	// get a snapshot of entries
