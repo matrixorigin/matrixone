@@ -28,7 +28,6 @@ var (
 	storages = map[string]func(*testing.T) TaskStorage{
 		"mem":     createMem,
 		"refresh": createRefresh,
-		"mysql":   createMysql,
 	}
 )
 
@@ -40,11 +39,12 @@ func createRefresh(t *testing.T) TaskStorage {
 	return newRefreshableTaskStorage(nil, func() (string, error) { return "", nil }, NewFixedTaskStorageFactory(NewMemTaskStorage()))
 }
 
-func createMysql(t *testing.T) TaskStorage {
-	storage, err := NewMysqlTaskStorage("root:root@tcp(127.0.0.1:12345)/", "mo_task")
-	require.NoError(t, err)
-	return storage
-}
+// TODO: move to cluster testing.
+// func createMysql(t *testing.T) TaskStorage {
+// 	storage, err := NewMysqlTaskStorage("root:root@tcp(127.0.0.1:12345)/", "mo_task")
+// 	require.NoError(t, err)
+// 	return storage
+// }
 
 func TestAddTask(t *testing.T) {
 	for name, factory := range storages {
