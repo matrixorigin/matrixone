@@ -666,10 +666,6 @@ func isLetter(ch uint16) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch == '$'
 }
 
-func isStartOfString(ch uint16) bool {
-	return ch == '"' || ch == '`' || ch == '\''
-}
-
 func isCarat(ch uint16) bool {
 	return ch == '.' || ch == '"' || ch == '`' || ch == '\''
 }
