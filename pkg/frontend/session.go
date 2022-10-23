@@ -1155,15 +1155,11 @@ func (th *TxnHandler) CommitTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Commit(ctx, txnOp); err != nil {
-		storage.Rollback(ctx, txnOp)
 		txnOp.Rollback(ctx)
 		th.SetInvalid()
 		return err
 	}
 	err := txnOp.Commit(ctx)
-	// tae's look to need rollback
-	storage.Rollback(ctx, txnOp)
-	txnOp.Rollback(ctx)
 	th.SetInvalid()
 	return err
 }

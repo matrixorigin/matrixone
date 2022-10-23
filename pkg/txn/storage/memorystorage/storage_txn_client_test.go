@@ -148,7 +148,7 @@ func testStorageTxnClient(
 	session.SetRequestContext(ctx)
 
 	_, err = session.AuthenticateUser("root")
-	//	assert.Nil(t, err)
+	assert.Nil(t, err)
 
 }
 
