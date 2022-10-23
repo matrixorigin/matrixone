@@ -129,7 +129,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
 	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
-		collector := newDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+		collector := logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
 		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval*1)*time.Millisecond, func() {
 			collector.Run()
 			entry := collector.GetAndRefreshMerged()

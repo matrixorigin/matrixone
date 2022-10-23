@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package logtail
 
 import (
 	"bytes"
@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/tidwall/btree"
 )
 
@@ -68,7 +67,7 @@ func (entry *DirtyTreeEntry) String() string {
 
 type dirtyCollector struct {
 	// sourcer
-	sourcer *logtail.LogtailMgr
+	sourcer *LogtailMgr
 
 	// context
 	catalog     *catalog.Catalog
@@ -84,8 +83,8 @@ type dirtyCollector struct {
 	merged atomic.Pointer[DirtyTreeEntry]
 }
 
-func newDirtyCollector(
-	sourcer *logtail.LogtailMgr,
+func NewDirtyCollector(
+	sourcer *LogtailMgr,
 	clock clock.Clock,
 	catalog *catalog.Catalog,
 	interceptor DirtyEntryInterceptor) *dirtyCollector {
