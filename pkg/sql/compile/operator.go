@@ -18,15 +18,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
@@ -145,15 +145,11 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *mark.Argument:
 		{
 			rin.Arg = &mark.Argument{
-				Typs:         arg.Typs,
-				Cond:         arg.Cond,
-				Result:       arg.Result,
-				Conditions:   arg.Conditions,
-				OutputNull:   arg.OutputNull,
-				OutputMark:   arg.OutputMark,
-				MarkMeaning:  arg.MarkMeaning,
-				OutputAnyway: arg.OutputAnyway,
-				OnList:       arg.OnList,
+				Typs:       arg.Typs,
+				Cond:       arg.Cond,
+				Result:     arg.Result,
+				Conditions: arg.Conditions,
+				OnList:     arg.OnList,
 			}
 		}
 	case *offset.Argument:
@@ -253,7 +249,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-
 		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
 		if err != nil {
 			return nil, err
@@ -263,11 +258,26 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 			return nil, err
 		}
 
+		computeIndexTables := make([]engine.Relation, 0)
+		for _, info := range n.DeleteTablesCtx[i].ComputeIndexInfos {
+			computeIndexTable, err := dbSource.Relation(ctx, info.TableName)
+			if err != nil {
+				return nil, err
+			}
+			computeIndexTables = append(computeIndexTables, computeIndexTable)
+		}
+
 		ds[i] = &deletion.DeleteCtx{
-			TableSource:  relation,
-			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
-			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
+			TableSource:        relation,
+			TableName:          n.DeleteTablesCtx[i].TblName,
+			DbName:             n.DeleteTablesCtx[i].DbName,
+			UseDeleteKey:       n.DeleteTablesCtx[i].UseDeleteKey,
+			CanTruncate:        n.DeleteTablesCtx[i].CanTruncate,
+			IsHideKey:          n.DeleteTablesCtx[i].IsHideKey,
+			ColIndex:           n.DeleteTablesCtx[i].ColIndex,
+			ComputeIndexInfos:  n.DeleteTablesCtx[i].ComputeIndexInfos,
+			ComputeIndexTables: computeIndexTables,
+			IndexAttrs:         n.DeleteTablesCtx[i].IndexAttrs,
 		}
 	}
 
@@ -286,13 +296,25 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	if err != nil {
 		return nil, err
 	}
+	computeIndexTables := make([]engine.Relation, 0)
+	for _, info := range n.TableDef.ComputeIndexInfos {
+		computeIndexTable, err := db.Relation(ctx, info.TableName)
+		if err != nil {
+			return nil, err
+		}
+		computeIndexTables = append(computeIndexTables, computeIndexTable)
+	}
 	return &insert.Argument{
-		TargetTable:   relation,
-		TargetColDefs: n.TableDef.Cols,
-		Engine:        eg,
-		DB:            db,
-		TableID:       relation.GetTableID(ctx),
-		CPkeyColDef:   n.TableDef.CompositePkey,
+		TargetTable:        relation,
+		TargetColDefs:      n.TableDef.Cols,
+		Engine:             eg,
+		DB:                 db,
+		TableID:            relation.GetTableID(ctx),
+		DBName:             n.ObjRef.SchemaName,
+		TableName:          n.TableDef.Name,
+		CPkeyColDef:        n.TableDef.CompositePkey,
+		ComputeIndexTables: computeIndexTables,
+		ComputeIndexInfos:  n.TableDef.ComputeIndexInfos,
 	}, nil
 }
 
@@ -318,16 +340,34 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			colNames = append(colNames, col.Name)
 		}
 
+		var k int
+		for k = 0; k < len(n.TableDefVec); k++ {
+			if updateCtx.TblName == n.TableDefVec[k].Name {
+				break
+			}
+		}
+		computeIndexTables := make([]engine.Relation, 0)
+		for _, info := range n.TableDefVec[k].ComputeIndexInfos {
+			computeIndexTable, err := dbSource.Relation(ctx, info.TableName)
+			if err != nil {
+				return nil, err
+			}
+			computeIndexTables = append(computeIndexTables, computeIndexTable)
+		}
+
 		us[i] = &update.UpdateCtx{
-			PriKey:      updateCtx.PriKey,
-			PriKeyIdx:   updateCtx.PriKeyIdx,
-			HideKey:     updateCtx.HideKey,
-			HideKeyIdx:  updateCtx.HideKeyIdx,
-			UpdateAttrs: colNames,
-			OtherAttrs:  updateCtx.OtherAttrs,
-			OrderAttrs:  updateCtx.OrderAttrs,
-			TableSource: relation,
-			CPkeyColDef: updateCtx.CompositePkey,
+			PriKey:             updateCtx.PriKey,
+			PriKeyIdx:          updateCtx.PriKeyIdx,
+			HideKey:            updateCtx.HideKey,
+			HideKeyIdx:         updateCtx.HideKeyIdx,
+			UpdateAttrs:        colNames,
+			OtherAttrs:         updateCtx.OtherAttrs,
+			OrderAttrs:         updateCtx.OrderAttrs,
+			TableSource:        relation,
+			CPkeyColDef:        updateCtx.CompositePkey,
+			ComputeIndexInfos:  n.TableDefVec[k].ComputeIndexInfos,
+			ComputeIndexTables: computeIndexTables,
+			IndexAttrs:         updateCtx.IndexAttrs,
 		}
 	}
 	return &update.Argument{
@@ -345,7 +385,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -357,10 +397,11 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
+			Fileparam:     fileparam,
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -373,20 +414,27 @@ func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam)
 		},
 	}
 }
+
+func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series.Argument {
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	return &generate_series.Argument{
+		Es: &generate_series.Param{
+			Attrs: attrs,
+			Cols:  n.TableDef.Cols,
+		},
+	}
+}
+
 func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &top.Argument{
-		Fs:    fs,
+		Fs:    n.OrderBy,
 		Limit: vec.Col.([]int64)[0],
 	}
 }
@@ -488,30 +536,19 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
-		Typs:         typs,
-		Result:       result,
-		Cond:         cond,
-		Conditions:   constructJoinConditions(conds),
-		OutputMark:   false,
-		OutputNull:   false,
-		MarkMeaning:  false,
-		OutputAnyway: false,
-		OnList:       onList,
+		Typs:       typs,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
+		OnList:     onList,
 	}
 }
 
 var _ = constructMark
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &order.Argument{
-		Fs: fs,
+		Fs: n.OrderBy,
 	}
 }
 
@@ -614,15 +651,8 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &mergetop.Argument{
-		Fs:    fs,
+		Fs:    n.OrderBy,
 		Limit: vec.Col.([]int64)[0],
 	}
 }
@@ -648,15 +678,8 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 }
 
 func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
-	fs := make([]colexec.Field, len(n.OrderBy))
-	for i, e := range n.OrderBy {
-		fs[i].E = e.Expr
-		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = colexec.Descending
-		}
-	}
 	return &mergeorder.Argument{
-		Fs: fs,
+		Fs: n.OrderBy,
 	}
 }
 

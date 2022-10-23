@@ -18,34 +18,46 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	m *mheap.Mheap,
 	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	cli client.TxnClient,
+	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
-		return nil
+		panic(err)
+	}
+	db := newDB(cluster.DNStores)
+	if err := db.init(ctx, mp); err != nil {
+		panic(err)
 	}
 	return &Engine{
-		m:                 m,
+		db:                db,
+		mp:                mp,
+		fs:                fs,
 		cli:               cli,
+		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
-		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -59,7 +71,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.m)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	databaseId, err := txn.allocateID(ctx)
+	if err != nil {
+		return err
+	}
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
+		name, databaseId, e.mp)
 	if err != nil {
 		return err
 	}
@@ -78,7 +97,17 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	if db, ok := txn.databaseMap[key]; ok {
+	if db, ok := txn.databaseMap.Load(key); ok {
+		return db.(*database), nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		txn.databaseMap.Store(key, db)
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)
@@ -88,10 +117,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}
-	txn.databaseMap[key] = db
+	txn.databaseMap.Store(key, db)
 	return db, nil
 }
 
@@ -109,12 +139,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	delete(txn.databaseMap, key)
+	txn.databaseMap.Delete(key)
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.m)
+	bat, err := genDropDatabaseTuple(id, name, e.mp)
 	if err != nil {
 		return err
 	}
@@ -132,34 +162,72 @@ func (e *Engine) hasConflict(txn *Transaction) bool {
 	return false
 }
 
+// hasDuplicate used to detect if a transaction on a cn has duplicate.
+func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
+	for i := range txn.writes {
+		for _, e := range txn.writes[i] {
+			if e.typ == DELETE {
+				continue
+			}
+			if e.bat.Length() == 0 {
+				continue
+			}
+			key := genTableKey(ctx, e.tableName, e.databaseId)
+			v, ok := txn.tableMap.Load(key)
+			if !ok {
+				continue
+			}
+			tbl := v.(*table)
+			if tbl.meta == nil {
+				continue
+			}
+			if tbl.primaryIdx == -1 {
+				continue
+			}
+		}
+	}
+	return false
+}
+
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	cluster, err := e.getClusterDetails()
 	if err != nil {
 		return err
 	}
+	proc := process.New(
+		ctx,
+		e.mp,
+		e.cli,
+		op,
+		e.fs,
+	)
 	txn := &Transaction{
-		m:           e.m,
-		db:          e.db,
-		readOnly:    true,
-		meta:        op.Txn(),
-		dnStores:    cluster.DNStores,
-		fileMap:     make(map[string]uint64),
-		tableMap:    make(map[tableKey]*table),
-		databaseMap: make(map[databaseKey]*database),
+		op:             op,
+		proc:           proc,
+		db:             e.db,
+		readOnly:       true,
+		meta:           op.Txn(),
+		idGen:          e.idGen,
+		rowId:          [2]uint64{math.MaxUint64, 0},
+		dnStores:       cluster.DNStores,
+		fileMap:        make(map[string]uint64),
+		tableMap:       new(sync.Map),
+		databaseMap:    new(sync.Map),
+		createTableMap: make(map[uint64]uint8),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
 	return nil
@@ -177,18 +245,27 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if e.hasConflict(txn) {
 		return moerr.NewTxnWriteConflict("write conflict")
 	}
+	if e.hasDuplicate(ctx, txn) {
+		return moerr.NewDuplicate()
+	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
+	if err == nil {
+		for _, name := range txn.deleteMetaTables {
+			txn.db.delMetaTable(name)
+		}
+	}
 	return err
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return nil // compatible with existing logic
+		//	return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	return nil
@@ -208,7 +285,6 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 			Addr: store.ServiceAddress,
 		})
 	}
-
 	return nodes, nil
 }
 
@@ -233,7 +309,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.m)
+			txn.writes[i][j].bat.Clean(e.mp)
 		}
 	}
 	e.Lock()

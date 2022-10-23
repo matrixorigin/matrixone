@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,7 +38,7 @@ func testDatabase(
 	t *testing.T,
 	newStorage func() (*Storage, error),
 ) {
-	heap := testutil.NewMheap()
+	mp := mpool.MustNewZero()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
@@ -55,6 +56,10 @@ func testDatabase(
 			LogicalTime:  1,
 		},
 	}
+	defer func() {
+		err := s.Commit(ctx, txnMeta)
+		assert.Nil(t, err)
+	}()
 
 	// open database
 	{
@@ -127,7 +132,11 @@ func testDatabase(
 					memoryengine.GetDatabasesReq{},
 				)
 				assert.Nil(t, err)
-				assert.Equal(t, 0, len(resp.Names))
+				for _, name := range resp.Names {
+					if name == "foo" {
+						t.Fatal()
+					}
+				}
 			}
 		}()
 	}
@@ -226,7 +235,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1, 2, 3, 4, 5,
@@ -235,7 +244,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6, 7, 8, 9, 10,
@@ -289,7 +298,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -339,7 +348,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				8,
@@ -389,7 +398,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -398,7 +407,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6,
@@ -479,7 +488,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1, 2, 3, 4, 5,
@@ -488,7 +497,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			5,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				6, 7, 8, 9, 10,
@@ -514,7 +523,7 @@ func testDatabase(
 		colA := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				1,
@@ -564,7 +573,7 @@ func testDatabase(
 		colB := testutil.NewVector(
 			1,
 			types.T_int64.ToType(),
-			heap,
+			mp,
 			false,
 			[]int64{
 				8,
@@ -650,6 +659,46 @@ func testDatabase(
 		assert.Nil(t, err)
 		assert.Nil(t, resp.Batch)
 	}
+
+	t.Run("duplicated db", func(t *testing.T) {
+		tx1 := txn.TxnMeta{
+			ID:     []byte("1"),
+			Status: txn.TxnStatus_Active,
+			SnapshotTS: timestamp.Timestamp{
+				PhysicalTime: 1,
+				LogicalTime:  1,
+			},
+		}
+		tx2 := txn.TxnMeta{
+			ID:     []byte("1"),
+			Status: txn.TxnStatus_Active,
+			SnapshotTS: timestamp.Timestamp{
+				PhysicalTime: 1,
+				LogicalTime:  1,
+			},
+		}
+		{
+			resp, err := testWrite[memoryengine.CreateDatabaseResp](
+				ctx, t, s, tx1,
+				memoryengine.OpCreateDatabase,
+				memoryengine.CreateDatabaseReq{
+					Name: "bar",
+				},
+			)
+			assert.Nil(t, err)
+			assert.NotEmpty(t, resp.ID)
+		}
+		{
+			_, err := testWrite[memoryengine.CreateDatabaseResp](
+				ctx, t, s, tx2,
+				memoryengine.OpCreateDatabase,
+				memoryengine.CreateDatabaseReq{
+					Name: "bar",
+				},
+			)
+			assert.NotNil(t, err)
+		}
+	})
 
 }
 

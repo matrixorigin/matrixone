@@ -1,0 +1,529 @@
+create table t1 (a smallint unsigned not null, primary key(a));
+insert into t1 values (65535), (0xFFFC), (65534), (65533);
+select * from t1 order by a asc;
+a
+65532
+65533
+65534
+65535
+select * from t1 where a=65535 order by 1 desc;
+a
+65535
+delete from t1 where a=65535;
+select * from t1;
+a
+65532
+65533
+65534
+drop table t1;
+create table t1 ( a smallint not null default 1, smallint16 smallint primary key);
+insert into t1 (smallint16) values (-1),(32767),(-32768);
+select * from t1 order by a desc, 2 asc;
+a	smallint16
+1	-32768
+1	-1
+1	32767
+select min(smallint16),max(smallint16),max(smallint16)-1 from t1;
+min(smallint16)	max(smallint16)	max(smallint16)-1
+-32768	32767	32766
+select min(smallint16),max(smallint16),max(smallint16)-1 from t1 group by a order by 1 asc;
+min(smallint16)	max(smallint16)	max(smallint16)-1
+-32768	32767	32766
+drop table t1;
+create table t1 ( a smallint not null default 1, smallint16 smallint unsigned);
+insert into t1 (smallint16) values (0),(65535), (0xFFFE), (65534), (65533);
+select * from t1;
+a	smallint16
+1	0
+1	65535
+1	65534
+1	65534
+1	65533
+select * from t1 order by smallint16 limit 1,3;
+a	smallint16
+1	65533
+1	65534
+1	65534
+select * from t1 order by smallint16 limit 3 offset 1;
+a	smallint16
+1	65533
+1	65534
+1	65534
+select min(smallint16),max(smallint16),max(smallint16)-1 from t1;
+min(smallint16)	max(smallint16)	max(smallint16)-1
+0	65535	65534
+select min(smallint16),max(smallint16),max(smallint16)-1 from t1 group by a;
+min(smallint16)	max(smallint16)	max(smallint16)-1
+0	65535	65534
+drop table t1;
+create table t1 (id smallint, a smallint primary key);
+insert into t1 values (1,1);
+select * from t1;
+id	a
+1	1
+select * from t1 limit 9999;
+id	a
+1	1
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (
+valueu16  smallint unsigned  not null,
+value16  smallint          not null,
+primary key(value16)
+);
+create table t2 (
+valueu16  smallint unsigned  not null,
+value16  smallint          not null,
+primary key(value16)
+);
+insert into t1 values(65535, 1);
+insert into t1 values( 32767, 2);
+insert into t2 values(65535, 3);
+insert into t2 values( 32767, 4);
+insert into t1 values(5,-32768);
+insert into t2 values(5,-32768);
+select * from t1;
+valueu16	value16
+5	-32768
+65535	1
+32767	2
+select * from t2;
+valueu16	value16
+5	-32768
+65535	3
+32767	4
+select * from t1 join t2 on t1.valueu16=t2.valueu16  order by 1 asc, t2.value16 desc;
+valueu16	value16	valueu16	value16
+5	-32768	5	-32768
+32767	2	32767	4
+65535	1	65535	3
+select * from t1 join t2 on t1.valueu16=t2.valueu16 where t1.valueu16=65535 order by 1+2 asc;
+valueu16	value16	valueu16	value16
+65535	1	65535	3
+select * from t1 join t2 on t1.value16=t2.value16 order by 2;
+valueu16	value16	valueu16	value16
+5	-32768	5	-32768
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (smallint16 smallint not null);
+insert into t1 values (-32768);
+select * from t1;
+smallint16
+-32768
+drop table t1;
+create table t1 (smallint_col smallint unsigned);
+insert into t1 values (65500);
+select * from t1 where smallint_col=65500 order by abs(1) asc;
+smallint_col
+65500
+select * from t1 where smallint_col='65500';
+smallint_col
+65500
+drop table t1;
+select cast(65500 as unsigned) mod 50 as result;
+result
+0
+select cast(32767 as signed);
+cast(32767 as signed)
+32767
+select cast(-32768 as signed);
+cast(-32768 as signed)
+-32768
+CREATE TABLE t1 (id SMALLINT PRIMARY KEY,
+a SMALLINT(6) UNSIGNED,
+b VARCHAR(6));
+INSERT INTO t1 (id,a) VALUES
+(1,0),
+(2,CAST(0x7FFF AS UNSIGNED)),
+(3,CAST(0x8000 AS UNSIGNED)),
+(4,CAST(0xFFFF AS UNSIGNED));
+UPDATE t1 SET b = a;
+select * from t1 where ((a = 65535) and (b = '65535')) order by 1 desc, 2 asc;
+id	a	b
+4	65535	65535
+CREATE TABLE t_smallint(id SMALLINT);
+INSERT INTO t_smallint VALUES (1), (2);
+SELECT id, id >= 1.1 FROM t_smallint;
+id	id >= 1.1
+1	false	
+2	true	
+SELECT id, 1.1 <= id FROM t_smallint;
+id	1.1 <= id
+1	false	
+2	true	
+SELECT id, id = 1.1 FROM t_smallint;
+id	id = 1.1
+1	false	
+2	false	
+SELECT id, 1.1 = id FROM t_smallint;
+id	1.1 = id
+1	false	
+2	false	
+SELECT * from t_smallint WHERE id = 1.1;
+id
+SELECT * from t_smallint WHERE id = 1.1e0;
+id
+SELECT * from t_smallint WHERE id = '1.1';
+id
+SELECT * from t_smallint WHERE id = '1.1e0';
+id
+SELECT * from t_smallint WHERE id IN (1.1, 2.2);
+id
+SELECT * from t_smallint WHERE id IN (1.1e0, 2.2e0);
+id
+SELECT * from t_smallint WHERE id IN ('1.1', '2.2');
+id
+SELECT * from t_smallint WHERE id IN ('1.1e0', '2.2e0');
+id
+SELECT * from t_smallint WHERE id BETWEEN 1.1 AND 1.9;
+id
+SELECT * from t_smallint WHERE id BETWEEN 1.1e0 AND 1.9e0;
+id
+SELECT * from t_smallint WHERE id BETWEEN '1.1' AND '1.9';
+id
+SELECT * from t_smallint WHERE id BETWEEN '1.1e0' AND '1.9e0';
+id
+drop table t1;
+CREATE TABLE t1 (a SMALLINT);
+INSERT INTO t1 VALUES (1);
+SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
+a
+SELECT * FROM t1 WHERE coalesce(a)=0.9;
+a
+SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
+a
+SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
+a
+SELECT * FROM t1 WHERE a=0.9;
+a
+SELECT * FROM t1 WHERE a IN (0.8,0.9) order by 1;
+a
+drop table t1;
+create table t (id smallint unsigned, b smallint);
+insert into t values(32767,1);
+insert into t values(65535,2);
+insert into t values(32768,3);
+select count(*) from t
+where id>=32767 and id <=65535 order by 1;
+count(*)
+3
+select count(*) from t
+where id between 32767 and 65535;
+count(*)
+3
+drop table t;
+SELECT (65534 BETWEEN 0 AND 65535);
+(65534 BETWEEN 0 AND 65535)
+true
+SELECT  -32000 <= 0;
+-32000 <= 0
+true
+SELECT 0 <= 32767;
+0 <= 32767
+true
+SELECT CAST(100 AS UNSIGNED) BETWEEN 1 AND -1;
+CAST(100 AS UNSIGNED) BETWEEN 1 AND -1
+false
+SELECT CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1;
+CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1
+true
+SELECT CAST(0 AS UNSIGNED) BETWEEN 0 AND -1;
+CAST(0 AS UNSIGNED) BETWEEN 0 AND -1
+false
+SELECT CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1;
+CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1
+true
+SELECT ( 65535 BETWEEN 65535 AND 65535 );
+( 65535 BETWEEN 65535 AND 65535 )
+true
+SELECT ( 32767 BETWEEN 65535 AND 1 );
+( 32767 BETWEEN 65535 AND 1 )
+false
+SELECT ( -1 BETWEEN 65535 AND 1 );
+( -1 BETWEEN 65535 AND 1 )
+false
+SELECT ( 0 BETWEEN 65535 AND 1 );
+( 0 BETWEEN 65535 AND 1 )
+false
+SELECT ( 1 BETWEEN 65535 AND 1 );
+( 1 BETWEEN 65535 AND 1 )
+false
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a smallint(3), b smallint(5) primary key);
+INSERT INTO t1 VALUES (1,1),(1,2);
+update t1 set a=2 where a=1 limit 1;
+select * from t1;
+a	b
+2	1
+1	2
+INSERT INTO t1 VALUES (1,3);
+update t1 set a=2 where a=1;
+select * from t1;
+a	b
+2	1
+2	2
+2	3
+drop table t1;
+create table t1 (
+a smallint not null,
+b smallint not null default 0,
+c smallint not null default 0,
+d smallint not null default 0,
+e smallint not null default 0,
+f smallint not null default 0,
+g smallint not null default 0,
+h smallint not null default 0,
+i smallint not null default 0,
+j smallint not null default 0,
+primary key (a));
+insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
+update t1 set a=a+101;
+select a,b from t1;
+a	b
+103	0
+105	0
+107	0
+109	0
+111	0
+113	0
+115	0
+117	0
+119	0
+121	0
+123	0
+124	0
+125	0
+127	0
+update t1 set a=127 where a=25;
+select a,b from t1;
+a	b
+103	0
+105	0
+107	0
+109	0
+111	0
+113	0
+115	0
+117	0
+119	0
+121	0
+123	0
+124	0
+125	0
+127	0
+update t1 set a=a-1 where 1 > 2;
+select a,b from t1;
+a	b
+103	0
+105	0
+107	0
+109	0
+111	0
+113	0
+115	0
+117	0
+119	0
+121	0
+123	0
+124	0
+125	0
+127	0
+update t1 set a=a-1 where 3 > 2;
+select a,b from t1;
+a	b
+102	0
+104	0
+106	0
+108	0
+110	0
+112	0
+114	0
+116	0
+118	0
+120	0
+122	0
+123	0
+124	0
+126	0
+drop table t1;
+create table t1 (a smallint primary key, b char(32));
+insert into t1 values (1,'apple'), (2,'apple');
+select * from t1;
+a	b
+1	apple
+2	apple
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t11;
+drop table if exists t12;
+CREATE TABLE t1 (a smallint(3), b smallint(5) primary key);
+INSERT INTO t1 VALUES (1,1),(1,2);
+delete from t1 where a=1 limit 1;
+select * from t1;
+a	b
+1	2
+INSERT INTO t1 VALUES (1,3);
+delete from t1 where a=1;
+select * from t1;
+a	b
+drop table t1;
+create table t1 (
+a smallint not null,
+b smallint not null default 0,
+c smallint not null default 0,
+d smallint not null default 0,
+e smallint not null default 0,
+f smallint not null default 0,
+g smallint not null default 0,
+h smallint not null default 0,
+i smallint not null default 0,
+j smallint not null default 0,
+primary key (a));
+insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
+delete from t1 where a=2+2;
+select a,b from t1;
+a	b
+2	0
+6	0
+8	0
+10	0
+12	0
+14	0
+16	0
+18	0
+20	0
+22	0
+23	0
+24	0
+26	0
+delete from t1 where  a=24;
+select a,b from t1;
+a	b
+2	0
+6	0
+8	0
+10	0
+12	0
+14	0
+16	0
+18	0
+20	0
+22	0
+23	0
+26	0
+delete from t1 where  3 < 2;
+select a,b from t1;
+a	b
+2	0
+6	0
+8	0
+10	0
+12	0
+14	0
+16	0
+18	0
+20	0
+22	0
+23	0
+26	0
+delete from t1 where  1 < 2;
+select a,b from t1;
+a	b
+drop table t1;
+create table t1 (a smallint primary key, b char(32));
+insert into t1 values (1,'apple'), (2,'apple');
+select * from t1;
+a	b
+1	apple
+2	apple
+drop table t1;
+create table t1(a smallint);
+insert into t1 values(-32768), (32767);
+select * from t1;
+a
+-32768
+32767
+insert into t1 values(-32769);
+truncated type SMALLINT value -32769 for column a, 1
+insert into t1 values(32768);
+truncated type SMALLINT value 32768 for column a, 1
+create table t2(a smallint unsigned);
+insert into t2 values(0), (32767);
+insert into t1 select * from t1;
+insert into t2 values(32768);
+insert into t1 select * from t2;
+data out of range: data type int16, value '32768'
+drop table t2;
+create table t2(a int);
+insert into t2 values(32768);
+insert into t1 select * from t2;
+data out of range: data type int16, value '32768'
+delete from t2;
+insert into t2 values(-32769);
+insert into t1 select * from t2;
+data out of range: data type int16, value '-32769'
+drop table t2;
+create table t2(a int unsigned);
+insert into t2 values(32768);
+insert into t1 select * from t2;
+data out of range: data type int16, value '32768'
+drop table t2;
+create table t2(a bigint);
+insert into t2 values(32768);
+insert into t1 select * from t2;
+data out of range: data type int16, value '32768'
+delete from t2;
+insert into t2 values(-32769);
+insert into t1 select * from t2;
+data out of range: data type int16, value '-32769'
+drop table t2;
+create table t2(a bigint unsigned);
+insert into t2 values(32768);
+insert into t1 select * from t2;
+data out of range: data type int16, value '32768'
+drop table t1;
+create table t1(a smallint unsigned);
+insert into t1 values(0), (65535);
+select * from t1;
+a
+0
+65535
+insert into t1 values(-1);
+truncated type SMALLINT UNSIGNED value -1 for column a, 1
+insert into t1 values(65536);
+truncated type SMALLINT UNSIGNED value 65536 for column a, 1
+drop table t2;
+create table t2(a int);
+insert into t2 values(65536);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '65536'
+delete from t2;
+insert into t2 values(-1);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '-1'
+drop table t2;
+create table t2(a int unsigned);
+insert into t2 values(65536);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '65536'
+drop table t2;
+create table t2(a bigint);
+insert into t2 values(65536);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '65536'
+delete from t2;
+insert into t2 values(-1);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '-1'
+drop table t2;
+create table t2(a bigint unsigned);
+insert into t2 values(65536);
+insert into t1 select * from t2;
+data out of range: data type uint16, value '65536'
+drop table t1;
+drop table t2;

@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,6 +55,12 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	defs, _ := SchemaToDefs(schema)
 	return defs, nil
+}
+
+func (rel *baseRelation) TableColumns(_ context.Context) ([]*engine.Attribute, error) {
+	colDefs := rel.handle.GetMeta().(*catalog.TableEntry).GetColDefs()
+	cols, _ := ColDefsToAttrs(colDefs)
+	return cols, nil
 }
 
 func (rel *baseRelation) Rows(context.Context) (int64, error) {
@@ -101,12 +106,8 @@ func (rel *baseRelation) Update(_ context.Context, _ *batch.Batch) error {
 	return nil
 }
 
-func (rel *baseRelation) Delete(_ context.Context, _ *vector.Vector, _ string) error {
+func (rel *baseRelation) Delete(_ context.Context, _ *batch.Batch, _ string) error {
 	return nil
-}
-
-func (rel *baseRelation) Truncate(_ context.Context) (uint64, error) {
-	return 0, nil
 }
 
 func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [][]byte) ([]engine.Reader, error) {

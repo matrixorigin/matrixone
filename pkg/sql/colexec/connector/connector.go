@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,16 +46,18 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i].IsOriginal() {
-			vec, err := vector.Dup(bat.Vecs[i], proc.GetMheap())
+			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return false, err
 			}
+			vector.Clean(bat.Vecs[i], proc.Mp())
 			bat.Vecs[i] = vec
 		}
 	}
 	select {
 	case <-reg.Ctx.Done():
-		bat.Clean(proc.GetMheap())
+		bat.Clean(proc.Mp())
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil

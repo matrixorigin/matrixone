@@ -60,9 +60,8 @@ func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 
 func TestInitSchemaByInnerExecutor(t *testing.T) {
 	type args struct {
-		ctx  context.Context
-		ch   chan string
-		mode string
+		ctx context.Context
+		ch  chan string
 	}
 	tests := []struct {
 		name string
@@ -71,17 +70,15 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 		{
 			name: "dummy",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 		{
 			name: "dummyS3",
 			args: args{
-				ctx:  context.Background(),
-				ch:   make(chan string, 10),
-				mode: FileService,
+				ctx: context.Background(),
+				ch:  make(chan string, 10),
 			},
 		},
 	}
@@ -92,8 +89,8 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
-			wg.Add(1 + len(initDDLs))
-			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
+			wg.Add(1 + len(tables) + len(views))
+			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch))
 			require.Equal(t, nil, err)
 			go func() {
 				wg.Wait()
@@ -110,7 +107,8 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 						continue
 					}
 					idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-					require.Equal(t, 0, idx)
+					viewIdx := strings.Index(sql, "CREATE VIEW")
+					require.Equal(t, -1, idx|viewIdx)
 				} else {
 					t.Log("exec sql Done.")
 					wg.Wait()

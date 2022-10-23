@@ -12,7 +12,7 @@ You can update the standalone MatrixOne version by 3 methods:
 
 !!! note
     This document is only applicable to the v0.5.0 version updating. Not for v0.4.0/v0.3.0/v0.2.0/v0.1.0 update to v0.5.0 version.
-    
+
 ## Before You Start
 
 - MatrixOne v0.5.0 has been installed.
@@ -70,7 +70,7 @@ make build
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+See [Connect to MatrixOne server](../Get-Started/connect-to-matrixone-server.md).
 
 ## <h2><a name="binary_packages_update">Method 2: Using binary package to update</a></h2>
 
@@ -135,18 +135,18 @@ cp -r ${path_name} store
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+See [Connect to MatrixOne server](../Get-Started/connect-to-matrixone-server.md).
 
 ## <h2><a name="use_docker_update">Method 3: Using Docker to update</a></h2>
 
 If you do not need to keep historical data, you can use the following command to download an image of MatrixOne V0.5.1 from Docker Hub.
 
-``` 
-docker ps 
-docker stop matrixone 
-docker rm matrixone 
-docker pull matrixorigin/matrixone:0.5.1 
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1 
+```
+docker ps
+docker stop matrixone
+docker rm matrixone
+docker pull matrixorigin/matrixone:0.5.1
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
 If you need to keep historical data, please refer to the following scenario example:
@@ -208,7 +208,7 @@ For the information on the user name and password, see the next step - Connect t
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+See [Connect to MatrixOne server](../Get-Started/connect-to-matrixone-server.md).
 
 ## Reference
 

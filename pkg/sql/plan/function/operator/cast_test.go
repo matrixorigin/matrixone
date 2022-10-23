@@ -1053,7 +1053,7 @@ func TestCastLeftToRight(t *testing.T) {
 }
 
 func TestCastSpecials1Int(t *testing.T) {
-	// (char / varhcar / blob) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+	// (char / varhcar / blob / text) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 
 	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
@@ -1350,6 +1350,63 @@ func TestCastSpecials1Int(t *testing.T) {
 			wantValues: []uint64{15},
 			wantScalar: false,
 		},
+
+		{
+			name:       "Test41",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test42",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test43",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test44",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test45",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test46",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test47",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test48",
+			vecs:       makeTempVectors("15", types.T_text, false, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: false,
+		},
 	}
 
 	for _, c := range cases {
@@ -1466,6 +1523,34 @@ func TestCastSpecials1Float(t *testing.T) {
 			wantValues: []float64{15.23},
 			wantScalar: true,
 		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors("15.23", types.T_text, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors("15.23", types.T_text, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors("15.23", types.T_text, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors("15.23", types.T_text, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -1578,6 +1663,34 @@ func TestCastSpecials2Float(t *testing.T) {
 		{
 			name:       "Test12",
 			vecs:       makeTempVectors(float64(23.65), types.T_blob, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors(float32(23.65), types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors(float64(23.65), types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors(float32(23.65), types.T_text, true),
+			proc:       procs,
+			wantBytes:  []byte("23.65"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors(float64(23.65), types.T_text, true),
 			proc:       procs,
 			wantBytes:  []byte("23.65"),
 			wantScalar: true,
@@ -1708,6 +1821,41 @@ func TestCastSpecials3(t *testing.T) {
 		{
 			name:       "Test13",
 			vecs:       makeTempVectors("abcsedn", types.T_char, types.T_blob, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_varchar, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors("abcsedn", types.T_text, types.T_char, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeTempVectors("abcsedn", types.T_varchar, types.T_text, false),
+			proc:       procs,
+			wantBytes:  []byte("abcsedn"),
+			wantScalar: false,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeTempVectors("abcsedn", types.T_char, types.T_text, false),
 			proc:       procs,
 			wantBytes:  []byte("abcsedn"),
 			wantScalar: false,
@@ -2106,7 +2254,7 @@ func TestCastVarcharAsDate(t *testing.T) {
 func TestCastFloatAsDecimal(t *testing.T) {
 	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2143,7 +2291,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 func TestCastDecimalAsString(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Decimal64, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
 		vecs[1] = vector.New(rightType)
 		return vecs
 	}
@@ -2177,7 +2325,7 @@ func TestCastDecimalAsString(t *testing.T) {
 func TestCastTimestampAsDate(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0], testutil.TestUtilMp)
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2215,9 +2363,9 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, nil)
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
 		vectors[1] = vector.New(destType)
 		return vectors
@@ -2276,9 +2424,9 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, nil)
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, testutil.TestUtilMp)
 		}
 
 		vectors[1] = vector.New(destType)
@@ -2334,9 +2482,9 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	makeTempVector := func(left types.Decimal128, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
 		if leftScalar {
-			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+			vectors[0] = vector.NewConstFixed(leftType, 1, left, testutil.TestUtilMp)
 		} else {
-			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal128{left}, nil, nil)
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal128{left}, nil, testutil.TestUtilMp)
 		}
 
 		vectors[1] = vector.New(destType)
@@ -4453,117 +4601,119 @@ func makeTypeVector(t types.T) *vector.Vector {
 func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	var typeOid types.T
 	var vec *vector.Vector
+	mp := testutil.TestUtilMp
+
 	switch val := src.(type) {
 	case int8:
 		typeOid = types.T_int8
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int8{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []int8{val}, nil, mp)
 		}
 
 	case int16:
 		typeOid = types.T_int16
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int16{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []int16{val}, nil, mp)
 		}
 
 	case int32:
 		typeOid = types.T_int32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int32{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []int32{val}, nil, mp)
 		}
 
 	case int64:
 		typeOid = types.T_int64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []int64{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []int64{val}, nil, mp)
 		}
 
 	case uint8:
 		typeOid = types.T_uint8
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint8{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint8{val}, nil, mp)
 		}
 
 	case uint16:
 		typeOid = types.T_uint16
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint16{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint16{val}, nil, mp)
 		}
 
 	case uint32:
 		typeOid = types.T_uint32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint32{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint32{val}, nil, mp)
 		}
 
 	case uint64:
 		typeOid = types.T_uint64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, testutil.TestUtilMp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []uint64{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint64{val}, nil, testutil.TestUtilMp)
 		}
 
 	case float32:
 		typeOid = types.T_float32
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []float32{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []float32{val}, nil, mp)
 		}
 
 	case float64:
 		typeOid = types.T_float64
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []float64{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []float64{val}, nil, mp)
 		}
 
 	case types.Date:
 		typeOid = types.T_date
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Date{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Date{val}, nil, mp)
 		}
 
 	case types.Datetime:
 		typeOid = types.T_datetime
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Datetime{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Datetime{val}, nil, mp)
 		}
 
 	case types.Timestamp:
 		typeOid = types.T_timestamp
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []types.Timestamp{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Timestamp{val}, nil, mp)
 		}
 
 	case bool:
 		typeOid = types.T_bool
 		if isSrcConst {
-			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
-			vec = vector.NewWithFixed(typeOid.ToType(), []bool{val}, nil, nil)
+			vec = vector.NewWithFixed(typeOid.ToType(), []bool{val}, nil, mp)
 		}
 	}
 	return vec
@@ -4577,8 +4727,8 @@ func makeScalarNullVector(srcType types.T) *vector.Vector {
 // make vector for type of char and varchar
 func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
 	if isConst {
-		return vector.NewConstString(t.ToType(), 1, src)
+		return vector.NewConstString(t.ToType(), 1, src, testutil.TestUtilMp)
 	} else {
-		return vector.NewWithStrings(t.ToType(), []string{src}, nil, nil)
+		return vector.NewWithStrings(t.ToType(), []string{src}, nil, testutil.TestUtilMp)
 	}
 }

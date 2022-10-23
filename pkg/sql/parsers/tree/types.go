@@ -377,6 +377,12 @@ var (
 		Oid:    uint32(defines.MYSQL_TYPE_BLOB),
 	}}
 
+	TYPE_TEXT = &T{InternalType: InternalType{
+		Family: BlobFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+	}}
+
 	TYPE_VARSTRING = &T{InternalType: InternalType{
 		Family: StringFamily,
 		Locale: &emptyLocale,

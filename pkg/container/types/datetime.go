@@ -88,7 +88,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' {
+	if s[4] == '-' || s[4] == '/' {
 		var num int64
 		var unum uint64
 		strArr := strings.Split(s, " ")
@@ -96,7 +96,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		// solve year/month/day
-		front := strings.Split(strArr[0], "-")
+		front := strings.Split(strArr[0], s[4:5])
 		if len(front) != 3 {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
@@ -293,7 +293,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 		if !validDate(y, m, d) {
 			return 0, false
 		}
-	case DateTimeType:
+	case DateTimeType, TimeStampType:
 		if !validDatetime(y, m, d) {
 			return 0, false
 		}
@@ -336,6 +336,46 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return 0, false
 	}
 	return newDate, true
+}
+
+func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, error) {
+	switch its {
+	case "microsecond":
+		return int64(dt - secondDt), nil
+	case "second":
+		return (dt - secondDt).sec(), nil
+	case "minute":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerMinute), nil
+	case "hour":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerHour), nil
+	case "day":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerDay), nil
+	case "week":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerWeek), nil
+	case "month":
+		return dt.ConvertToMonth(secondDt), nil
+	case "quarter":
+		return dt.ConvertToMonth(secondDt) / 3, nil
+	case "year":
+		return dt.ConvertToMonth(secondDt) / 12, nil
+	}
+	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
+}
+
+func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
+	return int64((dt - secondDt) / microSecsPerSec)
+}
+
+func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
+
+	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
+	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
+
+	if dayDiff >= 0 {
+		return monthDiff
+	} else {
+		return monthDiff - 1
+	}
 }
 
 func (dt Datetime) MicroSec() int64 {

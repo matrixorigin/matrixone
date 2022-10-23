@@ -118,7 +118,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -153,7 +153,7 @@ var builtins = map[int]Functions{
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -425,6 +425,14 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
 		},
 	},
 	LENGTH_UTF8: {
@@ -631,6 +639,27 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Rtrim,
+			},
+		},
+	},
+	LEFT: {
+		Id: LEFT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.Left,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        binary.Left,
 			},
 		},
 	},
@@ -1613,6 +1642,39 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
+
+			{
+				Index:     22,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     23,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     24,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     25,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
 		},
 	},
 	FROM_UNIXTIME: {
@@ -2235,7 +2297,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			{
@@ -2244,7 +2306,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			// {
@@ -2313,7 +2375,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
-				ReturnTyp: types.T_uint64,
+				ReturnTyp: types.T_int64,
 				Fn:        multi.Hash,
 			},
 		},
@@ -2400,6 +2462,186 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.BinFloat[float64],
+			},
+		},
+	},
+	REGEXP_INSTR: {
+		Id: REGEXP_INSTR,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstr,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstr,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstr,
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_uint8},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstr,
+			},
+		},
+	},
+	REGEXP_REPLACE: {
+		Id: REGEXP_REPLACE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularReplace,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularReplace,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularReplace,
+			},
+		},
+	},
+	REGEXP_LIKE: {
+		Id: REGEXP_LIKE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_bool,
+				Fn:        multi.RegularLike,
+			},
+		},
+	},
+	REGEXP_SUBSTR: {
+		Id: REGEXP_SUBSTR,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+		},
+	},
+
+	MO_MEMORY_USAGE: {
+		Id: MO_MEMORY_USAGE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoMemUsage,
+			},
+		},
+	},
+
+	MO_ENABLE_MEMORY_USAGE_DETAIL: {
+		Id: MO_ENABLE_MEMORY_USAGE_DETAIL,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoEnableMemUsageDetail,
+			},
+		},
+	},
+	MO_DISABLE_MEMORY_USAGE_DETAIL: {
+		Id: MO_DISABLE_MEMORY_USAGE_DETAIL,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_INTERNAL,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoDisableMemUsageDetail,
+			},
+		},
+	},
+	DATEDIFF: {
+		Id: DATEDIFF,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_date, types.T_date},
+				ReturnTyp: types.T_int64,
+				Fn:        binary.DateDiff,
+			},
+		},
+	},
+	TIMESTAMPDIFF: {
+		Id: TIMESTAMPDIFF,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.TimeStampDiff,
 			},
 		},
 	},

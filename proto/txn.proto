@@ -306,11 +306,20 @@ message TxnRemoveMetadataRequest {
 message TxnRemoveMetadataResponse {
 }
 
-// TxnError all explicit errors in transaction operations.
+// TxnError all explicit errors in transaction operations. 
 message TxnError {
-    // Code error code
-    int32 Code    = 1;
-    // Message error message
-    string    Message = 2;
+    // Code moerr code, used to special error handle without unmarshal moerr
+    uint32 Code       = 1;
+    // Error we use this field to send moerr from dn to cn. Set with 
+    // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore 
+    // moerr.
+    bytes  Error      = 2;
+    // TxnErrCode is a internal err code in the txn framework and used to indicate
+    // what transaction operation failed. Usually this value is the same as the value 
+    // of Code, except for the error returned by the interface call to TxnStorage.
+    // Because the types of errors returned by TxnStorage's interface are unknown to the 
+    // transaction framework, it is necessary to use a code for the interface call to uniformly
+    // replace these error codes.
+    uint32 TxnErrCode = 3;
 }
 

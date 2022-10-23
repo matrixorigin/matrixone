@@ -15,10 +15,13 @@
 package db
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"path"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -54,7 +57,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
-	SegmentFactory := blockio.NewObjectFactory(dirname)
+	serviceDir := path.Join(dirname, "data")
+	if opts.Fs == nil {
+		// TODO:fileservice needs to be passed in as a parameter
+		opts.Fs = objectio.TmpNewFileservice(path.Join(dirname, "data"))
+	}
+	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
 		Dir:         dirname,
@@ -62,13 +70,19 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: SegmentFactory,
+		Fs:          fs,
 		Closed:      new(atomic.Value),
 	}
 
-	db.Wal = wal.NewDriver(dirname, WALDir, nil)
+	switch opts.LogStoreT {
+	case options.LogstoreBatchStore:
+		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
+	case options.LogstoreLogservice:
+		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
+	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(
+		db.Fs, mutBufMgr, db.Scheduler, db.Dir)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}
@@ -80,11 +94,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
+	db.TxnMgr.Start()
 
 	db.Replay(dataFactory)
 	db.Catalog.ReplayTableRows()
-
-	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
@@ -98,14 +111,41 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
-	catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
+	catalogCheckpointer := newCatalogCheckpointer(
+		db,
+		opts.CheckpointCfg.CatalogUnCkpLimit,
+		time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond)
+	gcCollector := newGarbageCollector(
+		db,
+		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
 	scanner.RegisterOp(calibrationOp)
-	scanner.RegisterOp(catalogMonotor)
-	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
+	scanner.RegisterOp(gcCollector)
+	scanner.RegisterOp(catalogCheckpointer)
 
 	// Start workers
 	db.CKPDriver.Start()
-	db.TimedScanner.Start()
+
+	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
+	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
+		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
+			forest.Run()
+			dirtyTree := forest.MergeForest()
+			if dirtyTree.IsEmpty() {
+				return
+			}
+			// logutil.Infof(dirtyTree.String())
+		}, nil)
+		hb.Start()
+		<-ctx.Done()
+		hb.Stop()
+	})
+	db.HeartBeatJobs.RunNamedTask("BackgroundScanner", func(ctx context.Context) {
+		hb := w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
+		hb.Start()
+		<-ctx.Done()
+		hb.Stop()
+	})
 
 	return
 }

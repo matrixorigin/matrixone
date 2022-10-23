@@ -27,6 +27,9 @@ type TxnCmd interface {
 	GetType() int16
 	Desc() string
 	String() string
+	ApplyRollback()
+	ApplyCommit()
+	SetReplayTxn(AsyncTxn)
 	VerboseString() string
 	Close()
 }

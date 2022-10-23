@@ -63,9 +63,9 @@ func TestWithRootDataDir(t *testing.T) {
 	require.Equal(t, root, opt.rootDataDir)
 }
 
-func TestWithDnTxnStorage(t *testing.T) {
+func TestWithDNTxnStorage(t *testing.T) {
 	s := "MEM"
-	opt := Options{}.WithDnTxnStorage(s)
+	opt := Options{}.WithDNTxnStorage(s)
 	require.Equal(t, s, opt.dn.txnStorageBackend)
 }
 

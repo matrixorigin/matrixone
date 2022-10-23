@@ -25,7 +25,6 @@ type Relation interface {
 	io.Closer
 	ID() uint64
 	Rows() int64
-	Size(attr string) int64
 	String() string
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
@@ -34,7 +33,6 @@ type Relation interface {
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
-	UpdateByPhyAddrKey(key any, col int, v any) error
 	GetValueByPhyAddrKey(key any, col int) (any, error)
 
 	DeleteByPhyAddrKeys(keys containers.Vector) error

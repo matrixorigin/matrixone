@@ -32,9 +32,9 @@ type nodeManager struct {
 	sizeLimiter
 	nodes           map[any]base.INode
 	evicter         IEvictHolder
-	unregistertimes int64
-	loadtimes       int64
-	evicttimes      int64
+	unregistertimes atomic.Int64
+	loadtimes       atomic.Int64
+	evicttimes      atomic.Int64
 }
 
 func NewNodeManager(maxsize uint64, evicter IEvictHolder) *nodeManager {
@@ -57,9 +57,9 @@ func (mgr *nodeManager) String() string {
 	_, _ = w.WriteString(fmt.Sprintf("<nodeManager>[%s][Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:",
 		mgr.sizeLimiter.String(),
 		len(mgr.nodes),
-		atomic.LoadInt64(&mgr.loadtimes),
-		atomic.LoadInt64(&mgr.evicttimes),
-		atomic.LoadInt64(&mgr.unregistertimes)))
+		mgr.loadtimes.Load(),
+		mgr.evicttimes.Load(),
+		mgr.unregistertimes.Load()))
 	for _, node := range mgr.nodes {
 		key := node.Key()
 		_ = w.WriteByte('\n')
@@ -111,7 +111,7 @@ func (mgr *nodeManager) RegisterNode(node base.INode) error {
 func (mgr *nodeManager) UnregisterNode(node base.INode) {
 	mgr.Lock()
 	defer mgr.Unlock()
-	atomic.AddInt64(&mgr.unregistertimes, int64(1))
+	mgr.unregistertimes.Add(1)
 	delete(mgr.nodes, node.Key())
 	node.Destroy()
 }
@@ -232,7 +232,7 @@ func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 		return nil
 	}
 	node.Load()
-	atomic.AddInt64(&mgr.loadtimes, int64(1))
+	mgr.loadtimes.Add(1)
 	node.Ref()
 	return node.MakeHandle()
 }
@@ -244,6 +244,6 @@ func (mgr *nodeManager) Unpin(node base.INode) {
 	if node.RefCount() == 0 {
 		toevict := &EvictNode{Handle: node, Iter: node.IncIteration()}
 		mgr.evicter.Enqueue(toevict)
-		atomic.AddInt64(&mgr.evicttimes, int64(1))
+		mgr.evicttimes.Add(1)
 	}
 }

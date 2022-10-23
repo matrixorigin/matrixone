@@ -42,14 +42,8 @@ func TestShuffleByDeletes(t *testing.T) {
 	deletes.Add(8)
 	deletes.Add(22)
 
-	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes, deletes)
-	t.Log(destMask.String())
-	t.Log(destVals)
+	destDelets := ShuffleByDeletes(deletes, deletes)
 	t.Log(destDelets.String())
-	assert.True(t, destMask.Contains(0))
-	assert.True(t, destMask.Contains(8))
-	assert.True(t, destMask.Contains(18))
-	assert.True(t, destMask.Contains(27))
 }
 
 func TestCheckRowExists(t *testing.T) {

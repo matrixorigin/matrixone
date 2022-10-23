@@ -17,7 +17,6 @@ package batchstoredriver
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -93,7 +92,7 @@ func (bs *baseStore) start() {
 }
 
 func (bs *baseStore) onTruncate(batch ...any) {
-	lsn := atomic.LoadUint64(&bs.checkpointing)
+	lsn := bs.checkpointing.Load()
 	if lsn == 0 {
 		return
 	}
@@ -220,17 +219,17 @@ func (bs *baseStore) Close() error {
 }
 
 func (bs *baseStore) Truncate(lsn uint64) (err error) {
-	checkpointing := atomic.LoadUint64(&bs.checkpointing)
+	checkpointing := bs.checkpointing.Load()
 	if lsn <= checkpointing {
 		return nil
 	}
 	bs.ckpmu.Lock()
-	checkpointing = atomic.LoadUint64(&bs.checkpointing)
+	checkpointing = bs.checkpointing.Load()
 	if lsn <= checkpointing {
 		bs.ckpmu.Unlock()
 		return nil
 	}
-	atomic.StoreUint64(&bs.checkpointing, lsn)
+	bs.checkpointing.Store(lsn)
 	bs.ckpmu.Unlock()
 	_, err = bs.truncateQueue.Enqueue(lsn)
 	if err != nil && err != common.ErrClose {
@@ -285,7 +284,6 @@ func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 		syncedLsn := bs.GetCurrSeqNum()
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("batchstore: try to read %d", lsn)
 				bs.syncBase.commitCond.L.Lock()
 				ver, err = bs.GetVersionByGLSN(lsn)
 				if err == nil {

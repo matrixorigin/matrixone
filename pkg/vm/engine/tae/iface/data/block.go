@@ -16,6 +16,7 @@ package data
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -48,13 +48,13 @@ type BlockAppender interface {
 		txn txnif.AsyncTxn,
 	) (int, error)
 	IsAppendable() bool
-	ReplayAppend(bat *containers.Batch) error
+	ReplayAppend(bat *containers.Batch,
+		txn txnif.AsyncTxn) (int, error)
 	Close()
 }
 
 type BlockReplayer interface {
 	OnReplayDelete(node txnif.DeleteNode) (err error)
-	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
@@ -66,9 +66,9 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
-	SetNotAppendable()
+	FreezeAppend()
 
-	Rows(txn txnif.AsyncTxn, coarse bool) int
+	Rows() int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any
@@ -76,7 +76,6 @@ type Block interface {
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
-	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
 	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
@@ -86,19 +85,19 @@ type Block interface {
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
-	GetBlockFile() file.Block
 
 	SetMaxCheckpointTS(ts types.TS)
 	GetMaxCheckpointTS() types.TS
-	GetMaxVisibleTS() types.TS
 
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
+	ReplayImmutIndex() error
 	Close()
 	FreeData()
 	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
+	GetFs() *objectio.ObjectFS
 }

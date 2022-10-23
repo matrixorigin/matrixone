@@ -16,86 +16,70 @@ package tables
 
 import (
 	"bytes"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type appendableNode struct {
-	block     *dataBlock
-	data      *containers.Batch
-	rows      uint32
-	exception *atomic.Value
+	block  *dataBlock
+	data   *containers.Batch
+	rows   uint32
+	prefix []byte
 }
 
-func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
+func newNode(block *dataBlock) *appendableNode {
 	impl := new(appendableNode)
-	impl.exception = new(atomic.Value)
 	impl.block = block
-	//impl.rows = file.ReadRows(block.meta.GetMetaLoc())
 	impl.rows = 0
-	var err error
+	impl.prefix = block.meta.MakeKey()
+
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	opts.Allocator = ImmutMemAllocator
-	if impl.data, err = file.LoadBatch(
-		schema.AllTypes(),
+	// opts.Capacity = int(schema.BlockMaxRows)
+	opts.Allocator = common.MutMemAllocator
+	impl.data = containers.BuildBatch(
 		schema.AllNames(),
+		schema.AllTypes(),
 		schema.AllNullables(),
-		opts); err != nil {
-		panic(err)
-	}
+		opts)
 	return impl
 }
 
-func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
-	if coarse {
-		node.block.mvcc.RLock()
-		defer node.block.mvcc.RUnlock()
-		return node.rows
-	}
-	// TODO: fine row count
-	// 1. Load txn ts zonemap
-	// 2. Calculate fine row count
-	return 0
-}
-
-func (node *appendableNode) CheckUnloadable() bool {
-	return !node.block.mvcc.HasActiveAppendNode()
+func (node *appendableNode) Rows() uint32 {
+	node.block.mvcc.RLock()
+	defer node.block.mvcc.RUnlock()
+	return node.rows
 }
 
 func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	bat = node.data.CloneWindow(int(minRow),
 		int(maxRow-minRow),
-		containers.DefaultAllocator)
+		common.DefaultAllocator)
 	return
 }
 
 func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	var data *containers.Batch
 	schema := node.block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	data, err = node.block.file.LoadBatch(
-		schema.AllTypes(),
-		schema.AllNames(),
-		schema.AllNullables(),
-		opts)
-	if err != nil {
-		return
+	data := containers.NewBatch()
+	var vec containers.Vector
+	for i, col := range schema.ColDefs {
+		vec, err = node.block.LoadColumnData(i, nil)
+		if err != nil {
+			return nil, err
+		}
+		data.AddVector(col.Name, vec)
 	}
 	if maxRow-minRow == uint32(data.Length()) {
 		bat = data
 	} else {
-		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 		data.Close()
 	}
 	return
@@ -114,7 +98,7 @@ func (node *appendableNode) getPersistedColumnData(
 	if maxRow-minRow == uint32(data.Length()) {
 		vec = data
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 		data.Close()
 	}
 	return
@@ -128,19 +112,15 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 ) (vec containers.Vector, err error) {
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
-		data = data.Window(int(minRow), int(maxRow))
-		vec = containers.CloneWithBuffer(data, buffer, containers.DefaultAllocator)
+		data = data.Window(int(minRow), int(maxRow-minRow))
+		vec = containers.CloneWithBuffer(data, buffer, common.DefaultAllocator)
 	} else {
-		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.DefaultAllocator)
 	}
 	return
 }
 
 func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		err = exception.(error)
-		return
-	}
 	node.block.RLock()
 	if node.data != nil {
 		bat, err = node.getMemoryDataLocked(minRow, maxRow)
@@ -157,10 +137,6 @@ func (node *appendableNode) GetColumnData(
 	maxRow uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		err = exception.(error)
-		return
-	}
 	node.block.RLock()
 	if node.data != nil {
 		vec, err = node.getMemoryColumnDataLocked(minRow, maxRow, colIdx, buffer)
@@ -180,11 +156,6 @@ func (node *appendableNode) Close() (err error) {
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
 	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
 	if left == 0 {
 		err = moerr.NewInternalError("not appendable")
@@ -199,7 +170,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.block.prefix, startRow, length)
+	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, node.prefix, startRow, length)
 	if err != nil {
 		return
 	}
@@ -221,11 +192,6 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 }
 
 func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTxn) (from int, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
 	schema := node.block.meta.GetSchema()
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {

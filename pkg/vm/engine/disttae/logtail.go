@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-func updatePartition(ctx context.Context, op client.TxnOperator, mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
+func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+	ctx context.Context, op client.TxnOperator, db *DB,
+	mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
 	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
@@ -37,7 +39,7 @@ func updatePartition(ctx context.Context, op client.TxnOperator, mvcc MVCC, dn D
 		return err
 	}
 	for i := range logTails {
-		if consumerLogTail(ctx, mvcc, logTails[i]); err != nil {
+		if consumerLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
 			return err
 		}
 	}
@@ -61,12 +63,14 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 	return logTails, nil
 }
 
-func consumerLogTail(ctx context.Context, mvcc MVCC, logTail *api.SyncLogTailResp) error {
+func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
 	if err := consumerCheckPoint(logTail.CkpLocation); err != nil {
-		return nil
+		return err
 	}
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err := consumerEntry(ctx, mvcc, logTail.Commands[i]); err != nil {
+		if err := consumerEntry(idx, primaryIdx, tbl, ts, ctx,
+			db, mvcc, logTail.Commands[i]); err != nil {
 			return err
 		}
 	}
@@ -78,9 +82,22 @@ func consumerCheckPoint(ckpt string) error {
 	return nil
 }
 
-func consumerEntry(ctx context.Context, mvcc MVCC, e *api.Entry) error {
+func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
-		return mvcc.Insert(ctx, e.Bat)
+		if isMetaTable(e.TableName) {
+			if err := tbl.parts[idx].DeleteByBlockID(ctx, ts, e.BlockId); err != nil {
+				return err
+			}
+			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
+		}
+		if primaryIdx >= 0 {
+			return mvcc.Insert(ctx, MO_PRIMARY_OFF+primaryIdx, e.Bat, false)
+		}
+		return mvcc.Insert(ctx, primaryIdx, e.Bat, false)
+	}
+	if isMetaTable(e.TableName) {
+		return db.getMetaPartitions(e.TableName)[idx].Delete(ctx, e.Bat)
 	}
 	return mvcc.Delete(ctx, e.Bat)
 }

@@ -44,7 +44,7 @@ type TableEntry struct {
 	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
-	rows      uint64
+	rows      atomic.Uint64
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 }
@@ -66,6 +66,27 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
 		TableBaseEntry: NewTableBaseEntry(id),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+	}
+	if dataFactory != nil {
+		e.tableData = dataFactory(e)
+	}
+	e.CreateWithTxn(txnCtx)
+	return e
+}
+
+func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) *TableEntry {
+	if txnCtx != nil {
+		// Only in unit test, txnCtx can be nil
+		schema.AcInfo.TenantID = txnCtx.GetTenantID()
+		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
+	}
+	schema.AcInfo.CreateAt = types.CurrentTimestamp()
+	e := &TableEntry{
+		TableBaseEntry: NewTableBaseEntry(tableId),
 		db:             db,
 		schema:         schema,
 		link:           common.NewGenericSortedDList(compareSegmentFn),
@@ -130,15 +151,15 @@ func (entry *TableEntry) IsVirtual() bool {
 }
 
 func (entry *TableEntry) GetRows() uint64 {
-	return atomic.LoadUint64(&entry.rows)
+	return entry.rows.Load()
 }
 
 func (entry *TableEntry) AddRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, delta)
+	return entry.rows.Add(delta)
 }
 
 func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
-	return atomic.AddUint64(&entry.rows, ^(delta - 1))
+	return entry.rows.Add(^(delta - 1))
 }
 
 func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {
@@ -173,10 +194,10 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (entry *TableEntry) Set1PC() {
-	entry.GetNodeLocked().Set1PC()
+	entry.GetLatestNodeLocked().Set1PC()
 }
 func (entry *TableEntry) Is1PC() bool {
-	return entry.GetNodeLocked().Is1PC()
+	return entry.GetLatestNodeLocked().Is1PC()
 }
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
@@ -195,6 +216,12 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 
 func (entry *TableEntry) GetSchema() *Schema {
 	return entry.schema
+}
+
+func (entry *TableEntry) GetColDefs() []*ColDef {
+	colDefs := entry.schema.ColDefs
+	colDefs = append(colDefs, entry.schema.PhyAddrKey)
+	return colDefs
 }
 
 func (entry *TableEntry) GetFullName() string {
@@ -255,9 +282,7 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		itSeg.RLock()
-		dropped := itSeg.HasDropped()
-		itSeg.RUnlock()
+		dropped := itSeg.HasDropCommitted()
 		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
@@ -396,22 +421,22 @@ func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 	}
 }
 
-func (entry *TableEntry) CloneCreateEntry() *TableEntry {
-	return &TableEntry{
-		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
-		db:             entry.db,
-		schema:         entry.schema,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
 	if !db.IsActive() {
 		return false
 	}
-	entry.RLock()
-	dropped := entry.IsDroppedCommitted()
-	entry.RUnlock()
-	return !dropped
+	return !entry.HasDropCommitted()
+}
+
+// GetTerminationTS is coarse API: no consistency check
+func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
+	dbEntry := entry.GetDB()
+
+	dbEntry.RLock()
+	terminated, ts = dbEntry.TryGetTerminatedTS(true)
+	dbEntry.RUnlock()
+
+	return
 }

@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,43 +49,56 @@ type Txn interface {
 
 // Relation is only used by taeStorage
 type Relation interface {
+	GetPrimaryKeys(context.Context) ([]*engine.Attribute, error)
+	GetHideKeys(context.Context) ([]*engine.Attribute, error)
+
 	Write(context.Context, *batch.Batch) error
 
-	Delete(context.Context, *vector.Vector, string) error
+	Delete(context.Context, *batch.Batch, string) error
 
 	DeleteByPhyAddrKeys(context.Context, *vector.Vector) error
 
-	Truncate(context.Context) (uint64, error)
+	TableDefs(context.Context) ([]engine.TableDef, error)
 
 	GetRelationID(context.Context) uint64
+	//just for test
+	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
+	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]engine.Reader, error)
 }
 
 // Database is only used by taeStorage
 type Database interface {
 	RelationNames(context.Context) ([]string, error)
 	GetRelation(context.Context, string) (Relation, error)
+	GetRelationByID(context.Context, uint64) (Relation, error)
 
 	DropRelation(context.Context, string) error
-	CreateRelation(context.Context, string, []engine.TableDef) error // Create Table - (name, table define)
+	DropRelationByID(context.Context, uint64) error
+	TruncateRelationWithID(context.Context, string, uint64) error
+	TruncateRelationByID(context.Context, uint64, uint64) error
+
+	CreateRelation(context.Context, string, []engine.TableDef) error               // Create Table - (name, table define)
+	CreateRelationWithID(context.Context, string, uint64, []engine.TableDef) error // Create Table - (name, table define)
 
 	GetDatabaseID(ctx context.Context) uint64
 }
 
-// Engine is only used by taeStorage
+// moengine.Engine is only used by taeStorage
 type Engine interface {
-	// Delete deletes a database
 	DropDatabase(ctx context.Context, databaseName string, txn Txn) error
+	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
-	// Create creates a database
 	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName string, id uint64, txn Txn) error
 
-	// Databases returns all database names
+	// DatabaseNames returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
 
-	// Database creates a handle for a database
+	// GetDatabase returns a handle for a database
 	GetDatabase(ctx context.Context, databaseName string, txn Txn) (Database, error)
+	GetDatabaseByID(ctx context.Context, id uint64, txn Txn) (Database, error)
 
-	// GetDB returns tae db struct
+	// GetTAE returns tae db struct
 	GetTAE(ctx context.Context) *db.DB
 }
 

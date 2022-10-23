@@ -39,6 +39,7 @@ const (
 	MYSQL_TYPE_TIME2       uint8 = 0x13 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TYPED_ARRAY uint8 = 0x14 /**< Used for replication only */
 
+	MYSQL_TYPE_TEXT        uint8 = 241 // add text to distinct blob and blob
 	MYSQL_TYPE_INVALID     uint8 = 242
 	MYSQL_TYPE_UUID        uint8 = 243
 	MYSQL_TYPE_BOOL        uint8 = 244 /**< Currently just a placeholder */

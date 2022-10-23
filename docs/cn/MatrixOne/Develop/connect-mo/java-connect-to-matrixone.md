@@ -1,4 +1,4 @@
-# Java 连接 MatrixOne 服务
+# JDBC 连接 MatrixOne 服务
 
 MatrixOne 现在支持 Java 语言的 JDBC 连接器连接 MatrixOne 服务。
 
@@ -14,4 +14,4 @@ MatrixOne 现在支持 Java 语言的 JDBC 连接器连接 MatrixOne 服务。
 
 ## 参考文档
 
-更多关于 Java 连接 MatrixOne 服务实践教程，参见[用 JDBC 连接器连接 MatrixOne 服务示例](../../Tutorial/develop-java-connect-mo.md)。
+更多关于 Java 连接 MatrixOne 服务实践教程，参见[用 JDBC 连接器连接 MatrixOne 服务示例](../../Tutorial/develop-java-crud-demo.md)。

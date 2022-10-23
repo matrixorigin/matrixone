@@ -123,6 +123,7 @@ func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
 	opts.CheckpointCfg.ExecutionInterval = 1000 * int64(factor)
 	opts.CheckpointCfg.CatalogCkpInterval = 1000 * int64(factor)
 	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	opts.CheckpointCfg.FlushInterval = 1000 * int64(factor)
 	return opts
 }
 

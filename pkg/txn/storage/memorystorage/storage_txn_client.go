@@ -16,8 +16,10 @@ package memorystorage
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -26,17 +28,17 @@ import (
 )
 
 type StorageTxnClient struct {
-	clock   clock.Clock
-	storage *Storage
+	clock    clock.Clock
+	storages map[string]*Storage
 }
 
 func NewStorageTxnClient(
 	clock clock.Clock,
-	storage *Storage,
+	storages map[string]*Storage,
 ) *StorageTxnClient {
 	return &StorageTxnClient{
-		clock:   clock,
-		storage: storage,
+		clock:    clock,
+		storages: storages,
 	}
 }
 
@@ -49,8 +51,8 @@ func (s *StorageTxnClient) New(options ...client.TxnOption) (client.TxnOperator,
 		SnapshotTS: now,
 	}
 	return &StorageTxnOperator{
-		storage: s.storage,
-		meta:    meta,
+		storages: s.storages,
+		meta:     meta,
 	}, nil
 }
 
@@ -59,8 +61,8 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 }
 
 type StorageTxnOperator struct {
-	storage *Storage
-	meta    txn.TxnMeta
+	storages map[string]*Storage
+	meta     txn.TxnMeta
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)
@@ -70,7 +72,12 @@ func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 }
 
 func (s *StorageTxnOperator) Commit(ctx context.Context) error {
-	return s.storage.Commit(ctx, s.meta)
+	for _, storage := range s.storages {
+		if err := storage.Commit(ctx, s.meta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
@@ -89,16 +96,18 @@ func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*r
 			Flag:         op.Flag,
 			CNOpResponse: new(txn.CNOpResponse),
 		}
-		res, err := s.storage.Read(
+		storage, ok := s.storages[op.CNRequest.Target.Address]
+		if !ok {
+			panic(fmt.Sprintf("storage not found at %s", op.CNRequest.Target.Address))
+		}
+		res, err := storage.Read(
 			ctx,
 			op.Txn,
 			op.CNRequest.OpCode,
 			op.CNRequest.Payload,
 		)
 		if err != nil {
-			txnResponse.TxnError = &txn.TxnError{
-				Message: err.Error(),
-			}
+			txnResponse.TxnError = txn.WrapError(err, moerr.ErrTAERead)
 		} else {
 			payload, err := res.Read()
 			if err != nil {
@@ -113,7 +122,12 @@ func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*r
 }
 
 func (s *StorageTxnOperator) Rollback(ctx context.Context) error {
-	return s.storage.Rollback(ctx, s.meta)
+	for _, storage := range s.storages {
+		if err := storage.Rollback(ctx, s.meta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (*StorageTxnOperator) Snapshot() ([]byte, error) {
@@ -140,16 +154,18 @@ func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*
 			Flag:         op.Flag,
 			CNOpResponse: new(txn.CNOpResponse),
 		}
-		payload, err := s.storage.Write(
+		storage, ok := s.storages[op.CNRequest.Target.Address]
+		if !ok {
+			panic(fmt.Sprintf("storage not found at %s", op.CNRequest.Target.Address))
+		}
+		payload, err := storage.Write(
 			ctx,
 			op.Txn,
 			op.CNRequest.OpCode,
 			op.CNRequest.Payload,
 		)
 		if err != nil {
-			txnResponse.TxnError = &txn.TxnError{
-				Message: err.Error(),
-			}
+			txnResponse.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 		} else {
 			txnResponse.CNOpResponse.Payload = payload
 		}
@@ -169,7 +185,7 @@ func (s *StorageTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRe
 	if err != nil {
 		return nil, err
 	}
-	if err := s.storage.Commit(ctx, s.meta); err != nil {
+	if err := s.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -177,6 +193,10 @@ func (s *StorageTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRe
 
 var _ memoryengine.OperationHandlerProvider = new(StorageTxnOperator)
 
-func (s *StorageTxnOperator) GetOperationHandler() (memoryengine.OperationHandler, txn.TxnMeta) {
-	return s.storage.handler, s.meta
+func (s *StorageTxnOperator) GetOperationHandler(shard memoryengine.Shard) (memoryengine.OperationHandler, txn.TxnMeta) {
+	storage, ok := s.storages[shard.Address]
+	if !ok {
+		panic(fmt.Sprintf("storage not found at %s", shard.Address))
+	}
+	return storage.handler, s.meta
 }

@@ -22,8 +22,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -40,7 +40,7 @@ func TestCatalogHandler(t *testing.T) {
 	}, math.MaxInt64)
 	catalogHandler, err := NewCatalogHandler(
 		NewMemHandler(
-			testutil.NewMheap(),
+			mpool.MustNewZero(),
 			memtable.Serializable,
 			clock,
 			memoryengine.RandomIDGenerator,

@@ -120,3 +120,6 @@ func (cmd *compactBlockCmd) String() string {
 func (cmd *compactBlockCmd) VerboseString() string {
 	return fmt.Sprintf("CmdName=CPCT;CSN=%d;From=%s;To=%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }
+func (cmd *compactBlockCmd) ApplyCommit()                  {}
+func (cmd *compactBlockCmd) ApplyRollback()                {}
+func (cmd *compactBlockCmd) SetReplayTxn(_ txnif.AsyncTxn) {}

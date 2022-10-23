@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "show profiles",
+		input:  "SELECT  id,name,view_type,attribute,attribute_filed,size,created_at,updated_at  FROM view_warehouse limit 0,10",
+		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
 	}
 )
 
@@ -51,6 +52,17 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
+		output: "select algo_alarm_record* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+	}, {
+		input: "select a from t1 use index(b)",
+	}, {
+		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
+	}, {
+		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
+		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+	}, {
 		input: "select time from t1 as value",
 	}, {
 		input: "show profiles",
@@ -95,6 +107,18 @@ var (
 	}, {
 		input: "update t1 set a = default",
 	}, {
+		input:  "truncate t1",
+		output: "truncate table t1",
+	}, {
+		input:  "truncate table t1",
+		output: "truncate table t1",
+	}, {
+		input:  "truncate db1.t1",
+		output: "truncate table db1.t1",
+	}, {
+		input:  "truncate table db1.t1",
+		output: "truncate table db1.t1",
+	}, {
 		input:  "explain select * from emp",
 		output: "explain select * from emp",
 	}, {
@@ -117,7 +141,7 @@ var (
 		output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
 	}, {
 		input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
-		output: "update items, (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
+		output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 	}, {
 		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
@@ -324,7 +348,7 @@ var (
 		output: "select fld1, std(fld2) from t1 group by fld1 having variance(fld2) is not null",
 	}, {
 		input:  "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1<=>b.f1 as eq from t1 a, t1 b;",
-		output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a, t1 as b",
+		output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a cross join t1 as b",
 	}, {
 		input:  "select var_samp(s) as '0.5', var_pop(s) as '0.25' from bug22555;",
 		output: "select var_samp(s) as 0.5, var_pop(s) as 0.25 from bug22555",
@@ -346,7 +370,8 @@ var (
 	}, {
 		input: "select sql_small_result t2.id, avg(rating) from t2 group by t2.id",
 	}, {
-		input: "select any_value(name), avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+		input:  "select any_value(name), avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+		output: "select any_value(name), avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
 	}, {
 		input: "select id, avg(value1), std(value1), variance(value1) from t1 group by id",
 	}, {
@@ -356,7 +381,8 @@ var (
 	}, {
 		input: "select i, count(*), variance(s1 / s2) from bug22555 group by i order by i",
 	}, {
-		input: "select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+		input:  "select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+		output: "select name, avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
 	}, {
 		input:  "select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t",
 		output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
@@ -485,6 +511,15 @@ var (
 		input:  "INSERT INTO t1 SET f1 = -1;",
 		output: "insert into t1 (f1) values (-1)",
 	}, {
+		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (values(a) + values(b), values(a) + values(c))",
+	}, {
+		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2, 3)",
+	}, {
+		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
+		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update  (c, b) values (2 / 2, 3)",
+	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
 	}, {
@@ -580,213 +615,230 @@ var (
 		output: "load data infile data.txt into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'gzip'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'flate'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lzw'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'zlib'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-		output: "load data infile {'filepath':'data.txt', 'compression':'lz4'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
 	}, {
-		input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-		output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
-	}, {
-		input:  "show tables from test01 where tables_in_test01 like '%t2%'",
-		output: "show tables from test01 where tables_in_test01 like %t2%",
-	}, {
-		input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-		output: "select userid, max(score) as max_score from t1 where concat(userid < 2, userid > 3) group by userid order by max_score",
-	}, {
-		input: "select c1, -c2 from t2 order by -c1 desc",
-	}, {
-		input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-		output: "select * from t1 where concat(spid > 2 and userid < 2, userid >= 2) or userid < 2 limit 3",
-	}, {
-		input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
-		output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
-	}, {
-		input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
-		output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned) as cast_unsigned from t1 limit 2",
-	}, {
-		input: "select distinct name as name1 from t1",
-	}, {
-		input:  "select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1",
-		output: "select userid, userid div 2 as user_dir, userid % 2 as user_percent, userid % 2 as user_mod from t1",
-	}, {
-		input:  "select sum(score) as sum from t1 where spID=6 group by score order by sum desc",
-		output: "select sum(score) as sum from t1 where spid = 6 group by score order by sum desc",
-	}, {
-		input:  "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1",
-		output: "select userid, count(score) from t1 where userid > 2 group by userid having count(score) > 1",
-	}, {
-		input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product<>'TV' GROUP BY product order by product asc",
-		output: "select product, sum(profit), avg(profit) from t2 where product != TV group by product order by product asc",
-	}, {
-		input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product='Phone' GROUP BY product order by product asc",
-		output: "select product, sum(profit), avg(profit) from t2 where product = Phone group by product order by product asc",
-	}, {
-		input:  "select sum(col_1d),count(col_1d),avg(col_1d),min(col_1d),max(col_1d) from tbl1 group by col_1e",
-		output: "select sum(col_1d), count(col_1d), avg(col_1d), min(col_1d), max(col_1d) from tbl1 group by col_1e",
-	}, {
-		input:  "select u.a, (select t.a from sa.t, u) from u, (select t.a, u.a from sa.t, u where t.a = u.a) as t where (u.a, u.b, u.c) in (select t.a, u.a, t.b * u.b tubb from t)",
-		output: "select u.a, (select t.a from sa.t, u) from u, (select t.a, u.a from sa.t, u where t.a = u.a) as t where (u.a, u.b, u.c) in (select t.a, u.a, t.b * u.b as tubb from t)",
-	}, {
-		input: "select u.a, (select t.a from sa.t, u) from u",
-	}, {
-		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
-		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
-	}, {
-		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
-		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
-	}, {
-		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
-		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
-	}, {
-		input:  "SELECT t.a,u.a,t.b * u.b FROM sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
-		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
-	}, {
-		input: "select avg(u.a), count(u.b), cast(u.c as char) from u",
-	}, {
-		input: "select avg(u.a), count(*) from u",
-	}, {
-		input: "select avg(u.a), count(u.b) from u",
-	}, {
-		input: "select sum(col_1d) from tbl1 where col_1d < 13 group by col_1e",
-	}, {
-		input:  "select sum(col_1a),count(col_1b),avg(col_1c),min(col_1d),max(col_1d) from tbl1",
-		output: "select sum(col_1a), count(col_1b), avg(col_1c), min(col_1d), max(col_1d) from tbl1",
-	}, {
-		input:  "insert into tbl1 values (0,1,5,11, \"a\")",
-		output: "insert into tbl1 values (0, 1, 5, 11, a)",
-	}, {
-		input: "create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null)",
-	}, {
-		input: "insert into numtable values (4, 1.234567891, 1.234567891)",
-	}, {
-		input: "insert into numtable values (3, 1.234567, 1.234567)",
-	}, {
-		input: "create table numtable (id int, fl float, dl double)",
-	}, {
-		input: "drop table if exists numtable",
-	}, {
-		input:  "create table table17 (`index` int)",
-		output: "create table table17 (index int)",
-	}, {
-		input: "create table table19$ (a int)",
-	}, {
-		input:  "create table `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa int);",
-		output: "create table aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa int)",
-	}, {
-		input:  "create table table12 (`a ` int)",
-		output: "create table table12 (a  int)",
-	}, {
-		input:  "create table `table11 ` (a int)",
-		output: "create table table11  (a int)",
-	}, {
-		input:  "create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT=\"asdf\"",
-		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
-	}, {
-		input:  "create temporary table table05 ( a int, b char(10));",
-		output: "create temporary table table05 (a int, b char(10))",
-	}, {
-		input:  "create table table15 (a varchar(5) default 'abcde')",
-		output: "create table table15 (a varchar(5) default abcde)",
-	}, {
-		input:  "create table table01 (a TINYINT primary key, b SMALLINT SIGNED, c INT UNSIGNED, d BIGINT not null , e FLOAT unique,f DOUBLE, g CHAR(10), h VARCHAR(20))",
-		output: "create table table01 (a tinyint primary key, b smallint, c int unsigned, d bigint not null, e float unique, f double, g char(10), h varchar(20))",
-	}, {
-		input:  "create database test04 CHARACTER SET=utf8 collate=utf8_general_ci ENCRYPTION='N'",
-		output: "create database test04 character set utf8 collate utf8_general_ci encryption N",
-	}, {
-		input:  "create database test03 DEFAULT CHARACTER SET utf8 collate utf8_general_ci ENCRYPTION 'Y'",
-		output: "create database test03 default character set utf8 collate utf8_general_ci encryption Y",
-	}, {
-		input: "drop database if exists t01234567890123456789012345678901234567890123456789012345678901234567890123456789",
-	}, {
-		input: "select distinct a from t",
-	}, {
-		input:  "select * from t where a like 'a%'",
-		output: "select * from t where a like a%",
-	}, {
-		input: "select sysdate(), curtime(22) from t",
-	}, {
-		input: "select sysdate(), curtime from t",
-	}, {
-		input:  "select current_time(), current_timestamp, lacalTIMe(89), utc_time() from t",
-		output: "select current_time(), current_timestamp(), lacaltime(89), utc_time() from t",
-	}, {
-		input:  "select current_user(), current_role(), current_date, utc_date from t",
-		output: "select current_user(), current_role(), current_date(), utc_date() from t",
-	}, {
-		input: "select ascii(a), collation(b), hour(c), microsecond(d) from t",
-	}, {
-		input:  "select dayofmonth('2001-11-00'), month('2005-00-00') from t",
-		output: "select dayofmonth(2001-11-00), month(2005-00-00) from t",
-	}, {
-		input: "select sum(distinct s) from tbl where 1",
-	}, {
-		input:  "select u.a, interval 1 second from t",
-		output: "select u.a, interval(1, second) from t",
-	}, {
-		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
-	}, {
-		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c)",
-	}, {
-		input: "select u.a, (select t.a from sa.t, u) from u",
-	}, {
-		input: "select t.a from sa.t, u",
-	}, {
-		input: "select t.a from sa.t",
-	}, {
-		input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
-		output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
-	}, {
-		input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
-		output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
-	}, {
-		input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
-		output: "create table a (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
-	}, {
-		input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
-		output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
-	}, {
-		input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
-		output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key algorithm = 2 (a, b, db.t.c) subpartitions 10",
-	}, {
-		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10",
-	}, {
-		input: "create table a (a int) partition by linear hash (1 + 1234 / 32)",
-	}, {
-		input: "create table a (a int) partition by linear key algorithm = 31 (a, b, db.t.c)",
-	}, {
-		input:  "create table a (a int) partition by linear key (a, b, db.t.c)",
-		output: "create table a (a int) partition by linear key algorithm = 2 (a, b, db.t.c)",
-	}, {
-		input: "create table a (a int) partition by list columns (a, b, db.t.c)",
-	}, {
-		input: "create table a (a int) partition by list columns (a, b, db.t.c)",
-	}, {
-		input: "create table a (a int) partition by range columns (a, b, db.t.c)",
-	}, {
-		input: "create table a (a int) partition by range(1 + 21)",
-	}, {
-		input: "create table a (a int storage disk constraint cx check (b + c) enforced)",
-	}, {
-		input: "create table a (a int storage disk, b int references b(a asc, b desc) match full on delete cascade on update restrict)",
-	}, {
-		input: "create table a (a int storage disk, b int)",
-	}, {
-		input: "create table a (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
+		input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='array'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'array'} into table db.a",
 	},
+		{
+			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'} into table db.a",
+			output: "load data infile {'filepath':'data.txt', 'compression':'auto', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+		},
+		{
+			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2','format'='jsonline','jsondata'='object'} into table db.a",
+			output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'jsonline', 'jsondata':'object'} into table db.a",
+		},
+		{
+			input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+			output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
+		}, {
+			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
+			output: "show tables from test01 where tables_in_test01 like %t2%",
+		}, {
+			input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
+			output: "select userid, max(score) as max_score from t1 where concat(userid < 2, userid > 3) group by userid order by max_score",
+		}, {
+			input: "select c1, -c2 from t2 order by -c1 desc",
+		}, {
+			input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
+			output: "select * from t1 where concat(spid > 2 and userid < 2, userid >= 2) or userid < 2 limit 3",
+		}, {
+			input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
+			output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
+		}, {
+			input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
+			output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned) as cast_unsigned from t1 limit 2",
+		}, {
+			input: "select distinct name as name1 from t1",
+		}, {
+			input:  "select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1",
+			output: "select userid, userid div 2 as user_dir, userid % 2 as user_percent, userid % 2 as user_mod from t1",
+		}, {
+			input:  "select sum(score) as sum from t1 where spID=6 group by score order by sum desc",
+			output: "select sum(score) as sum from t1 where spid = 6 group by score order by sum desc",
+		}, {
+			input:  "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1",
+			output: "select userid, count(score) from t1 where userid > 2 group by userid having count(score) > 1",
+		}, {
+			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product<>'TV' GROUP BY product order by product asc",
+			output: "select product, sum(profit), avg(profit) from t2 where product != TV group by product order by product asc",
+		}, {
+			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product='Phone' GROUP BY product order by product asc",
+			output: "select product, sum(profit), avg(profit) from t2 where product = Phone group by product order by product asc",
+		}, {
+			input:  "select sum(col_1d),count(col_1d),avg(col_1d),min(col_1d),max(col_1d) from tbl1 group by col_1e",
+			output: "select sum(col_1d), count(col_1d), avg(col_1d), min(col_1d), max(col_1d) from tbl1 group by col_1e",
+		}, {
+			input:  "select u.a, (select t.a from sa.t, u) from u, (select t.a, u.a from sa.t, u where t.a = u.a) as t where (u.a, u.b, u.c) in (select t.a, u.a, t.b * u.b tubb from t)",
+			output: "select u.a, (select t.a from sa.t cross join u) from u cross join (select t.a, u.a from sa.t cross join u where t.a = u.a) as t where (u.a, u.b, u.c) in (select t.a, u.a, t.b * u.b as tubb from t)",
+		}, {
+			input:  "select u.a, (select t.a from sa.t, u) from u",
+			output: "select u.a, (select t.a from sa.t cross join u) from u",
+		}, {
+			input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
+			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
+		}, {
+			input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
+			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
+		}, {
+			input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
+			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
+		}, {
+			input:  "SELECT t.a,u.a,t.b * u.b FROM sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
+			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
+		}, {
+			input: "select avg(u.a), count(u.b), cast(u.c as char) from u",
+		}, {
+			input: "select avg(u.a), count(*) from u",
+		}, {
+			input: "select avg(u.a), count(u.b) from u",
+		}, {
+			input: "select sum(col_1d) from tbl1 where col_1d < 13 group by col_1e",
+		}, {
+			input:  "select sum(col_1a),count(col_1b),avg(col_1c),min(col_1d),max(col_1d) from tbl1",
+			output: "select sum(col_1a), count(col_1b), avg(col_1c), min(col_1d), max(col_1d) from tbl1",
+		}, {
+			input:  "insert into tbl1 values (0,1,5,11, \"a\")",
+			output: "insert into tbl1 values (0, 1, 5, 11, a)",
+		}, {
+			input: "create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null)",
+		}, {
+			input: "insert into numtable values (4, 1.234567891, 1.234567891)",
+		}, {
+			input: "insert into numtable values (3, 1.234567, 1.234567)",
+		}, {
+			input: "create table numtable (id int, fl float, dl double)",
+		}, {
+			input: "drop table if exists numtable",
+		}, {
+			input:  "create table table17 (`index` int)",
+			output: "create table table17 (index int)",
+		}, {
+			input: "create table table19$ (a int)",
+		}, {
+			input:  "create table `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa int);",
+			output: "create table aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa int)",
+		}, {
+			input:  "create table table12 (`a ` int)",
+			output: "create table table12 (a  int)",
+		}, {
+			input:  "create table `table11 ` (a int)",
+			output: "create table table11  (a int)",
+		}, {
+			input:  "create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT=\"asdf\"",
+			output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
+		}, {
+			input:  "create temporary table table05 ( a int, b char(10));",
+			output: "create temporary table table05 (a int, b char(10))",
+		}, {
+			input:  "create table table15 (a varchar(5) default 'abcde')",
+			output: "create table table15 (a varchar(5) default abcde)",
+		}, {
+			input:  "create table table01 (a TINYINT primary key, b SMALLINT SIGNED, c INT UNSIGNED, d BIGINT not null , e FLOAT unique,f DOUBLE, g CHAR(10), h VARCHAR(20))",
+			output: "create table table01 (a tinyint primary key, b smallint, c int unsigned, d bigint not null, e float unique, f double, g char(10), h varchar(20))",
+		}, {
+			input:  "create database test04 CHARACTER SET=utf8 collate=utf8_general_ci ENCRYPTION='N'",
+			output: "create database test04 character set utf8 collate utf8_general_ci encryption N",
+		}, {
+			input:  "create database test03 DEFAULT CHARACTER SET utf8 collate utf8_general_ci ENCRYPTION 'Y'",
+			output: "create database test03 default character set utf8 collate utf8_general_ci encryption Y",
+		}, {
+			input: "drop database if exists t01234567890123456789012345678901234567890123456789012345678901234567890123456789",
+		}, {
+			input: "select distinct a from t",
+		}, {
+			input:  "select * from t where a like 'a%'",
+			output: "select * from t where a like a%",
+		}, {
+			input: "select sysdate(), curtime(22) from t",
+		}, {
+			input: "select sysdate(), curtime from t",
+		}, {
+			input:  "select current_time(), current_timestamp, lacalTIMe(89), utc_time() from t",
+			output: "select current_time(), current_timestamp(), lacaltime(89), utc_time() from t",
+		}, {
+			input:  "select current_user(), current_role(), current_date, utc_date from t",
+			output: "select current_user(), current_role(), current_date(), utc_date() from t",
+		}, {
+			input: "select ascii(a), collation(b), hour(c), microsecond(d) from t",
+		}, {
+			input:  "select dayofmonth('2001-11-00'), month('2005-00-00') from t",
+			output: "select dayofmonth(2001-11-00), month(2005-00-00) from t",
+		}, {
+			input: "select sum(distinct s) from tbl where 1",
+		}, {
+			input:  "select u.a, interval 1 second from t",
+			output: "select u.a, interval(1, second) from t",
+		}, {
+			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
+			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c) in (select * from t)",
+		}, {
+			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c)",
+			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c)",
+		}, {
+			input:  "select u.a, (select t.a from sa.t, u) from u",
+			output: "select u.a, (select t.a from sa.t cross join u) from u",
+		}, {
+			input:  "select t.a from sa.t, u",
+			output: "select t.a from sa.t cross join u",
+		}, {
+			input: "select t.a from sa.t",
+		}, {
+			input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
+			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
+		}, {
+			input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
+			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
+		}, {
+			input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
+			output: "create table a (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
+		}, {
+			input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
+			output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
+		}, {
+			input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
+			output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key algorithm = 2 (a, b, db.t.c) subpartitions 10",
+		}, {
+			input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10",
+		}, {
+			input: "create table a (a int) partition by linear hash (1 + 1234 / 32)",
+		}, {
+			input: "create table a (a int) partition by linear key algorithm = 31 (a, b, db.t.c)",
+		}, {
+			input:  "create table a (a int) partition by linear key (a, b, db.t.c)",
+			output: "create table a (a int) partition by linear key algorithm = 2 (a, b, db.t.c)",
+		}, {
+			input: "create table a (a int) partition by list columns (a, b, db.t.c)",
+		}, {
+			input: "create table a (a int) partition by list columns (a, b, db.t.c)",
+		}, {
+			input: "create table a (a int) partition by range columns (a, b, db.t.c)",
+		}, {
+			input: "create table a (a int) partition by range(1 + 21)",
+		}, {
+			input: "create table a (a int storage disk constraint cx check (b + c) enforced)",
+		}, {
+			input: "create table a (a int storage disk, b int references b(a asc, b desc) match full on delete cascade on update restrict)",
+		}, {
+			input: "create table a (a int storage disk, b int)",
+		}, {
+			input: "create table a (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
+		},
 		{
 			input:  `CREATE TABLE tp1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4`,
 			output: `create table tp1 (col1 int, col2 char(5), col3 date) partition by key algorithm = 2 (col3) partitions 4`,
@@ -1163,7 +1215,8 @@ var (
 		}, {
 			input: "select * from t",
 		}, {
-			input: "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
+			input:  "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
+			output: "select c1, c2, c3 from t1 cross join t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 		}, {
 			input: "select a from t order by a desc limit 1 offset 2",
 		}, {
@@ -1419,6 +1472,15 @@ var (
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		}, {
+			input:  `DO SLEEP(5)`,
+			output: `do sleep(5)`,
+		}, {
+			input:  `DECLARE a, b INT`,
+			output: `declare a b int default null`,
+		}, {
+			input:  `DECLARE a, b INT DEFAULT 1`,
+			output: `declare a b int default 1`,
+		}, {
 			input: "grant truncate on table *.* to r1",
 		}, {
 			input: "grant reference on table *.* to r1",
@@ -1481,6 +1543,22 @@ var (
 		{
 			input:  `select * from unnest(t.a, "$.b", true) as f`,
 			output: `select * from unnest(t.a, $.b, true) as f`,
+		},
+		{
+			input:  `select * from generate_series('1', '10', '1')`,
+			output: `select * from generate_series(1, 10, 1)`,
+		},
+		{
+			input:  `select * from generate_series('1', '10', '1') g`,
+			output: `select * from generate_series(1, 10, 1) as g`,
+		},
+		{
+			input:  `select * from generate_series(1, 10, 1)`,
+			output: `select * from generate_series(1, 10, 1)`,
+		},
+		{
+			input:  `select * from generate_series(1, 10, 1) as g`,
+			output: `select * from generate_series(1, 10, 1) as g`,
 		},
 	}
 )

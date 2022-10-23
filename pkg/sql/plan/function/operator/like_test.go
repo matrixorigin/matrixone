@@ -17,10 +17,10 @@ package operator
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -35,43 +35,55 @@ func TestLikeVarchar(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeLikeVectors("RUNOOB.COM", "%COM", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST02",
 			vecs:      makeLikeVectors("aaa", "aaa", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST03",
 			vecs:      makeLikeVectors("123", "1%", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST04",
 			vecs:      makeLikeVectors("SALESMAN", "%SAL%", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST05",
 			vecs:      makeLikeVectors("MANAGER@@@", "MAN_", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{false},
 		},
 		{
 			name:      "TEST06",
 			vecs:      makeLikeVectors("MANAGER@@@", "_", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{false},
 		},
 		{
 			name:      "TEST07",
 			vecs:      makeLikeVectors("hello@world", "hello_world", true, true),
-			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			wantBytes: []bool{true},
+		},
+		{
+			name:      "TEST08",
+			vecs:      makeLikeVectors("**", "*", true, true),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			wantBytes: []bool{false},
+		},
+		{
+			name:      "TEST09",
+			vecs:      makeLikeVectors("*", "*", true, true),
+			proc:      testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			wantBytes: []bool{true},
 		},
 	}
@@ -145,6 +157,27 @@ func TestLikeVarchar2(t *testing.T) {
 			wantBytes:  []bool{true},
 			wantScalar: false,
 		},
+		{
+			name:       "TEST08",
+			vecs:       makeLikeVectors("a", "a", false, true),
+			proc:       procs,
+			wantBytes:  []bool{true},
+			wantScalar: false,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeLikeVectors("*", "*", false, true),
+			proc:       procs,
+			wantBytes:  []bool{true},
+			wantScalar: false,
+		},
+		{
+			name:       "TEST10",
+			vecs:       makeLikeVectors("*/", "*", false, true),
+			proc:       procs,
+			wantBytes:  []bool{false},
+			wantScalar: false,
+		},
 	}
 
 	for _, c := range cases {
@@ -161,9 +194,9 @@ func TestLikeVarchar2(t *testing.T) {
 
 func makeStrVec(s string, isConst bool, n int) *vector.Vector {
 	if isConst {
-		return vector.NewConstString(types.T_varchar.ToType(), n, s)
+		return vector.NewConstString(types.T_varchar.ToType(), n, s, testutil.TestUtilMp)
 	} else {
-		return vector.NewWithStrings(types.T_varchar.ToType(), []string{s}, nil, nil)
+		return vector.NewWithStrings(types.T_varchar.ToType(), []string{s}, nil, testutil.TestUtilMp)
 	}
 }
 

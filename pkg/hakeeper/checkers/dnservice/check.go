@@ -30,9 +30,6 @@ import (
 var (
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
-
-	// logger for dnservice checker
-	logger = logutil.GetGlobalLogger().Named("hakeeper")
 )
 
 func init() {
@@ -48,6 +45,7 @@ func Check(
 	cluster pb.ClusterInfo,
 	dnState pb.DNState,
 	currTick uint64,
+	logger *zap.Logger,
 ) []*operator.Operator {
 	logger.Debug("dn checker entrance",
 		zap.Any("cluster information", cluster),
@@ -60,6 +58,9 @@ func Check(
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
 	)
+	for _, node := range stores.ExpiredStores() {
+		logutil.Info("node is expired", zap.String("uuid", node.ID))
+	}
 	if len(stores.WorkingStores()) < 1 {
 		logger.Warn("no working dn stores")
 		return nil
@@ -71,17 +72,12 @@ func Check(
 
 	// 1. check reported dn state
 	operators = append(operators,
-		checkReportedState(
-			reportedShards, mapper, stores.WorkingStores(), idAlloc,
-		)...,
+		checkReportedState(reportedShards, mapper, stores.WorkingStores(), idAlloc, logger)...,
 	)
 
 	// 2. check expected dn state
 	operators = append(operators,
-		checkInitiatingShards(
-			reportedShards, mapper, stores.WorkingStores(), idAlloc,
-			cluster, cfg, currTick,
-		)...,
+		checkInitiatingShards(reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick, logger)...,
 	)
 
 	return operators
@@ -90,7 +86,7 @@ func Check(
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
-	shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
+	shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator, logger *zap.Logger,
 ) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica

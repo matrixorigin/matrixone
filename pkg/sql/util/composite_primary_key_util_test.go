@@ -20,12 +20,12 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,10 +50,9 @@ func TestSimpleCompositePrimaryKey(t *testing.T) {
 
 func TestFillCompositePKeyBatch(t *testing.T) {
 	var proc = testutil.NewProc()
-	var mheap = testutil.NewMheap()
 	columnSi := 10
 	rowCount := 10
-	bat, col, valueCount := MakeBatch(columnSi, rowCount, mheap)
+	bat, col, valueCount := MakeBatch(columnSi, rowCount, proc.Mp())
 	err := FillCompositePKeyBatch(bat, col, proc)
 	require.Equal(t, err, nil)
 	bs := vector.GetBytesVectorValues(bat.Vecs[len(bat.Vecs)-1])
@@ -70,7 +69,7 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 	}
 }
 
-func MakeBatch(columnSi int, rowCount int, mheap *mheap.Mheap) (*batch.Batch, *plan.ColDef, map[int]interface{}) {
+func MakeBatch(columnSi int, rowCount int, mp *mpool.MPool) (*batch.Batch, *plan.ColDef, map[int]interface{}) {
 	idx := columnSi
 	attrs := make([]string, 0, idx)
 
@@ -94,7 +93,7 @@ func MakeBatch(columnSi int, rowCount int, mheap *mheap.Mheap) (*batch.Batch, *p
 
 	for i := 0; i < idx; i++ {
 		bat.Vecs[i] = vector.New(types.Type{Oid: randType()})
-		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mheap)
+		randInsertValues(bat.Vecs[i], bat.Vecs[i].Typ.Oid, rowCount, valueCount, i*rowCount, mp)
 	}
 
 	bat.Vecs[idx] = vector.New(types.Type{Oid: types.T_varchar})
@@ -147,7 +146,7 @@ func randType() types.T {
 	return vt
 }
 
-func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[int]interface{}, valueBegin int, mheap *mheap.Mheap) {
+func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[int]interface{}, valueBegin int, mp *mpool.MPool) {
 	switch t {
 	case types.T_bool:
 		vs := make([]bool, rowCount)
@@ -160,119 +159,119 @@ func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[
 				valueCount[valueBegin+i] = false
 			}
 		}
-		vector.AppendFixed[bool](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_int8:
 		vs := make([]int8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt8()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[int8](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_int16:
 		vs := make([]int16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt16()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[int16](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_int32:
 		vs := make([]int32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[int32](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_int64:
 		vs := make([]int64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randPositiveInt64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[int64](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_uint8:
 		vs := make([]uint8, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint8()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[uint8](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_uint16:
 		vs := make([]uint16, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint16()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[uint16](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_uint32:
 		vs := make([]uint32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[uint32](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_uint64:
 		vs := make([]uint64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randUint64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[uint64](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_date:
 		vs := make([]types.Date, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDate()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[types.Date](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_datetime:
 		vs := make([]types.Datetime, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDatetime()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[types.Datetime](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_timestamp:
 		vs := make([]types.Timestamp, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randTimestamp()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[types.Timestamp](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_float32:
 		vs := make([]float32, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float32()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[float32](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_float64:
 		vs := make([]float64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = rand.Float64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[float64](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_decimal64:
 		vs := make([]types.Decimal64, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal64()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[types.Decimal64](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_decimal128:
 		vs := make([]types.Decimal128, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randDecimal128()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendFixed[types.Decimal128](v, vs, mheap)
+		vector.AppendFixed(v, vs, mp)
 	case types.T_varchar:
 		vs := make([][]byte, rowCount)
 		for i := 0; i < rowCount; i++ {
 			vs[i] = randStringType()
 			valueCount[valueBegin+i] = vs[i]
 		}
-		vector.AppendBytes(v, vs, mheap)
+		vector.AppendBytes(v, vs, mp)
 	}
 
 }

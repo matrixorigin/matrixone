@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,13 +35,19 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := DoTxnRequest[CreateRelationResp](
+	id, err := d.engine.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = DoTxnRequest[CreateRelationResp](
 		ctx,
 		d.txnOperator,
 		false,
 		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
+			ID:           id,
 			DatabaseID:   d.id,
 			DatabaseName: d.name,
 			Type:         RelationTable,
@@ -50,6 +57,38 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 	)
 	if err != nil {
 		return nil
+	}
+
+	return nil
+}
+
+func (d *Database) Truncate(ctx context.Context, relName string) error {
+	newId, err := d.engine.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
+	rel, err := d.Relation(ctx, relName)
+	if err != nil {
+		return err
+	}
+	oldId, _ := strconv.ParseInt(rel.GetTableID(ctx), 10, 64)
+
+	_, err = DoTxnRequest[TruncateRelationResp](
+		ctx,
+		d.txnOperator,
+		false,
+		d.engine.allShards,
+		OpTruncateRelation,
+		TruncateRelationReq{
+			NewTableID:   newId,
+			OldTableID:   ID(oldId),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
+		},
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -86,7 +125,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		ctx,
 		d.txnOperator,
 		true,
-		d.engine.allShards,
+		d.engine.anyShard,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID:   d.id,
@@ -134,10 +173,5 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	var relNames []string
-	for _, resp := range resps {
-		relNames = append(relNames, resp.Names...)
-	}
-
-	return relNames, nil
+	return resps[0].Names, nil
 }

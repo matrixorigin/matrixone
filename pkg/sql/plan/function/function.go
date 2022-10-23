@@ -61,9 +61,6 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
-		if len(args) == 0 {
-			return 0, nil
-		}
 		matched := make([]int32, 0, 4)   // function overload which can be matched directly
 		byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
 		convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
@@ -213,6 +210,19 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
+func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
+	function, err := GetFunctionByID(overloadID)
+	if err != nil {
+		return false, err
+	}
+	// if function cann't be fold, we think that will be not monotonical
+	if function.Volatile {
+		return false, nil
+	}
+	isMonotonical := (function.Flag & plan.Function_MONOTONICAL) != 0
+	return isMonotonical, nil
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return the encoded overload id and the overload's return type
@@ -231,11 +241,11 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	targetTypes := getTypeSlice(targetTs)
 	rewriteTypesIfNecessary(targetTypes, args)
 
-	finalTypes := make([]types.Type, len(args))
+	var finalTypes []types.Type
 	if targetTs != nil {
-		copy(finalTypes, targetTypes)
+		finalTypes = targetTypes
 	} else {
-		copy(finalTypes, args)
+		finalTypes = args
 	}
 
 	// deal the failed situations

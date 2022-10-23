@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,8 +97,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_bool), Size: 1}, nil
 		case defines.MYSQL_TYPE_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: 24}, nil
+		case defines.MYSQL_TYPE_TEXT:
+			return &plan.Type{Id: int32(types.T_text), Size: 24}, nil
 		case defines.MYSQL_TYPE_JSON:
-			return &plan.Type{Id: int32(types.T_json)}, nil
+			return &plan.Type{Id: int32(types.T_json), Size: types.VarlenaSize}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
@@ -116,7 +119,6 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
-
 	for _, attr := range col.Attributes {
 		if s, ok := attr.(*tree.AttributeNull); ok {
 			nullAbility = s.Is
@@ -131,6 +133,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		}
 	}
 
+	if typ.Id == int32(types.T_json) {
+		if expr != nil && !isNullAstExpr(expr) {
+			return nil, moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot have default value", col.Name.Parts[0]))
+		}
+	}
 	if !nullAbility && isNullAstExpr(expr) {
 		return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
 	}
@@ -143,7 +150,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		}, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ)
+	binder := NewDefaultBinder(nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -183,7 +190,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error)
 		return nil, nil
 	}
 
-	binder := NewDefaultBinder(nil, nil, typ)
+	binder := NewDefaultBinder(nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err

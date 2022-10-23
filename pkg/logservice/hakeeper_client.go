@@ -17,13 +17,15 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math/rand"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -38,6 +40,8 @@ type CNHAKeeperClient interface {
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error
 	// AllocateID allocate a globally unique ID
 	AllocateID(ctx context.Context) (uint64, error)
+	// GetClusterState queries the cluster state
+	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
 // DNHAKeeperClient is the HAKeeper client used by a DN store.
@@ -155,6 +159,22 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 	}
 }
 
+func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CheckerState{}, err
+		}
+		s, err := c.client.getClusterState(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
+	}
+}
+
 func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	c.mu.Lock()
 	if c.mu.nextID != c.mu.lastID {
@@ -243,7 +263,7 @@ func (c *managedHAKeeperClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			logger.Error("failed to close client", zap.Error(err))
+			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -343,14 +363,14 @@ func connectToHAKeeper(ctx context.Context,
 		c.addr = addr
 		c.client = cc
 		isHAKeeper, err := c.checkIsHAKeeper(ctx)
-		logger.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
+		logutil.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
 		if err == nil && isHAKeeper {
 			return c, nil
 		} else if err != nil {
 			e = err
 		}
 		if err := cc.Close(); err != nil {
-			logger.Error("failed to close the client", zap.Error(err))
+			logutil.Error("failed to close the client", zap.Error(err))
 		}
 	}
 	if e == nil {
@@ -380,6 +400,17 @@ func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetai
 		return pb.ClusterDetails{}, err
 	}
 	return *resp.ClusterDetails, nil
+}
+
+func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, error) {
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_STATE,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return pb.CheckerState{}, err
+	}
+	return *resp.CheckerState, nil
 }
 
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {
@@ -423,7 +454,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for _, cmd := range cb.Commands {
-		logger.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
+		logutil.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
 	}
 	return cb, nil
 }

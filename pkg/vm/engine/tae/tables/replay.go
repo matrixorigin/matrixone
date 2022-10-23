@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,7 +32,7 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
-	deletes, err := blk.file.LoadDeletes()
+	deletes := &roaring.Bitmap{}
 	if err != nil || deletes == nil {
 		return
 	}
@@ -49,6 +50,16 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 func (blk *dataBlock) ReplayIndex() (err error) {
 	if blk.meta.IsAppendable() {
 		return blk.replayMutIndex()
+	}
+	return blk.replayImmutIndex()
+}
+func (blk *dataBlock) ReplayImmutIndex() (err error) {
+	blk.mvcc.Lock()
+	defer blk.mvcc.Unlock()
+	for _, index := range blk.indexes {
+		if err = index.Destroy(); err != nil {
+			return
+		}
 	}
 	return blk.replayImmutIndex()
 }
@@ -81,9 +92,9 @@ func (blk *dataBlock) replayImmutIndex() error {
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
-	for i, column := range blk.colObjects {
+	for i := range schema.ColDefs {
 		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
+		if err := index.ReadFrom(blk, schema.ColDefs[i], uint16(i)); err != nil {
 			return err
 		}
 		blk.indexes[i] = index
@@ -100,12 +111,6 @@ func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	return
 }
 
-func (blk *dataBlock) OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error) {
-	chain := blk.mvcc.GetColumnChain(colIdx)
-	chain.OnReplayUpdateNode(node)
-	return
-}
-
 func (blk *dataBlock) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
 	blk.node.block.mvcc.OnReplayAppendNode(an)
@@ -117,6 +122,6 @@ func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
 	if err != nil {
 		return
 	}
-	err = appender.ReplayAppend(bat)
+	_, err = appender.ReplayAppend(bat, nil)
 	return
 }

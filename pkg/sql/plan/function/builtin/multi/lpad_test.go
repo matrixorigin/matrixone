@@ -168,9 +168,9 @@ func TestLpadVarchar(t *testing.T) {
 
 func makeLpadVectors(src string, length int64, pad string, nils []int) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, src)
-	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, length)
-	vec[2] = vector.NewConstString(types.T_varchar.ToType(), 1, pad)
+	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, src, testutil.TestUtilMp)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, length, testutil.TestUtilMp)
+	vec[2] = vector.NewConstString(types.T_varchar.ToType(), 1, pad, testutil.TestUtilMp)
 	for i, n := range nils {
 		if n == 0 {
 			nulls.Add(vec[i].Nsp, uint64(i))

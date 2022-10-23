@@ -16,21 +16,27 @@ package unnest
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type Param struct {
 	Attrs   []string
 	Cols    []*plan.ColDef
-	Extern  *tree.UnnestParam
+	Extern  *ExternalParam
 	filters []string
 	colName string
 	seq     int32
 	isCol   bool // use to mark the unnest args is from column in table
+	path    string
+	outer   bool
 }
 
 type Argument struct {
 	Es *Param
+}
+type ExternalParam struct {
+	ColName string
+	Path    string
+	Outer   bool
 }
 
 var (

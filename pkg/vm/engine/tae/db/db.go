@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -22,18 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -60,9 +60,9 @@ type DB struct {
 
 	Scheduler tasks.TaskScheduler
 
-	TimedScanner wb.IHeartbeater
+	HeartBeatJobs *stopper.Stopper
 
-	FileFactory file.SegmentFactory
+	Fs *objectio.ObjectFS
 
 	DBLocker io.Closer
 
@@ -134,9 +134,10 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	defer db.PrintStats()
+	// XXX PRINT
+	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.TimedScanner.Stop()
+	db.HeartBeatJobs.Stop()
 	db.CKPDriver.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()

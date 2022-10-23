@@ -310,7 +310,7 @@ func (n *Bitmap) Marshal() []byte {
 	u2 := uint64(len(n.data) * 8)
 	buf.Write(types.EncodeUint64(&u1))
 	buf.Write(types.EncodeUint64(&u2))
-	buf.Write(types.EncodeFixedSlice(n.data, 8))
+	buf.Write(types.EncodeSlice(n.data))
 	return buf.Bytes()
 }
 
@@ -319,7 +319,7 @@ func (n *Bitmap) Unmarshal(data []byte) {
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
-	n.data = types.DecodeFixedSlice[uint64](data[:size], 8)
+	n.data = types.DecodeSlice[uint64](data[:size])
 }
 
 func (n *Bitmap) String() string {

@@ -78,6 +78,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildCreateTable(stmt, ctx)
 	case *tree.DropTable:
 		return buildDropTable(stmt, ctx)
+	case *tree.TruncateTable:
+		return buildTruncateTable(stmt, ctx)
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
@@ -122,6 +124,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildLoad(stmt, ctx)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
+	case *tree.Do, *tree.Declare:
+		return nil, moerr.NewNotSupported(tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx)
 	default:

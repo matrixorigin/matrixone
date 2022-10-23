@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -311,6 +312,26 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNull,
 			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
+			{
+				Index:  19,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
 		},
 	},
 
@@ -497,6 +518,26 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNotNull,
 			},
+			{
+				Index:  18,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_json,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
+			{
+				Index:  19,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
 		},
 	},
 	// comparison operator
@@ -516,7 +557,38 @@ var operators = map[int]Functions{
 			},
 		},
 	},
-
+	REG_MATCH: {
+		Id: REG_MATCH,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.RegMatch,
+			},
+		},
+	},
+	NOT_REG_MATCH: {
+		Id: NOT_REG_MATCH,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NotRegMatch,
+			},
+		},
+	},
 	OP_BIT_XOR: {
 		Id: OP_BIT_XOR,
 		Overloads: []Function{
@@ -843,6 +915,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.EqUuid,
 			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.EqString,
+			},
 		},
 	},
 
@@ -852,7 +935,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:  0,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint8,
@@ -863,7 +946,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  1,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint16,
@@ -874,7 +957,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  2,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint32,
@@ -885,7 +968,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  3,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint64,
@@ -896,7 +979,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  4,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int8,
@@ -907,7 +990,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  5,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int16,
@@ -918,7 +1001,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  6,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int32,
@@ -929,7 +1012,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  7,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int64,
@@ -940,7 +1023,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  8,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_float32,
@@ -951,7 +1034,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  9,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_float64,
@@ -962,7 +1045,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  10,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_decimal64,
@@ -973,7 +1056,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  11,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_decimal128,
@@ -984,7 +1067,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  12,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_varchar,
@@ -995,7 +1078,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  13,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_char,
@@ -1006,7 +1089,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  14,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_date,
@@ -1017,7 +1100,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  15,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_datetime,
@@ -1028,7 +1111,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  16,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_bool,
@@ -1039,7 +1122,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  17,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_timestamp,
@@ -1050,7 +1133,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  18,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_blob,
@@ -1061,7 +1144,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  19,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uuid,
@@ -1069,6 +1152,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtUuid,
+			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtString,
 			},
 		},
 	},
@@ -1079,7 +1173,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:  0,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint8,
@@ -1090,7 +1184,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  1,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint16,
@@ -1101,7 +1195,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  2,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint32,
@@ -1112,7 +1206,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  3,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uint64,
@@ -1123,7 +1217,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  4,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int8,
@@ -1134,7 +1228,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  5,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int16,
@@ -1145,7 +1239,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  6,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int32,
@@ -1156,7 +1250,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  7,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_int64,
@@ -1167,7 +1261,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  8,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_float32,
@@ -1178,7 +1272,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  9,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_float64,
@@ -1189,7 +1283,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  10,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_decimal64,
@@ -1200,7 +1294,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  11,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_decimal128,
@@ -1211,7 +1305,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  12,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_varchar,
@@ -1222,7 +1316,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  13,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_char,
@@ -1233,7 +1327,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  14,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_date,
@@ -1244,7 +1338,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  15,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_datetime,
@@ -1255,7 +1349,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  16,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_bool,
@@ -1266,7 +1360,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  17,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_timestamp,
@@ -1277,7 +1371,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  18,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_blob,
@@ -1288,7 +1382,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:  19,
-				Flag:   plan.Function_STRICT,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout: COMPARISON_OPERATOR,
 				Args: []types.T{
 					types.T_uuid,
@@ -1296,6 +1390,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeUuid,
+			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT | plan.Function_MONOTONICAL,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeString,
 			},
 		},
 	},
@@ -1524,6 +1629,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtUuid,
 			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtString,
+			},
 		},
 	},
 
@@ -1751,6 +1867,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeUuid,
 			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeString,
+			},
 		},
 	},
 
@@ -1977,6 +2104,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeUuid,
+			},
+			{
+				Index:  20,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
 			},
 		},
 	},
@@ -2270,7 +2408,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
@@ -2278,7 +2416,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
@@ -2286,7 +2424,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
@@ -2294,7 +2432,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
@@ -2302,7 +2440,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8, types.T_int8},
 				ReturnTyp: types.T_int8,
@@ -2310,7 +2448,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16, types.T_int16},
 				ReturnTyp: types.T_int16,
@@ -2318,7 +2456,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32, types.T_int32},
 				ReturnTyp: types.T_int32,
@@ -2326,7 +2464,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
@@ -2334,7 +2472,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
@@ -2342,7 +2480,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
@@ -2350,7 +2488,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
@@ -2358,7 +2496,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128, types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
@@ -2366,7 +2504,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     12,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_date, types.T_interval},
 				ReturnTyp: types.T_date,
@@ -2381,7 +2519,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
@@ -2389,7 +2527,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
@@ -2397,7 +2535,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
@@ -2405,7 +2543,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
@@ -2413,7 +2551,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8, types.T_int8},
 				ReturnTyp: types.T_int8,
@@ -2421,7 +2559,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16, types.T_int16},
 				ReturnTyp: types.T_int16,
@@ -2429,7 +2567,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32, types.T_int32},
 				ReturnTyp: types.T_int32,
@@ -2437,7 +2575,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
@@ -2445,7 +2583,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
@@ -2453,7 +2591,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
@@ -2461,7 +2599,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
@@ -2469,7 +2607,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128, types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
@@ -2477,11 +2615,19 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     12,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
-				Args:      []types.T{types.T_date, types.T_interval},
-				ReturnTyp: types.T_date,
-				Fn:        nil,
+				Args:      []types.T{types.T_date, types.T_date},
+				ReturnTyp: types.T_int64,
+				Fn:        binary.DateDiff,
+			},
+			{
+				Index:     13,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
+				Layout:    BINARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.MinusDatetime,
 			},
 		},
 	},
@@ -2492,7 +2638,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp: types.T_uint8,
@@ -2500,7 +2646,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp: types.T_uint16,
@@ -2508,7 +2654,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp: types.T_uint32,
@@ -2516,7 +2662,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_uint64,
@@ -2524,7 +2670,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8, types.T_int8},
 				ReturnTyp: types.T_int8,
@@ -2532,7 +2678,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16, types.T_int16},
 				ReturnTyp: types.T_int16,
@@ -2540,7 +2686,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32, types.T_int32},
 				ReturnTyp: types.T_int32,
@@ -2548,7 +2694,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
@@ -2556,7 +2702,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
@@ -2564,7 +2710,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
@@ -2572,7 +2718,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
 				ReturnTyp: types.T_decimal128,
@@ -2580,7 +2726,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128, types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
@@ -2595,7 +2741,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_float32,
@@ -2603,7 +2749,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
@@ -2611,7 +2757,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
 				ReturnTyp: types.T_decimal128,
@@ -2619,7 +2765,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128, types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
@@ -2634,7 +2780,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32, types.T_float32},
 				ReturnTyp: types.T_int64,
@@ -2642,7 +2788,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_int64,
@@ -2743,145 +2889,145 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]uint64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int8)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int16)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]int64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]float32)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]float64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal64)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 					data := vs[0].Col.([]types.Decimal128)
-					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0], proc.Mp())
 					return vec, nil
 				},
 			},
@@ -2893,7 +3039,7 @@ var operators = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
@@ -2901,7 +3047,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
@@ -2909,7 +3055,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
@@ -2917,7 +3063,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
@@ -2925,7 +3071,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
@@ -2933,7 +3079,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
@@ -2941,7 +3087,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
@@ -2949,7 +3095,7 @@ var operators = map[int]Functions{
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
+				Flag:      plan.Function_STRICT | plan.Function_MONOTONICAL,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
@@ -5277,6 +5423,321 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_uuid,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     278,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_int8},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.Cast,
+			},
+
+			{
+				Index:     279,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_int16},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     280,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_int32},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     281,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     282,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_uint8},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     283,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_uint16},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     284,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_uint32},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     285,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_uint64},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     286,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_float32},
+				ReturnTyp: types.T_float32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     287,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     288,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_int8, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     289,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_int16, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     290,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_int32, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     291,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_int64, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     292,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_uint8, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     293,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_uint16, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     294,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_uint32, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     295,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_uint64, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     296,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_float32, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     297,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_float64, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     298,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_varchar, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     299,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     300,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_char, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     301,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_char},
+				ReturnTyp: types.T_char,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     302,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     303,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     304,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     305,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_timestamp},
+				ReturnTyp: types.T_timestamp,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     306,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_decimal64},
+				ReturnTyp: types.T_decimal64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     307,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_decimal128},
+				ReturnTyp: types.T_decimal128,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     308,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_timestamp, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     309,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_date, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     310,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_datetime, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     311,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     312,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_decimal64, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     313,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_decimal128, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     314,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_bool},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     315,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_text, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     316,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_blob, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 
@@ -5425,16 +5886,16 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_date,
-				Fn:        operator.CoalesceDate,
+				ReturnTyp: types.T_datetime,
+				Fn:        operator.CoalesceDateTime,
 			},
 			{
 				Index:     14,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_datetime,
-				Fn:        operator.CoalesceDateTime,
+				ReturnTyp: types.T_timestamp,
+				Fn:        operator.CoalesceTimestamp,
 			},
 			{
 				Index:     15,
@@ -5457,8 +5918,16 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_timestamp,
-				Fn:        operator.CoalesceTimestamp,
+				ReturnTyp: types.T_date,
+				Fn:        operator.CoalesceDate,
+			},
+			{
+				Index:     18,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    STANDARD_FUNCTION,
+				ReturnTyp: types.T_uuid,
+				Fn:        operator.CoalesceUuid,
 			},
 		},
 	},
@@ -5658,6 +6127,22 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_NONE,
 				Layout:    CASE_WHEN_EXPRESSION,
 				ReturnTyp: types.T_blob,
+				Fn:        operator.CaseWhenBlob,
+			},
+			{
+				Index:     19,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    CASE_WHEN_EXPRESSION,
+				ReturnTyp: types.T_uuid,
+				Fn:        operator.CaseWhenUuid,
+			},
+			{
+				Index:     20,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    CASE_WHEN_EXPRESSION,
+				ReturnTyp: types.T_text,
 				Fn:        operator.CaseWhenText,
 			},
 		},
@@ -5847,6 +6332,14 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
 				ReturnTyp: types.T_blob,
+				Fn:        operator.IfBlob,
+			},
+			{
+				Index:     19,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    STANDARD_FUNCTION,
+				ReturnTyp: types.T_text,
 				Fn:        operator.IfText,
 			},
 		},

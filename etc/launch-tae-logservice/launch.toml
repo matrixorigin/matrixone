@@ -1,0 +1,13 @@
+logservices = [
+    "./etc/launch-tae-logservice/log1.toml",
+    "./etc/launch-tae-logservice/log2.toml",
+    "./etc/launch-tae-logservice/log3.toml"
+]
+
+dnservices = [
+    "./etc/launch-tae-logservice/dn1.toml"
+]
+
+cnservices = [
+    "./etc/launch-tae-logservice/cn1.toml"
+]

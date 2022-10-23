@@ -18,7 +18,10 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -44,6 +47,7 @@ const (
 	MO_TABLE_ID_ACCOUNT_IDX       = 3
 	MO_TABLE_LIST_DATABASE_ID_IDX = 1
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
+	MO_PRIMARY_OFF                = 2
 )
 
 type DNStore = logservice.DNStore
@@ -51,8 +55,9 @@ type DNStore = logservice.DNStore
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
-type BlockMeta struct {
-}
+// type BlockMeta struct {
+
+// }
 
 // Cache is a multi-version cache for maintaining some table data.
 // The cache is concurrently secure,  with multiple transactions accessing
@@ -66,25 +71,31 @@ type Cache interface {
 		tableId uint64, ts timestamp.Timestamp) error
 }
 
+type IDGenerator interface {
+	AllocateID(ctx context.Context) (uint64, error)
+}
+
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
-	Insert(ctx context.Context, bat *api.Batch) error
+	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries [][]Entry) []BlockMeta
+		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
+		tableDef *plan.TableDef, blks []ModifyBlockMeta, ts timestamp.Timestamp,
+		fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
 	sync.RWMutex
+	mp                *mpool.MPool
+	fs                fileservice.FileService
 	db                *DB
-	m                 *mheap.Mheap
 	cli               client.TxnClient
+	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
@@ -94,9 +105,9 @@ type Engine struct {
 // DB is implementataion of cache
 type DB struct {
 	sync.RWMutex
-	dnMap  map[string]int
-	cli    client.TxnClient
-	tables map[[2]uint64]Partitions
+	dnMap      map[string]int
+	metaTables map[string]Partitions
+	tables     map[[2]uint64]Partitions
 }
 
 type Partitions []*Partition
@@ -122,6 +133,7 @@ type Transaction struct {
 	// use for solving halloween problem
 	statementId uint64
 	meta        txn.TxnMeta
+	op          client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
@@ -129,12 +141,21 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
-	m        *mheap.Mheap
+	proc     *process.Process
+
+	idGen IDGenerator
+
+	// interim incremental rowid
+	rowId [2]uint64
 
 	// use to cache table
-	tableMap map[tableKey]*table
+	tableMap *sync.Map
 	// use to cache database
-	databaseMap map[databaseKey]*database
+	databaseMap *sync.Map
+
+	createTableMap map[uint64]uint8
+
+	deleteMetaTables []string
 }
 
 // Entry represents a delete/insert
@@ -160,6 +181,7 @@ type database struct {
 	databaseName string
 	db           *DB
 	txn          *Transaction
+	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -175,10 +197,9 @@ type databaseKey struct {
 
 // block list information of table
 type tableMeta struct {
-	tableId       uint64
 	tableName     string
 	blocks        [][]BlockMeta
-	modifedBlocks [][]BlockMeta
+	modifedBlocks [][]ModifyBlockMeta
 	defs          []engine.TableDef
 }
 
@@ -190,11 +211,21 @@ type table struct {
 	meta       *tableMeta
 	parts      Partitions
 	insertExpr *plan.Expr
-	deleteExpr *plan.Expr
 	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	proc       *process.Process
+
+	primaryIdx int
+	viewdef    string
+	comment    string
+	partition  string
+	relKind    string
+	createSql  string
 }
 
 type column struct {
+	accountId  uint32
+	tableId    uint64
 	databaseId uint64
 	// column name
 	name            string
@@ -210,13 +241,51 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+	hasUpdate       int8
+	updateExpr      []byte
 }
 
 type blockReader struct {
-	blks []BlockMeta
-	ctx  context.Context
+	blks     []BlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
+}
+
+type blockMergeReader struct {
+	sels     []int64
+	blks     []ModifyBlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
 }
 
 type mergeReader struct {
 	rds []engine.Reader
+}
+
+type emptyReader struct {
+}
+
+type BlockMeta struct {
+	Rows    int64
+	Info    catalog.BlockInfo
+	Zonemap [][64]byte
+}
+
+type ModifyBlockMeta struct {
+	meta    BlockMeta
+	deletes []int
+}
+
+type Columns []column
+
+func (cols Columns) Len() int           { return len(cols) }
+func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
+func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
+
+func (a BlockMeta) Eq(b BlockMeta) bool {
+	return a.Info.BlockID == b.Info.BlockID
 }

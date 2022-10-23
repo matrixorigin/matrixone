@@ -17,6 +17,8 @@ package disttae
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,15 +26,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type PartitionReader struct {
+	typsMap     map[string]types.Type
 	iter        *memtable.TableIter[RowID, DataValue]
 	firstCalled bool
 	readTime    memtable.Time
 	tx          *memtable.Transaction
 	expr        *plan.Expr
+	inserts     []*batch.Batch
+	deletes     map[types.Rowid]uint8
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -42,9 +46,21 @@ func (p *PartitionReader) Close() error {
 	return nil
 }
 
-func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.Mheap) (*batch.Batch, error) {
+func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
+	}
+	if len(p.inserts) > 0 {
+		bat := p.inserts[0].GetSubBatch(colNames)
+		p.inserts = p.inserts[1:]
+		b := batch.New(false, colNames)
+		for i, name := range colNames {
+			b.Vecs[i] = vector.New(p.typsMap[name])
+		}
+		if _, err := b.Append(mp, bat); err != nil {
+			return nil, err
+		}
+		return b, nil
 	}
 
 	fn := p.iter.Next
@@ -55,27 +71,38 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 
 	b := batch.New(false, colNames)
 	for i, name := range colNames {
-		_ = name
-		b.Vecs[i] = vector.New(types.T_any.ToType()) //TODO get type
+		b.Vecs[i] = vector.New(p.typsMap[name])
 	}
 
 	maxRows := 4096
 	rows := 0
 	for ok := fn(); ok; ok = p.iter.Next() {
-		_, dataValue, err := p.iter.Read()
+		dataKey, dataValue, err := p.iter.Read()
 		if err != nil {
 			return nil, err
+		}
+
+		if _, ok := p.deletes[types.Rowid(dataKey)]; ok {
+			continue
+		}
+
+		if dataValue.op == opDelete {
+			continue
 		}
 
 		//TODO handle iter.Expr
 		_ = p.expr
 
 		for i, name := range b.Attrs {
-			value, ok := dataValue[name]
+			if name == catalog.Row_ID {
+				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)
+				continue
+			}
+			value, ok := dataValue.value[name]
 			if !ok {
 				panic(fmt.Sprintf("invalid column name: %v", name))
 			}
-			value.AppendVector(b.Vecs[i], heap)
+			value.AppendVector(b.Vecs[i], mp)
 		}
 
 		rows++
@@ -89,6 +116,9 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 		for _, vec := range b.Vecs {
 			nulls.TryExpand(vec.GetNulls(), rows)
 		}
+	}
+	if rows == 0 {
+		return nil, nil
 	}
 
 	return b, nil

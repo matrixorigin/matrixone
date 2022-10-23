@@ -1,0 +1,133 @@
+SELECT REVERSE('abc');
+reverse(abc)
+cba
+select reverse('abc'),reverse('abcd');
+reverse(abc)	reverse(abcd)
+cba	dcba
+select reverse(NULL);
+reverse(null)
+null
+create table t1 (a varchar(20));
+insert into t1 values ("empty"),(""),("hello");
+select a,reverse(a) from t1 where reverse(a)="olleh";
+a	reverse(a)
+hello	olleh
+drop table t1;
+drop table if exists `Ｔ１`;
+drop table if exists `Ｔ２`;
+drop table if exists `Ｔ３`;
+drop table if exists `Ｔ４`;
+drop table if exists `Ｔ５`;
+drop table if exists `Ｔ６`;
+drop table if exists `Ｔ７`;
+drop table if exists `Ｔ８`;
+drop table if exists `Ｔ９`;
+CREATE TABLE `Ｔ１` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ２` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ３` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ４` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ５` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ６` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ７` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ８` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+CREATE TABLE `Ｔ９` (`Ｃ１` char(5), INDEX(`Ｃ１`));
+INSERT INTO `Ｔ１` VALUES ('ｱｲｳｴｵ');
+INSERT INTO `Ｔ２` VALUES ('あいうえお');
+INSERT INTO `Ｔ３` VALUES ('龔龖龗龞龡');
+INSERT INTO `Ｔ４` VALUES ('ｱｲｳｴｵ');
+INSERT INTO `Ｔ５` VALUES ('あいうえお');
+INSERT INTO `Ｔ６` VALUES ('龔龖龗龞龡');
+INSERT INTO `Ｔ７` VALUES ('ｱｲｳｴｵ');
+INSERT INTO `Ｔ８` VALUES ('あいうえお');
+INSERT INTO `Ｔ９` VALUES ('龔龖龗龞龡');
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ１`;
+REVERSE(`Ｃ１`)
+ｵｴｳｲｱ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ２`;
+REVERSE(`Ｃ１`)
+おえういあ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ３`;
+REVERSE(`Ｃ１`)
+龡龞龗龖龔
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ４`;
+REVERSE(`Ｃ１`)
+ｵｴｳｲｱ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ５`;
+REVERSE(`Ｃ１`)
+おえういあ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ６`;
+REVERSE(`Ｃ１`)
+龡龞龗龖龔
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ７`;
+REVERSE(`Ｃ１`)
+ｵｴｳｲｱ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ８`;
+REVERSE(`Ｃ１`)
+おえういあ
+SELECT REVERSE(`Ｃ１`) FROM `Ｔ９`;
+REVERSE(`Ｃ１`)
+龡龞龗龖龔
+DROP TABLE `Ｔ１`;
+DROP TABLE `Ｔ２`;
+DROP TABLE `Ｔ３`;
+DROP TABLE `Ｔ４`;
+DROP TABLE `Ｔ５`;
+DROP TABLE `Ｔ６`;
+DROP TABLE `Ｔ７`;
+DROP TABLE `Ｔ８`;
+DROP TABLE `Ｔ９`;
+SELECT REVERSE("你好");
+reverse(你好)
+好你
+SELECT REVERSE("再 见");
+reverse(再 见)
+见 再
+drop table if exists t1;
+create table t1(a varchar(255));
+insert into t1 select (reverse("abc"));
+insert into t1 select (reverse("bcd"));
+insert into t1 select (reverse("def"));
+insert into t1 select (reverse("xyz"));
+insert into t1 select (reverse("1a1"));
+select a from t1 group by a having reverse(a)=reverse(a);
+a
+cba
+dcb
+fed
+zyx
+1a1
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a INT,  b varchar(255));
+create table t2(a INT,  b varchar(255));
+insert into t1 values(1, "abc"),(1, "bbb"),(3, "aaa"),(4, "2012");
+insert into t2 values(1, "abc"),(1, "aaa"),(3, "cba"),(4, "2012");
+SELECT distinct t1.a, t2.a FROM t1 JOIN t2 ON (reverse(t1.b) = reverse(t2.b));
+a	a
+1	1
+3	1
+4	4
+drop table t1;
+drop table t2;
+SELECT REVERSE("@($)@($#)_@(#");
+reverse(@($)@($#)_@(#)
+#(@_)#$(@)$(@
+SELECT REVERSE(space(500)+space(600));
+reverse(space(500) + space(600))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+SELECT REVERSE(123124);
+reverse(123124)
+421321
+SELECT REVERSE(123.124);
+reverse(123.124)
+421.321
+SELECT REVERSE(0.3414);
+reverse(0.3414)
+4143.0
+SELECT REVERSE("2023-04-24");
+reverse(2023-04-24)
+42-40-3202
+SELECT REVERSE("10:03:23.021412");
+reverse(10:03:23.021412)
+214120.32:30:01

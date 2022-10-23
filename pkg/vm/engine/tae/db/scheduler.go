@@ -83,19 +83,30 @@ func (s *taskScheduler) Stop() {
 	logutil.Info("TaskScheduler Stopped")
 }
 
-func (s *taskScheduler) ScheduleTxnTask(ctx *tasks.Context, taskType tasks.TaskType, factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
+func (s *taskScheduler) ScheduleTxnTask(
+	ctx *tasks.Context,
+	taskType tasks.TaskType,
+	factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, nil, factory)
 	err = s.Schedule(task)
 	return
 }
 
-func (s *taskScheduler) ScheduleMultiScopedTxnTask(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
+func (s *taskScheduler) ScheduleMultiScopedTxnTask(
+	ctx *tasks.Context,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
 	err = s.Schedule(task)
 	return
 }
 
-func (s *taskScheduler) ScheduleMultiScopedFn(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, fn tasks.FuncT) (task tasks.Task, err error) {
+func (s *taskScheduler) ScheduleMultiScopedFn(
+	ctx *tasks.Context,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	fn tasks.FuncT) (task tasks.Task, err error) {
 	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
 	return
@@ -110,8 +121,9 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	return
 }
 
-func (s *taskScheduler) GetGCTS() types.TS {
-	return s.db.TxnMgr.StatSafeTS()
+// TODO: implement later
+func (s *taskScheduler) GetGCTS() (ts types.TS) {
+	return
 }
 
 func (s *taskScheduler) GetCheckpointTS() types.TS {

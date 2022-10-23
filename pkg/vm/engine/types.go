@@ -18,13 +18,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Nodes []Node
@@ -119,6 +118,12 @@ type ViewDef struct {
 	View string
 }
 
+type ComputeIndexDef struct {
+	Names      []string
+	TableNames []string
+	Uniques    []bool
+}
+
 type TableDef interface {
 	tableDef()
 }
@@ -130,6 +135,7 @@ func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
 func (*PropertiesDef) tableDef()   {}
 func (*PrimaryIndexDef) tableDef() {}
+func (*ComputeIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics
@@ -146,9 +152,8 @@ type Relation interface {
 
 	Update(context.Context, *batch.Batch) error
 
-	Delete(context.Context, *vector.Vector, string) error
-
-	Truncate(context.Context) (uint64, error)
+	// Delete(context.Context, *vector.Vector, string) error
+	Delete(context.Context, *batch.Batch, string) error
 
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
@@ -157,11 +162,13 @@ type Relation interface {
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
+
+	TableColumns(ctx context.Context) ([]*Attribute, error)
 }
 
 type Reader interface {
 	Close() error
-	Read([]string, *plan.Expr, *mheap.Mheap) (*batch.Batch, error)
+	Read([]string, *plan.Expr, *mpool.MPool) (*batch.Batch, error)
 }
 
 type Database interface {
@@ -170,6 +177,7 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
+	Truncate(context.Context, string) error
 }
 
 type Engine interface {

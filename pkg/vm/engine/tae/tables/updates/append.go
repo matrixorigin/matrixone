@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -123,9 +122,6 @@ func (node *AppendNode) SetLogIndex(idx *wal.Index) {
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
 }
-func (node *AppendNode) OnReplayCommit(ts types.TS) {
-	node.End = ts
-}
 func (node *AppendNode) GetCommitTS() types.TS {
 	return node.GetEnd()
 }
@@ -151,10 +147,6 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(index)
-	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.GetMaxRow())
-		node.mvcc.SetMaxVisible(node.GetEnd())
-	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
 	if listener == nil {
@@ -166,7 +158,7 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
-	node.TxnMVCCNode.ApplyRollback(index)
+	_, err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 

@@ -51,8 +51,8 @@ func DoTxnRequest[
 	}
 
 	if provider, ok := txnOperator.(OperationHandlerProvider); ok {
-		handler, meta := provider.GetOperationHandler()
 		for _, shard := range shards {
+			handler, meta := provider.GetOperationHandler(shard)
 			resp, e := handle(ctx, handler, meta, shard, op, req)
 			resps = append(resps, resp.(Resp))
 			if e != nil {
@@ -101,8 +101,7 @@ func DoTxnRequest[
 	}
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {
-			//TODO no way to construct moerr.Error by code and message now
-			err = moerr.NewInternalError(resp.TxnError.Message)
+			err = resp.TxnError.UnwrapError()
 			return
 		}
 	}

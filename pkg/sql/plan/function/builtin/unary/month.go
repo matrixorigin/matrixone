@@ -31,7 +31,7 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultValues := make([]uint8, 1)
 		month.DateToMonth(inputValues, resultValues)
-		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0]), nil
+		return vector.NewConstFixed(resultType, inputVector.Length(), resultValues[0], proc.Mp()), nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
