@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -29,8 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -93,63 +90,6 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 	assert.Equal(t, "", buf.GetBatch(byteBuf))
 	buf.Reset()
 	assert.Equal(t, true, buf.IsEmpty())
-}
-
-func TestNewSpanBufferPipeWorker(t *testing.T) {
-	type args struct {
-		opt []bufferOption
-	}
-	opts := testBaseBuffer2SqlOption[:]
-	tests := []struct {
-		name string
-		args args
-		want batchpipe.PipeImpl[batchpipe.HasName, any]
-	}{
-		{
-			name: "basic",
-			args: args{
-				opt: opts,
-			},
-			want: &batchSqlHandler{defaultOpts: opts},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NewBufferPipe2SqlWorker(tt.args.opt...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewBufferPipe2SqlWorker() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
-	type args struct {
-		opt  []bufferOption
-		name string
-	}
-	opts := testBaseBuffer2SqlOption[:]
-	tests := []struct {
-		name string
-		args args
-		want genBatchFunc
-	}{
-		{name: "span_type", args: args{opt: opts, name: MOSpanType}, want: genSpanBatchSql},
-		{name: "log_type", args: args{opt: opts, name: MOLogType}, want: genZapLogBatchSql},
-		{name: "statement_type", args: args{opt: opts, name: MOStatementType},
-			want: genStatementBatchSql},
-		{name: "error_type", args: args{opt: opts, name: MOErrorType},
-			want: genErrorBatchSql},
-	}
-	for _, tt := range tests {
-		t1.Run(tt.name, func(t1 *testing.T) {
-			t := batchSqlHandler{
-				defaultOpts: opts,
-			}
-			if got := t.NewItemBuffer(tt.args.name); reflect.ValueOf(got.(*buffer2Sql).genBatchFunc).Pointer() != reflect.ValueOf(tt.want).Pointer() {
-				t1.Errorf("NewItemBuffer()'s genBatchFunc = %v, want %v", got.(*buffer2Sql).genBatchFunc, tt.want)
-			}
-		})
-	}
 }
 
 func Test_buffer2Sql_IsEmpty(t *testing.T) {
@@ -244,168 +184,6 @@ func Test_buffer2Sql_Reset(t *testing.T) {
 			b.Reset()
 			if got := b.IsEmpty(); got != tt.want {
 				t.Errorf("IsEmpty() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_buffer2Sql_ShouldFlush(t *testing.T) {
-	type fields struct {
-		Reminder      batchpipe.Reminder
-		buf           []IBuffer2SqlItem
-		sizeThreshold int64
-		batchFunc     genBatchFunc
-	}
-	tests := []struct {
-		name        string
-		fields      fields
-		isNilBuffer bool
-		want        bool
-	}{
-		{
-			name: "empty/nil",
-			fields: fields{
-				Reminder:      batchpipe.NewConstantClock(time.Hour),
-				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: mpool.KB,
-				batchFunc:     nil,
-			},
-			isNilBuffer: true,
-			want:        false,
-		},
-		{
-			name: "empty/normal",
-			fields: fields{
-				Reminder:      batchpipe.NewConstantClock(time.Hour),
-				buf:           []IBuffer2SqlItem{},
-				sizeThreshold: mpool.KB,
-				batchFunc:     genErrorBatchSql,
-			},
-			isNilBuffer: false,
-			want:        false,
-		},
-		{
-			name: "not_empty",
-			fields: fields{
-				Reminder: batchpipe.NewConstantClock(time.Hour),
-				buf: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
-					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
-				},
-				sizeThreshold: 512 * 1, /*byte*/
-				batchFunc:     genErrorBatchSql,
-			},
-			isNilBuffer: false,
-			want:        true,
-		},
-	}
-	errorFormatter.Store("%+v")
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			b := newBuffer2Sql(
-				bufferWithReminder(tt.fields.Reminder),
-				bufferWithSizeThreshold(tt.fields.sizeThreshold),
-				bufferWithGenBatchFunc(tt.fields.batchFunc),
-			)
-			t.Logf("ShouldFlush() get %p buffer", b)
-			if assert.NotEqual(t, nil, b, "ShouldFlush() get %p buffer", b) != tt.isNilBuffer || tt.isNilBuffer {
-				return
-			}
-			//assert.Equal(t, nil, b, "ShouldFlush() get nil Buffer")
-			for _, i := range tt.fields.buf {
-				b.Add(i)
-			}
-			if got := b.ShouldFlush(); got != tt.want {
-				t.Errorf("ShouldFlush() = %v, want %v, lenght: %d", got, tt.want, b.Size())
-			}
-		})
-	}
-}
-
-func Test_nanoSec2Datetime(t *testing.T) {
-	type args struct {
-		t util.TimeMono
-	}
-	tests := []struct {
-		name string
-		args args
-		want types.Datetime
-	}{
-		{
-			name: "1 ns",
-			args: args{t: util.TimeNano(1)},
-			want: types.Datetime(0),
-		},
-		{
-			name: "1 us",
-			args: args{t: util.TimeNano(time.Microsecond)},
-			want: types.Datetime(1),
-		},
-		{
-			name: "1 ms",
-			args: args{t: util.TimeNano(time.Millisecond)},
-			want: types.Datetime(1000),
-		},
-		{
-			name: "1 hour + 1ms",
-			args: args{t: util.TimeNano(time.Millisecond + time.Hour)},
-			want: types.Datetime(((time.Hour / time.Second) << 20) + 1000),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := nanoSec2Datetime(tt.args.t); got != tt.want {
-				t.Errorf("nanoSec2Datetime() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_quote(t *testing.T) {
-	type args struct {
-		value string
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{name: "'", args: args{value: `'`}, want: "\\'"},
-		{name: `"`, args: args{value: `"`}, want: "\\\""},
-		{name: `\n`, args: args{value: `\n`}, want: "\\n"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := quote(tt.args.value); got != tt.want {
-				t.Errorf("quote() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-	var err1 = errutil.WithContext(context.Background(), moerr.NewInternalError("test1"))
-	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
-}
-
-func Test_withGenBatchFunc(t *testing.T) {
-	type args struct {
-		f genBatchFunc
-	}
-	tests := []struct {
-		name string
-		args args
-		want genBatchFunc
-	}{
-		{name: "genSpanBatchSql", args: args{f: genSpanBatchSql}, want: genSpanBatchSql},
-		{name: "genLogBatchSql", args: args{f: genZapLogBatchSql}, want: genZapLogBatchSql},
-		{name: "genStatementBatchSql", args: args{f: genStatementBatchSql}, want: genStatementBatchSql},
-		{name: "genErrorBatchSql", args: args{f: genErrorBatchSql}, want: genErrorBatchSql},
-	}
-	buf := &buffer2Sql{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bufferWithGenBatchFunc(tt.args.f).apply(buf)
-			got := buf.genBatchFunc
-			if reflect.ValueOf(got).Pointer() != reflect.ValueOf(tt.want).Pointer() {
-				t.Errorf("bufferWithGenBatchFunc() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -507,12 +285,11 @@ func Test_genCsvData(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span1")),
-						StartTimeNS: util.TimeNano(0),
-						EndTimeNS:   util.TimeNano(time.Microsecond),
-						Duration:    util.TimeNano(time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
+						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						Name:       *bytes.NewBuffer([]byte("span1")),
+						StartTime:  zeroTime,
+						EndTime:    zeroTime.Add(time.Microsecond),
+						tracer:     gTracer.(*MOTracer),
 					},
 				},
 				buf: buf,
@@ -525,20 +302,18 @@ func Test_genCsvData(t *testing.T) {
 			args: args{
 				in: []IBuffer2SqlItem{
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span1")),
-						StartTimeNS: util.TimeNano(0),
-						EndTimeNS:   util.TimeNano(time.Microsecond),
-						Duration:    util.TimeNano(time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
+						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						Name:       *bytes.NewBuffer([]byte("span1")),
+						StartTime:  zeroTime,
+						EndTime:    zeroTime.Add(time.Microsecond),
+						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
-						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID}, parent: noopSpan{}},
-						Name:        *bytes.NewBuffer([]byte("span2")),
-						StartTimeNS: util.TimeNano(time.Microsecond),
-						EndTimeNS:   util.TimeNano(time.Millisecond),
-						Duration:    util.TimeNano(time.Millisecond - time.Microsecond),
-						tracer:      gTracer.(*MOTracer),
+						SpanConfig: SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID}, parent: noopSpan{}},
+						Name:       *bytes.NewBuffer([]byte("span2")),
+						StartTime:  zeroTime.Add(time.Microsecond),
+						EndTime:    zeroTime.Add(time.Millisecond),
+						tracer:     gTracer.(*MOTracer),
 					},
 				},
 				buf: buf,
@@ -606,7 +381,6 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
 						ExecPlan:             nil,
 					},
 				},
@@ -629,7 +403,6 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
 						ExecPlan:             nil,
 					},
 					&StatementInfo{
@@ -642,9 +415,9 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Statement:            "show databases",
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
-						RequestAt:            util.TimeNano(time.Microsecond),
-						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
-						Duration:             uint64(time.Microsecond + time.Second),
+						RequestAt:            zeroTime.Add(time.Microsecond),
+						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
+						Duration:             time.Microsecond + time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError("test error"),
 						ExecPlan:             nil,
@@ -660,7 +433,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 			name: "single_error",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
+					&MOErrorHolder{Error: err1, Timestamp: zeroTime},
 				},
 				buf: buf,
 			},
@@ -671,8 +444,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 			name: "multi_error",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
-					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
+					&MOErrorHolder{Error: err1, Timestamp: zeroTime},
+					&MOErrorHolder{Error: err2, Timestamp: zeroTime.Add(time.Millisecond + time.Microsecond)},
 				},
 				buf: buf,
 			},
@@ -720,9 +493,8 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
 						ExecPlan:             nil,
-						Duration:             uint64(time.Second) - 1,
+						Duration:             time.Second - time.Nanosecond,
 					},
 					&StatementInfo{
 						StatementID:          _1TraceID,
@@ -734,9 +506,8 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						RequestAt:            util.TimeNano(0),
 						ExecPlan:             nil,
-						Duration:             uint64(time.Second) - 1,
+						Duration:             time.Second - time.Nanosecond,
 						SerializeExecPlan:    dummySerializeExecPlan,
 					},
 					&StatementInfo{
@@ -749,9 +520,9 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show databases",
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
-						RequestAt:            util.TimeNano(time.Microsecond),
-						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
-						Duration:             uint64(time.Second),
+						RequestAt:            zeroTime.Add(time.Microsecond),
+						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
+						Duration:             time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError("test error"),
 						ExecPlan:             map[string]string{"key": "val"},

@@ -14,27 +14,4 @@
 
 package util
 
-import (
-	"testing"
-)
-
 const timeFormat = "2006-01-02 15:04:05"
-
-func TestNowNS(t *testing.T) {
-	tests := []struct {
-		name string
-		want TimeNano
-	}{
-		{
-			name: "normal",
-			want: NowNS(),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NowNS(); got <= tt.want {
-				t.Errorf("NowNS() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
