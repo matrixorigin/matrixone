@@ -37,12 +37,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 	defer ticker.Stop()
 
 	s.logger.Info("CNStore heartbeat started")
-	sqlAddress := s.cfg.SQLAddress
-	if sqlAddress == "" {
-		sqlAddress = fmt.Sprintf("%s:%d",
-			s.cfg.Frontend.Host,
-			s.cfg.Frontend.Port)
-	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -53,7 +48,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 			batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
 				UUID:               s.cfg.UUID,
 				ServiceAddress:     s.cfg.ServiceAddress,
-				SQLAddress:         sqlAddress,
+				SQLAddress:         s.cfg.SQLAddress,
 				Role:               s.metadata.Role,
 				TaskServiceCreated: s.GetTaskRunner() != nil,
 			})

@@ -306,7 +306,6 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 	}
 }
 
-// TODO: if refresh failed, maybe s.mu.store is nil, this must be handle in TaskStorage methods
 func (s *refreshableTaskStorage) refresh(lastAddress string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -321,8 +320,8 @@ func (s *refreshableTaskStorage) refresh(lastAddress string) {
 		return
 	}
 
-	s.logger.Debug("refresh task storage", zap.String("address", connectAddress))
 	s.mu.lastAddress = connectAddress
+	s.logger.Debug("try to refresh task storage", zap.String("address", connectAddress))
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
 		s.logger.Error("refresh task storage failed",

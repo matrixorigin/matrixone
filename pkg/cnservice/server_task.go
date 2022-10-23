@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -29,7 +30,23 @@ import (
 	"go.uber.org/zap"
 )
 
+func (s *service) adjustSQLAddress() {
+	if s.cfg.SQLAddress == "" {
+		ip := "127.0.0.1"
+		if s.cfg.Frontend.Host != "" &&
+			s.cfg.Frontend.Host != "0.0.0.0" {
+			ip = s.cfg.Frontend.Host
+		}
+
+		s.cfg.SQLAddress = fmt.Sprintf("%s:%d",
+			ip,
+			s.cfg.Frontend.Port)
+	}
+}
+
 func (s *service) initTaskServiceHolder() {
+	s.adjustSQLAddress()
+
 	s.task.Lock()
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
