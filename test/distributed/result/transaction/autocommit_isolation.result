@@ -114,21 +114,18 @@ invalid input: delete has no table def
 select * from test_11;
 SQL parser error: table "test_11" does not exist
 Insert into test_11 values(1,1);
-tae data: duplicate
 select * from test_11;
 c	d
 1	1
 2	2
+1    1
 commit;
+transaction error: convert to txnerror, code 20613, msg tae data: duplicate
 set @@autocommit=1;
 select * from test_11;
-c	d
-1	1
-2	2
+SQL parser error: table "test_11" does not exist
 select * from test_11;
-c	d
-1	1
-2	2
+SQL parser error: table "test_11" does not exist
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
