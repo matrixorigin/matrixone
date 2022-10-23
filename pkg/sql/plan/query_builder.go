@@ -1523,15 +1523,6 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 
 	for i := 1; i < len(stmt); i++ {
 		rightCtx := NewBindContext(builder, ctx)
-		if _, ok := stmt[i].(*tree.TableFunction); ok {
-			return 0, moerr.NewSyntaxError("Every table function must have an alias")
-		}
-		if tbl, ok := stmt[i].(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
-			err = buildTableFunctionStmt(tbl, stmt[:i], leftCtx)
-			if err != nil {
-				return 0, err
-			}
-		}
 		rightChildID, err := builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return 0, err
@@ -1889,7 +1880,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
-
+	if _, ok := tbl.Right.(*tree.TableFunction); ok {
+		return 0, moerr.NewSyntaxError("Every table function must have an alias")
+	}
+	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
+		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err

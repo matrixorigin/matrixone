@@ -663,17 +663,13 @@ func lookUpFnCols(ret tree.SelectExprs, fn interface{}) tree.SelectExprs {
 	}
 	return ret
 }
-func buildTableFunctionStmt(tbl *tree.TableFunction, stmt tree.TableExprs, leftCtx *BindContext) error {
-	tbls := make([]tree.TableExpr, 0, len(stmt))
+func buildTableFunctionStmt(tbl *tree.TableFunction, left tree.TableExpr, leftCtx *BindContext) error {
 	var selectExprs tree.SelectExprs
 	selectExprs = lookUpFnCols(selectExprs, tbl.Func)
-	for j := 0; j < len(stmt); j++ {
-		tbls = append(tbls, stmt[j])
-	}
 	tbl.SelectStmt = &tree.Select{
 		Select: &tree.SelectClause{
 			From: &tree.From{
-				Tables: tbls,
+				Tables: []tree.TableExpr{left},
 			},
 			Exprs: selectExprs,
 		},
