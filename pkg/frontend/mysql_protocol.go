@@ -545,7 +545,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			tp := stmt.ParamTypes[i<<1]
 			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
 
-			switch tp {
+			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
 				vars[i] = nil
 
@@ -919,7 +919,15 @@ func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint6
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
-	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	if !math.IsInf(value, 0) {
+		mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	} else {
+		if math.IsInf(value, 1) {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("+Infinity")...)
+		} else {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("-Infinity")...)
+		}
+	}
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
@@ -1570,6 +1578,25 @@ func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	}
 }
 
+func setColLength(column *MysqlColumn, width int32) {
+	column.length = column.columnType.GetLength(width)
+}
+
+func setColFlag(column *MysqlColumn) {
+	if column.auto_incr {
+		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
+	}
+}
+
+func setCharacter(column *MysqlColumn) {
+	switch column.columnType {
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		column.SetCharset(0x21)
+	default:
+		column.SetCharset(0x3f)
+	}
+}
+
 // make the column information with the format of column definition41
 func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, cmd int) []byte {
 	space := HeaderOffset + 8*9 + //lenenc bytes of 8 fields
@@ -1614,7 +1641,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	pos = mp.io.WriteUint32(data, pos, column.Length())
 
 	//int<1>              type
-	pos = mp.io.WriteUint8(data, pos, column.ColumnType())
+	pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 
 	//int<2>              flags
 	pos = mp.io.WriteUint16(data, pos, column.Flag())
