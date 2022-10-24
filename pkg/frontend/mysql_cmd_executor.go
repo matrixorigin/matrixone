@@ -387,8 +387,8 @@ func handleShowColumns(ses *Session) error {
 				row[2] = "YES"
 			}
 			row[3] = d[3]
-			if value, ok := row[3].([]uint8); ok{
-				if len(value) == 3{
+			if value, ok := row[3].([]uint8); ok {
+				if len(value) == 3 {
 					row[2] = "NO"
 				}
 			}
@@ -2071,7 +2071,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	ses.SetSql(sql)
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
- 	proc := process.New(
+	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
 		pu.TxnClient,
