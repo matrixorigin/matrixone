@@ -134,17 +134,39 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+	var db *database
+
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	txn.databaseMap.Delete(key)
-	id, err := txn.getDatabaseId(ctx, name)
+	if v, ok := txn.databaseMap.Load(key); ok {
+		db = v.(*database)
+		txn.databaseMap.Delete(key)
+	} else {
+		id, err := txn.getDatabaseId(ctx, name)
+		if err != nil {
+			return err
+		}
+		db = &database{
+			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
+			databaseId:   id,
+			databaseName: name,
+		}
+	}
+	rels, err := db.Relations(ctx)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.mp)
+	for _, relName := range rels {
+		if err := db.Delete(ctx, relName); err != nil {
+			return err
+		}
+	}
+	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
 	if err != nil {
 		return err
 	}

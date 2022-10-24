@@ -48,7 +48,7 @@ const (
 var (
 	stmtIDCol    = export.Column{Name: "statement_id", Type: uuidColType, Default: "0", Comment: "statement uniq id"}
 	txnIDCol     = export.Column{Name: "transaction_id", Type: uuidColType, Default: "0", Comment: "txn uniq id"}
-	sesIDCol     = export.Column{Name: "sessionID", Type: uuidColType, Default: "0", Comment: "session uniq id"}
+	sesIDCol     = export.Column{Name: "session_id", Type: uuidColType, Default: "0", Comment: "session uniq id"}
 	accountCol   = export.Column{Name: "account", Type: stringType, Default: "", Comment: "account name"}
 	userCol      = export.Column{Name: "user", Type: stringType, Default: "", Comment: "user name"}
 	hostCol      = export.Column{Name: "host", Type: stringType, Default: "", Comment: "user client ip"}
