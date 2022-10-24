@@ -182,5 +182,13 @@ col3 int
 -- echo duplicate
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
-
 drop table t6;
+
+create table t7 (a uuid);
+load data infile '$resources/load_data/uuid.csv' into table t7;
+select * from t7;
+select * from t7 into outfile '$resources/into_outfile/outfile_uuid.csv';
+delete from t7;
+load data infile '$resources/into_outfile/outfile_uuid.csv' into table t7 ignore 1 lines;
+select * from t7;
+drop table t7;

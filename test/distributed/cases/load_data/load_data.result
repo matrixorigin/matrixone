@@ -70,10 +70,10 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
-            
-            
+
+
 null    null    null    null
-            
+
 "    "    "    "
 ""    ""    ""    ""
 select * from t2 into outfile '$resources/into_outfile/outfile_char_varchar_1.csv';
@@ -110,10 +110,10 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
-            
-            
+
+
 null    null    null    null
-            
+
 "    "    "    "
 ""    ""    ""    ""
 aa",aa    bb",bb    cc",cc    dd",dd
@@ -139,9 +139,9 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa"|aa    bb"|bb    cc"|cc    dd"|dd
 aa""|aa    bb""|bb    cc""|cc    dd""|dd
-            
-            
-            
+
+
+
 "    "    "    "
 ""    ""    ""    ""
 delete from t2;
@@ -163,9 +163,9 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa"?aa    bb"?bb    cc"?cc    dd"?dd
 aa""?aa    bb""?bb    cc""?cc    dd""?dd
-            
-            
-            
+
+
+
 "    "    "    "
 ""    ""    ""    ""
 delete from t2;
@@ -306,3 +306,16 @@ tae data: duplicate
 select * from t6;
 col1    col2    col3
 drop table t6;
+create table t7 (a uuid);
+load data infile '$resources/load_data/uuid.csv' into table t7;
+select * from t7;
+a
+deec3a94-4653-11ed-940e-f6efd850eccd
+select * from t7 into outfile '$resources/into_outfile/outfile_uuid.csv';
+a
+delete from t7;
+load data infile '$resources/into_outfile/outfile_uuid.csv' into table t7 ignore 1 lines;
+select * from t7;
+a
+deec3a94-4653-11ed-940e-f6efd850eccd
+drop table t7;
