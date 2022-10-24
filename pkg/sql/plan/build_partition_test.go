@@ -758,6 +758,17 @@ func TestListPartition(t *testing.T) {
 			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 		);`,
+
+		`CREATE TABLE lc (
+			a INT NULL,
+			b INT NULL
+		)
+		PARTITION BY LIST (a) (
+			PARTITION p0 VALUES IN(NULL,NULL),
+			PARTITION p1 VALUES IN( 1,2 ),
+			PARTITION p2 VALUES IN( 3,1 ),
+			PARTITION p3 VALUES IN( 3,3 )
+		);`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1088,6 +1099,14 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		)
 			PARTITION BY KEY(col1, col3)
 			PARTITIONS 4;`,
+		// should show error:Field in list of fields for partition function not found in table
+		`CREATE TABLE k1 (
+			id INT NOT NULL,
+			name VARCHAR(20),
+			sal DOUBLE
+		)
+		PARTITION BY KEY()
+		PARTITIONS 2;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1099,8 +1118,7 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 	}
-}
-*/
+}*/
 
 func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 	sqls := []string{
@@ -1145,6 +1163,16 @@ func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 		//)
 		//PARTITION BY KEY(col1,col2)
 		//PARTITIONS 4;`,
+
+		//`CREATE TABLE k1 (
+		//	id INT NOT NULL,
+		//	name VARCHAR(20),
+		//	sal DOUBLE,
+		//	PRIMARY KEY (id, name),
+		//	unique key (id)
+		//)
+		//PARTITION BY KEY(id)
+		//PARTITIONS 2;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1214,6 +1242,104 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 	}
 }
 
+/*
+// A UNIQUE INDEX must include all columns in the table's partitioning function
+
+	func TestPartitionKeysShouldShowError(t *testing.T) {
+		sqls := []string{
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY KEY(col1, col3)
+			PARTITIONS 2;`,
+
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY HASH(col1 + col3)
+			PARTITIONS 2;`,
+
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY RANGE (col1 + col3) (
+			PARTITION p0 VALUES LESS THAN (6),
+			PARTITION p1 VALUES LESS THAN (11),
+			PARTITION p2 VALUES LESS THAN (16),
+			PARTITION p3 VALUES LESS THAN (21)
+			);`,
+
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY RANGE COLUMNS(col1, col3) PARTITIONS 4 (
+			PARTITION p0 VALUES LESS THAN (10,5),
+			PARTITION p1 VALUES LESS THAN (20,10),
+			PARTITION p2 VALUES LESS THAN (50,20),
+			PARTITION p3 VALUES LESS THAN (65,30)
+			);`,
+
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY LIST (col1) (
+			PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),
+			PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),
+			PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
+			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+			);`,
+
+			`CREATE TABLE t4 (
+				col1 INT NOT NULL,
+				col2 INT NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3),
+				UNIQUE KEY (col2, col4)
+			)
+			PARTITION BY LIST COLUMNS(col1, col3) (
+			PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+			PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
+			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
+			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
+			);`,
+		}
+		mock := NewMockOptimizer()
+		for _, sql := range sqls {
+			_, err := buildSingleStmt(mock, t, sql)
+			t.Log(sql)
+			t.Log(err)
+			if err == nil {
+				t.Fatalf("%+v", err)
+			}
+		}
+	}
+*/
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	statements, err := mysql.Parse(sql)
 	if err != nil {
