@@ -22,5 +22,4 @@
 > create user userx identified by '111';
 > grant public to userx;
 > revoke public from userx;
-ERROR 20101 (HY000): internal error: the role public can not be revoked
 ```
