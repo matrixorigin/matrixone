@@ -154,7 +154,6 @@ type ShowType int
 const (
 	ShowEngines = iota
 	ShowCharset
-	ShowCollation
 	ShowCreateUser
 	ShowTriggers
 	ShowProcedureStatus
@@ -172,8 +171,6 @@ func (s ShowType) String() string {
 		return "engines"
 	case ShowCharset:
 		return "charset"
-	case ShowCollation:
-		return "collation"
 	case ShowCreateUser:
 		return "create user"
 	case ShowTriggers:
@@ -360,6 +357,25 @@ func (node *ShowWarnings) Format(ctx *FmtCtx) {
 
 func NewShowWarnings() *ShowWarnings {
 	return &ShowWarnings{}
+}
+
+// SHOW collation statement
+type ShowCollation struct {
+	showImpl
+	Like  *ComparisonExpr
+	Where *Where
+}
+
+func (node *ShowCollation) Format(ctx *FmtCtx) {
+	ctx.WriteString("show collation")
+	if node.Like != nil {
+		ctx.WriteString(" like ")
+		node.Like.Format(ctx)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
 }
 
 // SHOW VARIABLES statement
