@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/BurntSushi/toml v1.0.0
-	github.com/FastFilter/xorfilter v0.1.1
+	github.com/FastFilter/xorfilter v0.1.2
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/aws/aws-sdk-go-v2 v1.16.5
 	github.com/aws/aws-sdk-go-v2/config v1.15.11

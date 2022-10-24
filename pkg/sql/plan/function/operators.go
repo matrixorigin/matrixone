@@ -38,36 +38,6 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int]Functions{
-	ISUNKNOWN: {
-		Id:     ISUNKNOWN,
-		Flag:   plan.Function_STRICT,
-		Layout: IS_NULL_EXPRESSION,
-		Overloads: []Function{
-			{
-				Index: 0,
-				Args: []types.T{
-					types.T_bool,
-				},
-				ReturnTyp: types.T_bool,
-				Fn:        operator.IsUnknown,
-			},
-		},
-	},
-	ISNOTUNKNOWN: {
-		Id:     ISNOTUNKNOWN,
-		Flag:   plan.Function_STRICT,
-		Layout: IS_NULL_EXPRESSION,
-		Overloads: []Function{
-			{
-				Index: 0,
-				Args: []types.T{
-					types.T_bool,
-				},
-				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotUnknown,
-			},
-		},
-	},
 	ISTRUE: {
 		Id:     ISTRUE,
 		Flag:   plan.Function_STRICT,
