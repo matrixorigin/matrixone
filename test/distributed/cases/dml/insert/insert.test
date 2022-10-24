@@ -119,6 +119,7 @@ drop table if exists t1;
 create table t1(a int, primary key(b));
 create table t1(a int, b int, primary key(b, c));
 
+-- @bvt:issue#5790
 drop table if exists t1;
 create table t1(a int, b varchar(20), unique key(a));
 insert into t1 values(1, '1');
@@ -141,3 +142,4 @@ insert into t1 values(2, '3');
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
+-- @bvt:issue

@@ -116,7 +116,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		for j := range tmpBat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].AutoIncrement) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
+			if (p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].Typ.AutoIncr) || (p.TableDefVec[i].Cols[j].Default != nil && !p.TableDefVec[i].Cols[j].Default.NullAbility) {
 				if nulls.Any(tmpBat.Vecs[j].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
 				}

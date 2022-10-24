@@ -1948,10 +1948,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
 		err = convertEngineTypeToMysqlType(types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
 		}
+		setColFlag(c)
+		setColLength(c, col.Typ.Width)
+		setCharacter(c)
+		c.SetDecimal(uint8(col.Typ.Scale))
 		columns[i] = c
 	}
 	return columns, err
@@ -2397,7 +2404,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
-				ses.SetUserName("")
+				ses.SetDatabaseName("")
 			}
 		case *tree.Import:
 			fromLoadData = true
@@ -2569,7 +2576,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
-			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
 			*tree.ExplainFor, *tree.ExplainStmt:
 			columns, err2 = cw.GetColumns()
 			if err2 != nil {

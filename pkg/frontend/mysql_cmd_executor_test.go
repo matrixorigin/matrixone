@@ -628,7 +628,7 @@ func Test_typeconvert(t *testing.T) {
 		}
 
 		type kase struct {
-			tp     uint8
+			tp     defines.MysqlType
 			signed bool
 		}
 		output := []kase{

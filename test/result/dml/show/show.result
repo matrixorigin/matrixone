@@ -53,6 +53,78 @@ create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
 drop database db11111111111;
+show grants;
+Grants for dump@localhost
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT * ON database `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT *.* ON table `dump`@`localhost`
+GRANT t ON table `dump`@`localhost`
+GRANT * ON account `dump`@`localhost`
+show grants for 'root'@'localhost';
+Grants for root@localhost
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON account `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT * ON database `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT *.* ON table `root`@`localhost`
+GRANT t ON table `root`@`localhost`
+GRANT * ON account `root`@`localhost`
 show grants for 'test'@'localhost';
 Grants for test@localhost
 show variables where value = 'MatrixOne';
@@ -94,6 +166,22 @@ Variable_name    Value
 select * from t1;
 a    b
 1    1
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation where 'Charset'='utf8mb4';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show variables like 'sql_safe_updates';
+Variable_name    Value
+sql_safe_updates    0
+set sql_safe_updates=1;
+show variables like 'sql_safe_updates';
+Variable_name    Value
+sql_safe_updates    1
 drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;

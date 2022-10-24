@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -186,7 +187,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].AutoIncrement) {
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
@@ -221,6 +222,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 		}
+	}
+	// set null value's data
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
 	if !proc.LoadTag {
 		return false, handleWrite(n, proc, ctx, bat)
