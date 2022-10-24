@@ -412,6 +412,11 @@ func handleShowColumns(ses *Session) error {
 				row[3] = "YES"
 			}
 			row[4] = d[4]
+			if value, ok := row[4].([]uint8); ok {
+				if len(value) == 3 {
+					row[3] = "NO"
+				}
+			}
 			row[5] = "NULL"
 			row[6] = ""
 			row[7] = d[7]
