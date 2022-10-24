@@ -191,9 +191,9 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.getClient().sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
 		if err != nil {
-			c.resetClient()
+			c.resetClientLocked()
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -264,6 +264,16 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 func (c *managedHAKeeperClient) resetClient() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.resetClientLocked()
+}
+
+func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.prepareClientLocked(ctx)
+}
+
+func (c *managedHAKeeperClient) resetClientLocked() {
 	if c.mu.client != nil {
 		cc := c.mu.client
 		c.mu.client = nil
@@ -271,12 +281,6 @@ func (c *managedHAKeeperClient) resetClient() {
 			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}
-}
-
-func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.prepareClientLocked(ctx)
 }
 
 func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
