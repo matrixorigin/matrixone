@@ -294,7 +294,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 					pks = append(pks, def.Name.Parts[0])
 				}
 
-				if _, ok := attr.(*tree.AttributeUnique); ok {
+				if _, ok := attr.(*tree.AttributeUniqueKey); ok {
 					part := &tree.KeyPart{
 						ColName: def.Name,
 					}
