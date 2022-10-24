@@ -116,7 +116,7 @@ type PathBuilder interface {
 	// BuildETLPath return path for EXTERNAL table 'infile' options
 	//
 	// like: {account}/merged/*/*/*/{name}/*.csv
-	BuildETLPath(account, db, name string) string
+	BuildETLPath(db, name, account string) string
 	// ParsePath
 	//
 	// switch path {
@@ -231,7 +231,7 @@ func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time
 //
 // #     account | typ | ts   | table | filename
 // like: *       /*    /*/*/* /metric /*.csv
-func (b *AccountDatePathBuilder) BuildETLPath(account, db, name string) string {
+func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
 	etlDirectory := b.Build(account, ETLParamTypeAll, ETLParamTSAll, db, name)
 	etlFilename := "*" + CsvExtension
 	return path.Join("/", etlDirectory, etlFilename)
@@ -261,7 +261,7 @@ type DBTablePathBuilder struct{}
 // BuildETLPath implement PathBuilder
 //
 // like: system/metric_*.csv
-func (m *DBTablePathBuilder) BuildETLPath(account, db, name string) string {
+func (m *DBTablePathBuilder) BuildETLPath(db, name, account string) string {
 	return fmt.Sprintf("%s/%s_*", db, name) + CsvExtension
 }
 

@@ -180,11 +180,19 @@ type View struct {
 	OriginTable *Table
 	Columns     []Column
 	Condition   WhereCondition
+	// SupportAccountAccess default false
+	SupportAccountAccess bool
 }
 
 func WithColumn(c Column) ViewOption {
 	return ViewOption(func(v *View) {
 		v.Columns = append(v.Columns, c)
+	})
+}
+
+func SupportAccountAccess(support bool) ViewOption {
+	return ViewOption(func(v *View) {
+		v.SupportAccountAccess = support
 	})
 }
 
@@ -330,7 +338,7 @@ func (o *CsvTableOptions) GetTableOptions(builder PathBuilder) string {
 		builder = NewDBTablePathBuilder()
 	}
 	if len(o.Formatter) > 0 {
-		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.Account, o.DbName, o.TblName))
+		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName, o.Account))
 	}
 	return ""
 }

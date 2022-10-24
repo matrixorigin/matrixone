@@ -383,6 +383,18 @@ func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
 
 func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 	var options []export.ViewOption
+	// check SubSystem
+	var subSystem *SubSystem = nil
+	for _, ss := range allSubSystem {
+		if strings.Index(tbl, ss.Name) == 0 {
+			subSystem = &ss
+			break
+		}
+	}
+	if subSystem == nil {
+		panic(moerr.NewNotSupported("metric unknown SubSystem: %s", tbl))
+	}
+	options = append(options, export.SupportAccountAccess(subSystem.SupportAccountAccess))
 	// construct columns
 	for _, label := range lbls {
 		for _, col := range SingleMetricTable.Columns {
@@ -430,18 +442,8 @@ func GetSchemaForAccount(account string) []string {
 
 	for desc := range descChan {
 		view := getView(desc)
-		// check SubSystem
-		var subSystem *SubSystem = nil
-		for _, ss := range allSubSystem {
-			if strings.Index(view.Table, ss.Name) == 0 {
-				subSystem = &ss
-				break
-			}
-		}
-		if subSystem == nil {
-			panic(moerr.NewNotSupported("metric unknown SubSystem: %s", view.Table))
-		}
-		if subSystem.SupportAccountAccess && view.OriginTable.SupportAccountAccess {
+
+		if view.SupportAccountAccess && view.OriginTable.SupportAccountAccess {
 			sqls = append(sqls, view.ToCreateSql(true))
 		}
 	}
