@@ -231,6 +231,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 					found = true
 				}
 			}
+			require.Equal(t, 6, len(schemas))
 			require.Equal(t, true, found)
 			found = false
 			if strings.Contains(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") {

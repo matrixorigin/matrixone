@@ -146,6 +146,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 					found = true
 				}
 			}
+			require.Equal(t, 1, len(schemas))
 			require.Equal(t, true, found)
 			found = false
 			if strings.Contains(SingleStatementTable.ToCreateSql(true), "/*/*/*/*/*/statement_info/*.csv") {
