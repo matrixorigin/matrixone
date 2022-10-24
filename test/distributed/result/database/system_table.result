@@ -157,6 +157,7 @@ schemata
 character_sets
 triggers
 tables
+engines
 show columns from `KEY_COLUMN_USAGE`;
 no such table information_schema.KEY_COLUMN_USAGE
 show columns from `COLUMNS`;
