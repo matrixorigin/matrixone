@@ -1747,10 +1747,17 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
 		err = convertEngineTypeToMysqlType(types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
 		}
+		setColFlag(c)
+		setColLength(c, col.Typ.Width)
+		setCharacter(c)
+		c.SetDecimal(uint8(col.Typ.Scale))
 		columns[i] = c
 	}
 	return columns, err
@@ -2681,6 +2688,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
+	ses.SetCmd(req.GetCmd())
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
 		/*resp = NewResponse(

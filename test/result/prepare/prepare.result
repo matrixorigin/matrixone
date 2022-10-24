@@ -117,3 +117,41 @@ execute s2;
 internal error: unclassified statement appears in uncommitted transaction
 rollback;
 set autocommit=1;
+drop table if exists t1;
+create table t1 (a int, b int);
+prepare stmt1 from 'select * from t1 where a > ?';
+insert into t1 values (1, 11), (2, 22), (3, 33);
+set @a_var = 1;
+execute stmt1 using @a_var;
+a	b
+2	22
+3	33
+select * from t1;
+a    b
+1    11
+2    22
+3    33
+set @a_var = 2;
+execute stmt1 using @a_var;
+a	b
+3	33
+select * from t1;
+a    b
+1    11
+2    22
+3    33
+insert into t1 values (4, 44);
+execute stmt1 using @a_var;
+a	b
+3	33
+4	44
+delete from t1 where a > 3;
+execute stmt1 using @a_var;
+a	b
+3	33
+select * from t1;
+a    b
+1    11
+2    22
+3    33
+deallocate prepare stmt1;

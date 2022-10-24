@@ -536,15 +536,15 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return nil
 	}
 
-	txnCode := uint16(txnError.Code)
-
+	// use txn internal error code to check error
+	txnCode := uint16(txnError.TxnErrCode)
 	if txnCode == moerr.ErrDNShardNotFound {
 		// do we still have the uuid and shard id?
 		return moerr.NewDNShardNotFound("", 0xDEADBEAF)
 	}
 
 	if _, ok := possibleErrorMap[txnCode]; ok {
-		return moerr.NewTxnError("convert to txnerror, code %d, msg %s", txnCode, txnError.Message)
+		return txnError.UnwrapError()
 	}
 
 	panic(moerr.NewInternalError("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
