@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SELECT  id,name,view_type,attribute,attribute_filed,size,created_at,updated_at  FROM view_warehouse limit 0,10",
-		output: "select id, name, view_type, attribute, attribute_filed, size, created_at, updated_at from view_warehouse limit 10 offset 0",
+		input: "create user daisy@192.168.1.10 identified by '123456'",
 	}
 )
 
