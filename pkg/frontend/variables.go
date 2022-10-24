@@ -1154,6 +1154,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
 		Default:           int64(28800),
 	},
+	"sql_safe_updates": {
+		Name:              "sql_safe_updates",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("sql_safe_updates", 0, 1, false),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

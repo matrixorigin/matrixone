@@ -30,6 +30,7 @@ import (
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
+const MO_DEFUALT_HOSTNAME = "localhost"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -392,13 +393,14 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := ""
-	if stmt.Username == "" {
-		sql = "select concat(\"GRANT \", p.privilege_level, ' ON ', p.obj_type,  \" `root`\", \"@\", \"`localhost`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id"
-	} else {
-		sql = "select concat(\"GRANT\", p.privilege_level, 'ON', p.obj_type,  \"`%s`\", \"@\", \"`%s`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Hostname)
+	if stmt.Hostname == "" {
+		stmt.Hostname = MO_DEFUALT_HOSTNAME
 	}
+	if stmt.Username == "" {
+		stmt.Username = ctx.GetUserName()
+	}
+	sql := "select concat(\"GRANT \", p.privilege_level, ' ON ', p.obj_type,  \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -444,6 +446,12 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_STATUS
 	sql := "select '' as `Variable_name`, '' as `Value` where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_COLLATION
+	sql := "select 'utf8mb4_bin' as `Collation`, 'utf8mb4' as `Charset`, 46 as `Id`, 'Yes' as `Compiled`, 1 as `Sortlen`"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
