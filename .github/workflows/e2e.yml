@@ -9,7 +9,7 @@ on:
 
 jobs:
   bvt-linux-x86:
-    runs-on: ubuntu-latest
+    runs-on: x86-runner
     name: e2e BVT Test on Linux/x64
     timeout-minutes: 30
 
@@ -61,7 +61,7 @@ jobs:
           locale
           sleep 120s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
 
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
