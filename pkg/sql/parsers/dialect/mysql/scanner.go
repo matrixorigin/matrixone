@@ -565,7 +565,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			break
 		}
 		if ch == '@' {
-			isVariable = true
+			break
 		}
 		s.inc()
 	}
