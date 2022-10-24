@@ -108,7 +108,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		return result, moerr.NewInvalidInput("invalid function or opreator '%s'", funcName)
 	}
 
-	switch funcProtoType.Layout {
+	switch funcProtoType.GetLayout() {
 	case function.STANDARD_FUNCTION:
 		result += funcExpr.F.Func.GetObjName() + "("
 		if len(funcExpr.F.Args) > 0 {

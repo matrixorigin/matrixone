@@ -486,6 +486,8 @@ func (t T) TypeLen() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
+	case T_tuple:
+		return 0
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
 }
