@@ -146,8 +146,6 @@ func (s *service) registerExecutors() {
 		return frontend.NewInternalExecutor(pu)
 	}
 
-	frontend.InitServerVersion(pu.SV.MoVersion)
-
 	executors := map[task.TaskCode]func(context.Context, func() ie.InternalExecutor) error{
 		task.TaskCode_TraceInit:   trace.InitSchema,
 		task.TaskCode_MetricInit:  metric.InitSchema,

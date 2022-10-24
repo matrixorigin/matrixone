@@ -13,8 +13,8 @@ github.com/CloudyKit/jet/v3 v3.0.0/go.mod h1:HKQPgSJmdK8hdoAbKUUWajkHyHo4RaU5rMd
 github.com/DataDog/zstd v1.4.5/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
 github.com/DataDog/zstd v1.5.0 h1:+K/VEwIAaPcHiMtQvpLD4lqW7f0Gk3xdYZmI1hD+CXo=
 github.com/DataDog/zstd v1.5.0/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
-github.com/FastFilter/xorfilter v0.1.1 h1:b0x4ms1+is6YROG+v+0II/2ogCcKqKsDODbJFKzf2q4=
-github.com/FastFilter/xorfilter v0.1.1/go.mod h1:RB6+tbWbRN163V4y7z10tNfZec6n1oTsOElP0Tu5hzU=
+github.com/FastFilter/xorfilter v0.1.2 h1:R8oYYHRjZPQV1TmKPVK87QnruIsR2WWZbyEen5YFnJA=
+github.com/FastFilter/xorfilter v0.1.2/go.mod h1:RB6+tbWbRN163V4y7z10tNfZec6n1oTsOElP0Tu5hzU=
 github.com/Joker/hpp v1.0.0/go.mod h1:8x5n+M1Hp5hC0g8okX3sR3vFQwynaX/UgSOM9MeBKzY=
 github.com/Joker/jade v1.0.1-0.20190614124447-d475f43051e7/go.mod h1:6E6s8o2AE4KhCrqr6GRJjdC/gNfTdxkIXvuGZZda2VM=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=

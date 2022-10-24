@@ -81,6 +81,7 @@ func NewService(
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
+	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}

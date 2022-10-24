@@ -166,6 +166,9 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
+	cn2, err := c.GetCNServiceIndexed(1)
+	require.NoError(t, err)
+
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
 	require.NoError(t, err)
@@ -179,6 +182,11 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	err = c.CloseCNService(uuid1)
 	require.NoError(t, err)
 
+	if uuid1 == cn1.ID() {
+		taskService, ok = cn2.GetTaskService()
+		require.True(t, ok)
+		require.NoError(t, err)
+	}
 	waitTaskRescheduled(t, ctx, taskService, uuid1)
 
 	err = c.Close()
