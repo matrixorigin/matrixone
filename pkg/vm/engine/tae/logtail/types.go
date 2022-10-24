@@ -63,11 +63,13 @@ var (
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
 		txnbase.SnapshotAttr_LogIndex_CSN,
 		txnbase.SnapshotAttr_LogIndex_Size,
 	}
 	TxnNodeSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_TS, 0, 0, 0),
 		types.New(types.T_uint32, 0, 0, 0),

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -240,6 +241,59 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}, true)
 }
 
+func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containers.Batch) {
+	for i := 0; i < ins.Length(); i++ {
+		dbid := ins.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
+		name := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
+		start, prepare, createdAt, logIndex := txnbase.GetFromBatch(insTxn, i)
+		catalog.onReplayCreateDB(dbid, name, createdAt, start, prepare, logIndex)
+	}
+	for i := 0; i < del.Length(); i++ {
+		panic("TODO")
+	}
+}
+
+func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, start, prepare types.TS, logindex *wal.Index) {
+	db := NewReplayDBEntry()
+	db.catalog = catalog
+	db.ID = dbid
+	db.name = name
+	err := catalog.AddEntryLocked(db, nil)
+	if err != nil {
+		panic(err)
+	}
+	un := &DBMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: createdAt,
+		},
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start:    start,
+			Prepare:  prepare,
+			End:      createdAt,
+			LogIndex: logindex,
+		},
+	}
+	db.Insert(un)
+}
+func (catalog *Catalog) onReplayDropDB(dbid uint64, deleteAt, start, prepare types.TS, logindex *wal.Index) {
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		panic(err)
+	}
+	un := &DBMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: db.GetCreatedAt(),
+			DeletedAt: deleteAt,
+		},
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start:    start,
+			Prepare:  prepare,
+			End:      deleteAt,
+			LogIndex: logindex,
+		},
+	}
+	db.Insert(un)
+}
 func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.Table.ID)
 	prepareTS := cmd.GetTs()
@@ -307,6 +361,53 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 			return true
 		}, true)
 	}
+}
+func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch) {
+	schemaOffset := 0
+	for i := 0; i < ins.Length(); i++ {
+		tid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(i).(uint64)
+		dbid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
+		name := string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
+		schema := NewEmptySchema(name)
+		schemaOffset = schema.ReadFromBatch(insCol, schemaOffset)
+		schema.Comment = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
+		schema.Partition = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
+		schema.Relkind = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
+		schema.Createsql = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
+		schema.View = string(ins.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte))
+		schema.AcInfo = accessInfo{}
+		schema.AcInfo.RoleID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).Get(i).(uint32)
+		schema.AcInfo.UserID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).Get(i).(uint32)
+		schema.AcInfo.CreateAt = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
+		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
+		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
+		catalog.onReplayCreateTable(dbid, tid, schema, create, start, prepare, logIndex)
+	}
+
+}
+func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, createAt, start, prepare types.TS, logIndex *wal.Index) {
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		panic(err)
+	}
+	tbl := NewReplayTableEntry()
+	tbl.schema = schema
+	tbl.db = db
+	err = db.AddEntryLocked(tbl, nil)
+	if err != nil {
+		panic(err)
+	}
+	un := &DBMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: createAt,
+		},
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start:   start,
+			Prepare: prepare,
+			End:     createAt,
+		},
+	}
+	tbl.Insert(un)
 }
 
 func (catalog *Catalog) onReplayUpdateSegment(
@@ -381,6 +482,8 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 		}, true)
 	}
 }
+
+func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn *containers.Batch)
 
 func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	dataFactory DataFactory,

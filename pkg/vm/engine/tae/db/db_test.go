@@ -3834,11 +3834,14 @@ func TestSnapshotBatch(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
+	minTs := types.BuildTS(0, 0)
+	txn, _ := tae.StartTxn(nil)
+	maxTs := txn.GetStartTS()
 	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+
+	ctlg := catalog.MockCatalog("/tmp/", "lalala", nil, nil)
 	ins, insTxn, del, delTxn := builder.GetDBBatchs()
-	t.Log(ins)
-	t.Log(insTxn)
-	t.Log(del)
-	t.Log(delTxn)
+	ctlg.OnReplayDatabaseBatch(ins, insTxn, del, delTxn)
+	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
+	t.Log(ctlg.SimplePPString(3))
 }

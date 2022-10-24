@@ -652,7 +652,14 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 func (b *CheckpointLogtailRespBuilder) GetDBBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
 	return b.dbInsBatch, b.dbInsTxnBatch, b.dbDelBatch, b.dbDelTxnBatch
 }
+func (b *CheckpointLogtailRespBuilder) GetTblBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
+	return b.tblInsBatch, b.tblInsTxnBatch, b.tblColInsBatch, b.tblDelBatch, b.tblDelTxnBatch
+}
+
 func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
+	if entry.IsSystemDB() {
+		return nil
+	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
@@ -664,16 +671,19 @@ func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(b.dbDelBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
-			dbNode.TxnMVCCNode.FillTxnRows(b.dbInsTxnBatch)
+			dbNode.TxnMVCCNode.FillTxnRows(b.dbDelTxnBatch)
 		} else {
 			catalogEntry2Batch(b.dbInsBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
-			dbNode.TxnMVCCNode.FillTxnRows(b.dbDelTxnBatch)
+			dbNode.TxnMVCCNode.FillTxnRows(b.dbInsTxnBatch)
 		}
 	}
 	return nil
 }
 
 func (b *CheckpointLogtailRespBuilder) VisitTable(entry *catalog.TableEntry) (err error) {
+	if entry.GetDB().IsSystemDB() {
+		return nil
+	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
