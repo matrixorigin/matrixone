@@ -188,7 +188,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 	}
 
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
 		firstID, err := c.getClient().sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
@@ -276,7 +276,10 @@ func (c *managedHAKeeperClient) resetClient() {
 func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.prepareClientLocked(ctx)
+}
 
+func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
 	if c.mu.client != nil {
 		return nil
 	}
