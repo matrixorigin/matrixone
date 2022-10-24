@@ -63,7 +63,7 @@ func TestHandleReadWithRetryWithTimeout(t *testing.T) {
 		defer cancel()
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRead(ctx, &req, resp))
-		assert.Equal(t, int32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
 	})
 }
 
@@ -169,6 +169,6 @@ func TestHandleDNShardNotFound(t *testing.T) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
-		assert.Equal(t, int32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
 	})
 }

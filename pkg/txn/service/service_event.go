@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -132,7 +133,7 @@ func (w *waiter) maybeReleaseLocked() {
 func (w *waiter) wait(ctx context.Context) (txn.TxnStatus, error) {
 	select {
 	case <-ctx.Done():
-		return txn.TxnStatus_Aborted, ctx.Err()
+		return txn.TxnStatus_Aborted, moerr.ConvertGoError(ctx.Err())
 	case status := <-w.c:
 		return status, nil
 	}

@@ -1,0 +1,44 @@
+use tpch;
+select
+cntrycode,
+count(*) as numcust,
+sum(c_acctbal) as totacctbal
+from
+(
+select
+substring(c_phone from 1 for 2) as cntrycode,
+c_acctbal
+from
+customer
+where
+substring(c_phone from 1 for 2) in
+('10', '11', '26', '22', '19', '20', '27')
+and c_acctbal > (
+select
+avg(c_acctbal)
+from
+customer
+where
+c_acctbal > 0.00
+and substring(c_phone from 1 for 2) in
+('10', '11', '26', '22', '19', '20', '27')
+)
+and not exists (
+select
+*
+from
+orders
+where
+o_custkey = c_custkey
+)
+) as custsale
+group by
+cntrycode
+order by
+cntrycode
+;
+cntrycode	numcust	totacctbal
+11	4	29942.58
+19	2	17120.35
+20	1	9091.82
+26	1	7354.23
