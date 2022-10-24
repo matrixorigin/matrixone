@@ -207,8 +207,9 @@ null    null    null    null
 1.2345679    1.23456789    1.23    1.23457
 1.0123457    1.0123456789    1.01    1.01235
 1.0E-10    1.0E-10    0.00    0.00000
-delete from t3;
+delete from t3
 import data infile '$resources/load_data/float_3.csv' into table t3;
+
 drop table t3;
 drop table if exists t4;
 create table t4(
