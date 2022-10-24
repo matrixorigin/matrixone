@@ -824,60 +824,6 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 	return nil
 }
 
-func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionInfo) (string, error) {
-	defs := tableDef.Defs
-	hasPrimaryKey := false
-	hasUniqueKey := false
-	var primaryKey *plan.PrimaryKeyDef
-	var uniqueKey *plan.ComputeIndexDef
-
-	for _, def := range defs {
-		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
-			hasPrimaryKey = true
-			primaryKey = pkdef.Pk
-			break
-		}
-	}
-
-	for _, def := range defs {
-		if ukdef, ok := def.Def.(*plan.TableDef_DefType_ComputeIndex); ok {
-			hasUniqueKey = true
-			uniqueKey = ukdef.ComputeIndex
-		}
-	}
-
-	if hasPrimaryKey {
-		var pkcols []string
-		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
-			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
-		}
-
-		if hasUniqueKey {
-			//for _, singleUniqueKey := range uniqueKey.uniqueKeys {
-			//	if !checkUniqueKeyIncludePartKey2(pkcols, singleUniqueKey.cols) {
-			//		return "", moerr.NewInvalidInput("partition key is not part of primary key")
-			//	}
-			//}
-
-			if checkUniqueKeyIncludePartKey(pkcols, uniqueKey.Names) {
-				return "", moerr.NewInvalidInput("partition key is not part of primary key")
-			}
-		}
-	} else if hasUniqueKey {
-		if len(uniqueKey.Names) >= 2 {
-			//firstUniqueKey := uniqueKey.uniqueKeys[0]
-			//for _, singleUniqueKey := range uniqueKey.uniqueKeys {
-			//	if !checkUniqueKeyIncludePartKey2(firstUniqueKey.cols, singleUniqueKey.cols) {
-			//		return "", moerr.NewInvalidInput("partition key is not part of primary key")
-			//	}
-			//}
-		}
-	} else {
-		return "", moerr.NewInvalidInput("Field in list of fields for partition function not found in table")
-	}
-	return "", nil
-}
-
 // checkPartitionKeysConstraints checks the partitioning key is included in the table constraint.
 func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
 	defs := tableDef.Defs
