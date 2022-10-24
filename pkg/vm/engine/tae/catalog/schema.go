@@ -50,6 +50,11 @@ type Default struct {
 	OriginString string
 }
 
+type OnUpdate struct {
+	Expr         []byte
+	OriginString string
+}
+
 func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
 	index := &IndexInfo{
 		Name:    name,
@@ -75,7 +80,7 @@ type ColDef struct {
 	SortKey       bool
 	Comment       string
 	Default       Default
-	OnUpdate      []byte
+	OnUpdate      OnUpdate
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -170,39 +175,60 @@ func (s *Schema) HasSortKey() bool { return s.SortKey != nil }
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
 
-func MarshalOnUpdate(w *bytes.Buffer, data []byte) (err error) {
-	if data == nil {
+func MarshalOnUpdate(w *bytes.Buffer, data OnUpdate) (err error) {
+	if err = binary.Write(w, binary.BigEndian, uint16(len([]byte(data.OriginString)))); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, []byte(data.OriginString)); err != nil {
+		return
+	}
+	if data.Expr == nil {
 		err = binary.Write(w, binary.BigEndian, uint16(0))
 		return
 	} else {
-		if err = binary.Write(w, binary.BigEndian, uint16(len(data))); err != nil {
+		if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
 			return
 		}
 	}
-
-	if err = binary.Write(w, binary.BigEndian, data); err != nil {
+	if err = binary.Write(w, binary.BigEndian, data.Expr); err != nil {
 		return
 	}
 	return nil
 }
 
-func UnMarshalOnUpdate(r io.Reader) ([]byte, int64, error) {
-	var valueLen uint16 = 0
-	if err := binary.Read(r, binary.BigEndian, &valueLen); err != nil {
-		return nil, 0, err
-	}
-	n := int64(2)
+func UnMarshalOnUpdate(r io.Reader, data *OnUpdate) (n int64, err error) {
 
-	if valueLen == 0 {
-		return nil, 0, nil
+	var valueLen uint16 = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
 	}
+	n = 2
 
 	buf := make([]byte, valueLen)
-	if _, err := r.Read(buf); err != nil {
-		return nil, 0, err
+	if _, err = r.Read(buf); err != nil {
+		return
 	}
+	data.OriginString = string(buf)
 	n += int64(valueLen)
-	return buf, n, nil
+
+	valueLen = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
+	}
+	n += 2
+
+	if valueLen == 0 {
+		data.Expr = nil
+		return
+	}
+
+	buf = make([]byte, valueLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	data.Expr = buf
+	n += int64(valueLen)
+	return n, nil
 }
 
 func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
@@ -361,7 +387,8 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		if def.OnUpdate, sn, err = UnMarshalOnUpdate(r); err != nil {
+		def.OnUpdate = OnUpdate{}
+		if sn, err = UnMarshalOnUpdate(r, &def.OnUpdate); err != nil {
 			return
 		}
 		n += sn
@@ -534,7 +561,6 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 	var bs []byte = nil
-	var ps []byte = nil
 	var err error
 	if attr.Default.Expr != nil {
 		bs, err = attr.Default.Expr.Marshal()
@@ -547,11 +573,13 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Expr:         bs,
 		OriginString: attr.Default.OriginString,
 	}
-	if attr.OnUpdate != nil {
-		ps, err = attr.OnUpdate.Marshal()
+	var attrOnUpdate OnUpdate
+	if attr.OnUpdate != nil && attr.OnUpdate.Expr != nil {
+		attrOnUpdate.Expr, err = attr.OnUpdate.Expr.Marshal()
 		if err != nil {
 			return err
 		}
+		attrOnUpdate.OriginString = attr.OnUpdate.OriginString
 	}
 	def := &ColDef{
 		Name:          attr.Name,
@@ -562,7 +590,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Default:       attrDefault,
 		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
-		OnUpdate:      ps,
+		OnUpdate:      attrOnUpdate,
 	}
 	return s.AppendColDef(def)
 }

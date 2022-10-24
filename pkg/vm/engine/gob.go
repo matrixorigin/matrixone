@@ -78,4 +78,5 @@ func init() {
 	gob.Register(&plan.Const_Jsonval{})
 	gob.Register(&plan.Const_Defaultval{})
 	gob.Register(&plan.Default{})
+	gob.Register(&plan.OnUpdate{})
 }

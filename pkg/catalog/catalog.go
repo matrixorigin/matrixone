@@ -242,7 +242,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 		}
 	}
 	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
 			return nil, err
 		}

@@ -124,7 +124,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 				if c.GetUpdateVal() {
-					lastNode.ProjectList[idx] = col.OnUpdate
+					lastNode.ProjectList[idx] = col.OnUpdate.Expr
 					idx++
 					continue
 				}

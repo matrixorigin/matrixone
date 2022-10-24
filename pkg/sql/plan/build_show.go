@@ -121,15 +121,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
+
 		updateOpt := ""
-		if col.OnUpdate != nil {
-			if f, ok := col.OnUpdate.Expr.(*plan.Expr_F); ok { //? other type
-				fStr, err := convertFunc2Str(f.F)
-				if err != nil {
-					return nil, err
-				}
-				updateOpt = " ON UPDATE " + fStr
-			}
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
 		}
 		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++

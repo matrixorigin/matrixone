@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -26,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"strconv"
-	"strings"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -616,35 +613,4 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 
 func needQuoteType(id types.T) bool {
 	return id == types.T_char || id == types.T_varchar || id == types.T_blob || id == types.T_text || id == types.T_json || id == types.T_timestamp || id == types.T_datetime || id == types.T_date || id == types.T_decimal64 || id == types.T_decimal128 || id == types.T_uuid
-}
-
-// only support function with const arguments
-func convertFunc2Str(f *plan.Function) (string, error) {
-	name := strings.ToUpper(f.GetFunc().GetObjName())
-	if len(f.Args) == 0 {
-		return name, nil
-	}
-	var args []string
-	for _, arg := range f.Args {
-		var (
-			param *plan.Expr_C
-			ok    bool
-		)
-		if param, ok = arg.Expr.(*plan.Expr_C); !ok {
-			return "", moerr.NewNotSupported("function %s with non-const arguments", name)
-		}
-		switch val := param.C.Value.(type) {
-		case *plan.Const_Ival:
-			args = append(args, strconv.FormatInt(val.Ival, 10))
-		case *plan.Const_Dval:
-			args = append(args, strconv.FormatFloat(val.Dval, 'f', -1, 64))
-		case *plan.Const_Sval:
-			args = append(args, fmt.Sprintf("'%s'", val.Sval))
-		case *plan.Const_Bval:
-			args = append(args, strconv.FormatBool(val.Bval))
-		default:
-			return "", moerr.NewNotSupported("function %s with non-const arguments", name)
-		}
-	}
-	return fmt.Sprintf("%s(%s)", name, strings.Join(args, ",")), nil
 }
