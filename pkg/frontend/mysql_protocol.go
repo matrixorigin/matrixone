@@ -57,26 +57,29 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 var serverVersion = ""
+var once sync.Once
 
 func InitServerVersion(v string) {
-	if len(v) > 0 {
-		switch v[0] {
-		case 'v': // format 'v1.1.1'
-			v = v[1:]
-			serverVersion = v
-		default:
-			vv := []byte(v)
-			for i := 0; i < len(vv); i++ {
-				if !unicode.IsDigit(rune(vv[i])) && vv[i] != '.' {
-					vv = append(vv[:i], vv[i+1:]...)
-					i--
+	once.Do(func() {
+		if len(v) > 0 {
+			switch v[0] {
+			case 'v': // format 'v1.1.1'
+				v = v[1:]
+				serverVersion = v
+			default:
+				vv := []byte(v)
+				for i := 0; i < len(vv); i++ {
+					if !unicode.IsDigit(rune(vv[i])) && vv[i] != '.' {
+						vv = append(vv[:i], vv[i+1:]...)
+						i--
+					}
 				}
+				serverVersion = string(vv)
 			}
-			serverVersion = string(vv)
+		} else {
+			serverVersion = "0.5.0"
 		}
-	} else {
-		serverVersion = "0.5.0"
-	}
+	})
 }
 
 const (

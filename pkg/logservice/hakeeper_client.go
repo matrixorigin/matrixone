@@ -112,17 +112,17 @@ func newManagedHAKeeperClient(ctx context.Context,
 		return nil, err
 	}
 
-	return &managedHAKeeperClient{
-		client:         c,
+	mc := &managedHAKeeperClient{
 		cfg:            cfg,
 		backendOptions: GetBackendOptions(ctx),
 		clientOptions:  GetClientOptions(ctx),
-	}, nil
+	}
+	mc.mu.client = c
+	return mc, nil
 }
 
 type managedHAKeeperClient struct {
-	cfg    HAKeeperClientConfig
-	client *hakeeperClient
+	cfg HAKeeperClientConfig
 
 	// Method `prepareClient` may update moprc.Client.
 	// So we need to keep options for morpc.Client.
@@ -133,14 +133,17 @@ type managedHAKeeperClient struct {
 		sync.RWMutex
 		nextID uint64
 		lastID uint64
+		client *hakeeperClient
 	}
 }
 
 func (c *managedHAKeeperClient) Close() error {
-	if c.client == nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.client == nil {
 		return nil
 	}
-	return c.client.close()
+	return c.mu.client.close()
 }
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -148,7 +151,7 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.ClusterDetails{}, err
 		}
-		cd, err := c.client.getClusterDetails(ctx)
+		cd, err := c.getClient().getClusterDetails(ctx)
 		if err != nil {
 			c.resetClient()
 		}
@@ -164,7 +167,7 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CheckerState{}, err
 		}
-		s, err := c.client.getClusterState(ctx)
+		s, err := c.getClient().getClusterState(ctx)
 		if err != nil {
 			c.resetClient()
 		}
@@ -188,7 +191,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
+		firstID, err := c.getClient().sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
 		if err != nil {
 			c.resetClient()
 		}
@@ -209,7 +212,7 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		result, err := c.client.sendCNHeartbeat(ctx, hb)
+		result, err := c.getClient().sendCNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -226,7 +229,7 @@ func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.client.sendDNHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendDNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -243,7 +246,7 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.client.sendLogHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendLogHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -259,9 +262,11 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 }
 
 func (c *managedHAKeeperClient) resetClient() {
-	if c.client != nil {
-		cc := c.client
-		c.client = nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.client != nil {
+		cc := c.mu.client
+		c.mu.client = nil
 		if err := cc.close(); err != nil {
 			logutil.Error("failed to close client", zap.Error(err))
 		}
@@ -269,7 +274,10 @@ func (c *managedHAKeeperClient) resetClient() {
 }
 
 func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
-	if c.client != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.mu.client != nil {
 		return nil
 	}
 
@@ -281,7 +289,7 @@ func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.client = cc
+	c.mu.client = cc
 	return nil
 }
 
@@ -504,4 +512,10 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 		return pb.Response{}, err
 	}
 	return resp, nil
+}
+
+func (c *managedHAKeeperClient) getClient() *hakeeperClient {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.client
 }
