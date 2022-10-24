@@ -449,6 +449,12 @@ func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_COLLATION
+	sql := "select 'utf8mb4_bin' as `Collation`, 'utf8mb4' as `Charset`, 46 as `Id`, 'Yes' as `Compiled`, 1 as `Sortlen`"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_PROCESSLIST
 	sql := "select '' as `Id`, '' as `User`, '' as `Host`, '' as `db` , '' as `Command`, '' as `Time` , '' as `State`, '' as `Info` where 0"
