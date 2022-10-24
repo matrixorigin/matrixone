@@ -1252,6 +1252,12 @@ func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	return tcc.txnHandler
 }
 
+func (tcc *TxnCompilerContext) GetUserName() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.GetUserName()
+}
+
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
