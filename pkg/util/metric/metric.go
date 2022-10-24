@@ -285,9 +285,9 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 }
 
 type SubSystem struct {
-	Name                 string
-	Comment              string
-	SupportAccountAccess bool
+	Name              string
+	Comment           string
+	SupportUserAccess bool
 }
 
 var SubSystemSql = &SubSystem{"sql", "base on query action", true}
@@ -362,8 +362,8 @@ var SingleMetricTable = &export.Table{
 	Comment:          `metric data`,
 	PathBuilder:      export.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
-	// SupportAccountAccess
-	SupportAccountAccess: true,
+	// SupportUserAccess
+	SupportUserAccess: true,
 }
 
 func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
@@ -393,7 +393,7 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 	if subSystem == nil {
 		panic(moerr.NewNotSupported("metric unknown SubSystem: %s", tbl))
 	}
-	options = append(options, export.SupportAccountAccess(subSystem.SupportAccountAccess))
+	options = append(options, export.SupportUserAccess(subSystem.SupportUserAccess))
 	// construct columns
 	for _, label := range lbls {
 		for _, col := range SingleMetricTable.Columns {
@@ -442,7 +442,7 @@ func GetSchemaForAccount(account string) []string {
 	for desc := range descChan {
 		view := getView(desc)
 
-		if view.SupportAccountAccess && view.OriginTable.SupportAccountAccess {
+		if view.SupportUserAccess && view.OriginTable.SupportUserAccess {
 			sqls = append(sqls, view.ToCreateSql(true))
 		}
 	}

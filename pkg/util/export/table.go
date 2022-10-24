@@ -82,8 +82,8 @@ type Table struct {
 	AccountColumn *Column
 	// TableOptions default is nil, see GetTableOptions
 	TableOptions TableOptions
-	// SupportAccountAccess default false
-	SupportAccountAccess bool
+	// SupportUserAccess default false. if true, user account can access.
+	SupportUserAccess bool
 }
 
 func (tbl *Table) Clone() *Table {
@@ -180,8 +180,8 @@ type View struct {
 	OriginTable *Table
 	Columns     []Column
 	Condition   WhereCondition
-	// SupportAccountAccess default false
-	SupportAccountAccess bool
+	// SupportUserAccess default false. if true, user account can access.
+	SupportUserAccess bool
 }
 
 func WithColumn(c Column) ViewOption {
@@ -190,9 +190,9 @@ func WithColumn(c Column) ViewOption {
 	})
 }
 
-func SupportAccountAccess(support bool) ViewOption {
+func SupportUserAccess(support bool) ViewOption {
 	return ViewOption(func(v *View) {
-		v.SupportAccountAccess = support
+		v.SupportUserAccess = support
 	})
 }
 

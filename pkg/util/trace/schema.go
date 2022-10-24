@@ -99,8 +99,8 @@ var (
 		Comment:          "record each statement and stats info",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,
-		// SupportAccountAccess
-		SupportAccountAccess: true,
+		// SupportUserAccess
+		SupportUserAccess: true,
 	}
 
 	rawItemCol      = export.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
@@ -150,8 +150,8 @@ var (
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
-		// SupportAccountAccess
-		SupportAccountAccess: false,
+		// SupportUserAccess
+		SupportUserAccess: false,
 	}
 
 	logView = &export.View{
@@ -315,14 +315,14 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 func GetSchemaForAccount(account string) []string {
 	var sqls = make([]string, 0, 1)
 	for _, tbl := range tables {
-		if tbl.SupportAccountAccess {
+		if tbl.SupportUserAccess {
 			t := tbl.Clone()
 			t.Account = account
 			sqls = append(sqls, t.ToCreateSql(true))
 		}
 	}
 	for _, v := range views {
-		if v.OriginTable.SupportAccountAccess {
+		if v.OriginTable.SupportUserAccess {
 			sqls = append(sqls, v.ToCreateSql(true))
 		}
 
