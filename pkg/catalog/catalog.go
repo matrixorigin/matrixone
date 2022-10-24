@@ -129,6 +129,7 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 	for i, row := range rows {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
+		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)

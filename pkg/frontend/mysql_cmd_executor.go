@@ -2368,7 +2368,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
-			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation,
 			*tree.ExplainFor, *tree.ExplainStmt:
 			columns, err2 = cw.GetColumns()
 			if err2 != nil {

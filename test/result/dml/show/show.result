@@ -166,3 +166,19 @@ Variable_name    Value
 select * from t1;
 a    b
 1    1
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation where 'Charset'='utf8mb4';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show variables like 'sql_safe_updates';
+Variable_name    Value
+sql_safe_updates    0
+set sql_safe_updates=1;
+show variables like 'sql_safe_updates';
+Variable_name    Value
+sql_safe_updates    1
