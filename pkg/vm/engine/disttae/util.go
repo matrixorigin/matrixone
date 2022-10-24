@@ -132,27 +132,39 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
+func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
 	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
+	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	rows, err := obs[0].GetRows()
+	if err != nil {
+		return nil, 0, err
 	}
 
-	for i, data := range idxList {
+	for i, idx := range idxs {
+		column, err := obs[0].GetColumn(idx)
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		if err != nil {
+			return nil, 0, err
+		}
 		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, nil
+	return zonemapList, rows, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {

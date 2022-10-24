@@ -90,5 +90,5 @@ MatrixOne 现在支持通过以下几种数据库客户端工具的方式连接 
     - serverTimezone: "Asia/Shanghai"
     - socketTimeout: 30000
     ```
-    
+
 5. 鼠标右左侧数据库导航目录中的 **MatrixOne**，选择**连接**，图标点亮，连接成功。
