@@ -227,13 +227,13 @@ func TestGetSchemaForAccount(t *testing.T) {
 			found := false
 			for _, sche := range schemas {
 				t.Logf("schma: %s", sche)
-				if strings.Index(sche, tt.wantPath) >= 0 {
+				if strings.Contains(sche, tt.wantPath) {
 					found = true
 				}
 			}
 			require.Equal(t, true, found)
 			found = false
-			if strings.Index(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") >= 0 {
+			if strings.Contains(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") {
 				found = true
 			}
 			require.Equal(t, true, found)

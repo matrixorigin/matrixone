@@ -256,7 +256,6 @@ func getView(desc *prom.Desc) *export.View {
 type descExtra struct {
 	orig   *prom.Desc
 	fqName string
-	subSys SubSystem
 	labels []*dto.LabelPair
 }
 
@@ -291,12 +290,12 @@ type SubSystem struct {
 	SupportAccountAccess bool
 }
 
-var SubSystemSql = SubSystem{"sql", "base on query action", true}
-var SubSystemServer = SubSystem{"server", "MO Server status, observe from inside", true}
-var SubSystemProcess = SubSystem{"process", "MO process status", false}
-var SubSystemSys = SubSystem{"sys", "OS status", false}
+var SubSystemSql = &SubSystem{"sql", "base on query action", true}
+var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
+var SubSystemProcess = &SubSystem{"process", "MO process status", false}
+var SubSystemSys = &SubSystem{"sys", "OS status", false}
 
-var allSubSystem = map[string]SubSystem{
+var allSubSystem = map[string]*SubSystem{
 	SubSystemSql.Name:     SubSystemSql,
 	SubSystemServer.Name:  SubSystemServer,
 	SubSystemProcess.Name: SubSystemProcess,
@@ -387,7 +386,7 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 	var subSystem *SubSystem = nil
 	for _, ss := range allSubSystem {
 		if strings.Index(tbl, ss.Name) == 0 {
-			subSystem = &ss
+			subSystem = ss
 			break
 		}
 	}
