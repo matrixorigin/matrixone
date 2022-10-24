@@ -224,3 +224,4 @@ drop table t1;
 create table t1 (a float(10,5) primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
+select cast(1.1 as float(255, 3));
