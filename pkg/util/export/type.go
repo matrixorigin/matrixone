@@ -232,7 +232,7 @@ func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time
 func (b *AccountDatePathBuilder) BuildETLPath(db string, name string) string {
 	etlDirectory := b.Build(ETLParamAccountAll, ETLParamTypeAll, ETLParamTSAll, db, name)
 	etlFilename := "*" + CsvExtension
-	return path.Join(etlDirectory, etlFilename)
+	return path.Join("/", etlDirectory, etlFilename)
 }
 
 func (b *AccountDatePathBuilder) ParsePath(path string) (CSVPath, error) {

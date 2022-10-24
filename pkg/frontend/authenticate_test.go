@@ -5621,6 +5621,10 @@ func Test_doDropUser(t *testing.T) {
 				{i, "111", "public"},
 			})
 			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5633,6 +5637,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user succ (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5672,6 +5677,9 @@ func Test_doDropUser(t *testing.T) {
 			}
 
 			bh.sql2result[sql] = mrs
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5684,6 +5692,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5722,6 +5731,10 @@ func Test_doDropUser(t *testing.T) {
 				})
 			}
 
+			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
 
@@ -6080,6 +6093,27 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
+
+func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("user_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("role_id")
+	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
 
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}

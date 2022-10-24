@@ -1,12 +1,10 @@
 # 导入数据
 
-# MySQL 客户端启动 MatrixOne 时导入数据
-
-本篇文档将指导你在 MySQL 客户端启动 MatrixOne 时如何完成数据导入。
+本篇文档将指导你在 **MySQL 客户端启动 MatrixOne 时如何完成数据导入**。
 
 ## 开始前准备
 
-- 已通过[源代码](../../Get-Started/install-standalone-matrixone/#1)或[二进制包](../../Get-Started/install-standalone-matrixone/#2)完成安装 MatrixOne
+- 已通过[源代码](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/#1)或[二进制包](https://docs.matrixorigin.io/cn/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/#2)完成安装 MatrixOne
 - 已完成[连接 MatrixOne 服务](../../Get-Started/connect-to-matrixone-server.md)
 
 如果你使用 Docker 安装启动 MatrixOne，确保你已将数据文件目录挂载到容器目录下，示例如下：
@@ -25,10 +23,6 @@ docker run -d -p 6001:6001 -v ~/tmp/docker_loaddata_demo:/ssb-dbgen-path:rw --na
 mysql> source file_name
 mysql> \. file_name
 ```
-
-Usually `source` is used to execute many SQL statements, you can write your database&table creation, insert data in one SQL file and execute this file with `source` in MySQL Client. Each statement is a separate line, the lines starting with `--` or wrapped with `/*`  are considered as comments and will be ignored.
-
-If your SQL is from `mysqldump`, please refer to this [tutorial](../../Migrate/migrate-from-mysql-to-matrixone.md) about how to modify the SQL file to adapt to MatrixOne format.
 
 通常 `source` 命令可以被用来执行很多 SQL 语句，你可以在你的数据库写入或创建表，插入数据到一个 SQL 文件中，并在 MySQL 客户端中使用 `source` 命令执行这个文件。每个 SQL 语句都是单独的一行，以 `--` 开头或是以 `/*` 换行的语句皆为注释，在执行 SQL 的过程中将被忽略。
 
@@ -61,8 +55,6 @@ If your SQL is from `mysqldump`, please refer to this [tutorial](../../Migrate/m
         如果你使用 Docker 启动 MatrixOne，需要先将这个数据文件路径挂载到容器的目录中。
 
 ### 示例：使用 *docker* 执行 `Load data`
-
-We will walk through the whole process of loading data with MatrixOne 0.5.1 docker version.
 
 本示例将介绍如何使用 Docker 启动 MatrixOne 0.5.1 加载数据。
 

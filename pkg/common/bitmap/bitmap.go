@@ -243,7 +243,7 @@ func (n *Bitmap) IsSame(m *Bitmap) bool {
 
 func (n *Bitmap) Or(m *Bitmap) {
 	n.TryExpand(m)
-	for i := 0; i < len(n.data); i++ {
+	for i := 0; i < len(m.data); i++ {
 		n.data[i] |= m.data[i]
 	}
 }

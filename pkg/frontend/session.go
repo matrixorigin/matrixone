@@ -1155,6 +1155,7 @@ func (th *TxnHandler) CommitTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Commit(ctx, txnOp); err != nil {
+		txnOp.Rollback(ctx)
 		th.SetInvalid()
 		return err
 	}
@@ -1249,6 +1250,12 @@ func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.txnHandler
+}
+
+func (tcc *TxnCompilerContext) GetUserName() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.GetUserName()
 }
 
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
@@ -1359,12 +1366,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
+					AutoIncr:  attr.Attr.AutoIncrement,
+					Table:     tableName,
 				},
-				Primary:       attr.Attr.Primary,
-				Default:       attr.Attr.Default,
-				OnUpdate:      attr.Attr.OnUpdate,
-				Comment:       attr.Attr.Comment,
-				AutoIncrement: attr.Attr.AutoIncrement,
+				Primary:  attr.Attr.Primary,
+				Default:  attr.Attr.Default,
+				OnUpdate: attr.Attr.OnUpdate,
+				Comment:  attr.Attr.Comment,
 			}
 			if isCPkey {
 				col.IsCPkey = isCPkey
