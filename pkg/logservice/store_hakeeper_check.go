@@ -21,6 +21,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -139,11 +140,8 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperRunning:
 		if state.TaskState == pb.TaskInitNotStart {
 			if err := l.setTaskTableUser(pb.TaskTableUser{
-				// TODO: delete
-				// Username: uuid.NewString(),
-				// Password: uuid.NewString(),
-				Username: "root",
-				Password: "root",
+				Username: uuid.NewString(),
+				Password: uuid.NewString(),
 			}); err != nil {
 				l.logger.Error("failed to set task table user", zap.Error(err))
 				return

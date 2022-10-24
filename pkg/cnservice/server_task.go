@@ -157,12 +157,14 @@ func (s *service) registerExecutors() {
 	}
 
 	for code, exec := range executors {
-		s.task.runner.RegisterExecutor(uint32(code),
-			func(ctx context.Context, task task.Task) error {
-				if err := exec(moServerCtx, ieFactory); err != nil {
+		fn := func(handler func(context.Context, func() ie.InternalExecutor) error) taskservice.TaskExecutor {
+			return func(ctx context.Context, task task.Task) error {
+				if err := handler(moServerCtx, ieFactory); err != nil {
 					panic(err)
 				}
 				return nil
-			})
+			}
+		}
+		s.task.runner.RegisterExecutor(uint32(code), fn(exec))
 	}
 }
