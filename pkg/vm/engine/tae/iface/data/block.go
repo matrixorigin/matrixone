@@ -16,6 +16,8 @@ package data
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,7 +36,7 @@ import (
 type CheckpointUnit interface {
 	MutationInfo() string
 	RunCalibration() int
-	EstimateScore(int64) int
+	EstimateScore(time.Duration) int
 	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
 
