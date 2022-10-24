@@ -26,14 +26,14 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	IsHideKey          bool
-	TableName          string
-	DbName             string
-	TableSource        engine.Relation
-	UseDeleteKey       string
-	CanTruncate        bool
-	ColIndex           int32
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan2.ComputeIndexInfo
-	IndexAttrs         []string
+	IsHideKey    bool
+	TableName    string
+	DbName       string
+	TableSource  engine.Relation
+	UseDeleteKey string
+	CanTruncate  bool
+	ColIndex     int32
+	IndexTables  []engine.Relation
+	IndexInfos   []*plan2.IndexInfo
+	IndexAttrs   []string
 }

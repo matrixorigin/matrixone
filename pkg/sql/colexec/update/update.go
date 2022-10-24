@@ -79,15 +79,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		// in update, we can get a batch[b(update), b(old)]
 		// we should use old b as delete info
-		for i, info := range updateCtx.ComputeIndexInfos {
-			rel := updateCtx.ComputeIndexTables[i]
+		for i, info := range updateCtx.IndexInfos {
+			rel := updateCtx.IndexTables[i]
 			var attrs []string = nil
 			attrs = append(attrs, updateCtx.UpdateAttrs...)
 			attrs = append(attrs, updateCtx.OtherAttrs...)
 			attrs = append(attrs, updateCtx.IndexAttrs...)
 			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
 			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.Attrs[0])
+				err := rel.Delete(ctx, oldBatch, info.ColNames[0])
 				if err != nil {
 					return false, err
 				}
@@ -144,8 +144,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 		}
 		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
-		for i, info := range updateCtx.ComputeIndexInfos {
-			rel := updateCtx.ComputeIndexTables[i]
+		for i, info := range updateCtx.IndexInfos {
+			rel := updateCtx.IndexTables[i]
 			b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
 			if rowNum != 0 {
 				err = rel.Write(ctx, b)
