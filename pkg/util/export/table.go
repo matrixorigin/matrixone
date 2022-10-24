@@ -69,6 +69,7 @@ var NormalTableEngine = "TABLE"
 var ExternalTableEngine = "EXTERNAL"
 
 type Table struct {
+	Account          string
 	Database         string
 	Table            string
 	Columns          []Column
@@ -81,6 +82,14 @@ type Table struct {
 	AccountColumn *Column
 	// TableOptions default is nil, see GetTableOptions
 	TableOptions TableOptions
+	// SupportAccountAccess default false
+	SupportAccountAccess bool
+}
+
+func (tbl *Table) Clone() *Table {
+	t := &Table{}
+	*t = *tbl
+	return t
 }
 
 func (tbl *Table) GetName() string {
@@ -152,7 +161,7 @@ func (tbl *Table) GetTableOptions() TableOptions {
 	if tbl.TableOptions != nil {
 		return tbl.TableOptions
 	}
-	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table)
+	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table, tbl.Account)
 }
 
 type ViewOption func(view *View)
@@ -301,6 +310,7 @@ type CsvTableOptions struct {
 	Formatter string
 	DbName    string
 	TblName   string
+	Account   string
 }
 
 func getExternalTableDDLPrefix(sql string) string {
@@ -320,20 +330,20 @@ func (o *CsvTableOptions) GetTableOptions(builder PathBuilder) string {
 		builder = NewDBTablePathBuilder()
 	}
 	if len(o.Formatter) > 0 {
-		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName))
+		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.Account, o.DbName, o.TblName))
 	}
 	return ""
 }
 
-func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+func GetOptionFactory(engine string) func(db, tbl, account string) TableOptions {
 	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
 		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 	switch engine {
 	case NormalTableEngine:
-		return func(_, _ string) TableOptions { return NoopTableOptions{} }
+		return func(_, _, _ string) TableOptions { return NoopTableOptions{} }
 	case ExternalTableEngine:
-		return func(db, tbl string) TableOptions {
-			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
+		return func(db, tbl, account string) TableOptions {
+			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl, Account: account}
 		}
 	default:
 		panic(moerr.NewInternalError("unknown engine: %s", engine))
