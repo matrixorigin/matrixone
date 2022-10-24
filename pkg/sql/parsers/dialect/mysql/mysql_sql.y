@@ -3610,6 +3610,17 @@ table_function:
             },
 	}
     }
+|   GENERATE_SERIES '(' expression_list ')'
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+	$$ = &tree.TableFunction{
+	    Func: &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: $3,
+		Type: tree.FUNC_TYPE_TABLE,
+	    },
+	}
+    }
 
 as_opt:
     {}
