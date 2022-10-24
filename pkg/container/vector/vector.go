@@ -658,13 +658,7 @@ func (v *Vector) Free(m *mpool.MPool) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
-	if v.Typ.IsTuple() || v.IsScalar() {
-		v.data = nil
-		v.Col = nil
-		v.area = nil
-		v.Nsp = nil
-		return
-	}
+
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
 	if v.data != nil {
