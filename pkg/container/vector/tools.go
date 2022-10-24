@@ -27,6 +27,21 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// CheckInsertVector  vector.data will not be nil when insert rows
+func CheckInsertVector(v *Vector, m *mpool.MPool) *Vector {
+	if v.data == nil && v.Typ.Oid != types.T_any && v.Length() > 0 {
+		newVec := New(v.Typ)
+		newVec.isConst = v.isConst
+		val := GetInitConstVal(v.Typ)
+		for i := 0; i < v.Length(); i++ {
+			newVec.Append(val, true, m)
+		}
+		newVec.length = v.length
+		return newVec
+	}
+	return v
+}
+
 func MustTCols[T types.FixedSizeT](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.

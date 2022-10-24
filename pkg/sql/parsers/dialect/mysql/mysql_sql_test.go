@@ -71,6 +71,8 @@ var (
 	}, {
 		input: "show events from db1",
 	}, {
+		input: "show collation",
+	}, {
 		input: "show plugins",
 	}, {
 		input: "show procedure status",
