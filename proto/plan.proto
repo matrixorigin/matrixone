@@ -26,10 +26,12 @@ option (gogoproto.protosizer_all) = true;
 message Type {
 	int32 id           = 1;
 	bool nullable		= 2;
-	int32 width			= 3;
-	int32 precision		= 4;
-	int32 size 			= 5;
-	int32 scale 		= 6;
+	bool auto_incr      = 3;
+	int32 width			= 4;
+	int32 precision		= 5;
+	int32 size 			= 6;
+	int32 scale 		= 7;
+	string table 		= 8;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -194,7 +196,6 @@ message ColDef {
 	Type typ			= 3;
 	Default default 	= 4;
 	bool primary        = 5;
-	bool auto_increment = 6;
 	int32 pkidx 		= 7;
 	string comment		= 8;
 	bool is_cPkey = 9;
