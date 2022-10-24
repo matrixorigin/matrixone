@@ -570,7 +570,7 @@ const ParamSeparator = " "
 // MergeTaskMetadata
 //
 // args like: "{db_tbl_name} [date, default: today]"
-var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
+var MergeTaskMetadata = func(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       path.Join("ETL_merge_task", path.Join(args...)),
 		Executor: uint32(id),
@@ -578,7 +578,7 @@ var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
 	}
 }
 
-func InitCronTask(ctx context.Context, executorID int, taskService taskservice.TaskService) error {
+func InitCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
 	var err error
 	// should init once in with schema-init.
 	tables := GetAllTable()
