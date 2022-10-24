@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -445,6 +446,7 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		}
 		return ifNeed
 	}
+	sort.Ints(columns)
 
 	// get min max data from Meta
 	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
@@ -453,10 +455,19 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	}
 
 	// use all min/max data to build []vectors.
+	maxCol := columns[len(columns)-1] + 1
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
-	bat := batch.NewWithSize(len(columns))
-	bat.Zs = make([]int64, buildVectors[0].Length())
-	bat.Vecs = buildVectors
+	bat := batch.NewWithSize(maxCol)
+	cols := columns
+	j := int32(0)
+	for i := 0; i < maxCol; i++ {
+		if i == cols[0] {
+			bat.SetVector(j, buildVectors[j])
+			j++
+			cols = cols[1:]
+		}
+	}
+	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
 	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
