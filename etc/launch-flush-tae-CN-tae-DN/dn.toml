@@ -30,3 +30,11 @@ uuid = "42"
 
 [dn.Txn.Storage]
 backend = "TAE"
+
+[dn.Ckp]
+scanner-interval = "2s"
+execution-levels = 2
+execution-interval = "3s"
+catalog-ckp-interval = "3s"
+catalog-unckp-limit = 2
+flush-interval = "6s"
