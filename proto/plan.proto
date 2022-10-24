@@ -648,6 +648,7 @@ message DataDefinition {
 		SHOW_PROCESSLIST	= 23;
 		SHOW_TABLE_STATUS 	= 24;
 		SHOW_TARGET 		= 25;
+		SHOW_COLLATION 		= 26;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
