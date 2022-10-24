@@ -6,7 +6,7 @@ In Java, we can connect to MatrixOne with JDBC(Java Database Connectivity) throu
 
 Prerequisite to understand Java Database Connectivity with MatrixOne, make sure you have installed these items as below:
 
-1. Make sure you have already [installed and launched MatrixOne](../../Get-Started/install-standalone-matrixone.md).
+1. Make sure you have already [installed and launched MatrixOne](../../../Get-Started/install-standalone-matrixone.md).
 2. Make sure you have already installed [JDK 8+ version](https://www.oracle.com/sg/java/technologies/javase/javase8-archive-downloads.html).
 3. To set up the connectivity user should have MySQL Download and install [JDBC Connector](https://dev.mysql.com/downloads/connector/j/) to the Java (JAR file), the ‘JAR’ file must be in classpath while compiling and running the code of JDBC.
 
@@ -32,6 +32,7 @@ Prerequisite to understand Java Database Connectivity with MatrixOne, make sure 
     ```
 
 2. Add the downloaded connector into NetBeans. Select **Services > Databases > Drivers**, right click **MySQL(Connector/J driver)** and choose **Customize** in the Services sheet, click **Add**. add the *mysql-connector-java-8.0.31.jar*, enter *com.mysql.cj.jdbc.Driver* into Drive Class.
+
 
 3. Right click **MySQL(Connector/J driver)** and choose **Connect Using** to configure as following:
 
