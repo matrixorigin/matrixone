@@ -1192,8 +1192,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		if e != nil {
 			return nil, err
 		}
+		c.isTemporaryScan = true
 	}
-
+	if c.isTemporaryScan {
+		c.isTemporaryScan = false
+		for i := 0; i < len(c.cnList); i++ {
+			c.cnList[i].Addr = ""
+		}
+	}
 	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
 	if err != nil {
 		return nil, err
