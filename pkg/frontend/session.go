@@ -215,7 +215,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:       pu.StorageEngine,
+		storage:       &engine.EntireEngine{Engine: pu.StorageEngine},
 		gSysVars:      gSysVars,
 
 		serverStatus: 0,
@@ -771,14 +771,27 @@ func (ses *Session) GetSql() string {
 func (ses *Session) IsTaeEngine() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	_, ok := ses.storage.(moengine.TxnEngine)
-	return ok
+	e, isEntire := ses.storage.(*engine.EntireEngine)
+	if isEntire {
+		_, ok := e.Engine.(moengine.TxnEngine)
+		return ok
+	} else {
+		_, ok := ses.storage.(moengine.TxnEngine)
+		return ok
+	}
 }
 
 func (ses *Session) GetStorage() engine.Engine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.storage
+}
+
+func (ses *Session) SetTempEngine(te engine.Engine) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ee := ses.storage.(*engine.EntireEngine)
+	ee.TempEngine = te
 }
 
 func (ses *Session) GetDatabaseName() string {
@@ -1630,9 +1643,29 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		return nil, err
+		tmpTable, e := tcc.getTmpRelation(ctx, tableName)
+		if e != nil {
+			logutil.Errorf("get table %v error %v", tableName, err)
+			return nil, err
+		} else {
+			table = tmpTable
+		}
 	}
 	return table, nil
+}
+
+func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+	e := tcc.ses.storage.(*engine.EntireEngine).TempEngine
+	if e == nil {
+		return nil, errors.New("temporary engine not init yet")
+	}
+	db, err := e.Database(ctx, "temp-db", tcc.txnHandler.GetTxn())
+	if err != nil {
+		logutil.Errorf("get temp database error %v", err)
+		return nil, err
+	}
+	table, err := db.Relation(ctx, tableName)
+	return table, err
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {

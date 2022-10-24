@@ -110,15 +110,29 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 }
 
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
+
+	var err error
+	var dbSource engine.Database
+	var relation engine.Relation
+	var IsTemporary bool
 	p := s.Plan.GetIns()
 
-	dbSource, err := c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(c.ctx, p.TblName)
+	relation, err = dbSource.Relation(c.ctx, p.TblName)
 	if err != nil {
-		return 0, err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		if e != nil {
+			return 0, e
+		}
+		relation, e = dbSource.Relation(c.ctx, p.TblName)
+		if e != nil {
+			return 0, err
+		}
+		IsTemporary = true
 	}
 
 	bat := makeInsertBatch(p)
@@ -150,9 +164,17 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
-		return 0, err
+	if IsTemporary {
+		e := c.e.(*engine.EntireEngine).TempEngine
+		if err = colexec.UpdateInsertValueBatch(e, c.ctx, c.proc, p, bat, "temp-db", p.DbName+"-"+p.TblName); err != nil {
+			return 0, err
+		}
+	} else {
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+			return 0, err
+		}
 	}
+
 	if p.CompositePkey != nil {
 		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
 		if err != nil {

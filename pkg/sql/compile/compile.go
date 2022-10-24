@@ -44,15 +44,48 @@ import (
 // New is used to new an object of compile
 func New(addr, db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	return &Compile{
-		e:    e,
-		db:   db,
-		ctx:  ctx,
-		uid:  uid,
-		sql:  sql,
-		proc: proc,
-		stmt: stmt,
+	ee, ok := e.(*engine.EntireEngine)
+	if !ok {
+		return &Compile{
+			e:    e,
+			db:   db,
+			ctx:  ctx,
+			uid:  uid,
+			sql:  sql,
+			proc: proc,
+			stmt: stmt,
+		}
+	} else {
+		return &Compile{
+			e:    ee,
+			db:   db,
+			ctx:  ctx,
+			uid:  uid,
+			sql:  sql,
+			proc: proc,
+			stmt: stmt,
+		}
 	}
+}
+
+// helper function to judge if init temporary engine is needed
+func (c *Compile) NeedInitTempEngine() bool {
+	ddl := c.scope.Plan.GetDdl()
+	if ddl != nil {
+		qry := ddl.GetCreateTable()
+		if qry != nil && qry.Temporary {
+			e := c.e.(*engine.EntireEngine).TempEngine
+			if e == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Compile) SetTempEngine(te engine.Engine) {
+	e := c.e.(*engine.EntireEngine)
+	e.TempEngine = te
 }
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
@@ -107,7 +140,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 	case DropDatabase:
 		return c.scope.DropDatabase(c)
 	case CreateTable:
-		return c.scope.CreateTable(c)
+		qry := c.scope.Plan.GetDdl().GetCreateTable()
+		if qry.Temporary {
+			return c.scope.CreateTempTable(c)
+		} else {
+			return c.scope.CreateTable(c)
+		}
 	case DropTable:
 		return c.scope.DropTable(c)
 	case TruncateTable:
@@ -1239,17 +1277,28 @@ func (c *Compile) fillAnalyzeInfo() {
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var err error
+	var db engine.Database
+	var rel engine.Relation
 	var ranges [][]byte
 	var nodes engine.Nodes
 
-	db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	db, err = c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(c.ctx, n.TableDef.Name)
+	rel, err = db.Relation(c.ctx, n.TableDef.Name)
 	if err != nil {
-		return nil, err
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		if e != nil {
+			return nil, e
+		}
+		rel, e = db.Relation(c.ctx, n.TableDef.Name)
+		if e != nil {
+			return nil, err
+		}
 	}
+
 	ranges, err = rel.Ranges(c.ctx, colexec.RewriteFilterExprList(n.FilterList))
 	if err != nil {
 		return nil, err

@@ -157,14 +157,24 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 	} else {
 		var err error
+		var db engine.Database
+		var rel engine.Relation
 
-		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		db, err = c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(c.ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(c.ctx, s.DataSource.RelationName)
 		if err != nil {
-			return err
+			var e error // avoid contamination of error messages
+			db, e = c.e.Database(c.ctx, "temp-db", s.Proc.TxnOperator)
+			if e != nil {
+				return e
+			}
+			rel, e = db.Relation(c.ctx, s.DataSource.RelationName)
+			if e != nil {
+				return err
+			}
 		}
 		if rds, err = rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err

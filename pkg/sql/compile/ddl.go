@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -109,6 +110,59 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+}
+
+func (s *Scope) CreateTempTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateTable()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	planDefs := qry.GetTableDef().GetDefs()
+	exeDefs, err := planDefsToExeDefs(planDefs)
+	if err != nil {
+		return err
+	}
+
+	// Temporary table names and persistent table names are not allowed to be duplicated
+	// So before create temporary table, need to check if it exists a table has same name
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+
+	// check in EntireEngine.TempEngine
+	tmpDBSource, err := c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err := tmpDBSource.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(fmt.Sprintf("temporary '%s'", tblName))
+	}
+
+	// check in EntireEngine.Engine
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	if _, err := dbSource.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return moerr.NewTableAlreadyExists(tblName)
+	}
+
+	// create temporary table
+	if err := tmpDBSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.

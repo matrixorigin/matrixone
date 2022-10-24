@@ -35,8 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -53,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -2291,6 +2296,76 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	// check if it is necessary to initialize the temporary engine
+	if cwft.compile.NeedInitTempEngine() {
+		// 0. init memory-non-dist engine
+		ck := clock.DefaultClock()
+		if ck == nil {
+			ck = clock.NewHLCClock(func() int64 {
+				return time.Now().Unix()
+			}, math.MaxInt)
+		}
+		shard := logservicepb.DNShardInfo{
+			ShardID:   2,
+			ReplicaID: 2,
+		}
+		shards := []logservicepb.DNShardInfo{
+			shard,
+		}
+		dnAddr := "1"
+		dnStore := logservicepb.DNStore{
+			UUID:           uuid.NewString(),
+			ServiceAddress: dnAddr,
+			Shards:         shards,
+		}
+		ms, err := memorystorage.NewMemoryStorage(
+			mpool.MustNewZero(),
+			memorystorage.SnapshotIsolation,
+			ck,
+			memoryengine.RandomIDGenerator,
+		)
+		if err != nil {
+			panic(err)
+		}
+		mc := memorystorage.NewStorageTxnClient(
+			ck,
+			map[string]*memorystorage.Storage{
+				dnAddr: ms,
+			},
+		)
+		me := memoryengine.New(
+			requestCtx,
+			memoryengine.NewDefaultShardPolicy(
+				mpool.MustNewZero(),
+			),
+			func() (logservicepb.ClusterDetails, error) {
+				return logservicepb.ClusterDetails{
+					DNStores: []logservicepb.DNStore{
+						dnStore,
+					},
+				}, nil
+			},
+			memoryengine.RandomIDGenerator,
+		)
+		txnOp, err := mc.New()
+		if err != nil {
+			panic(err)
+		}
+
+		// 1. bind the temporary engine to the session
+		cwft.ses.SetTempEngine(me.Bind(txnOp))
+		e := cwft.ses.GetStorage().(*engine.EntireEngine)
+
+		// 2. init temp-db to store temporary relations
+		err = e.TempEngine.Create(requestCtx, "temp-db", txnOp)
+		if err != nil {
+			panic(err)
+		}
+
+		// 3. assign for compile, only for the first time needed
+		cwft.compile.SetTempEngine(e.TempEngine)
+	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
