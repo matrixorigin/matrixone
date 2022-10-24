@@ -93,7 +93,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				nullOrNot = "DEFAULT NULL"
 			}
 		}
-		if col.AutoIncrement {
+		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
 

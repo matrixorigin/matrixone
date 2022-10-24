@@ -84,7 +84,7 @@ type SystemVariableType interface {
 	Type() types.T
 
 	// MysqlType gets the mysql type
-	MysqlType() uint8
+	MysqlType() defines.MysqlType
 
 	// Zero gets the zero value for the type
 	Zero() interface{}
@@ -117,7 +117,7 @@ func (svnt SystemVariableNullType) Type() types.T {
 	return types.T_any
 }
 
-func (svnt SystemVariableNullType) MysqlType() uint8 {
+func (svnt SystemVariableNullType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_NULL
 }
 
@@ -213,7 +213,7 @@ func (svbt SystemVariableBoolType) Type() types.T {
 	return types.T_bool
 }
 
-func (svbt SystemVariableBoolType) MysqlType() uint8 {
+func (svbt SystemVariableBoolType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_BOOL
 }
 
@@ -293,7 +293,7 @@ func (svit SystemVariableIntType) Type() types.T {
 	return types.T_int64
 }
 
-func (svit SystemVariableIntType) MysqlType() uint8 {
+func (svit SystemVariableIntType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_LONGLONG
 }
 
@@ -368,7 +368,7 @@ func (svut SystemVariableUintType) Type() types.T {
 	return types.T_uint64
 }
 
-func (svut SystemVariableUintType) MysqlType() uint8 {
+func (svut SystemVariableUintType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_LONGLONG
 }
 
@@ -428,7 +428,7 @@ func (svdt SystemVariableDoubleType) Type() types.T {
 	return types.T_float64
 }
 
-func (svdt SystemVariableDoubleType) MysqlType() uint8 {
+func (svdt SystemVariableDoubleType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_DOUBLE
 }
 
@@ -521,7 +521,7 @@ func (svet SystemVariableEnumType) Type() types.T {
 	return types.T_varchar
 }
 
-func (svet SystemVariableEnumType) MysqlType() uint8 {
+func (svet SystemVariableEnumType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_VARCHAR
 }
 
@@ -678,7 +678,7 @@ func (svst SystemVariableSetType) Type() types.T {
 	return types.T_any
 }
 
-func (svst SystemVariableSetType) MysqlType() uint8 {
+func (svst SystemVariableSetType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_SET
 }
 
@@ -746,7 +746,7 @@ func (svst SystemVariableStringType) Type() types.T {
 	return types.T_varchar
 }
 
-func (svst SystemVariableStringType) MysqlType() uint8 {
+func (svst SystemVariableStringType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_VARCHAR
 }
 

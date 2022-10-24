@@ -328,14 +328,14 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				return err
 			}
 
+			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:          def.Name.Parts[0],
-				Alg:           plan.CompressType_Lz4,
-				Typ:           colType,
-				Default:       defaultValue,
-				OnUpdate:      onUpdateExpr,
-				Comment:       comment,
-				AutoIncrement: auto_incr,
+				Name:     def.Name.Parts[0],
+				Alg:      plan.CompressType_Lz4,
+				Typ:      colType,
+				Default:  defaultValue,
+				OnUpdate: onUpdateExpr,
+				Comment:  comment,
 			}
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)

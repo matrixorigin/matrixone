@@ -156,6 +156,10 @@ func isPredefinedRole(r string) bool {
 	return n == publicRoleName || n == accountAdminRoleName || n == moAdminRoleName
 }
 
+func isSysTenant(n string) bool {
+	return isCaseInsensitiveEqual(n, sysAccountName)
+}
+
 //GetTenantInfo extract tenant info from the input of the user.
 /**
 The format of the user
@@ -814,6 +818,8 @@ const (
 
 	checkUserGrantFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d;`
 
+	checkUserHasRoleFormat = `select u.user_id,ug.role_id from mo_catalog.mo_user u, mo_catalog.mo_user_grant ug where u.user_id = ug.user_id and u.user_name = "%s" and ug.role_id = %d;`
+
 	//with_grant_option = true
 	checkUserGrantWGOFormat = `select role_id,user_id from mo_catalog.mo_user_grant where with_grant_option = true and role_id = %d and user_id = %d;`
 
@@ -1081,6 +1087,10 @@ func getSqlForRoleIdOfUserId(userId int) string {
 
 func getSqlForCheckUserGrant(roleId, userId int64) string {
 	return fmt.Sprintf(checkUserGrantFormat, roleId, userId)
+}
+
+func getSqlForCheckUserHasRole(userName string, roleId int64) string {
+	return fmt.Sprintf(checkUserHasRoleFormat, userName, roleId)
 }
 
 func getSqlForCheckUserGrantWGO(roleId, userId int64) string {
@@ -1760,6 +1770,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		return err
 	}
 
+	if isSysTenant(da.Name) {
+		return moerr.NewInternalError("can not delete the account %s", da.Name)
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -1834,6 +1848,10 @@ handleFailed:
 func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	var err error
 	var vr *verifiedRole
+	var sql string
+	var sqls []string
+	var erArray []ExecResult
+	account := ses.GetTenantInfo()
 	err = normalizeNamesOfUsers(du.Users)
 	if err != nil {
 		return err
@@ -1851,7 +1869,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	//step1: check users exists or not.
 	//handle "IF EXISTS"
 	for _, user := range du.Users {
-		sql := getSqlForPasswordOfUser(user.Username)
+		sql = getSqlForPasswordOfUser(user.Username)
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
@@ -1868,9 +1886,33 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 			continue
 		}
 
+		//if the user is admin user with the role moadmin or accountadmin,
+		//the user can not be deleted.
+		if account.IsSysTenant() {
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+		} else {
+			sql = getSqlForCheckUserHasRole(user.Username, accountAdminRoleID)
+		}
+
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		erArray, err = getResultSet(bh)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if execResultArrayHasData(erArray) {
+			err = moerr.NewInternalError("can not delete the user %s", user.Username)
+			goto handleFailed
+		}
+
 		//step2 : delete mo_user
 		//step3 : delete mo_user_grant
-		sqls := getSqlForDeleteUser(vr.id)
+		sqls = getSqlForDeleteUser(vr.id)
 		for _, sqlx := range sqls {
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlx)
@@ -1900,6 +1942,7 @@ handleFailed:
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	var err error
 	var vr *verifiedRole
+	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(dr.Roles)
 	if err != nil {
 		return err
@@ -1937,6 +1980,14 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 		if vr == nil {
 			continue
 		}
+
+		//NOTE: if the role is the admin role (moadmin,accountadmin) or public,
+		//the role can not be deleted.
+		if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
+			err = moerr.NewInternalError("can not delete the role %s", vr.name)
+			goto handleFailed
+		}
+
 		sqls := getSqlForDeleteRole(vr.id)
 		for _, sqlx := range sqls {
 			bh.ClearExecResultSet()
