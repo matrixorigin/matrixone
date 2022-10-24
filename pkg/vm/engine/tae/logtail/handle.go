@@ -296,13 +296,13 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 }
 
 func addDBIDVector(bat *containers.Batch) {
-	bat.AddVector("db_id", containers.MakeVector(types.T_uint64.ToType(), false))
+	bat.AddVector(SnapshotAttr_DBID, containers.MakeVector(types.T_uint64.ToType(), false))
 }
 func addTIDVector(bat *containers.Batch) {
-	bat.AddVector("table_id", containers.MakeVector(types.T_uint64.ToType(), false))
+	bat.AddVector(SnapshotAttr_TID, containers.MakeVector(types.T_uint64.ToType(), false))
 }
 func addSegIDVector(bat *containers.Batch) {
-	bat.AddVector("segment_id", containers.MakeVector(types.T_uint64.ToType(), false))
+	bat.AddVector(SnapshotAttr_SegID, containers.MakeVector(types.T_uint64.ToType(), false))
 }
 
 // consume containers.Batch to construct api batch
@@ -689,7 +689,12 @@ func (b *CheckpointLogtailRespBuilder) GetDBBatchs() (*containers.Batch, *contai
 func (b *CheckpointLogtailRespBuilder) GetTblBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
 	return b.tblInsBatch, b.tblInsTxnBatch, b.tblColInsBatch, b.tblDelBatch, b.tblDelTxnBatch
 }
-
+func (b *CheckpointLogtailRespBuilder) GetSegBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
+	return b.segInsBatch, b.segInsTxnBatch, b.segDelBatch, b.segDelTxnBatch
+}
+func (b *CheckpointLogtailRespBuilder) GetBlkBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
+	return b.blkMetaInsBatch, b.blkMetaInsTxnBatch, b.blkMetaDelBatch, b.blkMetaDelTxnBatch
+}
 func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	if entry.IsSystemDB() {
 		return nil
@@ -763,11 +768,15 @@ func (b *CheckpointLogtailRespBuilder) VisitSeg(entry *catalog.SegmentEntry) (er
 		if segNode.HasDropCommitted() {
 			b.segDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
 			b.segDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd())
+			b.segDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID())
+			b.segDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID())
 			segNode.TxnMVCCNode.FillTxnRows(b.segDelTxnBatch)
 		} else {
 			b.segInsBatch.GetVectorByName(SegmentAttr_ID).Append(entry.GetID())
 			b.segInsBatch.GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd())
 			b.segInsBatch.GetVectorByName(SegmentAttr_State).Append(entry.IsAppendable())
+			b.segInsTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID())
+			b.segInsTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID())
 			segNode.TxnMVCCNode.FillTxnRows(b.segInsTxnBatch)
 		}
 	}
@@ -783,8 +792,11 @@ func (b *CheckpointLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) (err 
 		}
 		metaNode := node.(*catalog.MetadataMVCCNode)
 		if metaNode.HasDropCommitted() {
-			b.segDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
-			b.segDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+			b.blkMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
+			b.blkMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+			b.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID())
+			b.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
+			b.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
 			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaDelTxnBatch)
 		} else {
 			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
@@ -794,6 +806,9 @@ func (b *CheckpointLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) (err 
 			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
 			b.blkMetaInsBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
 			b.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
+			b.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID())
+			b.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
+			b.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
 			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaInsTxnBatch)
 		}
 	}

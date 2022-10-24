@@ -3840,8 +3840,9 @@ func TestSnapshotBatch(t *testing.T) {
 	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
 
 	ctlg := catalog.MockCatalog("/tmp/", "lalala", nil, nil)
-	ins, insTxn, del, delTxn := builder.GetDBBatchs()
-	ctlg.OnReplayDatabaseBatch(ins, insTxn, del, delTxn)
+	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
 	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
+	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
+	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
 	t.Log(ctlg.SimplePPString(3))
 }

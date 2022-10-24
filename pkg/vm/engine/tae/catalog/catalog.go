@@ -40,6 +40,14 @@ import (
 // +--------+---------+----------+----------+------------+
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
+const (
+	SnapshotAttr_SegID   = "segment_id"
+	SnapshotAttr_TID     = "table_id"
+	SnapshotAttr_DBID    = "db_id"
+	SegmentAttr_ID       = "id"
+	SegmentAttr_CreateAt = "create_at"
+	SegmentAttr_State    = "state"
+)
 
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
@@ -254,6 +262,7 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 }
 
 func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, start, prepare types.TS, logindex *wal.Index) {
+	catalog.OnReplayDBID(dbid)
 	db := NewReplayDBEntry()
 	db.catalog = catalog
 	db.ID = dbid
@@ -386,6 +395,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 
 }
 func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, createAt, start, prepare types.TS, logIndex *wal.Index) {
+	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		panic(err)
@@ -393,6 +403,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 	tbl := NewReplayTableEntry()
 	tbl.schema = schema
 	tbl.db = db
+	tbl.ID = tid
 	err = db.AddEntryLocked(tbl, nil)
 	if err != nil {
 		panic(err)
@@ -483,8 +494,49 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	}
 }
 
-func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn *containers.Batch)
-
+func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *containers.Batch) {
+	idVec := ins.GetVectorByName(SegmentAttr_ID)
+	for i := 0; i < idVec.Length(); i++ {
+		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
+		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		appendable := ins.GetVectorByName(SegmentAttr_State).Get(i).(bool)
+		state := ES_NotAppendable
+		if appendable {
+			state = ES_Appendable
+		}
+		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(uint64)
+		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
+		catalog.onReplayCreateSegment(dbid, tid, sid, state, start, prepare, create, logIndex)
+	}
+}
+func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, start, prepare, end types.TS, logIndex *wal.Index) {
+	catalog.OnReplaySegmentID(segid)
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		panic(err)
+	}
+	rel, err := db.GetTableEntryByID(tbid)
+	if err != nil {
+		panic(err)
+	}
+	seg := NewReplaySegmentEntry()
+	seg.table = rel
+	seg.ID = segid
+	seg.state = state
+	rel.AddEntryLocked(seg)
+	un := &MetadataMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: end,
+		},
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start:    start,
+			Prepare:  prepare,
+			End:      end,
+			LogIndex: logIndex,
+		},
+	}
+	seg.Insert(un)
+}
 func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	dataFactory DataFactory,
 	idx *wal.Index,
@@ -567,6 +619,57 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 	}
 }
 
+func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch) {
+	for i := 0; i < ins.Length(); i++ {
+		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
+		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		sid := insTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(uint64)
+		appendable := ins.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
+		state := ES_NotAppendable
+		if appendable {
+			state = ES_Appendable
+		}
+		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
+		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		deltaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
+		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, start, prepare, create, logIndex)
+	}
+}
+func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, state EntryState, metaloc, deltaloc string, start, prepare, create types.TS, logIndex *wal.Index) {
+	catalog.OnReplayBlockID(blkid)
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		panic(err)
+	}
+	rel, err := db.GetTableEntryByID(tid)
+	if err != nil {
+		panic(err)
+	}
+	seg, err := rel.GetSegmentByID(segid)
+	if err != nil {
+		panic(err)
+	}
+	blk := NewReplayBlockEntry()
+	blk.segment = seg
+	blk.ID = blkid
+	blk.state = state
+	seg.AddEntryLocked(blk)
+	un := &MetadataMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: create,
+		},
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start:    start,
+			Prepare:  prepare,
+			End:      create,
+			LogIndex: logIndex,
+		},
+		MetaLoc:  metaloc,
+		DeltaLoc: deltaloc,
+	}
+	blk.Insert(un)
+}
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)

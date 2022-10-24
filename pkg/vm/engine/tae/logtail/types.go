@@ -35,9 +35,12 @@ const (
 )
 
 const (
-	SegmentAttr_ID       = "id"
-	SegmentAttr_CreateAt = "create_at"
-	SegmentAttr_State    = "state"
+	SnapshotAttr_SegID   = catalog.SnapshotAttr_SegID
+	SnapshotAttr_TID     = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID    = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID       = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt = catalog.SegmentAttr_CreateAt
+	SegmentAttr_State    = catalog.SegmentAttr_State
 )
 
 var (
