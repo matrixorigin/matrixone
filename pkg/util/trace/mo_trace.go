@@ -173,7 +173,12 @@ func (s *MOSpan) CsvFields(row *export.Row) []string {
 }
 
 func (s *MOSpan) End(options ...SpanEndOption) {
-
+	for _, opt := range options {
+		opt.applySpanEnd(&s.SpanConfig)
+	}
+	if s.EndTime.IsZero() {
+		s.EndTime = time.Now()
+	}
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}
