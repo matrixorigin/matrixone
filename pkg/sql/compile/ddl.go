@@ -86,6 +86,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(tblName)
 	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+	if err == nil {
+		if _, err := tmpDBSource.Relation(c.ctx, tblName); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(fmt.Sprintf("temporary '%s'", tblName))
+		}
+	}
+
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
@@ -166,14 +178,25 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
+
 	tblName := tqry.GetTable()
-	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		return err
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		if e != nil {
+			return err
+		}
+		rel, e = dbSource.Relation(c.ctx, tblName)
+		if e != nil {
+			return err
+		}
 	}
 	id := rel.GetTableID(c.ctx)
 	err = dbSource.Truncate(c.ctx, tblName)
@@ -191,7 +214,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	var dbSource engine.Database
+	var rel engine.Relation
+	var err error
+	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -199,12 +225,20 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 	tblName := qry.GetTable()
-	var rel engine.Relation
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
-		if qry.GetIfExists() {
-			return nil
+		var e error // avoid contamination of error messages
+		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		if e != nil {
+			return err
 		}
-		return err
+		rel, e = dbSource.Relation(c.ctx, tblName)
+		if e != nil {
+			if qry.GetIfExists() {
+				return nil
+			} else {
+				return err
+			}
+		}
 	}
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err

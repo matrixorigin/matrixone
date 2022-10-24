@@ -40,13 +40,16 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
 	var tableID string
+	var err error
+	var dbSource engine.Database
+	var rel engine.Relation
+
 	if arg.DeleteCtxs[0].CanTruncate {
-		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
+		dbSource, err = c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
 
-		var rel engine.Relation
 		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
 			return 0, err
 		}
@@ -55,10 +58,31 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
-				return 0, err
+				origin := dbSource
+				var e error // avoid contamination of error messages
+				dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+				if e != nil {
+					return 0, err
+				}
+				e = dbSource.Truncate(c.ctx, info.TableName)
+				if e != nil {
+					return 0, err
+				}
+				dbSource = origin
 			}
 		}
 
+		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
+			var e error
+			dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+			if e != nil {
+				return 0, err
+			}
+			rel, e = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName)
+			if e != nil {
+				return 0, err
+			}
+		}
 		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 		if err != nil {
 			return 0, err

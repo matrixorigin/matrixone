@@ -66,10 +66,17 @@ type TxnHandler struct {
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	h := &TxnHandler{
-		storage:   storage,
+		storage:   &engine.EntireEngine{Engine: storage},
 		txnClient: txnClient,
 	}
 	return h
+}
+
+func (txn *TxnHandler) SetTempEngine(te engine.Engine) {
+	txn.mu.Lock()
+	defer txn.mu.Unlock()
+	ee := txn.storage.(*engine.EntireEngine)
+	ee.TempEngine = te
 }
 
 type Session struct {
@@ -640,7 +647,7 @@ func (ses *Session) GetStorage() engine.Engine {
 }
 
 func (ses *Session) SetTempEngine(te engine.Engine) {
-	ses.mu.Lock()	
+	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ee := ses.storage.(*engine.EntireEngine)
 	ee.TempEngine = te

@@ -2217,6 +2217,14 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// 3. assign for compile, only for the first time needed
 		cwft.compile.SetTempEngine(e.TempEngine)
+
+		txn := cwft.ses.txnCompileCtx.txnHandler
+		txn.SetTempEngine(e.TempEngine)
+
+		// Note : when TempEngine is inited, the message in cwft.ses.PU.storage will out of date.
+		// Since I did not find that the PU would be used after initialization, 
+		// the information here is probably fine without modification.
+
 	}
 	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
