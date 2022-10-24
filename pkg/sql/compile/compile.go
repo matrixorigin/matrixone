@@ -42,27 +42,14 @@ import (
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	ee, ok := e.(*engine.EntireEngine)
-	if !ok {
-		return &Compile{
-			e:    e,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
-	} else {
-		return &Compile{
-			e:    ee,
-			db:   db,
-			ctx:  ctx,
-			uid:  uid,
-			sql:  sql,
-			proc: proc,
-			stmt: stmt,
-		}
+	return &Compile{
+		e:    e,
+		db:   db,
+		ctx:  ctx,
+		uid:  uid,
+		sql:  sql,
+		proc: proc,
+		stmt: stmt,
 	}
 }
 
