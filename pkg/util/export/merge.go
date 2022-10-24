@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/simdcsv"
 )
@@ -575,4 +576,20 @@ var MergeTaskMetadata = func(id int, args ...string) task.TaskMetadata {
 		Executor: uint32(id),
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 	}
+}
+
+func InitCronTask(ctx context.Context, executorID int, taskService taskservice.TaskService) error {
+	var err error
+	// should init once in with schema-init.
+	tables := GetAllTable()
+	for _, tbl := range tables {
+		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
+		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify()), MergeTaskCronExpr); err != nil {
+			return err
+		}
+		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify(), MergeTaskYesterday), MergeTaskCronExprYesterday); err != nil {
+			return err
+		}
+	}
+	return nil
 }
