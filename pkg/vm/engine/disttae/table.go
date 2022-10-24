@@ -75,7 +75,6 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	//	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
 	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
@@ -97,6 +96,14 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
+		// update meta
+		columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId,
+			genMetaTableName(tbl.tableId), !ok, columnLength)
+		if err != nil {
+			return nil, err
+		}
+		tbl.meta = meta
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
@@ -320,7 +327,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
