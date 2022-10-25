@@ -12,7 +12,7 @@ mo_role_grant
 mo_role_privs
 SELECT COUNT(*) FROM mo_database;
 count(*)
-6
+8
 SHOW COLUMNS FROM mo_database;
 Field    Type    Null    Key    Default    Extra    Comment
 dat_id    BIGINT UNSIGNED    NO    PRI    NULL        
@@ -642,9 +642,6 @@ value    DOUBLE    YES        NULL
 node    VARCHAR    YES        NULL        
 role    VARCHAR    YES        NULL        
 account    VARCHAR    YES        NULL        
-SELECT value, role, account FROM sys_memory_used LIMIT 1;
-value    role    account
-1.774194688E9    ALL    sys
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(*)
 10

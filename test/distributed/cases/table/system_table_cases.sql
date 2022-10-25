@@ -211,7 +211,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS tem
 
 -- sys_memory_used
 SHOW COLUMNS FROM sys_memory_used;
-SELECT value, role, account FROM sys_memory_used LIMIT 1;
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
