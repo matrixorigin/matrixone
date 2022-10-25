@@ -289,34 +289,22 @@ rows_read    BIGINT UNSIGNED    YES        NULL        rows read total
 bytes_scan    BIGINT UNSIGNED    YES        NULL        bytes scan total
 SELECT account, user, host FROM statement_info LIMIT 1;
 account    user    host
-sys    internal    0.0.0.0
 SELECT COUNT(*) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(*)
-10
+0
 SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(0)
-10
+0
 SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count()
-10
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(null)
 0
 (SELECT account, user, host FROM statement_info LIMIT 1) UNION (SELECT account, user, host FROM statement_info LIMIT 1);
 account    user    host
-sys    internal    0.0.0.0
 SELECT account, user, host FROM statement_info LIMIT 10;
 account    user    host
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
-sys    internal    0.0.0.0
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
 [unknown result because it is related to issue#5895]
 SHOW COLUMNS FROM rawlog;
@@ -415,13 +403,13 @@ duration    BIGINT UNSIGNED    YES        NULL
 resource    JSON    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(*)
-10
+3
 SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(0)
-10
+3
 SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count()
-10
+3
 SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(null)
 0
@@ -482,26 +470,18 @@ account    VARCHAR    YES        NULL
 type    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_statement_total LIMIT 1;
 value    account    role
-0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(*)
-10
+0
 SELECT COUNT(0) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(0)
-10
+0
 SELECT COUNT('') FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count()
-10
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(null)
 0
-SELECT value, account, role FROM (SELECT value, account, role FROM sql_statement_total LIMIT 10) AS temp LIMIT 5;
-value    account    role
-0.0    sys    ALL
-0.0    sys    ALL
-0.0    sys    ALL
-158.0    sys    ALL
-0.0    sys    ALL
 SHOW COLUMNS FROM sql_statement_errors;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -510,18 +490,6 @@ node    VARCHAR    YES        NULL
 role    VARCHAR    YES        NULL        
 account    VARCHAR    YES        NULL        
 type    VARCHAR    YES        NULL        
-SELECT COUNT(*) FROM sql_statement_errors;
-count(*)
-0
-SELECT COUNT(*) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-count(*)
-0
-SELECT COUNT(0) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-count(0)
-0
-SELECT COUNT('') FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-count()
-0
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 count(null)
 0
@@ -534,22 +502,20 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_transaction_total LIMIT 1;
 value    account    role
-0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(*)
-9
+0
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(0)
-9
+0
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count()
-9
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(null)
 0
 (SELECT value, account, role FROM sql_transaction_total LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_total LIMIT 1);
 value    account    role
-0.0    sys    ALL
 SHOW COLUMNS FROM sql_transaction_errors;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -560,23 +526,18 @@ account    VARCHAR    YES        NULL
 type    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_transaction_errors LIMIT 1;
 value    account    role
-0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(*)
-9
+0
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(0)
-9
+0
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count()
-9
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(null)
 0
-(SELECT value, account, role FROM sql_transaction_errors LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_errors LIMIT 2);
-value    account    role
-0.0    sys    ALL
-71.0    sys    ALL
 SHOW COLUMNS FROM server_connections;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -586,30 +547,18 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT account, role, value FROM server_connections LIMIT 1;
 account    role    value
-sys    ALL    1.0
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(*)
-8
+0
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(0)
-8
+0
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count()
-8
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(null)
 0
-SELECT account, role, value FROM (SELECT account, role, value FROM server_connections LIMIT 10) AS temp LIMIT 5;
-account    role    value
-sys    ALL    1.0
-sys    ALL    0.0
-sys    ALL    0.0
-sys    ALL    0.0
-sys    ALL    0.0
-(SELECT account, role, value FROM server_connections LIMIT 1) UNION (SELECT account, role, value FROM server_connections LIMIT 2);
-account    role    value
-sys    ALL    1.0
-sys    ALL    0.0
 SHOW COLUMNS FROM process_cpu_percent;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -619,13 +568,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(null)
 0
@@ -636,18 +585,15 @@ value    DOUBLE    YES        NULL
 node    VARCHAR    YES        NULL        
 role    VARCHAR    YES        NULL        
 account    VARCHAR    YES        NULL        
-SELECT account, value, role FROM process_resident_memory_bytes LIMIT 1;
-account    value    role
-sys    1.44949248E8    ALL
 SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -660,27 +606,22 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(null)
 0
 SELECT value, role, account FROM (SELECT value, role, account FROM process_open_fds LIMIT 10) AS temp LIMIT 5;
 value    role    account
-62.0    ALL    sys
-274.0    ALL    sys
-277.0    ALL    sys
-276.0    ALL    sys
-276.0    ALL    sys
+69.0    ALL    sys
 (SELECT value, role, account FROM process_open_fds LIMIT 1) UNION (SELECT value, role, account FROM process_open_fds LIMIT 2);
 value    role    account
-62.0    ALL    sys
-274.0    ALL    sys
+69.0    ALL    sys
 SHOW COLUMNS FROM sys_cpu_seconds_total;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -690,13 +631,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(null)
 0
@@ -709,13 +650,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(null)
 0
@@ -728,30 +669,22 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT value, role, account FROM sys_memory_used LIMIT 1;
 value    role    account
-2.549612544E9    ALL    sys
+1.774194688E9    ALL    sys
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(null)
 0
 SELECT value, role, account FROM (SELECT value, role, account FROM sys_memory_used LIMIT 10) AS temp LIMIT 5;
 value    role    account
-2.549612544E9    ALL    sys
-2.511904768E9    ALL    sys
-2.502008832E9    ALL    sys
-2.48692736E9    ALL    sys
-2.427281408E9    ALL    sys
-(SELECT value, role, account FROM sys_memory_used LIMIT 1) UNION (SELECT value, role, account FROM sys_memory_used LIMIT 2);
-value    role    account
-2.549612544E9    ALL    sys
-2.511904768E9    ALL    sys
+1.774194688E9    ALL    sys
 SHOW COLUMNS FROM sys_memory_available;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -761,13 +694,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(null)
 0
@@ -783,13 +716,13 @@ value    account    role
 0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -802,13 +735,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -821,13 +754,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -840,13 +773,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(*)
-10
+1
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(0)
-10
+1
 SELECT COUNT('') FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count()
-10
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(null)
 0

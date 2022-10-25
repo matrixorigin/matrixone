@@ -167,14 +167,9 @@ SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
-SELECT value, account, role FROM (SELECT value, account, role FROM sql_statement_total LIMIT 10) AS temp LIMIT 5;
 
 -- sql_statement_errors
 SHOW COLUMNS FROM sql_statement_errors;
-SELECT COUNT(*) FROM sql_statement_errors;
-SELECT COUNT(*) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 
 -- sql_transaction_total
@@ -193,7 +188,6 @@ SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
-(SELECT value, account, role FROM sql_transaction_errors LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_errors LIMIT 2);
 
 -- server_connections
 SHOW COLUMNS FROM server_connections;
@@ -202,8 +196,6 @@ SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
-SELECT account, role, value FROM (SELECT account, role, value FROM server_connections LIMIT 10) AS temp LIMIT 5;
-(SELECT account, role, value FROM server_connections LIMIT 1) UNION (SELECT account, role, value FROM server_connections LIMIT 2);
 
 -- process_cpu_percent
 SHOW COLUMNS FROM process_cpu_percent;
@@ -214,7 +206,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 
 -- process_resident_memory_bytes
 SHOW COLUMNS FROM process_resident_memory_bytes;
-SELECT account, value, role FROM process_resident_memory_bytes LIMIT 1;
 SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
@@ -252,7 +243,6 @@ SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT value, role, account FROM (SELECT value, role, account FROM sys_memory_used LIMIT 10) AS temp LIMIT 5;
-(SELECT value, role, account FROM sys_memory_used LIMIT 1) UNION (SELECT value, role, account FROM sys_memory_used LIMIT 2);
 
 -- sys_memory_available
 SHOW COLUMNS FROM sys_memory_available;
