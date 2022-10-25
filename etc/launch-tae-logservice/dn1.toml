@@ -23,7 +23,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/etl"
+data-dir = "mo-data/local/etl"
 
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"

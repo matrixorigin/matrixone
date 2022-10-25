@@ -17,6 +17,7 @@ package memtable
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -111,9 +112,20 @@ func ToOrdered(v any) any {
 		return Bytes(v[:])
 	case ID:
 		return v
-	default:
-		panic(fmt.Sprintf("unknown type: %T", v))
 	}
+
+	switch v := reflect.ValueOf(v); v.Kind() {
+	case reflect.Bool:
+		return Bool(v.Bool())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return Int(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return Uint(v.Uint())
+	case reflect.Float32, reflect.Float64:
+		return Float(v.Float())
+	}
+
+	panic(fmt.Sprintf("unknown type: %T", v))
 }
 
 func TypeMatch(v any, typ types.T) bool {
