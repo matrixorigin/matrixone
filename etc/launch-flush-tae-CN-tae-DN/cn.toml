@@ -22,7 +22,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/cn"
+data-dir = "mo-data/local/etl"
 
 [observability]
 disableTrace = true
