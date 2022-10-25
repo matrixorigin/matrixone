@@ -3063,7 +3063,6 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
-		col.SetCharset(63) // set binnary charset
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT) // default utf-8
 	case types.T_uuid:
