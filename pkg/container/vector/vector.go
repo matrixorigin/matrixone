@@ -658,6 +658,7 @@ func (v *Vector) Free(m *mpool.MPool) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
+
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
 	if v.data != nil {
