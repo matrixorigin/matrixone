@@ -45,15 +45,6 @@ func TestSingleDDLPartition(t *testing.T) {
 			PARTITION BY KEY()
 			PARTITIONS 2;`
 
-	//sql := `CREATE TABLE t4 (
-	//		col1 INT NOT NULL,
-	//		col2 INT NOT NULL,
-	//		col3 INT NOT NULL,
-	//		col4 INT NOT NULL,
-	//		UNIQUE KEY (col1, col3),
-	//		UNIQUE KEY (col2, col4)
-	//	);`
-
 	mock := NewMockOptimizer()
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
@@ -135,6 +126,16 @@ func TestKeyPartitionError(t *testing.T) {
 				)
 				PARTITION BY KEY()
 				PARTITIONS 2;`,
+		`CREATE TABLE t4 (
+			col1 INT NOT NULL,
+			col2 INT NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1, col3),
+			UNIQUE KEY (col2, col4)
+		)
+		PARTITION BY KEY()
+		PARTITIONS 2;`,
 	}
 	mock := NewMockOptimizer()
 	for _, sql := range sqls {
@@ -961,14 +962,34 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 		PARTITIONS 4;`,
 
 		`CREATE TABLE t1 (
+				col1 INT NOT NULL,
+				col2 DATE NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col2, col3)
+			)
+			PARTITION BY HASH(col3)
+			PARTITIONS 4;`,
+
+		`CREATE TABLE t2 (
+				col1 INT NOT NULL,
+				col2 DATE NOT NULL,
+				col3 INT NOT NULL,
+				col4 INT NOT NULL,
+				UNIQUE KEY (col1, col3)
+			)
+			PARTITION BY HASH(col1 + col3)
+			PARTITIONS 4;`,
+
+		`CREATE TABLE t1 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
 			col3 INT NOT NULL,
 			col4 INT NOT NULL,
 			UNIQUE KEY (col1, col2, col3)
 		)
-		PARTITION BY HASH(col3)
-		PARTITIONS 4;`,
+			PARTITION BY KEY(col3)
+			PARTITIONS 4;`,
 
 		`CREATE TABLE t2 (
 			col1 INT NOT NULL,
@@ -977,28 +998,8 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 			col4 INT NOT NULL,
 			UNIQUE KEY (col1, col3)
 		)
-		PARTITION BY HASH(col1 + col3)
-		PARTITIONS 4;`,
-
-		`CREATE TABLE t1 (
-		col1 INT NOT NULL,
-		col2 DATE NOT NULL,
-		col3 INT NOT NULL,
-		col4 INT NOT NULL,
-		UNIQUE KEY (col1, col2, col3)
-	)
-		PARTITION BY KEY(col3)
-		PARTITIONS 4;`,
-
-		`CREATE TABLE t2 (
-		col1 INT NOT NULL,
-		col2 DATE NOT NULL,
-		col3 INT NOT NULL,
-		col4 INT NOT NULL,
-		UNIQUE KEY (col1, col3)
-	)
-		PARTITION BY KEY(col1,col3)
-		PARTITIONS 4;`,
+			PARTITION BY KEY(col1,col3)
+			PARTITIONS 4;`,
 
 		`CREATE TABLE t3 (
 			col1 INT NOT NULL,
@@ -1034,7 +1035,6 @@ func TestPartitioningKeysUniqueKeys(t *testing.T) {
 	}
 }
 
-/*
 func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 	sqls := []string{
 		`CREATE TABLE t1 (
@@ -1118,7 +1118,7 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 	}
-}*/
+}
 
 func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 	sqls := []string{
@@ -1132,16 +1132,16 @@ func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 		PARTITION BY HASH(col1 + YEAR(col2))
 		PARTITIONS 4;`,
 
-		//`CREATE TABLE t8 (
-		//	col1 INT NOT NULL,
-		//	col2 DATE NOT NULL,
-		//	col3 INT NOT NULL,
-		//	col4 INT NOT NULL,
-		//	PRIMARY KEY(col1, col2, col4),
-		//	UNIQUE KEY(col2, col1)
-		//)
-		//PARTITION BY HASH(col1 + YEAR(col2))
-		//PARTITIONS 4;`,
+		`CREATE TABLE t8 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY(col1, col2, col4),
+			UNIQUE KEY(col2, col1)
+		)
+		PARTITION BY HASH(col1 + YEAR(col2))
+		PARTITIONS 4;`,
 
 		`CREATE TABLE t7 (
 			col1 INT NOT NULL,
@@ -1153,26 +1153,26 @@ func TestPartitioningKeysPrimaryKeys(t *testing.T) {
 		PARTITION BY KEY(col1,col2)
 		PARTITIONS 4;`,
 
-		//`CREATE TABLE t8 (
-		//	col1 INT NOT NULL,
-		//	col2 DATE NOT NULL,
-		//	col3 INT NOT NULL,
-		//	col4 INT NOT NULL,
-		//	PRIMARY KEY(col1, col2, col4),
-		//	UNIQUE KEY(col2, col1)
-		//)
-		//PARTITION BY KEY(col1,col2)
-		//PARTITIONS 4;`,
+		`CREATE TABLE t8 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY(col1, col2, col4),
+			UNIQUE KEY(col2, col1)
+		)
+		PARTITION BY KEY(col1,col2)
+		PARTITIONS 4;`,
 
-		//`CREATE TABLE k1 (
-		//	id INT NOT NULL,
-		//	name VARCHAR(20),
-		//	sal DOUBLE,
-		//	PRIMARY KEY (id, name),
-		//	unique key (id)
-		//)
-		//PARTITION BY KEY(id)
-		//PARTITIONS 2;`,
+		`CREATE TABLE k1 (
+			id INT NOT NULL,
+			name VARCHAR(20),
+			sal DOUBLE,
+			PRIMARY KEY (id, name),
+			unique key (id)
+		)
+		PARTITION BY KEY(id)
+		PARTITIONS 2;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1198,16 +1198,16 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 		PARTITION BY HASH(col3)
 		PARTITIONS 4;`,
 
-		//`CREATE TABLE t6 (
-		//	col1 INT NOT NULL,
-		//	col2 DATE NOT NULL,
-		//	col3 INT NOT NULL,
-		//	col4 INT NOT NULL,
-		//	PRIMARY KEY(col1, col3),
-		//	UNIQUE KEY(col2)
-		//)
-		//PARTITION BY HASH( YEAR(col2) )
-		//PARTITIONS 4;`,
+		`CREATE TABLE t6 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			PRIMARY KEY(col1, col3),
+			UNIQUE KEY(col2)
+		)
+		PARTITION BY HASH( YEAR(col2) )
+		PARTITIONS 4;`,
 
 		`CREATE TABLE t5 (
 			col1 INT NOT NULL,
@@ -1219,7 +1219,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 		PARTITION BY KEY(col3)
 		PARTITIONS 4;`,
 
-		/*`CREATE TABLE t6 (
+		`CREATE TABLE t6 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
 			col3 INT NOT NULL,
@@ -1228,7 +1228,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			UNIQUE KEY(col2)
 		)
 		PARTITION BY KEY(col2)
-		PARTITIONS 4;`,*/
+		PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer()
@@ -1242,12 +1242,10 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 	}
 }
 
-/*
 // A UNIQUE INDEX must include all columns in the table's partitioning function
-
-	func TestPartitionKeysShouldShowError(t *testing.T) {
-		sqls := []string{
-			`CREATE TABLE t4 (
+func TestPartitionKeysShouldShowError(t *testing.T) {
+	sqls := []string{
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1258,7 +1256,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION BY KEY(col1, col3)
 			PARTITIONS 2;`,
 
-			`CREATE TABLE t4 (
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1269,7 +1267,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION BY HASH(col1 + col3)
 			PARTITIONS 2;`,
 
-			`CREATE TABLE t4 (
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1284,7 +1282,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION p3 VALUES LESS THAN (21)
 			);`,
 
-			`CREATE TABLE t4 (
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1299,7 +1297,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION p3 VALUES LESS THAN (65,30)
 			);`,
 
-			`CREATE TABLE t4 (
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1314,7 +1312,7 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 			);`,
 
-			`CREATE TABLE t4 (
+		`CREATE TABLE t4 (
 				col1 INT NOT NULL,
 				col2 INT NOT NULL,
 				col3 INT NOT NULL,
@@ -1328,18 +1326,18 @@ func TestPartitioningKeysPrimaryKeysError(t *testing.T) {
 			PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 			PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 			);`,
-		}
-		mock := NewMockOptimizer()
-		for _, sql := range sqls {
-			_, err := buildSingleStmt(mock, t, sql)
-			t.Log(sql)
-			t.Log(err)
-			if err == nil {
-				t.Fatalf("%+v", err)
-			}
+	}
+	mock := NewMockOptimizer()
+	for _, sql := range sqls {
+		_, err := buildSingleStmt(mock, t, sql)
+		t.Log(sql)
+		t.Log(err)
+		if err == nil {
+			t.Fatalf("%+v", err)
 		}
 	}
-*/
+}
+
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	statements, err := mysql.Parse(sql)
 	if err != nil {

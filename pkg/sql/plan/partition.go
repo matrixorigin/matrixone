@@ -801,6 +801,11 @@ func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef
 	if err := checkPartitionKeysConstraints(partitionBinder, tableDef, partitionInfo); err != nil {
 		return err
 	}
+	if partitionInfo.Type == plan.PartitionType_KEY || partitionInfo.Type == plan.PartitionType_LINEAR_KEY {
+		if len(partitionInfo.Columns) == 0 {
+			return handleEmptyKeyPartition(tableDef, partitionInfo)
+		}
+	}
 	return nil
 }
 
@@ -827,25 +832,37 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 // checkPartitionKeysConstraints checks the partitioning key is included in the table constraint.
 func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
 	defs := tableDef.Defs
+
 	hasPrimaryKey := false
-	hasUniqueKey := false
-	var pkNames []string
+	var primaryKey *plan.PrimaryKeyDef
 	for _, def := range defs {
 		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
 			hasPrimaryKey = true
-			pkNames = pkdef.Pk.Names
+			primaryKey = pkdef.Pk
+			break
 		}
-		if _, ok := def.Def.(*plan.TableDef_DefType_ComputeIndex); ok {
-			hasUniqueKey = true
+	}
+
+	hasUniqueKey := false
+	var uniqueKey *plan.IndexDef
+	for _, def := range defs {
+		if ukdef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
+			uniqueKey = ukdef.Idx
+			for _, unique := range uniqueKey.Uniques {
+				if unique {
+					hasUniqueKey = true
+					break
+				}
+			}
 		}
 	}
 
 	if hasPrimaryKey {
 		var pkcols []string
-		if len(pkNames) > 0 && util.JudgeIsCompositePrimaryKeyColumn(pkNames[0]) {
-			pkcols = util.SplitCompositePrimaryKeyColumnName(pkNames[0])
+		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
+			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
 		} else {
-			pkcols = pkNames
+			pkcols = primaryKey.Names
 		}
 
 		if partitionInfo.PartitionColumns != nil {
@@ -856,6 +873,24 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 			extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
 			if !checkUniqueKeyIncludePartKey(extractCols, pkcols) {
 				return moerr.NewInvalidInput("partition key is not part of primary key")
+			}
+		}
+	}
+
+	if hasUniqueKey {
+		for i, field := range uniqueKey.Fields {
+			if uniqueKey.Uniques[i] {
+				uniqueKeyCols := field.ColNames
+				if partitionInfo.PartitionColumns != nil {
+					if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, uniqueKeyCols) {
+						return moerr.NewInvalidInput("partition key is not part of primary key")
+					}
+				} else {
+					extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
+					if !checkUniqueKeyIncludePartKey(extractCols, uniqueKeyCols) {
+						return moerr.NewInvalidInput("partition key is not part of primary key")
+					}
+				}
 			}
 		}
 	}
@@ -973,4 +1008,70 @@ func extractColFromFunc(partitionBinder *PartitionBinder, funcExpr *plan.Expr_F)
 		result = append(result, tmpcols...)
 	}
 	return result
+}
+
+func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
+	defs := tableDef.Defs
+	hasPrimaryKey := false
+	hasUniqueKey := false
+	var primaryKey *plan.PrimaryKeyDef
+	var uniqueKey *plan.IndexDef
+
+	for _, def := range defs {
+		if pkdef, ok := def.Def.(*plan.TableDef_DefType_Pk); ok {
+			hasPrimaryKey = true
+			primaryKey = pkdef.Pk
+			break
+		}
+	}
+
+	for _, def := range defs {
+		if ukdef, ok := def.Def.(*plan.TableDef_DefType_Idx); ok {
+			uniqueKey = ukdef.Idx
+			for _, unique := range uniqueKey.Uniques {
+				if unique {
+					hasUniqueKey = true
+					break
+				}
+			}
+		}
+	}
+
+	if hasPrimaryKey {
+		//  Any columns used as the partitioning key must comprise part or all of the table's primary key, if the table has one.
+		// Where no column name is specified as the partitioning key, the table's primary key is used, if there is one.
+		var pkcols []string
+		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
+			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
+		}
+
+		if hasUniqueKey {
+			for i, field := range uniqueKey.Fields {
+				// A UNIQUE INDEX must include all columns in the table's partitioning function
+				if !checkUniqueKeyIncludePartKey(pkcols, field.ColNames) && uniqueKey.Uniques[i] {
+					return moerr.NewInvalidInput("partition key is not part of primary key")
+				}
+			}
+		}
+	} else if hasUniqueKey {
+		// If there is no primary key but there is a unique key, then the unique key is used for the partitioning key
+		if len(uniqueKey.IndexNames) >= 2 {
+			var firstUniqueKeyCols []string
+			for i, field := range uniqueKey.Fields {
+				if uniqueKey.Uniques[i] {
+					firstUniqueKeyCols = field.ColNames
+					break
+				}
+			}
+
+			for _, field := range uniqueKey.Fields {
+				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, field.ColNames) {
+					return moerr.NewInvalidInput("partition key is not part of primary key")
+				}
+			}
+		}
+	} else {
+		return moerr.NewInvalidInput("Field in list of fields for partition function not found in table")
+	}
+	return nil
 }
