@@ -40,6 +40,7 @@ func NewTAEStorage(
 	fs fileservice.FileService,
 	clock clock.Clock,
 	ckpCfg *options.CheckpointCfg,
+	logStore options.LogstoreType,
 ) (*taeStorage, error) {
 
 	opt := &options.Options{
@@ -48,6 +49,7 @@ func NewTAEStorage(
 		Lc:            logservicedriver.LogServiceClientFactory(factory),
 		Shard:         shard,
 		CheckpointCfg: ckpCfg,
+		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
 		taeHandler: rpc.NewTAEHandle(opt),
