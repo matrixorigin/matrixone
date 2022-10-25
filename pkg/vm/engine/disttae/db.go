@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -28,10 +29,12 @@ func newDB(dnList []DNStore) *DB {
 	for i := range dnList {
 		dnMap[dnList[i].UUID] = i
 	}
+	cache, _ := lru.New(Tables_Cache_Size)
 	db := &DB{
-		dnMap:      dnMap,
-		metaTables: make(map[string]Partitions),
-		tables:     make(map[[2]uint64]Partitions),
+		dnMap:       dnMap,
+		tablesCache: cache,
+		metaTables:  make(map[string]Partitions),
+		tables:      make(map[[2]uint64]Partitions),
 	}
 	return db
 }

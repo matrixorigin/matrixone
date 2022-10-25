@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +37,10 @@ import (
 const (
 	INSERT = iota
 	DELETE
+)
+
+const (
+	Tables_Cache_Size = 1024
 )
 
 const (
@@ -105,9 +110,10 @@ type Engine struct {
 // DB is implementataion of cache
 type DB struct {
 	sync.RWMutex
-	dnMap      map[string]int
-	metaTables map[string]Partitions
-	tables     map[[2]uint64]Partitions
+	dnMap       map[string]int
+	metaTables  map[string]Partitions
+	tables      map[[2]uint64]Partitions
+	tablesCache *lru.Cache
 }
 
 type Partitions []*Partition

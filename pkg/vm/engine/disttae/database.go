@@ -38,6 +38,11 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if tbl, ok := db.txn.tableMap.Load(key); ok {
 		return tbl.(*table), nil
 	}
+	if v, ok := db.txn.db.tablesCache.Get(key); ok {
+		tbl := v.(*table)
+		tbl.db = db
+		return tbl, nil
+	}
 	// for acceleration, and can work without these codes.
 	if name == catalog.MO_DATABASE {
 		id := uint64(catalog.MO_DATABASE_ID)
@@ -74,12 +79,14 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	tbl.tableName = name
 	tbl.insertExpr = genInsertExpr(defs, len(parts))
 	db.txn.tableMap.Store(key, tbl)
+	db.txn.db.tablesCache.Add(key, tbl)
 	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
 	key := genTableKey(ctx, name, db.databaseId)
 	db.txn.tableMap.Delete(key)
+	db.txn.db.tablesCache.Remove(key)
 	id, err := db.txn.getTableId(ctx, db.databaseId, name)
 	if err != nil {
 		return err
@@ -108,8 +115,10 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 	key := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.tableMap.Load(key); ok {
 		tbl = v.(*table)
+	} else if v, ok := db.txn.db.tablesCache.Get(key); ok {
+		tbl := v.(*table)
+		tbl.db = db
 	}
-
 	if tbl != nil {
 		oldId = tbl.tableId
 		tbl.tableId = newId
