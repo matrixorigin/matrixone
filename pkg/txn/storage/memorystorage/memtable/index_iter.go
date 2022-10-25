@@ -80,7 +80,7 @@ func (i *IndexIter[K, V]) seekToValid() bool {
 		if entry.Index.Less(i.min) {
 			return false
 		}
-		if !entry.Index.Less(i.max) {
+		if i.max.Less(entry.Index) {
 			return false
 		}
 		// check physical row
