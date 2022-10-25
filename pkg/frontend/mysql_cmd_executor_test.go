@@ -627,7 +627,7 @@ func Test_typeconvert(t *testing.T) {
 		}
 
 		type kase struct {
-			tp     uint8
+			tp     defines.MysqlType
 			signed bool
 		}
 		output := []kase{
@@ -815,7 +815,8 @@ func Test_handleShowColumns(t *testing.T) {
 		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
 		convey.So(err, convey.ShouldBeNil)
 		data[0][1] = typ
-		data[0][2] = int8(2)
+		data[0][2] = []byte("NULL")
+		data[0][3] = int8(2)
 		data[0][primaryKeyPos] = []byte("p")
 		ses.SetData(data)
 		proto.ses = ses
@@ -1004,6 +1005,7 @@ func Test_convert_type(t *testing.T) {
 		convertEngineTypeToMysqlType(types.T_decimal64, &MysqlColumn{})
 		convertEngineTypeToMysqlType(types.T_decimal128, &MysqlColumn{})
 		convertEngineTypeToMysqlType(types.T_blob, &MysqlColumn{})
+		convertEngineTypeToMysqlType(types.T_text, &MysqlColumn{})
 	})
 }
 

@@ -37,7 +37,7 @@ func appendQueryNode(query *Query, node *Node) int32 {
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
-		switch uint8(n.InternalType.Oid) {
+		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1}, nil
@@ -100,6 +100,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_bool), Size: 1}, nil
 		case defines.MYSQL_TYPE_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: 24}, nil
+		case defines.MYSQL_TYPE_TEXT:
+			return &plan.Type{Id: int32(types.T_text), Size: 24}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return &plan.Type{Id: int32(types.T_json), Size: types.VarlenaSize}, nil
 		case defines.MYSQL_TYPE_UUID:
@@ -265,7 +267,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 }
 
 func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.AutoIncrement {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInput("invalid default value")
 	}
 	if d.Default.Expr == nil {

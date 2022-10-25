@@ -383,6 +383,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
+		case defines.MYSQL_TYPE_UUID:
+			value, err := oq.mrs.GetString(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
 		default:
 			return moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}

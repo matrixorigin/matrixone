@@ -124,7 +124,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	*/
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
-		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
@@ -396,7 +396,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {

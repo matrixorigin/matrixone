@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,6 +41,8 @@ type Argument struct {
 	DB                 engine.Database
 	TableID            string
 	CPkeyColDef        *plan.ColDef
+	DBName             string
+	TableName          string
 	ComputeIndexTables []engine.Relation
 	ComputeIndexInfos  []*plan.ComputeIndexInfo
 }
@@ -68,48 +71,107 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 		b.Clean(proc.Mp())
 	}
 	err := n.TargetTable.Write(ctx, bat)
+	bat.Clean(proc.Mp())
 	n.Affected += uint64(len(bat.Zs))
 	return err
 }
 
-func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
+func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
+	if proc.TxnClient == nil {
+		return nil, moerr.NewInternalError("must set txn client")
 	}
-
-	var err error
-	var txnOperator client.TxnOperator
-	txnOperator, err = proc.TxnClient.New()
+	txn, err = proc.TxnClient.New()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	err = n.Engine.New(ctx, txnOperator)
-	if err != nil {
-		return false, err
-	}
-
-	err = handleWrite(n, proc, ctx, bat)
-	if err != nil {
-		ctx, cancel := context.WithTimeout(
-			ctx,
-			n.Engine.Hints().CommitOrRollbackTimeout,
-		)
-		defer cancel()
-		if err2 := txnOperator.Rollback(ctx); err2 != nil {
-			return false, err2
-		}
-		return false, err
+	if ctx == nil {
+		return nil, moerr.NewInternalError("context should not be nil")
 	}
 	ctx, cancel := context.WithTimeout(
 		ctx,
 		n.Engine.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	if err = n.Engine.Commit(ctx, txnOperator); err != nil {
+	if err = n.Engine.New(ctx, txn); err != nil {
+		return nil, err
+	}
+	return txn, nil
+}
+
+func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
+	if txn == nil {
+		return nil
+	}
+	if ctx == nil {
+		return moerr.NewInternalError("context should not be nil")
+	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		n.Engine.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	if err := n.Engine.Commit(ctx, txn); err != nil {
+		return err
+	}
+	err := txn.Commit(ctx)
+	txn = nil
+	return err
+}
+
+func RolllbackTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
+	if txn == nil {
+		return nil
+	}
+	if ctx == nil {
+		return moerr.NewInternalError("context should not be nil")
+	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		n.Engine.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	if err := n.Engine.Rollback(ctx, txn); err != nil {
+		return err
+	}
+	err := txn.Rollback(ctx)
+	txn = nil
+	return err
+}
+
+func GetNewRelation(n *Argument, txn client.TxnOperator, proc *process.Process, ctx context.Context) (engine.Relation, error) {
+	dbHandler, err := n.Engine.Database(ctx, n.DBName, txn)
+	if err != nil {
+		return nil, err
+	}
+	tableHandler, err := dbHandler.Relation(ctx, n.TableName)
+	if err != nil {
+		return nil, err
+	}
+	return tableHandler, nil
+}
+
+func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) (bool, error) {
+	var err error
+	proc.TxnOperator, err = NewTxn(n, proc, ctx)
+	if err != nil {
 		return false, err
 	}
-	err = txnOperator.Commit(ctx)
-	return false, err
+
+	n.TargetTable, err = GetNewRelation(n, proc.TxnOperator, proc, ctx)
+	if err != nil {
+		return false, err
+	}
+	if err = handleWrite(n, proc, ctx, bat); err != nil {
+		if err2 := RolllbackTxn(n, proc.TxnOperator, ctx); err2 != nil {
+			return false, err2
+		}
+		return false, err
+	}
+
+	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
@@ -125,7 +187,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].AutoIncrement) {
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
@@ -160,6 +222,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 		}
+	}
+	// set null value's data
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
+	}
+	if !proc.LoadTag {
+		return false, handleWrite(n, proc, ctx, bat)
 	}
 	return handleLoadWrite(n, proc, ctx, bat)
 }

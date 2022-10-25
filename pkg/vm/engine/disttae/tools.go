@@ -154,7 +154,7 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_createsql
-		if err := bat.Vecs[idx].Append([]byte(sql), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.createSql), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATED_TIME_IDX
@@ -199,7 +199,8 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoColumnsTypes[idx]) // att_uniq_name
-		if err := bat.Vecs[idx].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(genColumnPrimaryKey(col.tableId, col.name)),
+			false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_COLUMNS_ACCOUNT_ID_IDX
@@ -948,40 +949,63 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
+func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
-	columnLength := len(rows)
+	{
+		mp := make(map[uint64]catalog.BlockInfo) // block list
+		for i := range blockInfos {
+			if blk, ok := mp[blockInfos[i].BlockID]; ok &&
+				blk.CommitTs.Less(blockInfos[i].CommitTs) {
+				mp[blk.BlockID] = blockInfos[i]
+			} else {
+				mp[blk.BlockID] = blockInfos[i]
+			}
+		}
+		blockInfos = blockInfos[:0]
+		for _, blk := range mp {
+			blockInfos = append(blockInfos, blk)
+		}
+	}
 	metas := make([]BlockMeta, len(rows))
+
+	idxs := make([]uint16, columnLength)
+	for i := 0; i < columnLength; i++ {
+		idxs[i] = uint16(i)
+	}
+
 	for i, blockInfo := range blockInfos {
-		zm, err := fetchZonemapFromBlockInfo(columnLength, blockInfo, fs, m)
+		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(idxs, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}
 		metas[i] = BlockMeta{
-			info:    blockInfo,
-			zonemap: zm,
+			Rows:    int64(rows),
+			Info:    blockInfo,
+			Zonemap: zm,
 		}
 	}
 	return metas, nil
 }
 
 func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
-	/* TODO
 	for i := range blks {
 		if blk.Eq(blks[i]) {
 			return true
 		}
 	}
-	*/
 	return false
 }
 
-func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []BlockMeta {
-	blks := make([]BlockMeta, 0, len(orgs)-len(modfs))
+func genModifedBlocks(deletes map[uint64][]int, orgs, modfs []BlockMeta,
+	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
+	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
 			if needRead(expr, blk, tableDef, proc) {
-				blks = append(blks, orgs[i])
+				blks = append(blks, ModifyBlockMeta{
+					meta:    orgs[i],
+					deletes: deletes[orgs[i].Info.BlockID],
+				})
 			}
 		}
 	}
@@ -1018,4 +1042,8 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	bat.Vecs = append(vecs, bat.Vecs...)
 	bat.Attrs = append(attrs, bat.Attrs...)
 	return batch.BatchToProtoBatch(bat)
+}
+
+func genColumnPrimaryKey(tableId uint64, name string) string {
+	return fmt.Sprintf("%v-%v", tableId, name)
 }

@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 	"unsafe"
 
@@ -150,22 +151,25 @@ func (s *MOSpan) Free() {
 }
 
 func (s *MOSpan) GetName() string {
-	return MOSpanType
+	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) CsvFields() []string {
-	var result []string
-	result = append(result, s.SpanID.String())
-	result = append(result, s.TraceID.String())
-	result = append(result, s.parent.SpanContext().SpanID.String())
-	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType)
-	result = append(result, s.Name.String())
-	result = append(result, nanoSec2DatetimeString(s.StartTimeNS))
-	result = append(result, nanoSec2DatetimeString(s.EndTimeNS))
-	result = append(result, fmt.Sprintf("%d", s.Duration)) // Duration
-	result = append(result, s.tracer.provider.resource.String())
-	return result
+func (s *MOSpan) GetRow() *export.Row { return spanView.OriginTable.GetRow() }
+
+func (s *MOSpan) CsvFields(row *export.Row) []string {
+	row.Reset()
+	row.SetColumnVal(rawItemCol, spanView.Table)
+	row.SetColumnVal(spanIDCol, s.SpanID.String())
+	row.SetColumnVal(stmtIDCol, s.TraceID.String())
+	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
+	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
+	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
+	row.SetColumnVal(spanNameCol, s.Name.String())
+	row.SetColumnVal(startTimeCol, nanoSec2DatetimeString(s.StartTimeNS))
+	row.SetColumnVal(endTimeCol, nanoSec2DatetimeString(s.EndTimeNS))
+	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration)) // Duration
+	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
+	return row.ToStrings()
 }
 
 func (s *MOSpan) End(options ...SpanEndOption) {

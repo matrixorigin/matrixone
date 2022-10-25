@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/hex"
 	"fmt"
 	"go/constant"
 	"strings"
@@ -101,10 +102,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("isnotnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsUnknownExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("isunknown", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsNotUnknownExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("isnotunknown", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnotnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsTrueExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("istrue", []tree.Expr{exprImpl.Expr}, depth)
@@ -945,11 +946,22 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
+	// rewrite the hexnum process logic
+	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
+	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
 		if typ != nil {
 			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val), typ)
 		}
 		return makePlan2DecimalExprWithType(val)
+	}
+
+	returnHexNumExpr := func(val string, isBin ...bool) (*Expr, error) {
+		if typ != nil {
+			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val, isBin[0]), typ, isBin[0], isFloat)
+		}
+		return makePlan2StringConstExprWithType(val, isBin...), nil
 	}
 
 	switch astExpr.ValType {
@@ -1027,7 +1039,66 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 		}, nil
 	case tree.P_decimal:
-		return returnDecimalExpr(astExpr.String())
+		if typ != nil {
+			if typ.Id == int32(types.T_decimal64) {
+				d64, err := types.Decimal64_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				return &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value: &plan.Const_Decimal64Val{
+								Decimal64Val: &plan.Decimal64{A: types.Decimal64ToInt64Raw(d64)},
+							},
+						},
+					},
+					Typ: typ,
+				}, nil
+			}
+			if typ.Id == int32(types.T_decimal128) {
+				d128, err := types.Decimal128_FromStringWithScale(astExpr.String(), typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				a, b := types.Decimal128ToInt64Raw(d128)
+				return &Expr{
+					Expr: &plan.Expr_C{
+						C: &Const{
+							Isnull: false,
+							Value: &plan.Const_Decimal128Val{
+								Decimal128Val: &plan.Decimal128{A: a, B: b},
+							},
+						},
+					},
+					Typ: typ,
+				}, nil
+			}
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(astExpr.String()), typ)
+		}
+		d128, scale, err := types.ParseStringToDecimal128WithoutTable(astExpr.String())
+		if err != nil {
+			return nil, err
+		}
+		a, b := types.Decimal128ToInt64Raw(d128)
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Decimal128Val{
+						Decimal128Val: &plan.Decimal128{A: a, B: b},
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:        int32(types.T_decimal128),
+				Width:     34,
+				Scale:     scale,
+				Precision: 34,
+				Nullable:  false,
+			},
+		}, nil
 	case tree.P_float64:
 		originString := astExpr.String()
 		if typ != nil && (typ.Id == int32(types.T_decimal64) || typ.Id == int32(types.T_decimal128)) {
@@ -1059,7 +1130,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 		}, nil
 	case tree.P_hexnum:
-		return returnDecimalExpr(astExpr.String())
+		s := astExpr.String()[2:]
+		if len(s)%2 != 0 {
+			s = string('0') + s
+		}
+		bytes, _ := hex.DecodeString(s)
+		return returnHexNumExpr(string(bytes), true)
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
@@ -1072,7 +1148,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 
 // --- util functions ----
 
-func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
+func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error) {
 	if expr.Typ.Id == int32(types.T_any) {
 		return expr, nil
 	}
@@ -1084,6 +1160,11 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
+	typ := *toType
+	if len(isBin) == 2 && isBin[0] && isBin[1] {
+		typ.Id = int32(types.T_uint64)
+	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1091,13 +1172,13 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 				Args: []*Expr{expr, {
 					Expr: &plan.Expr_T{
 						T: &plan.TargetType{
-							Typ: toType,
+							Typ: &typ,
 						},
 					},
 				}},
 			},
 		},
-		Typ: toType,
+		Typ: &typ,
 	}, nil
 }
 

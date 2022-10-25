@@ -30,8 +30,8 @@ type Column interface {
 	Name() string
 
 	//data type: MYSQL_TYPE_XXXX
-	SetColumnType(uint8)
-	ColumnType() uint8
+	SetColumnType(defines.MysqlType)
+	ColumnType() defines.MysqlType
 
 	//the max count of spaces
 	SetLength(uint32)
@@ -49,17 +49,17 @@ type ColumnImpl struct {
 	name string
 
 	//the data type of the column
-	columnType uint8
+	columnType defines.MysqlType
 
 	//maximum length in bytes of the field
 	length uint32
 }
 
-func (ci *ColumnImpl) ColumnType() uint8 {
+func (ci *ColumnImpl) ColumnType() defines.MysqlType {
 	return ci.columnType
 }
 
-func (ci *ColumnImpl) SetColumnType(colType uint8) {
+func (ci *ColumnImpl) SetColumnType(colType defines.MysqlType) {
 	ci.columnType = colType
 }
 
@@ -127,6 +127,9 @@ type MysqlColumn struct {
 	//flags
 	flag uint16
 
+	//auto_incr
+	auto_incr bool
+
 	//max shown decimal digits
 	decimal uint8
 
@@ -147,6 +150,10 @@ func (mc *MysqlColumn) Decimal() uint8 {
 }
 
 func (mc *MysqlColumn) SetDecimal(decimal uint8) {
+	if mc.columnType == defines.MYSQL_TYPE_FLOAT || mc.columnType == defines.MYSQL_TYPE_DOUBLE {
+		mc.decimal = 31
+		return
+	}
 	mc.decimal = decimal
 }
 
@@ -208,6 +215,14 @@ func (mc *MysqlColumn) SetSigned(s bool) {
 
 func (mc *MysqlColumn) IsSigned() bool {
 	return mc.flag&uint16(defines.UNSIGNED_FLAG) == 0
+}
+
+func (mc *MysqlColumn) SetAutoIncr(s bool) {
+	mc.auto_incr = s
+}
+
+func (mc *MysqlColumn) GetAutoIncr() bool {
+	return mc.auto_incr
 }
 
 // Discussion: for some MatrixOne types, the Type.Precision and Type.Scale value are needed for stringification, I think we

@@ -249,6 +249,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
+		vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -356,7 +357,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +483,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		}
 		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
@@ -702,7 +703,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {

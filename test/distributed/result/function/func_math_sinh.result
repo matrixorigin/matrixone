@@ -1,0 +1,110 @@
+SELECT SINH(PI());
+sinh(pi())
+11.5487
+SELECT ROUND(SINH(PI()));
+round(sinh(pi()))
+12.0
+SELECT SINH(PI());
+sinh(pi())
+11.5487
+SELECT SINH(12);
+sinh(12)
+81377.3957
+SELECT SINH(PI());
+sinh(pi())
+11.5487
+SELECT SINH(PI()+1);
+sinh(pi() + 1)
+31.4435
+SELECT SINH(1);
+sinh(1)
+1.1752
+SELECT SINH(1.0001);
+sinh(1.0001)
+1.1754
+SELECT SINH(0);
+sinh(0)
+0.0
+SELECT SINH(2);
+sinh(2)
+3.6269
+SELECT SINH(-2);
+sinh(-2)
+-3.6269
+SELECT SINH(13413);
+Infinity
+SELECT SINH(-3114);
+-Infinity
+SELECT SINH(1);
+sinh(1)
+1.1752
+SELECT SINH(-1);
+sinh(-1)
+-1.1752
+SELECT SINH(0);
+sinh(0)
+0.0
+SELECT SINH(0.001);
+sinh(0.001)
+0.001
+SELECT SINH(-0.001);
+sinh(-0.001)
+-0.001
+SELECT SINH("ABC");
+strconv.ParseFloat: parsing "ABC": invalid syntax
+SELECT SINH(NULL);
+sinh(null)
+null
+create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
+insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-03-12 10:03:12", "2032-03-12 13:04:12", "abr23c", "3dcf");
+insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
+insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
+select SINH(a), SINH(b), SINH(c), SINH(d), SINH(e), SINH(f), SINH(g), SINH(h), SINH(i), SINH(j), SINH(k), SINH(l) from t1;
+invalid argument function sinh, bad value [DATE]
+drop table t1;
+Create table t1(a float);
+insert into t1 select (SINH(1));
+insert into t1 select (SINH(0));
+insert into t1 select (SINH(1));
+insert into t1 select (SINH(0));
+insert into t1 select (acos(1));
+insert into t1 select (atan(1));
+select distinct a from t1;
+a
+1.1752012
+0.0
+0.7853982
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b float);
+insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
+select * from t1 where SINH(a)<>SINH(b);
+a	b
+1	0.0
+0	1.0
+drop table t1;
+create table t1(a INT,  b float);
+create table t2(a INT,  b float);
+insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
+insert into t2 values(0, 1),(1, 0),(1,1),(0,0);
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (SINH(t1.a)=SINH(t2.b));
+a	a
+1	0
+1	1
+0	1
+0	0
+1	0
+1	1
+0	1
+0	0
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(a INT,  b float);
+insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
+SELECT a FROM t1 group by a having SINH(a)>0;
+a
+1
+drop table t1;
+SELECT SINH(0.745e5);

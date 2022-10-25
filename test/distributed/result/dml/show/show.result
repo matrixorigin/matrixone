@@ -1,0 +1,47 @@
+drop database if exists test01;
+create database test01;
+use test01;
+create table tt(col2 float comment '"%$^&*()_+@!\'');
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n`col2` FLOAT DEFAULT NULL COMMENT '"%$^&*()_+@!''\n)
+drop table tt;
+create table t1 (id int not null, str char(10),name varchar(10));
+create table t2 (a int);
+show tables;
+tables_in_test01
+t1
+t2
+show tables from test01;
+tables_in_test01
+t1
+t2
+show columns from t1;
+Field	Type	Null	Key	Default	Comment
+id	INT	NO		NULL		
+str	CHAR	YES		NULL	
+name	VARCHAR	YES		NULL		
+drop database if exists test01;
+show charset;
+Charset    Description    Default collation    Maxlen
+drop database if exists test02;
+create database test02;
+use test02;
+create table t1(a tinyint, b smallint, c int, d bigint);
+create database test01;
+use test01;
+show columns from test02.t1;
+Field    Type    Null    Key    Default    Comment
+a    TINYINT    YES        NULL
+b    SMALLINT    YES        NULL
+c    INT    YES        NULL
+d    BIGINT    YES        NULL
+create database if not exists db11111111111;
+show table status from db11111111111;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
+drop database db11111111111;
+show grants for 'test'@'localhost';
+Grants for test@localhost
+show variables where value = 'MatrixOne';
+Variable_name    Value
+version_comment    MatrixOne

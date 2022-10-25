@@ -195,7 +195,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if vec.IsScalarNull() {
 			value = Nullable{
 				IsNull: true,

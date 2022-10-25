@@ -637,12 +637,24 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) 
 	return node.TxnGetNodeLocked(txn)
 }
 
-func (catalog *Catalog) GetDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	n, err := catalog.txnGetNodeByNameLocked(name, txn)
 	if err != nil {
 		return nil, err
 	}
 	return n.GetPayload(), nil
+}
+
+func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+	dbEntry, err := catalog.GetDatabaseByID(id)
+	if err != nil {
+		return nil, err
+	}
+	visiable, dropped := dbEntry.GetVisibility(txn.GetStartTS())
+	if !visiable || dropped {
+		return nil, moerr.NewNotFound()
+	}
+	return dbEntry, nil
 }
 
 func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
@@ -663,11 +675,41 @@ func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry b
 	return
 }
 
+func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
+	if id == pkgcatalog.MO_CATALOG_ID {
+		err = moerr.NewTAEError("not permitted")
+		return
+	}
+	entry, err := catalog.GetDatabaseByID(id)
+	if err != nil {
+		return
+	}
+	entry.Lock()
+	defer entry.Unlock()
+	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
+		deleted = entry
+	}
+	return
+}
+
 func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
 	entry := NewDBEntry(catalog, name, txn)
+	err = catalog.AddEntryLocked(entry, txn)
+
+	return entry, err
+}
+
+func (catalog *Catalog) CreateDBEntryWithID(name string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+	var err error
+	catalog.Lock()
+	defer catalog.Unlock()
+	if _, exist := catalog.entries[id]; exist {
+		return nil, moerr.NewDuplicate()
+	}
+	entry := NewDBEntryWithID(catalog, name, id, txn)
 	err = catalog.AddEntryLocked(entry, txn)
 
 	return entry, err
