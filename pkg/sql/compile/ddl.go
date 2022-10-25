@@ -125,6 +125,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -171,7 +172,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		return err
 	}
 
-	return nil
+	return colexec.CreateAutoIncrCol(tmpDBSource, c.ctx, c.proc, tableCols, tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.

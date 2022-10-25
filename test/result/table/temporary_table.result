@@ -6,3 +6,19 @@ create table t1 (a int);
 show tables;
 tables_in_temporary_table
 t1
+insert into t values (1), (2), (3);
+select * from t;
+a
+1
+2
+3
+delete from t where a = 1;
+select * from t;
+a
+2
+3
+update t set a = 4 where a = 3;
+select * from t;
+a
+2
+4

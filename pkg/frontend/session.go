@@ -1396,7 +1396,9 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 
 	ctx := tcc.GetSession().GetRequestContext()
 	//open database
-	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
+	txn := tcc.GetTxnHandler()
+	storage := txn.GetStorage()
+	db, err := storage.Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err

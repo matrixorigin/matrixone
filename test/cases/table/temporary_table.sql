@@ -4,4 +4,9 @@ use test_temporary;
 create temporary table t (a int);
 create table t1 (a int);
 show tables;
-t1
+insert into t values (1), (2), (3);
+select * from t;
+delete from t where a = 1;
+select * from t;
+update t set a = 4 where a = 3;
+select * from t;

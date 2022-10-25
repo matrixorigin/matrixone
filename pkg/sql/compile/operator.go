@@ -257,13 +257,24 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
+		var dbSource engine.Database
+		var relation engine.Relation
+		var err error
+		dbSource, err = eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
+		relation, err = dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
-			return nil, err
+			var e error
+			dbSource, e = eg.Database(ctx, "temp-db", txnOperator)
+			if e != nil {
+				return nil, err
+			}
+			relation, e = dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
+			if e != nil {
+				return nil, err
+			}
 		}
 
 		indexTables := make([]engine.Relation, 0)
@@ -299,9 +310,17 @@ func constructInsert(n *plan.Node, eg engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(ctx, n.TableDef.Name)
+	relation, err = db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
-		return nil, err
+		var e error
+		db, e = eg.Database(ctx, "temp-db", txnOperator)
+		if e != nil {
+			return nil, err
+		}
+		relation, e = db.Relation(ctx, n.TableDef.Name)
+		if e != nil {
+			return nil, err
+		}
 	}
 	indexTables := make([]engine.Relation, 0)
 	for _, info := range n.TableDef.IndexInfos {
@@ -333,16 +352,26 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 	dbName := make([]string, len(n.UpdateCtxs))
 	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
+		var dbSource engine.Database
+		var relation engine.Relation
+		var err error
+		dbSource, err = eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
+		}
+		relation, err = dbSource.Relation(ctx, updateCtx.TblName)
+		if err != nil {
+			var e error
+			dbSource, e = eg.Database(ctx, "temp-db", txnOperator)
+			if e != nil {
+				return nil, err
+			}
+			relation, e = dbSource.Relation(ctx, updateCtx.TblName)
+			if e != nil {
+				return nil, err
+			}
 		}
 		db[i] = dbSource
-		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
-		if err != nil {
-			return nil, err
-		}
-
 		tableID[i] = relation.GetTableID(ctx)
 		dbName[i] = updateCtx.DbName
 		tblName[i] = updateCtx.TblName
