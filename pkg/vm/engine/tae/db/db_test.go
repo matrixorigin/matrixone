@@ -3845,4 +3845,36 @@ func TestSnapshotBatch(t *testing.T) {
 	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
 	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
 	t.Log(ctlg.SimplePPString(3))
+
+	txn, relation := tae.getRelation()
+	blkIt := relation.MakeBlockIt()
+	for blkIt.Valid() {
+		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
+		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
+		blkIt.Next()
+	}
+	segIt := relation.MakeSegmentIt()
+	for segIt.Valid() {
+		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
+		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
+		segIt.Next()
+	}
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName("test")
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs = maxTs.Next()
+	txn, _ = tae.StartTxn(nil)
+	maxTs = txn.GetStartTS()
+	builder, _ = logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
+	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
+	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
+	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
+	t.Log(ctlg.SimplePPString(3))
 }

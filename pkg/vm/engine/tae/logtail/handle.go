@@ -671,10 +671,13 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 	addTIDVector(b.segDelTxnBatch)
 	addTIDVector(b.blkMetaInsTxnBatch)
 	addTIDVector(b.blkMetaDelTxnBatch)
+	addTIDVector(b.tblDelTxnBatch)
 	addDBIDVector(b.segInsTxnBatch)
 	addDBIDVector(b.segDelTxnBatch)
 	addDBIDVector(b.blkMetaInsTxnBatch)
 	addDBIDVector(b.blkMetaDelTxnBatch)
+	addDBIDVector(b.tblDelTxnBatch)
+	addDBIDVector(b.dbDelTxnBatch)
 	addSegIDVector(b.blkMetaInsTxnBatch)
 	addSegIDVector(b.blkMetaDelTxnBatch)
 	b.DatabaseFn = b.VisitDB
@@ -711,6 +714,7 @@ func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(b.dbDelBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 			dbNode.TxnMVCCNode.FillTxnRows(b.dbDelTxnBatch)
+			b.dbDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID())
 		} else {
 			catalogEntry2Batch(b.dbInsBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 			dbNode.TxnMVCCNode.FillTxnRows(b.dbInsTxnBatch)
@@ -744,13 +748,15 @@ func (b *CheckpointLogtailRespBuilder) VisitTable(entry *catalog.TableEntry) (er
 			catalogEntry2Batch(b.tblInsBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			tblNode.TxnMVCCNode.FillTxnRows(b.tblInsTxnBatch)
 		} else {
+			b.tblDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetDB().GetID())
+			b.tblDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetID())
 			rowidVec := b.tblColDelBatch.GetVectorByName(catalog.AttrRowID)
 			commitVec := b.tblColDelBatch.GetVectorByName(catalog.AttrCommitTs)
 			for _, usercol := range entry.GetSchema().ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
 				commitVec.Append(tblNode.GetEnd())
 			}
-			catalogEntry2Batch(b.tblColDelBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+			catalogEntry2Batch(b.tblDelBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			tblNode.TxnMVCCNode.FillTxnRows(b.tblDelTxnBatch)
 		}
 	}
