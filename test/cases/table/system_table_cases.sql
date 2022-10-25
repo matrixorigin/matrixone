@@ -3,7 +3,6 @@
 -- @desc:test for Some System tables status, content, availability, and so on...
 -- @label:bvt
 
-SHOW DATABASES;
 USE mo_catalog;
 SHOW TABLES;
 -- mo_database
@@ -16,7 +15,6 @@ SHOW COLUMNS FROM mo_database;
 
 -- mo_tables
 SHOW COLUMNS FROM mo_tables;
-SELECT * FROM mo_tables LIMIT 1;
 SELECT COUNT(*) FROM mo_tables;
 SELECT COUNT(*) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
@@ -105,7 +103,7 @@ SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 (SELECT account, user, host FROM statement_info LIMIT 1) UNION (SELECT account, user, host FROM statement_info LIMIT 1);
-SELECT account, user, host FROM statement_info WHERE err_code = 0 LIMIT 10;
+SELECT account, user, host FROM statement_info LIMIT 10;
 
 
 -- @bvt:issue#5895
@@ -141,18 +139,14 @@ SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
-(SELECT * FROM error_info LIMIT 1) UNION (SELECT * FROM error_info LIMIT 1);
 -- @bvt:issue
 
 -- span_info
 SHOW COLUMNS FROM span_info;
-SELECT statement_id, parent_span_id, node_type FROM span_info LIMIT 1;
-SELECT COUNT(*) FROM span_info;
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
-(SELECT statement_id, parent_span_id, node_type FROM span_info LIMIT 1) UNION (SELECT statement_id, parent_span_id, node_type FROM span_info LIMIT 1);
 
 -- tables in system_metrics
 USE system_metrics;
@@ -160,62 +154,50 @@ SHOW TABLES;
 -- metric
 SHOW COLUMNS FROM metric;
 SELECT metric_name, role, account FROM metric LIMIT 1;
-SELECT COUNT(*) FROM metric;
 SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM metric LIMIT 10) AS temp;
-SELECT metric_name, role, account FROM (SELECT metric_name, role, account FROM metric LIMIT 10) AS temp LIMIT 5;
 (SELECT metric_name, role, account FROM metric LIMIT 1) UNION (SELECT metric_name, role, account FROM metric LIMIT 1);
 
 -- sql_statement_total
 SHOW COLUMNS FROM sql_statement_total;
 SELECT value, account, role FROM sql_statement_total LIMIT 1;
-SELECT COUNT(*) FROM sql_statement_total;
 SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 SELECT value, account, role FROM (SELECT value, account, role FROM sql_statement_total LIMIT 10) AS temp LIMIT 5;
-(SELECT value, account, role FROM sql_statement_total LIMIT 1) UNION (SELECT value, account, role FROM sql_statement_total LIMIT 1);
 
 -- sql_statement_errors
 SHOW COLUMNS FROM sql_statement_errors;
-SELECT value, role, type FROM sql_statement_errors LIMIT 1;
 SELECT COUNT(*) FROM sql_statement_errors;
 SELECT COUNT(*) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
-SELECT value, role, type FROM (SELECT value, role, type FROM sql_statement_errors LIMIT 10) AS temp LIMIT 5;
-(SELECT value, role, type FROM sql_statement_errors LIMIT 1) UNION (SELECT value, role, type FROM sql_statement_errors LIMIT 1);
 
 -- sql_transaction_total
 SHOW COLUMNS FROM sql_transaction_total;
 SELECT value, account, role FROM sql_transaction_total LIMIT 1;
-SELECT COUNT(*) FROM sql_transaction_total;
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
-SELECT value, account, role FROM (SELECT value, account, role FROM sql_transaction_total LIMIT 10) AS temp LIMIT 5;
 (SELECT value, account, role FROM sql_transaction_total LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_total LIMIT 1);
 
 -- sql_transaction_errors
 SHOW COLUMNS FROM sql_transaction_errors;
 SELECT value, account, role FROM sql_transaction_errors LIMIT 1;
-SELECT COUNT(*) FROM sql_transaction_errors;
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
-SELECT value, account, role FROM (SELECT value, account, role FROM sql_transaction_errors LIMIT 10) AS temp LIMIT 5;
 (SELECT value, account, role FROM sql_transaction_errors LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_errors LIMIT 2);
 
 -- server_connections
 SHOW COLUMNS FROM server_connections;
 SELECT account, role, value FROM server_connections LIMIT 1;
-SELECT COUNT(*) FROM server_connections;
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
@@ -225,30 +207,21 @@ SELECT account, role, value FROM (SELECT account, role, value FROM server_connec
 
 -- process_cpu_percent
 SHOW COLUMNS FROM process_cpu_percent;
-SELECT account, value, role FROM process_cpu_percent LIMIT 1;
-SELECT COUNT(*) FROM process_cpu_percent;
 SELECT COUNT(*) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
-SELECT account, value, role FROM (SELECT account, value, role FROM process_cpu_percent LIMIT 10) AS temp LIMIT 5;
-(SELECT account, value, role FROM process_cpu_percent LIMIT 1) UNION (SELECT account, value, role FROM process_cpu_percent LIMIT 2);
 
 -- process_resident_memory_bytes
 SHOW COLUMNS FROM process_resident_memory_bytes;
 SELECT account, value, role FROM process_resident_memory_bytes LIMIT 1;
-SELECT COUNT(*) FROM process_resident_memory_bytes;
 SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
-SELECT account, value, role FROM (SELECT account, value, role FROM process_resident_memory_bytes LIMIT 10) AS temp LIMIT 5;
-(SELECT account, value, role FROM process_resident_memory_bytes LIMIT 1) UNION (SELECT account, value, role FROM process_resident_memory_bytes LIMIT 2);
 
 -- process_open_fds
 SHOW COLUMNS FROM process_open_fds;
-SELECT value, role, account FROM process_open_fds LIMIT 1;
-SELECT COUNT(*) FROM process_open_fds;
 SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
@@ -258,31 +231,22 @@ SELECT value, role, account FROM (SELECT value, role, account FROM process_open_
 
 -- sys_cpu_seconds_total
 SHOW COLUMNS FROM sys_cpu_seconds_total;
-SELECT value, role, account FROM sys_cpu_seconds_total LIMIT 1;
-SELECT COUNT(*) FROM sys_cpu_seconds_total;
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
-SELECT value, role, account FROM (SELECT value, role, account FROM sys_cpu_seconds_total LIMIT 10) AS temp LIMIT 5;
-(SELECT value, role, account FROM sys_cpu_seconds_total LIMIT 1) UNION (SELECT value, role, account FROM sys_cpu_seconds_total LIMIT 2);
 
 
 -- sys_cpu_combined_percent
 SHOW COLUMNS FROM sys_cpu_combined_percent;
-SELECT value, role, account FROM sys_cpu_combined_percent LIMIT 1;
-SELECT COUNT(*) FROM sys_cpu_combined_percent;
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
-SELECT value, role, account FROM (SELECT value, role, account FROM sys_cpu_combined_percent LIMIT 10) AS temp LIMIT 5;
-(SELECT value, role, account FROM sys_cpu_combined_percent LIMIT 1) UNION (SELECT value, role, account FROM sys_cpu_combined_percent LIMIT 2);
 
 -- sys_memory_used
 SHOW COLUMNS FROM sys_memory_used;
 SELECT value, role, account FROM sys_memory_used LIMIT 1;
-SELECT COUNT(*) FROM sys_memory_used;
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
@@ -292,58 +256,39 @@ SELECT value, role, account FROM (SELECT value, role, account FROM sys_memory_us
 
 -- sys_memory_available
 SHOW COLUMNS FROM sys_memory_available;
-SELECT value, role, account FROM sys_memory_available LIMIT 1;
-SELECT COUNT(*) FROM sys_memory_available;
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
-SELECT value, role, account FROM (SELECT value, role, account FROM sys_memory_available LIMIT 10) AS temp LIMIT 5;
-(SELECT value, account, role FROM sys_memory_available LIMIT 1) UNION (SELECT value, account, role FROM sys_memory_available LIMIT 2);
 
 -- sys_disk_read_bytes
 SHOW COLUMNS FROM sys_disk_read_bytes;
 SELECT value, account, role FROM sys_disk_read_bytes LIMIT 1;
-SELECT COUNT(*) FROM sys_disk_read_bytes;
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
-SELECT value, account, role FROM (SELECT value, account, role FROM sys_disk_read_bytes LIMIT 10) AS temp LIMIT 5;
-(SELECT value, account, role FROM sys_disk_read_bytes LIMIT 1) UNION (SELECT value, account, role FROM sys_disk_read_bytes LIMIT 2);
 
 -- sys_disk_write_bytes
 SHOW COLUMNS FROM sys_disk_write_bytes;
-SELECT value, account, role FROM sys_disk_write_bytes LIMIT 1;
-SELECT COUNT(*) FROM sys_disk_write_bytes;
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
-SELECT value, account, role FROM (SELECT value, account, role FROM sys_disk_write_bytes LIMIT 10) AS temp LIMIT 5;
-(SELECT value, account, role FROM sys_disk_write_bytes LIMIT 1) UNION (SELECT value, account, role FROM sys_disk_write_bytes LIMIT 2);
 
 -- sys_net_recv_bytes
 SHOW COLUMNS FROM sys_net_recv_bytes;
-SELECT role, value, account FROM sys_net_recv_bytes LIMIT 1;
-SELECT COUNT(*) FROM sys_net_recv_bytes;
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
-SELECT role, value, account FROM (SELECT role, value, account FROM sys_net_recv_bytes LIMIT 10) AS temp LIMIT 5;
-(SELECT role, value, account FROM sys_net_recv_bytes LIMIT 1) UNION (SELECT role, value, account FROM sys_net_recv_bytes LIMIT 2);
 
 -- sys_net_sent_bytes
 SHOW COLUMNS FROM sys_net_sent_bytes;
-SELECT role, value, account FROM sys_net_sent_bytes LIMIT 1;
-SELECT COUNT(*) FROM sys_net_sent_bytes;
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
-SELECT role, value, account FROM (SELECT role, value, account FROM sys_net_sent_bytes LIMIT 10) AS temp LIMIT 5;
-(SELECT role, value, account FROM sys_net_sent_bytes LIMIT 1) UNION (SELECT role, value, account FROM sys_net_sent_bytes LIMIT 2);
 
 -- tables in mysql
 USE mysql;
