@@ -194,7 +194,11 @@ func (n *Bitmap) Remove(row uint64) {
 
 // Contains returns true if the row is contained in the Bitmap
 func (n *Bitmap) Contains(row uint64) bool {
-	return (n.data[row>>6] & (1 << (row & 0x3F))) != 0
+	idx := row >> 6
+	if idx > uint64(len(n.data)) {
+		return false
+	}
+	return (n.data[idx] & (1 << (row & 0x3F))) != 0
 }
 
 func (n *Bitmap) AddRange(start, end uint64) {
