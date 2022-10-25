@@ -84,7 +84,7 @@ func BlockRead(
 		}
 		bat.Vecs[i] = movec
 	}
-	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
+	bat.SetZs(bat.Vecs[0].Length(), pool)
 
 	return bat, nil
 }
