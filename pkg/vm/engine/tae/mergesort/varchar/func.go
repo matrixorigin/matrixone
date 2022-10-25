@@ -28,10 +28,17 @@ func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 
 	sortUnstable(dataWithIdx)
 
+	opt := &containers.Options{Allocator: col.GetAllocator()}
+	sorted := containers.MakeVector(col.GetType(), col.Nullable(), opt)
+	defer sorted.Close()
 	for i, v := range dataWithIdx {
 		idx[i] = v.idx
-		col.Update(i, v.data)
+		sorted.Append(v.data)
 	}
+	bs := col.Bytes()
+	dbs := sorted.Bytes()
+	copy(bs.HeaderBuf(), dbs.HeaderBuf())
+	copy(bs.Storage, dbs.Storage)
 	return
 }
 

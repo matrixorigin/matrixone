@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -50,12 +51,12 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 		}
 	}
 	err = r.allocData(metas.Entries, m)
+	defer r.freeData(metas.Entries, m)
 	if err != nil {
-		r.freeData(metas.Entries, m)
+		return nil, err
 	}
 	err = r.object.fs.Read(context.Background(), metas)
 	if err != nil {
-		r.freeData(metas.Entries, m)
 		return nil, err
 	}
 	blocks := make([]BlockObject, len(extents))
@@ -66,7 +67,6 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 		}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
-			r.freeData(metas.Entries, m)
 			return nil, err
 		}
 	}
@@ -97,6 +97,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*file
 	err = r.allocData(data.Entries, m)
 	if err != nil {
 		r.freeData(data.Entries, m)
+		return nil, err
 	}
 	err = r.object.fs.Read(context.Background(), data)
 	if err != nil {
@@ -130,9 +131,9 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType
 
 func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
-		for _, entry := range Entries {
-			if entry.Data != nil {
-				m.Free(entry.Data)
+		for i := range Entries {
+			if Entries[i].Data != nil {
+				m.Free(Entries[i].Data)
 			}
 		}
 	}
@@ -140,8 +141,8 @@ func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 
 func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
-		for _, entry := range Entries {
-			entry.Data, err = m.Alloc(int(entry.Size))
+		for i := range Entries {
+			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
 			if err != nil {
 				return
 			}

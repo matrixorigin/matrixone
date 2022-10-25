@@ -455,6 +455,9 @@ var (
 		input:  "create table t (a double(13))  // comment",
 		output: "create table t (a double(13))",
 	}, {
+		input:  "create table t (a double(13))  -- comment",
+		output: "create table t (a double(13))",
+	}, {
 		input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 	}, {
 		input:  "select extract(year from l_shipdate) as l_year from t",
