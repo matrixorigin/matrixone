@@ -1,0 +1,113 @@
+drop database if exists test_temporary;
+create database test_temporary;
+use test_temporary;
+drop table if exists t1;
+drop table if exists t2;
+create temporary table t1(a int primary key,b int);
+create temporary table t2(c int);
+insert into t1 values(1,1),(2,2),(4,5);
+insert into t2 values(2),(3),(8),(4);
+drop table if exists t3;
+create table t3(a int);
+show tables;
+tables_in_test_temporary
+t3
+insert into t3 values(1),(7),(8),(2);
+select * from t1;
+a   b
+1   1
+2   2
+4   5
+select * from t2;
+c
+2
+3
+8
+4
+-- test join between temporary table and normal table
+select * from t1,t2,t3 where t1.a = t2.c and t1.b > t3.a;
+a   b   c   a
+2   2   2   1
+4   5   4   1
+4   5   4   2
+drop table t2;
+ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
+truncate table t1;
+ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
+insert into t1 values(1,1),(1,2);
+ERROR 20305 (HY000): tae data: duplicate
+drop table if exists t4;
+create temporary table t4(a int auto_increment,b varchar(20));
+insert into t4 values(1,"abc");
+ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
+insert into t4(b) values("def");
+ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
+select * from t4;
+Empty set
+-- test subquery
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create temporary table t1 (a int);
+create temporary table t2 (a int, b int);
+create temporary table t3 (a int);
+create temporary table t4 (a int not null, b int not null);
+insert into t1 values (2);
+insert into t2 values (1,7),(2,7);
+insert into t4 values (4,8),(3,8),(5,9);
+insert into t2 values (100, 5);
+select * from t3 where a in (select b from t2);
+a
+select * from t3 where a in (select b from t2 where b > 7);
+a
+select * from t3 where a not in (select b from t2);
+a
+
+-- test load data
+drop table if exists t1;
+create temporary table t1(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile '$resources/load_data/integer_numbers_1.csv' into table t1;
+select * from t1;
+col1    col2    col3    col4    col5    col6    col7    col8
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+-128    -32768    -2147483648    -9223372036854775808    0    0    0    0
+0    0    0    0    0    0    0    0
+null    null    null    null    null    null    null    null
+1    null    null    0    0    0    null    null
+null    null    null    null    null    null    null    null
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+select * from t1 into outfile '$resources/into_outfile/outfile_integer_numbers_1.csv';
+col1    col2    col3    col4    col5    col6    col7    col8
+delete from t1;
+load data infile '$resources/into_outfile/outfile_integer_numbers_1.csv' into table t1 ignore 1 lines;
+select * from t1;
+col1    col2    col3    col4    col5    col6    col7    col8
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+-128    -32768    -2147483648    -9223372036854775808    0    0    0    0
+0    0    0    0    0    0    0    0
+null    null    null    null    null    null    null    null
+1    null    null    0    0    0    null    null
+null    null    null    null    null    null    null    null
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+delete from t1;
+load data infile '$resources/load_data/integer_numbers_2.csv' into table t1 fields terminated by'*';
+select * from t1;
+col1    col2    col3    col4    col5    col6    col7    col8
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+-128    -32768    -2147483648    -9223372036854775808    0    0    0    0
+0    0    0    0    0    0    0    0
+null    null    null    null    null    null    null    null
+1    null    null    0    0    0    null    null
+null    null    null    null    null    null    null    null
+127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
+delete from t1;
+drop table t1;
