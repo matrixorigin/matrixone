@@ -45,10 +45,12 @@ func isNotNull(n *nulls.Nulls, i uint64) bool {
 
 func removeEscapeChar(src []byte, escapeChar byte) []byte {
 	var target []byte
-	for _, b := range src {
-		if b != escapeChar {
-			target = append(target, b)
+	max := len(src)
+	for i := 0; i < max; i++ {
+		if src[i] == escapeChar && i < max {
+			i = i + 1
 		}
+		target = append(target, src[i])
 	}
 	return target
 }
