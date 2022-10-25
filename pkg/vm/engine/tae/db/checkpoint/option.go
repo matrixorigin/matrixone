@@ -29,3 +29,21 @@ func WithFlushInterval(interval time.Duration) Option {
 		r.options.maxFlushInterval = interval
 	}
 }
+
+func WithMinCount(count int) Option {
+	return func(r *runner) {
+		r.options.minCount = count
+	}
+}
+
+func WithMinIncrementalInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.minIncrementalInterval = interval
+	}
+}
+
+func WithMinGlobalInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.minGlobalInterval = interval
+	}
+}
