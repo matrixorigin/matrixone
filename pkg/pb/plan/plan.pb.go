@@ -14393,7 +14393,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			b := bool(v != 0)
 			m.Value = &Const_UpdateVal{b}
-		case 16:
+		case 17:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsBin", wireType)
 			}
