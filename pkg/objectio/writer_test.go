@@ -102,14 +102,17 @@ func TestNewObjectWriter(t *testing.T) {
 	for i, blk := range blocks {
 		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
 	}
-	bs, err := objectReader.ReadMeta(extents, nil)
+	pool, err := mpool.NewMPool("objectio_test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	nb0 := pool.CurrNB()
+	bs, err := objectReader.ReadMeta(extents, pool)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(blocks[0].GetExtent(), idxs, nil)
+	vec, err := objectReader.Read(blocks[0].GetExtent(), idxs, pool)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Data)
 	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
@@ -126,6 +129,11 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
 	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
+	assert.False(t, nb0 == pool.CurrNB())
+	for i := range vec.Entries {
+		pool.Free(vec.Entries[i].Data)
+	}
+	assert.True(t, nb0 == pool.CurrNB())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

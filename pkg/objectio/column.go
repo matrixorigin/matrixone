@@ -84,12 +84,12 @@ func (cb *ColumnBlock) GetIndex(dataType IndexDataType, m *mpool.MPool) (IndexDa
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
 		err = cb.allocData(data.Entries[0], m)
+		defer cb.freeData(data.Entries[0], m)
 		if err != nil {
 			return nil, err
 		}
 		err = cb.object.fs.Read(context.Background(), data)
 		if err != nil {
-			cb.freeData(data.Entries[0], m)
 			return nil, err
 		}
 		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Data), nil
