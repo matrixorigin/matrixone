@@ -14,8 +14,18 @@
 
 package checkpoint
 
-type Runner interface {
-	Start()
-	Stop()
-	EnqueueWait(any) error
+import "time"
+
+type Option func(*runner)
+
+func WithCollectInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.collectInterval = interval
+	}
+}
+
+func WithFlushInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.maxFlushInterval = interval
+	}
 }
