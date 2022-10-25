@@ -11,7 +11,7 @@ jobs:
   bvt-linux-x86:
     runs-on: x86-runner
     name: e2e BVT Test on Linux/x64
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: checkout head
@@ -82,5 +82,5 @@ jobs:
         with:
           name: linux_x86_ci_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/upload
           retention-days: 7

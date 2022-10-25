@@ -50,5 +50,5 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/etl/log"
+data-dir = "mo-data/local/etl"
 
