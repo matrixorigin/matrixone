@@ -398,9 +398,14 @@ func handleShowColumns(ses *Session) error {
 				return err
 			}
 			originString := def.GetOriginString()
-			if originString == "" {
+			switch originString{
+			case "uuid()":
+				row[4] = "UUID"
+			case "current_timestamp()":
+				row[4] = "CURRENT_TIMESTAMP"
+			case "":
 				row[4] = "NULL"
-			} else {
+			default:
 				row[4] = originString
 			}
 			row[5] = ""
@@ -433,9 +438,14 @@ func handleShowColumns(ses *Session) error {
 				return err
 			}
 			originString := def.GetOriginString()
-			if originString == "" {
+			switch originString{
+			case "uuid()":
+				row[5] = "UUID"
+			case "current_timestamp()":
+				row[5] = "CURRENT_TIMESTAMP"
+			case "":
 				row[5] = "NULL"
-			} else {
+			default:
 				row[5] = originString
 			}
 			row[6] = ""
