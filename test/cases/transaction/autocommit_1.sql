@@ -14,11 +14,9 @@ SELECT @@session.autocommit;
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 
