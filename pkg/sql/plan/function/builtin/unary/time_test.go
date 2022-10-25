@@ -15,9 +15,9 @@
 package unary
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -136,10 +136,11 @@ func TestTime(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec, err := makeVectorForTimeTest(c.input, c.precise, c.isConst, c.testTyp, c.proc)
-			require.NoError(t, err)
+			vec, err1 := makeVectorForTimeTest(c.input, c.precise, c.isConst, c.testTyp, c.proc)
+			require.Equal(t, uint16(0), err1)
 
 			var result *vector.Vector
+			var err error
 			switch c.testTyp.Oid {
 			case types.T_date:
 				result, err = DateToTime(vec, c.proc)
@@ -155,20 +156,20 @@ func TestTime(t *testing.T) {
 
 }
 
-func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.Type, proc *process.Process) ([]*vector.Vector, error) {
+func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.Type, proc *process.Process) ([]*vector.Vector, uint16) {
 	vec := make([]*vector.Vector, 1)
 	if isConst {
 		switch typ.Oid {
 		case types.T_date:
 			data, err := types.ParseDate(str)
 			if err != nil {
-				return nil, err
+				return nil, moerr.ErrInvalidInput
 			}
 			vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_datetime:
 			data, err := types.ParseDatetime(str, precision)
 			if err != nil {
-				return nil, err
+				return nil, moerr.ErrInvalidInput
 			}
 			vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, data, testutil.TestUtilMp)
 			vec[0].Typ.Precision = precision
@@ -189,8 +190,8 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 		case types.T_varchar:
 			vec[0] = testutil.MakeVarcharVector(input, nil)
 		default:
-			return nil, errors.New("unknow error when time test")
+			return vec, moerr.ErrInvalidInput
 		}
 	}
-	return vec, nil
+	return vec, 0
 }
