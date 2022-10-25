@@ -53,7 +53,6 @@ load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'
     {"col1":"true","col2":"1","col3":"var","col4":"2020-09-07","col5":"2020-09-07 00:00:00","col6":"2020-09-07 00:00:00","col7":"18","col8":"121.11"}
     {"col6":"2020-09-07 00:00:00","col7":"18","col8":"121.11","col4":"2020-09-07","col5":"2020-09-07 00:00:00","col1":"true","col2":"1","col3":"var"}
     {"col2":1,"col3":"var","col1":true,"col6":"2020-09-07 00:00:00","col7":"18","col4":"2020-09-07","col5":"2020-09-07 00:00:00","col8":121.11}
-
     > head jsonline_array.jl
     [true,1,"var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18",121.11]
     ["true","1","var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18","121.11"]
@@ -64,6 +63,7 @@ load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'
     ```
     mysql -h 127.0.0.1 -P 6001 -udump -p111
     ```
+    
 4. 在 MatrixOne 建表：
 
     ```sql
