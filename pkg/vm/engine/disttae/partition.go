@@ -33,9 +33,8 @@ import (
 )
 
 const (
-	index_PrimaryKey = memtable.Text("primary key")
-	index_BlockID    = memtable.Text("block id")
-	index_Time_OP    = memtable.Text("time, op")
+	index_PrimaryKey      = memtable.Text("primary key")
+	index_BlockID_Time_OP = memtable.Text("block id, time, op")
 )
 
 func NewPartition() *Partition {
@@ -91,7 +90,7 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	p.IterDeletedRowIDs(ctx, ts, func(rowID RowID) bool {
+	p.IterDeletedRowIDs(ctx, []uint64{ /*TODO*/ }, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
 		deletes[id] = append(deletes[id], int(offset))
 		return true
@@ -161,9 +160,10 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		var indexes []memtable.Tuple
 		// time, op
 		indexes = append(indexes, memtable.Tuple{
-			index_Time_OP,
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.Uint(opDelete),
+			memtable.ToOrdered(opDelete),
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -244,16 +244,12 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				primaryKey,
 			})
 		}
-		// block id
-		indexes = append(indexes, memtable.Tuple{
-			index_BlockID,
-			memtable.ToOrdered(rowIDToBlockID(rowID)),
-		})
 		// time, op
 		indexes = append(indexes, memtable.Tuple{
-			index_Time_OP,
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.Uint(opInsert),
+			memtable.ToOrdered(opInsert),
 		})
 
 		err = p.data.Upsert(tx, &DataRow{
@@ -282,11 +278,19 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	pivot := memtable.Tuple{
-		index_BlockID,
+	min := memtable.Tuple{
+		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
+		memtable.Min,
+		memtable.ToOrdered(opInsert),
 	}
-	iter := p.data.NewIndexIter(tx, pivot, append(pivot, memtable.Min))
+	max := memtable.Tuple{
+		index_BlockID_Time_OP,
+		memtable.ToOrdered(blockID),
+		memtable.Max,
+		memtable.ToOrdered(opInsert),
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
@@ -297,37 +301,43 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 	return nil
 }
 
-func (p *Partition) IterDeletedRowIDs(ctx context.Context, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
+func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	min := memtable.Tuple{
-		index_Time_OP,
-		types.TS{},
-	}
-	max := memtable.Tuple{
-		index_Time_OP,
-		types.TimestampToTS(ts),
-		memtable.Max,
-	}
-	iter := p.data.NewIndexIter(tx, min, max)
-	defer iter.Close()
-	deleted := make(map[RowID]bool)
-	inserted := make(map[RowID]bool)
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		rowID := entry.Key
-		switch Op(entry.Index[2].(memtable.Uint)) {
-		case opInsert:
-			inserted[rowID] = true
-		case opDelete:
-			deleted[rowID] = true
+
+	for _, blockID := range blockIDs {
+		min := memtable.Tuple{
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(blockID),
+			memtable.Min,
+			memtable.Min,
 		}
-	}
-	for rowID := range deleted {
-		if !inserted[rowID] {
-			if !fn(rowID) {
-				break
+		max := memtable.Tuple{
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(blockID),
+			types.TimestampToTS(ts),
+			memtable.Max,
+		}
+		iter := p.data.NewIndexIter(tx, min, max)
+		defer iter.Close()
+		deleted := make(map[RowID]bool)
+		inserted := make(map[RowID]bool)
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			rowID := entry.Key
+			switch Op(entry.Index[3].(memtable.Uint)) {
+			case opInsert:
+				inserted[rowID] = true
+			case opDelete:
+				deleted[rowID] = true
+			}
+		}
+		for rowID := range deleted {
+			if !inserted[rowID] {
+				if !fn(rowID) {
+					break
+				}
 			}
 		}
 	}
