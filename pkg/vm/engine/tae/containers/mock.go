@@ -193,6 +193,10 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		for i := 1; i <= rows; i++ {
 			vec.Append(types.FromCalendar(int32(i)*100, 1, 1))
 		}
+	case types.T_time:
+		for i := 1; i <= rows; i++ {
+			vec.Append(types.FromTimeClock(false, 1, 1, 1, 1))
+		}
 	case types.T_timestamp:
 		for i := int32(1); i <= int32(rows); i++ {
 			vec.Append(types.Timestamp(common.NextGlobalSeqNum()))
@@ -290,6 +294,10 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	case types.T_date:
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Date(i + offset))
+		}
+	case types.T_time:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Time(i + offset))
 		}
 	case types.T_datetime:
 		for i := 0; i < rows; i++ {

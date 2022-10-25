@@ -908,6 +908,23 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
+				case types.T_time:
+					cols := vector.MustTCols[types.Time](vec)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseTime(fs, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = 0
+						}
+						cols[rowIdx] = d
+					}
 				case types.T_datetime:
 					cols := vector.MustTCols[types.Datetime](vec)
 					if isNullOrEmpty {
@@ -1444,6 +1461,28 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
+			case types.T_time:
+				cols := vector.MustTCols[types.Time](vec)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseTime(field, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = 0
+							//break
+						}
+						cols[i] = d
+					}
+				}
 			case types.T_datetime:
 				cols := vector.MustTCols[types.Datetime](vec)
 				for i := 0; i < countOfLineArray; i++ {
@@ -1769,6 +1808,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 						vec.Col = cols[:needLen]
 					case types.T_date:
 						cols := vector.MustTCols[types.Date](vec)
+						vec.Col = cols[:needLen]
+					case types.T_time:
+						cols := vector.MustTCols[types.Time](vec)
 						vec.Col = cols[:needLen]
 					case types.T_datetime:
 						cols := vector.MustTCols[types.Datetime](vec)

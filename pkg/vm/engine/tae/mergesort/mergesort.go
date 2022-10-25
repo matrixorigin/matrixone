@@ -58,6 +58,8 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		numerics.Sort[float64](cols[pk], sortedIdx)
 	case types.T_date:
 		numerics.Sort[types.Date](cols[pk], sortedIdx)
+	case types.T_time:
+		numerics.Sort[types.Time](cols[pk], sortedIdx)
 	case types.T_datetime:
 		numerics.Sort[types.Datetime](cols[pk], sortedIdx)
 	case types.T_decimal64:
@@ -113,6 +115,8 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = numerics.Merge[float64](column, sortedIdx, fromLayout, toLayout)
 	case types.T_date:
 		ret, mapping = numerics.Merge[types.Date](column, sortedIdx, fromLayout, toLayout)
+	case types.T_time:
+		ret, mapping = numerics.Merge[types.Time](column, sortedIdx, fromLayout, toLayout)
 	case types.T_datetime:
 		ret, mapping = numerics.Merge[types.Datetime](column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal64:

@@ -12,34 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package date
+package time
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func DatetimeToDate(xs []types.Datetime, rs []types.Date) []types.Date {
+func DateToTime(xs []types.Date, rs []types.Time) []types.Time {
 	for i, x := range xs {
-		rs[i] = x.ToDate()
+		rs[i] = x.ToTime()
 	}
 	return rs
 }
 
-func DateStringToDate(xs []string, rs []types.Date) ([]types.Date, error) {
+func DatetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) []types.Time {
+	for i, x := range xs {
+		rs[i] = x.ToTime(precision)
+	}
+	return rs
+}
+
+func DateStringToTime(xs []string, rs []types.Time) ([]types.Time, error) {
 	for i, str := range xs {
-		d, e := types.ParseDatetime(str, 6)
+		t, e := types.ParseTime(str, 6)
 		if e != nil {
 			return rs, moerr.NewOutOfRange("date", "'%s'", str)
 		}
-		rs[i] = d.ToDate()
+		rs[i] = t
 	}
 	return rs, nil
-}
-
-func TimeToDate(xs []types.Time, rs []types.Date) []types.Date {
-	for i, x := range xs {
-		rs[i] = x.ToDate()
-	}
-	return rs
 }

@@ -253,6 +253,12 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 				proc, m, rows); err != nil {
 				return nil, 0
 			}
+		case types.T_time:
+			vs := vector.GetFixedVectorValues[types.Time](vec)
+			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,
+				proc, m, rows); err != nil {
+				return nil, 0
+			}
 		case types.T_datetime:
 			vs := vector.GetFixedVectorValues[types.Datetime](vec)
 			if err := appendTuples(j == 0, &cnt, vs, vec.GetNulls(), rvec,

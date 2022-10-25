@@ -83,6 +83,66 @@ func DateAdd(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 	return rs, nil
 }
 
+func TimeAdd(xs []types.Time, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Time) ([]types.Time, error) {
+	if len(ys) == 0 || len(zs) == 0 {
+		for i := range xs {
+			nulls.Add(rns, uint64(i))
+		}
+		return rs, nil
+	}
+	for _, y := range ys {
+		err := types.JudgeIntervalNumOverflow(y, types.IntervalType(zs[0]))
+		if err != nil {
+			return rs, err
+		}
+	}
+	if xs == nil {
+		for i := range ys {
+			nulls.Add(rns, uint64(i))
+		}
+	} else if len(xs) == len(ys) {
+		for i, t := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			time, success := t.AddInterval(ys[i], types.IntervalType(zs[0]))
+			if success {
+				rs[i] = time
+			} else {
+				return rs, moerr.NewOutOfRange("time", "")
+			}
+		}
+	} else if len(xs) == 1 {
+		for i, d := range ys {
+			if nulls.Contains(xns, uint64(0)) || nulls.Contains(yns, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			time, success := xs[0].AddInterval(d, types.IntervalType(zs[0]))
+			if success {
+				rs[i] = time
+			} else {
+				return rs, moerr.NewOutOfRange("time", "")
+			}
+		}
+	} else if len(ys) == 1 {
+		for i, d := range xs {
+			if nulls.Contains(xns, uint64(i)) || nulls.Contains(yns, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			time, success := d.AddInterval(ys[0], types.IntervalType(zs[0]))
+			if success {
+				rs[i] = time
+			} else {
+				return rs, moerr.NewOutOfRange("time", "")
+			}
+		}
+	}
+	return rs, nil
+}
+
 func DatetimeAdd(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {

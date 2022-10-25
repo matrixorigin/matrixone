@@ -81,6 +81,10 @@ var (
 		return ifGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
 	}
 
+	IfTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return ifGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+	}
+
 	IfDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
 	}

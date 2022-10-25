@@ -101,9 +101,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	} else if len(msecStr) < int(precision) {
 		lengthMsecStr := len(msecStr)
 		padZeros := int(precision) - lengthMsecStr
-		for i := 0; i < padZeros; i++ {
-			msecStr = msecStr + string('0')
-		}
+		msecStr = msecStr + FillString[padZeros]
 	}
 	if len(msecStr) == 0 { // this means the precision is 0
 		return 0, msecCarry, nil
