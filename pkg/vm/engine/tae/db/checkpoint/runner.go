@@ -20,14 +20,17 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/tidwall/btree"
 )
 
 type blockVisitor struct {
@@ -42,12 +45,39 @@ func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (er
 	return
 }
 
+type RunnerState int8
+
+const (
+	RS_Finished RunnerState = iota
+	RS_Pendding
+	RS_Running
+)
+
+type CheckpointEntry struct {
+	start, end types.TS
+	state      RunnerState
+}
+
+func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
+	return &CheckpointEntry{
+		start: start,
+		end:   end,
+		state: RS_Pendding,
+	}
+}
+
+func (e *CheckpointEntry) MakeBatches() *containers.Batch {
+	logutil.Infof("make batches")
+	return nil
+}
+
 type runner struct {
 	options struct {
 		collectInterval     time.Duration
 		maxFlushInterval    time.Duration
 		dirtyEntryQueueSize int
 		waitQueueSize       int
+		checkpointQueueSize int
 	}
 
 	source    logtail.Collector
@@ -56,11 +86,31 @@ type runner struct {
 
 	stopper *stopper.Stopper
 
+	storage struct {
+		sync.RWMutex
+		entries *btree.BTreeG[*CheckpointEntry]
+		maxTS   types.TS
+	}
+	policy *policy
+
 	dirtyEntryQueue sm.Queue
 	waitQueue       sm.Queue
+	checkpointQueue sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
+}
+
+type policy struct {
+	t0 time.Time
+}
+
+func (p *policy) NeedCheckpoint() bool {
+	if time.Since(p.t0) > time.Minute*5 {
+		p.t0 = time.Now()
+		return true
+	}
+	return false
 }
 
 func NewRunner(
@@ -72,6 +122,16 @@ func NewRunner(
 		catalog:   catalog,
 		scheduler: scheduler,
 		source:    source,
+		storage: struct {
+			sync.RWMutex
+			entries *btree.BTreeG[*CheckpointEntry]
+			maxTS   types.TS
+		}{
+			RWMutex: sync.RWMutex{},
+			entries: btree.NewBTreeG(func(a, b *CheckpointEntry) bool {
+				return a.start.Less(b.start)
+			}),
+		},
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -80,9 +140,75 @@ func NewRunner(
 	r.stopper = stopper.NewStopper("CheckpointRunner")
 	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
 	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
+	r.checkpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onCheckpointEntries)
 	return r
 }
 
+func (r *runner) onCheckpointEntries(items ...any) {
+	for _, item := range items {
+		ckpEntry := item.(*CheckpointEntry)
+		bat := ckpEntry.MakeBatches()
+		logutil.Infof("Flush batch %v", bat)
+	}
+}
+func (r *runner) GetLastEntry() *CheckpointEntry {
+	r.storage.RLock()
+	defer r.storage.RUnlock()
+	entry, _ := r.storage.entries.Max()
+	return entry
+}
+func (r *runner) NeedWait(entry *CheckpointEntry) bool {
+	e := r.source.ScanInRange(entry.start, entry.end)
+	return !e.GetTree().Compact()
+}
+
+func (r *runner) TryCheckpoint(ts types.TS) {
+	var state RunnerState
+	entry := r.GetLastEntry()
+	if entry == nil {
+		state = RS_Finished
+	} else {
+		state = entry.state
+	}
+	switch state {
+	case RS_Finished:
+		if r.policy.NeedCheckpoint() {
+			maxTS := ts
+			minTS := r.GetLastCheckpointTS().Next()
+			newEntry := NewCheckpointEntry(minTS, maxTS)
+			r.SetCheckpointEntry(newEntry)
+			if !r.NeedWait(newEntry) {
+				newEntry.state = RS_Running
+				r.checkpointQueue.Enqueue(newEntry)
+			}
+		}
+		return
+	case RS_Pendding:
+		if !r.NeedWait(entry) {
+			entry.state = RS_Running
+			r.checkpointQueue.Enqueue(entry)
+		}
+	case RS_Running:
+		return
+	}
+}
+func (r *runner) SetCheckpointEntry(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.entries.Set(entry)
+	r.storage.maxTS = entry.end
+}
+func (r *runner) LogCheckpointEntry(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.entries.Set(entry)
+	r.storage.maxTS = entry.end
+}
+func (r *runner) GetLastCheckpointTS() types.TS {
+	r.storage.RLock()
+	defer r.storage.RUnlock()
+	return r.storage.maxTS
+}
 func (r *runner) fillDefaults() {
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
@@ -93,6 +219,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.waitQueueSize <= 1000 {
 		r.options.waitQueueSize = 1000
+	}
+	if r.options.checkpointQueueSize <= 1000 {
+		r.options.checkpointQueueSize = 1000
 	}
 }
 
@@ -181,6 +310,8 @@ func (r *runner) cronCollect(ctx context.Context) {
 	hb.Stop()
 }
 
+func (r *runner) EnqueueCheckpoint(item any)
+
 func (r *runner) EnqueueWait(item any) (err error) {
 	_, err = r.waitQueue.Enqueue(item)
 	return
@@ -190,6 +321,7 @@ func (r *runner) Start() {
 	r.onceStart.Do(func() {
 		r.waitQueue.Start()
 		r.dirtyEntryQueue.Start()
+		r.checkpointQueue.Start()
 		if err := r.stopper.RunNamedTask("dirty-collector-job", r.cronCollect); err != nil {
 			panic(err)
 		}
@@ -201,5 +333,6 @@ func (r *runner) Stop() {
 		r.stopper.Stop()
 		r.dirtyEntryQueue.Stop()
 		r.waitQueue.Stop()
+		r.checkpointQueue.Stop()
 	})
 }
