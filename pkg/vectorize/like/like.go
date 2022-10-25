@@ -47,7 +47,7 @@ func removeEscapeChar(src []byte, escapeChar byte) []byte {
 	var target []byte
 	max := len(src)
 	for i := 0; i < max; i++ {
-		if src[i] == escapeChar && i < max {
+		if src[i] == escapeChar && i+1 < max {
 			i = i + 1
 		}
 		target = append(target, src[i])
