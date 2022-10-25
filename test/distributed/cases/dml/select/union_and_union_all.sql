@@ -119,8 +119,9 @@ insert into t6 values ('bb', '22');
 insert into t6 values ('cc', '33');
 insert into t6 values ('dd', '44');
 
+-- @bvt:issue#4944
 select a from t5 union select col1 from t6;
-
+-- @bvt:issue
 select a from t5 union select col2 from t6;
 select b from t5 union select col1 from t6;
 select b from t5 union select col2 from t6;
