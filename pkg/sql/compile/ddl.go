@@ -171,10 +171,15 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 				Names: defVal.Pk.GetNames(),
 			}
 		case *plan.TableDef_DefType_Idx:
-			exeDefs[i] = &engine.IndexTableDef{
-				ColNames: defVal.Idx.GetColNames(),
-				Name:     defVal.Idx.GetName(),
+			indexDef := &engine.ComputeIndexDef{}
+			indexDef.IndexNames = defVal.Idx.IndexNames
+			indexDef.TableNames = defVal.Idx.TableNames
+			indexDef.Uniques = defVal.Idx.Uniques
+			indexDef.Fields = make([][]string, 0)
+			for _, field := range defVal.Idx.Fields {
+				indexDef.Fields = append(indexDef.Fields, field.ColNames)
 			}
+			exeDefs[i] = indexDef
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -198,12 +203,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
-		case *plan.TableDef_DefType_ComputeIndex:
-			computeIndexDef := &engine.ComputeIndexDef{}
-			computeIndexDef.Names = defVal.ComputeIndex.Names
-			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
-			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
-			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil

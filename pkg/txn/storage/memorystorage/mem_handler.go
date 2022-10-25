@@ -196,11 +196,11 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 	case *engine.ComputeIndexDef:
 		// add index
 		// check existence
-		for i := 0; i < len(def.Names); i++ {
+		for i := 0; i < len(def.IndexNames); i++ {
 			entries, err := m.indexes.Index(tx, Tuple{
 				index_RelationID_Name,
 				req.TableID,
-				Text(def.Names[i]),
+				Text(def.IndexNames[i]),
 			})
 			if err != nil {
 				return err
@@ -216,9 +216,10 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			idxRow := &IndexRow{
 				ID:         id,
 				RelationID: req.TableID,
-				Name:       def.Names[i],
+				IndexName:  def.IndexNames[i],
 				Unique:     def.Uniques[i],
 				TableName:  def.TableNames[i],
+				Field:      def.Fields[i],
 			}
 			if err := m.indexes.Insert(tx, idxRow); err != nil {
 				return err
@@ -445,7 +446,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// insert relation indexes
 	if relIndexes != nil {
-		for i := 0; i < len(relIndexes.Names); i++ {
+		for i := 0; i < len(relIndexes.IndexNames); i++ {
 			id, err := m.idGenerator.NewID(ctx)
 			if err != nil {
 				return err
@@ -453,9 +454,10 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			idxRow := &IndexRow{
 				ID:         id,
 				RelationID: row.ID,
-				Name:       relIndexes.Names[i],
+				IndexName:  relIndexes.IndexNames[i],
 				Unique:     relIndexes.Uniques[i],
 				TableName:  relIndexes.TableNames[i],
+				Field:      relIndexes.Fields[i],
 			}
 			if err := m.indexes.Insert(tx, idxRow); err != nil {
 				return err
@@ -978,18 +980,20 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		indexLen := len(entries)
 		if indexLen > 0 {
 			computeIndexDef := &engine.ComputeIndexDef{
-				Names:      make([]string, indexLen),
+				IndexNames: make([]string, indexLen),
 				Uniques:    make([]bool, indexLen),
 				TableNames: make([]string, indexLen),
+				Fields:     make([][]string, indexLen),
 			}
 			for i, entry := range entries {
 				index, err := m.indexes.Get(tx, entry.Key)
 				if err != nil {
 					return err
 				}
-				computeIndexDef.Names[i] = index.Name
+				computeIndexDef.IndexNames[i] = index.IndexName
 				computeIndexDef.Uniques[i] = index.Unique
 				computeIndexDef.TableNames[i] = index.TableName
+				computeIndexDef.Fields[i] = index.Field
 			}
 			resp.Defs = append(resp.Defs, computeIndexDef)
 		}

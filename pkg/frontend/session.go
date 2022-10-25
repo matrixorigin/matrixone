@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
@@ -1419,12 +1420,19 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 			})
 		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			fields := make([]*plan.Field, len(indexDef.Fields))
+			for i := range indexDef.Fields {
+				fields[i] = &plan.Field{
+					ColNames: indexDef.Fields[i],
+				}
+			}
 			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_ComputeIndex{
-					ComputeIndex: &plan2.ComputeIndexDef{
-						Names:      indexDef.Names,
+				Def: &plan2.TableDef_DefType_Idx{
+					Idx: &plan2.IndexDef{
+						IndexNames: indexDef.IndexNames,
 						TableNames: indexDef.TableNames,
 						Uniques:    indexDef.Uniques,
+						Fields:     fields,
 					},
 				},
 			})
