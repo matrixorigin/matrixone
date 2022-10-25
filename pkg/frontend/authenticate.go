@@ -3410,9 +3410,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	return false, nil
 }
 
-// determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
+// determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
 	var erArray []ExecResult
 	var yes bool
 	var err error
@@ -3805,15 +3805,15 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 	return rset, err
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
-func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
+func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	var err error
 	var ok, yes bool
 	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
 		return true, nil
 	}
-	ok, err = determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
 	if err != nil {
 		return false, err
 	}
@@ -3836,8 +3836,8 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 	return ok, nil
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
-func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
+func authenticateUserCanExecuteStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
 		arr := extractPrivilegeTipsFromPlan(p)
@@ -3845,7 +3845,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, se
 			return true, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
 		if err != nil {
 			return false, err
 		}
@@ -4150,8 +4150,8 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 	return privType, nil
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
-func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
+func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeNone { //do nothing
 		return true, nil
