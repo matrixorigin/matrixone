@@ -17,11 +17,12 @@ package tables
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -246,7 +247,7 @@ func (blk *dataBlock) MutationInfo() string {
 	return s
 }
 
-func (blk *dataBlock) EstimateScore(interval int64) int {
+func (blk *dataBlock) EstimateScore(interval time.Duration) int {
 	score, dropped := blk.estimateRawScore()
 	if dropped {
 		return 0
@@ -267,7 +268,7 @@ func (blk *dataBlock) EstimateScore(interval int64) int {
 		blk.score.rows = rows
 		blk.score.startTime = time.Now()
 	} else {
-		s := time.Since(blk.score.startTime).Milliseconds()
+		s := time.Since(blk.score.startTime)
 		if s > interval {
 			return 100
 		}

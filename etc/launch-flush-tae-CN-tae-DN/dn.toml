@@ -13,7 +13,8 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/store"
 
 [[fileservice]]
 name = "S3"
@@ -31,9 +32,9 @@ uuid = "42"
 backend = "TAE"
 
 [dn.Ckp]
-scanner-interval = "10000s"
-execution-levels = 20000
-execution-interval = "10000s"
-catalog-ckp-interval = "10000s"
-catalog-unckp-limit = 10000
-flush-interval = "10000s"
+scanner-interval = "2s"
+execution-levels = 2
+execution-interval = "3s"
+catalog-ckp-interval = "3s"
+catalog-unckp-limit = 2
+flush-interval = "6s"

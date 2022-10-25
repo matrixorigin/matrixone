@@ -210,7 +210,15 @@ insert into t6 values ('bb', '22');
 insert into t6 values ('cc', '33');
 insert into t6 values ('dd', '44');
 select a from t5 union select col1 from t6;
-invalid argument cast to int, bad value aa
+a
+12
+20
+18
+15
+aa
+bb
+cc
+dd
 select a from t5 union select col2 from t6;
 a
 12
