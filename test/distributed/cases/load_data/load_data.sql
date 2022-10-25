@@ -106,9 +106,11 @@ delete from t3;
 -- load data
 load data infile '$resources/into_outfile/outfile_float_2.csv' into table t3 ignore 1 lines;
 select * from t3;
-delete from t3;
+delete from t3
 
+-- @bvt:issue#5112
 load data infile '$resources/load_data/float_3.csv' into table t3;
+-- @bvt:issue
 
 drop table t3;
 
