@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -61,7 +64,17 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-	rand.Seed(time.Now().UnixNano())
+	if *httpListenAddr != "" {
+		go func() {
+			http.ListenAndServe(*httpListenAddr, nil)
+		}()
+	}
+
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
@@ -254,6 +267,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		_ = export.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -266,7 +280,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithFSWriterFactory(writerFactory),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)
@@ -289,7 +302,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	if SV.MergeCycle > 0 {
 		stopper.RunNamedTask("merge", func(ctx context.Context) {
 			merge, inited := export.NewMergeService(ctx,
-				export.WithDB(metric.MetricDBConst),
 				export.WithTable(metric.SingleMetricTable),
 				export.WithFileService(fs),
 				export.WithMinFilesMerge(1),

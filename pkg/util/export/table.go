@@ -17,6 +17,7 @@ package export
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,11 +43,21 @@ type Column struct {
 	Comment string
 }
 
+// ToCreateSql return column scheme in create sql
+//   - case 1: `column_name` varchar(36) DEFAULT "def_val" COMMENT "what am I, with default."
+//   - case 2: `column_name` varchar(36) NOT NULL COMMENT "what am I. Without default, SO NOT NULL."
 func (col *Column) ToCreateSql() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
-	if len(col.Default) > 0 {
+	if col.Type == "JSON" {
+		sb.WriteString("NOT NULL ")
+		if len(col.Default) == 0 {
+			panic(moerr.NewNotSupported("json column need default in csv, but not in schema"))
+		}
+	} else if len(col.Default) > 0 {
 		sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
+	} else {
+		sb.WriteString("NOT NULL ")
 	}
 	sb.WriteString(fmt.Sprintf("COMMENT %q", col.Comment))
 	return sb.String()
@@ -64,14 +75,23 @@ type Table struct {
 	PrimaryKeyColumn []Column
 	Engine           string
 	Comment          string
-	TableOptions     TableOptions
-	PathBuilder      PathBuilder
-
+	// PathBuilder help to desc param 'infile'
+	PathBuilder PathBuilder
+	// AccountColumn help to split data in account's filepath
 	AccountColumn *Column
+	// TableOptions default is nil, see GetTableOptions
+	TableOptions TableOptions
 }
 
 func (tbl *Table) GetName() string {
 	return tbl.Table
+}
+func (tbl *Table) GetDatabase() string {
+	return tbl.Database
+}
+
+func (tbl *Table) GetIdentify() string {
+	return fmt.Sprintf("%s.%s", tbl.Database, tbl.Table)
 }
 
 type TableOptions interface {
@@ -83,13 +103,15 @@ type TableOptions interface {
 
 func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 
+	TableOptions := tbl.GetTableOptions()
+
 	const newLineCharacter = ",\n"
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE ")
 	switch strings.ToUpper(tbl.Engine) {
 	case ExternalTableEngine:
-		sb.WriteString(tbl.TableOptions.GetCreateOptions())
+		sb.WriteString(TableOptions.GetCreateOptions())
 	default:
 		panic(moerr.NewInternalError("NOT support engine: %s", tbl.Engine))
 	}
@@ -111,7 +133,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 	// primary key
 	if len(tbl.PrimaryKeyColumn) > 0 {
 		sb.WriteString(newLineCharacter)
-		sb.WriteString("PRIMARY KEY (`")
+		sb.WriteString("PRIMARY KEY (")
 		for idx, col := range tbl.PrimaryKeyColumn {
 			if idx > 0 {
 				sb.WriteString(`, `)
@@ -121,9 +143,16 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
-	sb.WriteString(tbl.TableOptions.GetTableOptions(tbl.PathBuilder))
+	sb.WriteString(TableOptions.GetTableOptions(tbl.PathBuilder))
 
 	return sb.String()
+}
+
+func (tbl *Table) GetTableOptions() TableOptions {
+	if tbl.TableOptions != nil {
+		return tbl.TableOptions
+	}
+	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table)
 }
 
 type ViewOption func(view *View)
@@ -173,6 +202,15 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 	return sb.String()
 }
 
+type ViewSingleCondition struct {
+	Column Column
+	Table  string
+}
+
+func (tbl *ViewSingleCondition) String() string {
+	return fmt.Sprintf("`%s` = %q", tbl.Column.Name, tbl.Table)
+}
+
 type Row struct {
 	Table          *Table
 	AccountIdx     int
@@ -206,9 +244,10 @@ func (r *Row) Reset() {
 	}
 }
 
-// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0, else return "sys"
+// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
+// else return "sys"
 func (r *Row) GetAccount() string {
-	if r.AccountIdx >= 0 {
+	if r.Table.PathBuilder.SupportAccountStrategy() && r.AccountIdx >= 0 {
 		return r.Columns[r.AccountIdx]
 	}
 	return "sys"
@@ -217,6 +256,14 @@ func (r *Row) GetAccount() string {
 func (r *Row) SetVal(col string, val string) {
 	if idx, exist := r.Name2ColumnIdx[col]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
+	} else {
+		r.Columns[idx] = val
+	}
+}
+
+func (r *Row) SetColumnVal(col Column, val string) {
+	if idx, exist := r.Name2ColumnIdx[col.Name]; !exist {
+		logutil.Fatalf("column(%s) not exist in table(%s)", col.Name, r.Table.Table)
 	} else {
 		r.Columns[idx] = val
 	}
@@ -247,3 +294,83 @@ type NoopTableOptions struct{}
 func (o NoopTableOptions) FormatDdl(ddl string) string        { return ddl }
 func (o NoopTableOptions) GetCreateOptions() string           { return "" }
 func (o NoopTableOptions) GetTableOptions(PathBuilder) string { return "" }
+
+var _ TableOptions = (*CsvTableOptions)(nil)
+
+type CsvTableOptions struct {
+	Formatter string
+	DbName    string
+	TblName   string
+}
+
+func getExternalTableDDLPrefix(sql string) string {
+	return strings.Replace(sql, "CREATE TABLE", "CREATE EXTERNAL TABLE", 1)
+}
+
+func (o *CsvTableOptions) FormatDdl(ddl string) string {
+	return getExternalTableDDLPrefix(ddl)
+}
+
+func (o *CsvTableOptions) GetCreateOptions() string {
+	return "EXTERNAL "
+}
+
+func (o *CsvTableOptions) GetTableOptions(builder PathBuilder) string {
+	if builder == nil {
+		builder = NewDBTablePathBuilder()
+	}
+	if len(o.Formatter) > 0 {
+		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName))
+	}
+	return ""
+}
+
+func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
+		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+	switch engine {
+	case NormalTableEngine:
+		return func(_, _ string) TableOptions { return NoopTableOptions{} }
+	case ExternalTableEngine:
+		return func(db, tbl string) TableOptions {
+			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
+		}
+	default:
+		panic(moerr.NewInternalError("unknown engine: %s", engine))
+	}
+}
+
+var gTable map[string]*Table
+var mux sync.Mutex
+
+// RegisterTableDefine return old one, if already registered
+var RegisterTableDefine = func(table *Table) *Table {
+	mux.Lock()
+	defer mux.Unlock()
+	if len(gTable) == 0 {
+		gTable = make(map[string]*Table)
+	}
+	id := table.GetIdentify()
+	old := gTable[id]
+	gTable[id] = table
+	return old
+}
+
+var GetAllTable = func() []*Table {
+	mux.Lock()
+	defer mux.Unlock()
+	tables := make([]*Table, 0, len(gTable))
+	for _, tbl := range gTable {
+		tables = append(tables, tbl)
+	}
+	return tables
+}
+
+func SetPathBuilder(pathBuilder string) error {
+	tables := GetAllTable()
+	bp := PathBuilderFactory(pathBuilder)
+	for _, tbl := range tables {
+		tbl.PathBuilder = bp
+	}
+	return nil
+}

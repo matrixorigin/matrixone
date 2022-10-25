@@ -348,7 +348,7 @@ func (ls *localStream) start() {
 			response := v.responseFactory()
 			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
 			if err != nil {
-				response.TxnError = &txn.TxnError{Code: int32(moerr.ErrRpcError), Message: err.Error()}
+				response.TxnError = txn.WrapError(moerr.NewRpcError(err.Error()), 0)
 			}
 			out <- response
 		}

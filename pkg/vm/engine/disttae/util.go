@@ -132,32 +132,44 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
+func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
 	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
+	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	rows, err := obs[0].GetRows()
+	if err != nil {
+		return nil, 0, err
 	}
 
-	for i, data := range idxList {
+	for i, idx := range idxs {
+		column, err := obs[0].GetColumn(idx)
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		if err != nil {
+			return nil, 0, err
+		}
 		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, nil
+	return zonemapList, rows, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	getIdx := func(idx int) int {
-		return int(tableDef.Name2ColIndex[tableDef.Cols[columns[idx]].Name])
+		return int(tableDef.Name2ColIndex[tableDef.Cols[idx].Name])
 	}
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
@@ -169,7 +181,7 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.zonemap[idx][:])
+		err := zm.Unmarshal(meta.Zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -600,18 +612,24 @@ func getHashValue(buf []byte) uint64 {
 	return states[0]
 }
 
-func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
+func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+	fullList := func() []int {
+		dnList := make([]int, len(list))
+		for i := range list {
+			dnList[i] = i
+		}
+		return dnList
+	}
 	listLen := uint64(len(list))
 	if listLen == 1 || len(pkRange) == 0 {
-		return list
+		return []int{0}
 	}
 
 	listMap := make(map[uint64]struct{})
 	for _, r := range pkRange {
 		if r[1]-r[0] > MAX_RANGE_SIZE {
-			return list
+			return fullList()
 		}
-
 		for i := r[0]; i <= r[1]; i++ {
 			keys := make([]byte, 8)
 			binary.LittleEndian.PutUint64(keys, uint64(i))
@@ -619,24 +637,22 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
 			modVal := val % listLen
 			listMap[modVal] = struct{}{}
 			if len(listMap) == int(listLen) {
-				return list
+				return fullList()
 			}
 		}
 	}
-
-	returnList := make([]T, len(listMap))
-	var i = 0
+	dnList := make([]int, len(listMap))
+	i := 0
 	for idx := range listMap {
-		returnList[i] = list[idx]
-		i = i + 1
+		dnList[i] = int(idx)
+		i++
 	}
-
-	return returnList
+	return dnList
 }
 
 func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
 	zm := index.NewZoneMap(typ)
-	err := zm.Unmarshal(meta.zonemap[colIdx][:])
+	err := zm.Unmarshal(meta.Zonemap[colIdx][:])
 	if err != nil {
 		return false, err
 	}

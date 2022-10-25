@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -517,6 +518,15 @@ func NewWithNspSize(typ types.Type, n int64) *Vector {
 	}
 }
 
+func NewConstNullWithData(typ types.Type, length int, mp *mpool.MPool) *Vector {
+	v := New(typ)
+	v.isConst = true
+	val := GetInitConstVal(typ)
+	v.Append(val, true, mp)
+	v.length = length
+	return v
+}
+
 func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.isConst = true
@@ -648,6 +658,7 @@ func (v *Vector) Free(m *mpool.MPool) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
+
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
 	if v.data != nil {
@@ -1495,5 +1506,57 @@ func (v *Vector) String() string {
 
 	default:
 		panic("vec to string unknown types.")
+	}
+}
+
+func GetInitConstVal(typ types.Type) any {
+	switch typ.Oid {
+	case types.T_bool:
+		return false
+	case types.T_int8:
+		return int8(0)
+	case types.T_int16:
+		return int16(0)
+	case types.T_int32:
+		return int32(0)
+	case types.T_int64:
+		return int64(0)
+	case types.T_uint8:
+		return uint8(0)
+	case types.T_uint16:
+		return uint16(0)
+	case types.T_uint32:
+		return uint32(0)
+	case types.T_uint64:
+		return uint64(0)
+	case types.T_float32:
+		return float32(0)
+	case types.T_float64:
+		return float64(0)
+	case types.T_date:
+		return types.Date(0)
+	case types.T_datetime:
+		return types.Datetime(0)
+	case types.T_timestamp:
+		return types.Timestamp(0)
+	case types.T_decimal64:
+		return types.Decimal64{}
+	case types.T_decimal128:
+		return types.Decimal128{}
+	case types.T_uuid:
+		var emptyUuid [16]byte
+		return emptyUuid[:]
+	case types.T_TS:
+		var emptyTs [types.TxnTsSize]byte
+		return emptyTs[:]
+	case types.T_Rowid:
+		var emptyRowid [types.RowidSize]byte
+		return emptyRowid[:]
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		var emptyVarlena [types.VarlenaSize]byte
+		return emptyVarlena[:]
+	default:
+		//T_any T_star T_tuple T_interval
+		return int64(0)
 	}
 }

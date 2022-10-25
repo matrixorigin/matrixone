@@ -86,7 +86,7 @@ func TestAppend2(t *testing.T) {
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	forest := newDirtyForest(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
+	forest := logtail.NewDirtyCollector(db.LogtailMgr, opts.Clock, db.Catalog, new(catalog.LoopProcessor))
 	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
 		forest.Run()
 		t.Log(forest.String())
@@ -2751,7 +2751,7 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	forest := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
 	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
 		forest.Run()
 		t.Log(forest.String())
@@ -3620,9 +3620,7 @@ func TestWatchDirty(t *testing.T) {
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := newDirtyForest(logMgr, opts.Clock, tae.Catalog, visitor)
-	// test uses mock clock, where alloc count used as timestamp, so delay is set as 10 count here
-	watcher.WithDelay(10 * time.Nanosecond)
+	watcher := logtail.NewDirtyCollector(logMgr, opts.Clock, tae.Catalog, visitor)
 
 	tbl, seg, blk := watcher.DirtyCount()
 	assert.Zero(t, blk)
@@ -3689,8 +3687,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
 
 	visitor := &catalog.LoopProcessor{}
-	watcher := newDirtyForest(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
-	watcher.WithDelay(10 * time.Nanosecond)
+	watcher := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
 
 	wg := &sync.WaitGroup{}
 

@@ -118,6 +118,9 @@ var (
 	// defaultMergeCycle default: 0 sec, means disable merge as service
 	defaultMergeCycle = 0
 
+	// defaultPathBuilder, val in [DBTable, AccountDate]
+	defaultPathBuilder = "AccountDate"
+
 	// defaultSessionTimeout default: 10 minutes
 	defaultSessionTimeout = 10 * time.Minute
 )
@@ -396,6 +399,9 @@ type ObservabilityParameters struct {
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
 	MergeCycle int `toml:"mergeCycle"`
+
+	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
+	PathBuilder string `toml:"PathBuilder"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -427,6 +433,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeCycle <= 0 {
 		op.MergeCycle = defaultMergeCycle
+	}
+
+	if op.PathBuilder == "" {
+		op.PathBuilder = defaultPathBuilder
 	}
 }
 
