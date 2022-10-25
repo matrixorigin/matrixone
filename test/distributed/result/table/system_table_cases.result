@@ -39,9 +39,6 @@ owner    INT UNSIGNED    YES        NULL
 account_id    INT UNSIGNED    YES        NULL        
 partitioned    BLOB    YES        NULL        
 viewdef    BLOB    YES        NULL        
-SELECT COUNT(*) FROM mo_tables;
-count(*)
-51
 SELECT COUNT(*) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
 count(*)
 10
@@ -80,9 +77,6 @@ attr_update    VARCHAR    YES        NULL
 SELECT att_database_id, attr_has_update, att_length FROM mo_columns LIMIT 1;
 att_database_id    attr_has_update    att_length
 1    0    0
-SELECT COUNT(*) FROM mo_columns;
-count(*)
-526
 SELECT COUNT(*) FROM (SELECT * FROM mo_columns LIMIT 10) AS temp;
 count(*)
 10
@@ -111,9 +105,6 @@ default_role    INT    YES        NULL
 SELECT user_id, user_host, user_name, status FROM mo_user LIMIT 1;
 user_id    user_host    user_name    status
 0    localhost    root    unlock
-SELECT COUNT(*) FROM mo_user;
-count(*)
-2
 SELECT COUNT(*) FROM (SELECT * FROM mo_user LIMIT 10) AS temp;
 count(*)
 2
@@ -136,9 +127,6 @@ comments    VARCHAR    YES        NULL
 SELECT account_id, account_name, status FROM mo_account LIMIT 1;
 account_id    account_name    status
 0    sys    open
-SELECT COUNT(*) FROM mo_account;
-count(*)
-1
 SELECT COUNT(*) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(*)
 1
@@ -162,9 +150,6 @@ comments    TEXT    YES        NULL
 SELECT role_id, role_name, creator FROM mo_role LIMIT 1;
 role_id    role_name    creator
 0    moadmin    0
-SELECT COUNT(*) FROM mo_role;
-count(*)
-2
 SELECT COUNT(*) FROM (SELECT * FROM mo_role LIMIT 10) AS temp;
 count(*)
 2
@@ -186,9 +171,6 @@ with_grant_option    BOOL    YES        NULL
 SELECT role_id, user_id, with_grant_option FROM mo_user_grant LIMIT 1;
 role_id    user_id    with_grant_option
 0    0    false
-SELECT COUNT(*) FROM mo_user_grant;
-count(*)
-4
 SELECT COUNT(*) FROM (SELECT * FROM mo_user_grant LIMIT 10) AS temp;
 count(*)
 4
@@ -211,9 +193,6 @@ granted_time    TIMESTAMP    YES        NULL
 with_grant_option    BOOL    YES        NULL        
 SELECT granted_id, grantee_id, operation_role_id, operation_user_id FROM mo_role_grant LIMIT 1;
 granted_id    grantee_id    operation_role_id    operation_user_id
-SELECT COUNT(*) FROM mo_role_grant;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM mo_role_grant LIMIT 10) AS temp;
 count(*)
 0
@@ -241,9 +220,6 @@ with_grant_option    BOOL    YES        NULL
 SELECT role_id, role_name, obj_type, obj_id, privilege_id FROM mo_role_privs LIMIT 1;
 role_id    role_name    obj_type    obj_id    privilege_id
 0    moadmin    account    0    0
-SELECT COUNT(*) FROM mo_role_privs;
-count(*)
-34
 SELECT COUNT(*) FROM (SELECT * FROM mo_role_privs LIMIT 10) AS temp;
 count(*)
 10
@@ -289,22 +265,22 @@ rows_read    BIGINT UNSIGNED    YES        NULL        rows read total
 bytes_scan    BIGINT UNSIGNED    YES        NULL        bytes scan total
 SELECT account, user, host FROM statement_info LIMIT 1;
 account    user    host
+sys    internal    0.0.0.0
 SELECT COUNT(*) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(null)
 0
 (SELECT account, user, host FROM statement_info LIMIT 1) UNION (SELECT account, user, host FROM statement_info LIMIT 1);
 account    user    host
-SELECT account, user, host FROM statement_info LIMIT 10;
-account    user    host
+sys    internal    0.0.0.0
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
 [unknown result because it is related to issue#5895]
 SHOW COLUMNS FROM rawlog;
@@ -377,10 +353,6 @@ error    TEXT    YES        NULL
 node_uuid    VARCHAR    YES        NULL        
 node_type    VARCHAR    YES        NULL        
 stack    VARCHAR    YES        NULL        
-SELECT * FROM error_info LIMIT 1;
-[unknown result because it is related to issue#5901]
-SELECT COUNT(*) FROM error_info;
-[unknown result because it is related to issue#5901]
 SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 [unknown result because it is related to issue#5901]
 SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
@@ -403,13 +375,13 @@ duration    BIGINT UNSIGNED    YES        NULL
 resource    JSON    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(*)
-3
+10
 SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(0)
-3
+10
 SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count()
-3
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(null)
 0
@@ -470,15 +442,16 @@ account    VARCHAR    YES        NULL
 type    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_statement_total LIMIT 1;
 value    account    role
+0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(null)
 0
@@ -502,20 +475,22 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_transaction_total LIMIT 1;
 value    account    role
+0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(null)
 0
 (SELECT value, account, role FROM sql_transaction_total LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_total LIMIT 1);
 value    account    role
+0.0    sys    ALL
 SHOW COLUMNS FROM sql_transaction_errors;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -526,15 +501,16 @@ account    VARCHAR    YES        NULL
 type    VARCHAR    YES        NULL        
 SELECT value, account, role FROM sql_transaction_errors LIMIT 1;
 value    account    role
+0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(null)
 0
@@ -547,15 +523,16 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT account, role, value FROM server_connections LIMIT 1;
 account    role    value
+sys    ALL    1.0
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(null)
 0
@@ -568,13 +545,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(null)
 0
@@ -587,13 +564,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -606,22 +583,20 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(null)
 0
-SELECT value, role, account FROM (SELECT value, role, account FROM process_open_fds LIMIT 10) AS temp LIMIT 5;
-value    role    account
-69.0    ALL    sys
 (SELECT value, role, account FROM process_open_fds LIMIT 1) UNION (SELECT value, role, account FROM process_open_fds LIMIT 2);
 value    role    account
 69.0    ALL    sys
+276.0    ALL    sys
 SHOW COLUMNS FROM sys_cpu_seconds_total;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -631,13 +606,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(null)
 0
@@ -650,13 +625,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(null)
 0
@@ -672,19 +647,16 @@ value    role    account
 1.774194688E9    ALL    sys
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(null)
 0
-SELECT value, role, account FROM (SELECT value, role, account FROM sys_memory_used LIMIT 10) AS temp LIMIT 5;
-value    role    account
-1.774194688E9    ALL    sys
 SHOW COLUMNS FROM sys_memory_available;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -694,13 +666,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(null)
 0
@@ -716,13 +688,13 @@ value    account    role
 0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -735,13 +707,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -754,13 +726,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -773,13 +745,13 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(*)
-1
+10
 SELECT COUNT(0) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(0)
-1
+10
 SELECT COUNT('') FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count()
-1
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(null)
 0
@@ -847,9 +819,6 @@ user_attributes    JSON    YES        NULL
 __mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL        
 SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1;
 host    user    select_priv    insert_priv    update_priv
-SELECT COUNT(*) FROM user;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
 count(*)
 0
@@ -862,8 +831,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
 count(null)
 0
-SELECT host, user, select_priv, insert_priv, update_priv FROM (SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 10) AS temp LIMIT 5;
-host    user    select_priv    insert_priv    update_priv
 (SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1) UNION (SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1);
 host    user    select_priv    insert_priv    update_priv
 SHOW COLUMNS FROM db;
@@ -893,9 +860,6 @@ trigger_priv    VARCHAR    NO        NULL
 __mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL        
 SELECT host, db, user, select_priv FROM db LIMIT 1;
 host    db    user    select_priv
-SELECT COUNT(*) FROM db;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
 count(*)
 0
@@ -908,8 +872,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
 count(null)
 0
-SELECT host, db, user, select_priv FROM (SELECT host, db, user, select_priv FROM db LIMIT 10) AS temp LIMIT 5;
-host    db    user    select_priv
 (SELECT host, db, user, select_priv FROM db LIMIT 1) UNION (SELECT host, db, user, select_priv FROM db LIMIT 1);
 host    db    user    select_priv
 SHOW COLUMNS FROM procs_priv;
@@ -925,9 +887,6 @@ timestamp    TIMESTAMP    NO        NULL
 __mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL        
 SELECT host, db, user, routine_name FROM procs_priv LIMIT 1;
 host    db    user    routine_name
-SELECT COUNT(*) FROM procs_priv;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -940,8 +899,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 count(null)
 0
-SELECT host, db, user, routine_name FROM (SELECT host, db, user, routine_name FROM procs_priv LIMIT 10) AS temp LIMIT 5;
-host    db    user    routine_name
 (SELECT host, db, user, routine_name FROM procs_priv LIMIT 1) UNION (SELECT host, db, user, routine_name FROM procs_priv LIMIT 1);
 host    db    user    routine_name
 SHOW COLUMNS FROM columns_priv;
@@ -956,9 +913,6 @@ column_priv    VARCHAR    NO        NULL
 __mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL        
 SELECT host, db, user, table_name FROM columns_priv LIMIT 1;
 host    db    user    table_name
-SELECT COUNT(*) FROM columns_priv;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -971,8 +925,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 count(null)
 0
-SELECT host, db, user, table_name FROM (SELECT host, db, user, table_name FROM columns_priv LIMIT 10) AS temp LIMIT 5;
-host    db    user    table_name
 (SELECT host, db, user, table_name FROM columns_priv LIMIT 1) UNION (SELECT host, db, user, table_name FROM columns_priv LIMIT 1);
 host    db    user    table_name
 SHOW COLUMNS FROM tables_priv;
@@ -988,9 +940,6 @@ column_priv    VARCHAR    NO        NULL
 __mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
 SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1;
 table_name    grantor    user    host
-SELECT COUNT(*) FROM tables_priv;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -1003,8 +952,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 count(null)
 0
-SELECT table_name, grantor, user, host FROM (SELECT table_name, grantor, user, host FROM tables_priv LIMIT 10) AS temp LIMIT 5;
-table_name    grantor    user    host
 (SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1) UNION (SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1);
 table_name    grantor    user    host
 USE information_schema;
@@ -1035,9 +982,6 @@ referenced_table_name    VARCHAR    YES        NULL
 referenced_column_name    VARCHAR    YES        NULL        
 SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1;
 constraint_catalog    constraint_schema    constraint_name
-SELECT COUNT(*) FROM key_column_usage;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 count(*)
 0
@@ -1050,8 +994,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 count(null)
 0
-SELECT constraint_catalog, constraint_schema, constraint_name FROM (SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 10) AS temp LIMIT 5;
-constraint_catalog    constraint_schema    constraint_name
 (SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1) UNION (SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1);
 constraint_catalog    constraint_schema    constraint_name
 SHOW COLUMNS FROM columns;
@@ -1080,9 +1022,6 @@ generation_expression    BLOB    YES        NULL
 srs_id    INT UNSIGNED    YES        NULL        
 SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1;
 column_name    ordinal_position    column_default
-SELECT COUNT(*) FROM columns;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(*)
 0
@@ -1095,8 +1034,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(null)
 0
-SELECT column_name, ordinal_position, column_default FROM (SELECT column_name, ordinal_position, column_default FROM columns LIMIT 10) AS temp LIMIT 5;
-column_name    ordinal_position    column_default
 (SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1) UNION (SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1);
 column_name    ordinal_position    column_default
 SHOW COLUMNS FROM profiling;
@@ -1121,9 +1058,6 @@ source_file    VARCHAR    YES        NULL
 source_line    INT    YES        NULL        
 SELECT query_id, seq, state FROM profiling LIMIT 1;
 query_id    seq    state
-SELECT COUNT(*) FROM profiling;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 count(*)
 0
@@ -1136,8 +1070,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 count(null)
 0
-SELECT query_id, seq, state FROM (SELECT query_id, seq, state FROM profiling LIMIT 10) AS temp LIMIT 5;
-query_id    seq    state
 (SELECT query_id, seq, state FROM profiling LIMIT 1) UNION (SELECT query_id, seq, state FROM profiling LIMIT 1);
 query_id    seq    state
 SHOW COLUMNS FROM user_privileges;
@@ -1148,9 +1080,6 @@ privilege_type    VARCHAR    NO        NULL
 is_grantable    VARCHAR    NO        NULL        
 SELECT grantee, table_catalog FROM user_privileges LIMIT 1;
 grantee    table_catalog
-SELECT COUNT(*) FROM user_privileges;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(*)
 0
@@ -1163,8 +1092,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(null)
 0
-SELECT grantee, table_catalog FROM (SELECT grantee, table_catalog FROM user_privileges LIMIT 10) AS temp LIMIT 5;
-grantee    table_catalog
 (SELECT grantee, table_catalog FROM user_privileges LIMIT 1) UNION (SELECT grantee, table_catalog FROM user_privileges LIMIT 1);
 grantee    table_catalog
 SHOW COLUMNS FROM schemata;
@@ -1177,9 +1104,6 @@ sql_path    VARCHAR    YES        NULL
 default_encryption    VARCHAR    YES        NULL        
 SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1;
 catalog_name    schema_name    sql_path
-SELECT COUNT(*) FROM schemata;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 count(*)
 0
@@ -1192,8 +1116,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 count(null)
 0
-SELECT catalog_name, schema_name, sql_path FROM (SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 10) AS temp LIMIT 5;
-catalog_name    schema_name    sql_path
 (SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1) UNION (SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1);
 catalog_name    schema_name    sql_path
 SHOW COLUMNS FROM character_sets;
@@ -1204,9 +1126,6 @@ description    VARCHAR    YES        NULL
 maxlen    INT UNSIGNED    YES        NULL        
 SELECT character_set_name, description FROM character_sets LIMIT 1;
 character_set_name    description
-SELECT COUNT(*) FROM character_sets;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 count(*)
 0
@@ -1219,8 +1138,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 count(null)
 0
-SELECT character_set_name, description FROM (SELECT character_set_name, description FROM character_sets LIMIT 10) AS temp LIMIT 5;
-character_set_name    description
 (SELECT character_set_name, description FROM character_sets LIMIT 1) UNION (SELECT character_set_name, description FROM character_sets LIMIT 1);
 character_set_name    description
 SHOW COLUMNS FROM triggers;
@@ -1249,9 +1166,6 @@ collation_connection    VARCHAR    YES        NULL
 database_collation    VARCHAR    YES        NULL        
 SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1;
 trigger_catalog    trigger_schema    trigger_name
-SELECT COUNT(*) FROM triggers;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 count(*)
 0
@@ -1264,8 +1178,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 count(null)
 0
-SELECT trigger_catalog, trigger_schema, trigger_name FROM (SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 10) AS temp LIMIT 5;
-trigger_catalog    trigger_schema    trigger_name
 (SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1) UNION (SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1);
 trigger_catalog    trigger_schema    trigger_name
 SHOW COLUMNS FROM tables;
@@ -1293,9 +1205,6 @@ create_options    VARCHAR    YES        NULL
 table_comment    TEXT    YES        NULL        
 SELECT table_name, table_type, engine, version FROM tables LIMIT 1;
 table_name    table_type    engine    version
-SELECT COUNT(*) FROM tables;
-count(*)
-0
 SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 count(*)
 0
@@ -1308,7 +1217,5 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 count(null)
 0
-SELECT table_name, table_type, engine, version FROM (SELECT table_name, table_type, engine, version FROM tables LIMIT 10) AS temp LIMIT 5;
-table_name    table_type    engine    version
 (SELECT table_name, table_type, engine, version FROM tables LIMIT 1) UNION (SELECT table_name, table_type, engine, version FROM tables LIMIT 1);
 table_name    table_type    engine    version
