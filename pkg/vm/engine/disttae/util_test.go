@@ -175,6 +175,11 @@ func TestCheckExprIsMonotonical(t *testing.T) {
 	})
 }
 
+// delete this if TestNeedRead is not skipped anymore
+func TestMakeBlockMeta(t *testing.T) {
+	_ = makeBlockMetaForTest()
+}
+
 func TestNeedRead(t *testing.T) {
 	t.Skip("NeedRead always returns true fot start cn-dn with flushing")
 	type asserts = struct {
