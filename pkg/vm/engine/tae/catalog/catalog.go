@@ -282,12 +282,21 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 
 func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, start, prepare types.TS, logindex *wal.Index) {
 	catalog.OnReplayDBID(dbid)
-	db := NewReplayDBEntry()
+	db, _ := catalog.GetDatabaseByID(dbid)
+	if db != nil {
+		dbCreatedAt := db.GetCreatedAt()
+		if !dbCreatedAt.Equal(createdAt) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", createdAt.ToString(), dbCreatedAt.ToString()))
+		}
+		return
+	}
+	db = NewReplayDBEntry()
 	db.catalog = catalog
 	db.ID = dbid
 	db.name = name
 	err := catalog.AddEntryLocked(db, nil)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	un := &DBMVCCNode{
@@ -306,7 +315,15 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, st
 func (catalog *Catalog) onReplayDeleteDB(dbid uint64, deleteAt, start, prepare types.TS, logindex *wal.Index) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	dbDeleteAt := db.GetDeleteAt()
+	if !dbDeleteAt.IsEmpty() {
+		if !dbDeleteAt.Equal(deleteAt) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", deleteAt.ToString(), dbDeleteAt.ToString()))
+		}
+		return
 	}
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -423,14 +440,24 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	tbl := NewReplayTableEntry()
+	tbl, _ := db.GetTableEntryByID(tid)
+	if tbl != nil {
+		tblCreatedAt := tbl.GetCreatedAt()
+		if !tblCreatedAt.Equal(createAt) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", createAt.ToString(), tblCreatedAt.ToString()))
+		}
+		return
+	}
+	tbl = NewReplayTableEntry()
 	tbl.schema = schema
 	tbl.db = db
 	tbl.ID = tid
 	err = db.AddEntryLocked(tbl, nil)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	un := &TableMVCCNode{
@@ -449,11 +476,20 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, deleteAt, start, prepare types.TS, logIndex *wal.Index) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	tbl, err := db.GetTableEntryByID(tid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	tableDeleteAt := tbl.GetDeleteAt()
+	if !tableDeleteAt.IsEmpty() {
+		if !tableDeleteAt.Equal(deleteAt) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", deleteAt.ToString(), tableDeleteAt.ToString()))
+		}
+		return
 	}
 	prev := tbl.MVCCChain.GetLatestCommittedNode().(*TableMVCCNode)
 	un := &TableMVCCNode{
@@ -571,13 +607,23 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	rel, err := db.GetTableEntryByID(tbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	seg := NewReplaySegmentEntry()
+	seg, _ := rel.GetSegmentByID(segid)
+	if seg != nil {
+		segCreatedAt := seg.GetCreatedAt()
+		if !segCreatedAt.Equal(end) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), segCreatedAt.ToString()))
+		}
+		return
+	}
+	seg = NewReplaySegmentEntry()
 	seg.table = rel
 	seg.ID = segid
 	seg.state = state
@@ -599,15 +645,25 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, start, p
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	rel, err := db.GetTableEntryByID(tbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	segDeleteAt := seg.GetDeleteAt()
+	if !segDeleteAt.IsEmpty() {
+		if !segDeleteAt.Equal(end) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), segDeleteAt.ToString()))
+		}
+		return
 	}
 	prevUn := seg.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un := &MetadataMVCCNode{
@@ -735,14 +791,17 @@ func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, stat
 	catalog.OnReplayBlockID(blkid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	rel, err := db.GetTableEntryByID(tid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	blk, _ := seg.GetBlockEntryByID(blkid)
@@ -781,25 +840,49 @@ func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, stat
 			MetaLoc:  metaloc,
 			DeltaLoc: deltaloc,
 		}
+		node := blk.MVCCChain.SearchNode(un).(*MetadataMVCCNode)
+		if node != nil {
+			if !node.CreatedAt.Equal(un.CreatedAt) {
+				panic(moerr.NewInternalError("logic err expect %s, get %s", node.CreatedAt.ToString(), un.CreatedAt.ToString()))
+			}
+			if node.MetaLoc != un.MetaLoc {
+				panic(moerr.NewInternalError("logic err expect %s, get %s", node.MetaLoc, un.MetaLoc))
+			}
+			if node.DeltaLoc != un.DeltaLoc {
+				panic(moerr.NewInternalError("logic err expect %s, get %s", node.DeltaLoc, un.DeltaLoc))
+			}
+			return
+		}
 	}
 	blk.Insert(un)
 }
 func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, start, prepare, end types.TS, logIndex *wal.Index) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	rel, err := db.GetTableEntryByID(tid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(blkid)
 	if err != nil {
+		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	blkDeleteAt := blk.GetDeleteAt()
+	if !blkDeleteAt.IsEmpty() {
+		if !blkDeleteAt.Equal(end) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), blkDeleteAt.ToString()))
+		}
+		return
 	}
 	prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un := &MetadataMVCCNode{
