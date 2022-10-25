@@ -408,6 +408,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	} else {
 		query = fmt.Sprintf(selectAsyncTask, m.dbname)
 	}
+	query += buildOrderByCause()
 	query += buildLimitClause(c)
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -760,6 +761,10 @@ func buildLimitClause(c conditions) string {
 		return fmt.Sprintf(" limit %d", c.limit)
 	}
 	return ""
+}
+
+func buildOrderByCause() string {
+	return " order by task_id desc"
 }
 
 func removeDuplicateTasks(err error, tasks []task.Task) ([]task.Task, error) {

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -43,9 +44,6 @@ const (
 	defaultGossipSeedNum = 3
 	defaultHAKeeperNum   = 3
 
-	// default configuration for logger
-	defaultLogLevel = zapcore.InfoLevel
-
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10
 	defaultLogStoreTimeout = 4 * time.Second
@@ -62,7 +60,6 @@ const (
 type Options struct {
 	hostAddr    string
 	rootDataDir string
-	logLevel    zapcore.Level
 	logger      *zap.Logger
 
 	initial struct {
@@ -132,8 +129,6 @@ func (opt *Options) validate() {
 	if opt.dn.txnStorageBackend == "" {
 		opt.dn.txnStorageBackend = defaultDnStorage
 	}
-
-	opt.logLevel = defaultLogLevel
 
 	// hakeeper configuration
 	if opt.hakeeper.tickPerSecond == 0 {
@@ -233,7 +228,7 @@ func (opt Options) WithHostAddress(host string) Options {
 
 // WithLogLevel sets log level.
 func (opt Options) WithLogLevel(lvl zapcore.Level) Options {
-	opt.logLevel = lvl
+	opt.logger = logutil.GetPanicLoggerWithLevel(lvl)
 	return opt
 }
 

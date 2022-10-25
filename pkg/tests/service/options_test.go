@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zapcore"
 )
 
 func TestDefaultOptons(t *testing.T) {
@@ -73,12 +72,6 @@ func TestWithHostAddress(t *testing.T) {
 	host := "127.0.0.1"
 	opt := Options{}.WithHostAddress(host)
 	require.Equal(t, host, opt.hostAddr)
-}
-
-func TestWithLogLevel(t *testing.T) {
-	lvl := zapcore.WarnLevel
-	opt := Options{}.WithLogLevel(lvl)
-	require.Equal(t, lvl, opt.logLevel)
 }
 
 func TestWithHKTickPerSecond(t *testing.T) {

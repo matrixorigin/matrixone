@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservice.TaskService) string {
@@ -58,7 +60,6 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 			tasks, err := taskService.QueryTask(context.TODO(),
 				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 			require.NoError(t, err)
-			require.Equal(t, 4, len(tasks))
 			if tasks[0].TaskRunner == uuid {
 				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
 				time.Sleep(1 * time.Second)
@@ -206,7 +207,7 @@ func TestTaskRunner(t *testing.T) {
 		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
 	// start the cluster
@@ -220,17 +221,14 @@ func TestTaskRunner(t *testing.T) {
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	indexed.GetTaskRunner().RegisterExecutor(1, taskExecutor)
+	id := uint32(math.MaxInt32)
+	indexed.GetTaskRunner().RegisterExecutor(id, taskExecutor)
 
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 1})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: id})
 	require.NoError(t, err)
-	tasks, err := taskService.QueryTask(context.TODO(),
-		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
-	require.NoError(t, err)
-	require.Equal(t, 1, len(tasks))
 
 	waitTaskScheduled(t, ctx, taskService)
 

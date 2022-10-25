@@ -364,17 +364,18 @@ func (c *testCluster) Close() error {
 		return nil
 	}
 
-	// close all dn services first
+	// close all cn services first
+	if err := c.closeCNServices(); err != nil {
+		return err
+	}
+
+	// close all dn services
 	if err := c.closeDNServices(); err != nil {
 		return err
 	}
 
 	// close all log services
 	if err := c.closeLogServices(); err != nil {
-		return err
-	}
-
-	if err := c.closeCNServices(); err != nil {
 		return err
 	}
 
