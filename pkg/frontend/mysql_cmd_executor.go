@@ -392,7 +392,17 @@ func handleShowColumns(ses *Session) error {
 					row[2] = "NO"
 				}
 			}
-			row[4] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[4].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			if originString == "" {
+				row[4] = "NULL"
+			} else {
+				row[4] = originString
+			}
 			row[5] = ""
 			row[6] = d[6]
 			mrs.AddRow(row)
@@ -417,7 +427,17 @@ func handleShowColumns(ses *Session) error {
 					row[3] = "NO"
 				}
 			}
-			row[5] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[5].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			if originString == "" {
+				row[5] = "NULL"
+			} else {
+				row[5] = originString
+			}
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
