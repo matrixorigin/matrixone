@@ -51,9 +51,9 @@ type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionInfo = plan.PartitionInfo
-type TableDef_DefType_ComputeIndex = plan.TableDef_DefType_ComputeIndex
-type ComputeIndexDef = plan.ComputeIndexDef
-type ComputeIndexInfo = plan.ComputeIndexInfo
+type TableDef_DefType_Idx = plan.TableDef_DefType_Idx
+type IndexDef = plan.IndexDef
+type IndexInfo = plan.IndexInfo
 
 type CompilerContext interface {
 	// Default database/schema in context
