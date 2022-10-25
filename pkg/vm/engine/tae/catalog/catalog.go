@@ -105,6 +105,19 @@ func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 	return catalog
 }
 
+func NewEmptyCatalog() *Catalog {
+	return &Catalog{
+		RWMutex:     new(sync.RWMutex),
+		IDAlloctor:  NewIDAllocator(),
+		store:       nil,
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList(compareDBFn),
+		checkpoints: make([]*Checkpoint, 0),
+		scheduler:   nil,
+	}
+}
+
 func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
 	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{

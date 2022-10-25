@@ -3836,7 +3836,7 @@ func TestSnapshotBatch(t *testing.T) {
 	maxTs := txn.GetStartTS()
 	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
 
-	ctlg := catalog.MockCatalog("/tmp/", "lalala", nil, nil)
+	ctlg := catalog.NewEmptyCatalog()
 	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
 	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
 	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())

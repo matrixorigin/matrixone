@@ -590,9 +590,6 @@ func (b *CheckpointLogtailRespBuilder) GetBlkBatchs() (*containers.Batch, *conta
 	return b.blkMetaInsBatch, b.blkMetaInsTxnBatch, b.blkMetaDelBatch, b.blkMetaDelTxnBatch
 }
 func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
-	if entry.IsSystemDB() {
-		return nil
-	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
@@ -615,9 +612,6 @@ func (b *CheckpointLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 }
 
 func (b *CheckpointLogtailRespBuilder) VisitTable(entry *catalog.TableEntry) (err error) {
-	if entry.GetDB().IsSystemDB() {
-		return nil
-	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
