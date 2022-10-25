@@ -1,4 +1,4 @@
-service-type = "CN"
+service-type = "DN"
 
 [log]
 level = "error"
@@ -10,9 +10,11 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
+
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/store"
 
 [[fileservice]]
 name = "S3"
@@ -23,12 +25,16 @@ name = "ETL"
 backend = "DISK-ETL"
 data-dir = "mo-data/local/etl"
 
-[observability]
-disableTrace = true
-disableMetric = true
+[dn]
+uuid = "42"
 
-[cn]
-uuid = "cn1"
+[dn.Txn.Storage]
+backend = "TAE"
 
-[cn.Engine]
-type = "distributed-tae"
+[dn.Ckp]
+scanner-interval = "2s"
+execution-levels = 2
+execution-interval = "3s"
+catalog-ckp-interval = "3s"
+catalog-unckp-limit = 2
+flush-interval = "6s"
