@@ -425,7 +425,7 @@ const (
 	PrivilegeTypeTableAll
 	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
-	PrivilegeTypeRoleWGO
+	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
 )
 
@@ -1289,8 +1289,8 @@ func (p *privilege) privilegeKind() privilegeKind {
 type privilegeEntryType int
 
 const (
-	privilegeEntryTypeGeneral privilegeEntryType = iota
-	privilegeEntryTypeMulti                      //multi privileges take effect together
+	privilegeEntryTypeGeneral  privilegeEntryType = iota
+	privilegeEntryTypeCompound                    //multi privileges take effect together
 )
 
 // privilegeItem is the item for in the compound entry
@@ -2889,16 +2889,16 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			me2 := &compoundEntry{
 				items: []privilegeItem{
 					{PrivilegeTypeCreateUser, nil, nil, "", ""},
-					{PrivilegeTypeRoleWGO, st.Role, st.Users, "", ""},
+					{PrivilegeTypeCanGrantRoleToOthersInCreateUser, st.Role, st.Users, "", ""},
 				},
 			}
 
 			entry1 := privilegeEntry{
-				privilegeEntryTyp: privilegeEntryTypeMulti,
+				privilegeEntryTyp: privilegeEntryTypeCompound,
 				compound:          me1,
 			}
 			entry2 := privilegeEntry{
-				privilegeEntryTyp: privilegeEntryTypeMulti,
+				privilegeEntryTyp: privilegeEntryTypeCompound,
 				compound:          me2,
 			}
 			extraEntries = append(extraEntries, entry1, entry2)
@@ -3166,7 +3166,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	}
 
 	me := &compoundEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeMulti, compound: me})
+	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 
 	//optional predefined privilege : tableAll, ownership
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -3346,12 +3346,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if yes {
 					return true, nil
 				}
-			} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+			} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 				if entry.compound != nil {
 					allTrue := true
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
-						if mi.privilegeTyp == PrivilegeTypeRoleWGO {
+						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 							//TODO: normalize the name
 							//TODO: simplify the logic
 							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
@@ -3418,6 +3418,8 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	var err error
 	var roleB int64
 	var ret bool
+	var ok bool
+	var grantedIds *btree.Set[int64]
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
@@ -3429,6 +3431,8 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleSetOfKthIteration := &btree.Set[int64]{}
 	//the set of roles visited by traversal algorithm
 	roleSetOfVisited := &btree.Set[int64]{}
+	//simple mo_role_grant cache
+	cacheOfMoRoleGrant := &btree.Map[int64, *btree.Set[int64]]{}
 
 	//step 1: The Set R1 {default role id}
 	//The primary role (in use)
@@ -3495,6 +3499,14 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 		//get roleB of roleA
 		for _, roleA := range roleSetOfKthIteration.Keys() {
+			if grantedIds, ok = cacheOfMoRoleGrant.Get(roleA); ok {
+				for _, grantedId := range grantedIds.Keys() {
+					roleSetOfKPlusOneThIteration.Insert(grantedId)
+				}
+				continue
+			}
+			grantedIds = &btree.Set[int64]{}
+			cacheOfMoRoleGrant.Set(roleA, grantedIds)
 			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleA)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
@@ -3518,6 +3530,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 					if !roleSetOfVisited.Contains(roleB) {
 						roleSetOfVisited.Insert(roleB)
 						roleSetOfKPlusOneThIteration.Insert(roleB)
+						grantedIds.Insert(roleB)
 					}
 				}
 			}

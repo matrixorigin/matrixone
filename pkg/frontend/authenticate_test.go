@@ -3483,7 +3483,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
@@ -3576,7 +3576,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
@@ -3662,7 +3662,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
