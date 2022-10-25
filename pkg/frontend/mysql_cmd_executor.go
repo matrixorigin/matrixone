@@ -398,7 +398,7 @@ func handleShowColumns(ses *Session) error {
 				return err
 			}
 			originString := def.GetOriginString()
-			switch originString{
+			switch originString {
 			case "uuid()":
 				row[4] = "UUID"
 			case "current_timestamp()":
@@ -438,7 +438,7 @@ func handleShowColumns(ses *Session) error {
 				return err
 			}
 			originString := def.GetOriginString()
-			switch originString{
+			switch originString {
 			case "uuid()":
 				row[5] = "UUID"
 			case "current_timestamp()":
