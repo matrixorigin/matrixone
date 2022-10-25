@@ -12,7 +12,7 @@ mo_role_grant
 mo_role_privs
 SELECT COUNT(*) FROM mo_database;
 count(*)
-8
+6
 SHOW COLUMNS FROM mo_database;
 Field    Type    Null    Key    Default    Extra    Comment
 dat_id    BIGINT UNSIGNED    NO    PRI    NULL        
@@ -278,9 +278,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(null)
 0
-(SELECT account, user, host FROM statement_info LIMIT 1) UNION (SELECT account, user, host FROM statement_info LIMIT 1);
-account    user    host
-sys    internal    0.0.0.0
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
 [unknown result because it is related to issue#5895]
 SHOW COLUMNS FROM rawlog;
@@ -429,9 +426,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 count(null)
 0
-(SELECT metric_name, role, account FROM metric LIMIT 1) UNION (SELECT metric_name, role, account FROM metric LIMIT 1);
-metric_name    role    account
-process_cpu_percent    ALL    sys
 SHOW COLUMNS FROM sql_statement_total;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -488,9 +482,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(null)
 0
-(SELECT value, account, role FROM sql_transaction_total LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_total LIMIT 1);
-value    account    role
-0.0    sys    ALL
 SHOW COLUMNS FROM sql_transaction_errors;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -523,7 +514,7 @@ role    VARCHAR    YES        NULL
 account    VARCHAR    YES        NULL        
 SELECT account, role, value FROM server_connections LIMIT 1;
 account    role    value
-sys    ALL    1.0
+sys    ALL    0.0
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(*)
 10
@@ -593,10 +584,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(null)
 0
-(SELECT value, role, account FROM process_open_fds LIMIT 1) UNION (SELECT value, role, account FROM process_open_fds LIMIT 2);
-value    role    account
-69.0    ALL    sys
-276.0    ALL    sys
 SHOW COLUMNS FROM sys_cpu_seconds_total;
 Field    Type    Null    Key    Default    Extra    Comment
 collecttime    DATETIME    YES        NULL        
@@ -680,9 +667,6 @@ value    DOUBLE    YES        NULL
 node    VARCHAR    YES        NULL        
 role    VARCHAR    YES        NULL        
 account    VARCHAR    YES        NULL        
-SELECT value, account, role FROM sys_disk_read_bytes LIMIT 1;
-value    account    role
-0.0    sys    ALL
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -828,8 +812,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
 count(null)
 0
-(SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1) UNION (SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1);
-host    user    select_priv    insert_priv    update_priv
 SHOW COLUMNS FROM db;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -869,8 +851,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
 count(null)
 0
-(SELECT host, db, user, select_priv FROM db LIMIT 1) UNION (SELECT host, db, user, select_priv FROM db LIMIT 1);
-host    db    user    select_priv
 SHOW COLUMNS FROM procs_priv;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -896,8 +876,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 count(null)
 0
-(SELECT host, db, user, routine_name FROM procs_priv LIMIT 1) UNION (SELECT host, db, user, routine_name FROM procs_priv LIMIT 1);
-host    db    user    routine_name
 SHOW COLUMNS FROM columns_priv;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -922,8 +900,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 count(null)
 0
-(SELECT host, db, user, table_name FROM columns_priv LIMIT 1) UNION (SELECT host, db, user, table_name FROM columns_priv LIMIT 1);
-host    db    user    table_name
 SHOW COLUMNS FROM tables_priv;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -949,8 +925,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 count(null)
 0
-(SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1) UNION (SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1);
-table_name    grantor    user    host
 USE information_schema;
 SHOW TABLES;
 tables_in_information_schema
@@ -991,8 +965,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 count(null)
 0
-(SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1) UNION (SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1);
-constraint_catalog    constraint_schema    constraint_name
 SHOW COLUMNS FROM columns;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR    YES        NULL        
@@ -1031,8 +1003,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(null)
 0
-(SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1) UNION (SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1);
-column_name    ordinal_position    column_default
 SHOW COLUMNS FROM profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT    NO        NULL        
@@ -1067,8 +1037,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 count(null)
 0
-(SELECT query_id, seq, state FROM profiling LIMIT 1) UNION (SELECT query_id, seq, state FROM profiling LIMIT 1);
-query_id    seq    state
 SHOW COLUMNS FROM user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment
 grantee    VARCHAR    NO        NULL        
@@ -1089,8 +1057,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(null)
 0
-(SELECT grantee, table_catalog FROM user_privileges LIMIT 1) UNION (SELECT grantee, table_catalog FROM user_privileges LIMIT 1);
-grantee    table_catalog
 SHOW COLUMNS FROM schemata;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR    YES        NULL        
@@ -1113,8 +1079,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 count(null)
 0
-(SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1) UNION (SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1);
-catalog_name    schema_name    sql_path
 SHOW COLUMNS FROM character_sets;
 Field    Type    Null    Key    Default    Extra    Comment
 character_set_name    VARCHAR    YES        NULL        
@@ -1135,8 +1099,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 count(null)
 0
-(SELECT character_set_name, description FROM character_sets LIMIT 1) UNION (SELECT character_set_name, description FROM character_sets LIMIT 1);
-character_set_name    description
 SHOW COLUMNS FROM triggers;
 Field    Type    Null    Key    Default    Extra    Comment
 trigger_catalog    VARCHAR    YES        NULL        
@@ -1175,8 +1137,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 count(null)
 0
-(SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1) UNION (SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1);
-trigger_catalog    trigger_schema    trigger_name
 SHOW COLUMNS FROM tables;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR    YES        NULL        
@@ -1214,5 +1174,3 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 count(null)
 0
-(SELECT table_name, table_type, engine, version FROM tables LIMIT 1) UNION (SELECT table_name, table_type, engine, version FROM tables LIMIT 1);
-table_name    table_type    engine    version

@@ -82,7 +82,6 @@ SELECT COUNT(*) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
-(SELECT account, user, host FROM statement_info LIMIT 1) UNION (SELECT account, user, host FROM statement_info LIMIT 1);
 
 -- @bvt:issue#5895
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
@@ -134,7 +133,6 @@ SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM metric LIMIT 10) AS temp;
-(SELECT metric_name, role, account FROM metric LIMIT 1) UNION (SELECT metric_name, role, account FROM metric LIMIT 1);
 
 -- sql_statement_total
 SHOW COLUMNS FROM sql_statement_total;
@@ -155,7 +153,6 @@ SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
-(SELECT value, account, role FROM sql_transaction_total LIMIT 1) UNION (SELECT value, account, role FROM sql_transaction_total LIMIT 1);
 
 -- sql_transaction_errors
 SHOW COLUMNS FROM sql_transaction_errors;
@@ -193,7 +190,6 @@ SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-(SELECT value, role, account FROM process_open_fds LIMIT 1) UNION (SELECT value, role, account FROM process_open_fds LIMIT 2);
 
 -- sys_cpu_seconds_total
 SHOW COLUMNS FROM sys_cpu_seconds_total;
@@ -225,7 +221,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 
 -- sys_disk_read_bytes
 SHOW COLUMNS FROM sys_disk_read_bytes;
-SELECT value, account, role FROM sys_disk_read_bytes LIMIT 1;
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
@@ -262,7 +257,6 @@ SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM user LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM user LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
-(SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1) UNION (SELECT host, user, select_priv, insert_priv, update_priv FROM user LIMIT 1);
 
 -- db
 SHOW COLUMNS FROM db;
@@ -271,7 +265,6 @@ SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM db LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM db LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
-(SELECT host, db, user, select_priv FROM db LIMIT 1) UNION (SELECT host, db, user, select_priv FROM db LIMIT 1);
 
 -- procs_priv
 SHOW COLUMNS FROM procs_priv;
@@ -280,7 +273,6 @@ SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-(SELECT host, db, user, routine_name FROM procs_priv LIMIT 1) UNION (SELECT host, db, user, routine_name FROM procs_priv LIMIT 1);
 
 -- columns_priv
 SHOW COLUMNS FROM columns_priv;
@@ -289,7 +281,6 @@ SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-(SELECT host, db, user, table_name FROM columns_priv LIMIT 1) UNION (SELECT host, db, user, table_name FROM columns_priv LIMIT 1);
 
 -- tables_priv
 SHOW COLUMNS FROM tables_priv;
@@ -298,7 +289,6 @@ SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-(SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1) UNION (SELECT table_name, grantor, user, host FROM tables_priv LIMIT 1);
 
 -- tables in information_schema
 USE information_schema;
@@ -310,7 +300,6 @@ SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-(SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1) UNION (SELECT constraint_catalog, constraint_schema, constraint_name FROM key_column_usage LIMIT 1);
 
 -- columns
 SHOW COLUMNS FROM columns;
@@ -319,7 +308,6 @@ SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM columns LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-(SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1) UNION (SELECT column_name, ordinal_position, column_default FROM columns LIMIT 1);
 
 -- profiling
 SHOW COLUMNS FROM profiling;
@@ -328,7 +316,6 @@ SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-(SELECT query_id, seq, state FROM profiling LIMIT 1) UNION (SELECT query_id, seq, state FROM profiling LIMIT 1);
 
 -- user_privileges
 SHOW COLUMNS FROM user_privileges;
@@ -337,7 +324,6 @@ SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-(SELECT grantee, table_catalog FROM user_privileges LIMIT 1) UNION (SELECT grantee, table_catalog FROM user_privileges LIMIT 1);
 
 -- schemata
 SHOW COLUMNS FROM schemata;
@@ -346,7 +332,6 @@ SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
-(SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1) UNION (SELECT catalog_name, schema_name, sql_path FROM schemata LIMIT 1);
 
 -- character_sets
 SHOW COLUMNS FROM character_sets;
@@ -355,7 +340,6 @@ SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-(SELECT character_set_name, description FROM character_sets LIMIT 1) UNION (SELECT character_set_name, description FROM character_sets LIMIT 1);
 
 -- triggers
 SHOW COLUMNS FROM triggers;
@@ -364,7 +348,6 @@ SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-(SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1) UNION (SELECT trigger_catalog, trigger_schema, trigger_name FROM triggers LIMIT 1);
 
 -- tables
 SHOW COLUMNS FROM tables;
@@ -373,4 +356,3 @@ SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-(SELECT table_name, table_type, engine, version FROM tables LIMIT 1) UNION (SELECT table_name, table_type, engine, version FROM tables LIMIT 1);
