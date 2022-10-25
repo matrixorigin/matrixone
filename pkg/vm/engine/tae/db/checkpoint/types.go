@@ -14,6 +14,13 @@
 
 package checkpoint
 
+type State int8
+
+const (
+	ST_Running State = iota
+	ST_Finished
+)
+
 type Runner interface {
 	Start()
 	Stop()
