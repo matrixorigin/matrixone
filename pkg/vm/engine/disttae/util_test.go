@@ -176,6 +176,7 @@ func TestCheckExprIsMonotonical(t *testing.T) {
 }
 
 func TestNeedRead(t *testing.T) {
+	t.Skip("NeedRead always returns true fot start cn-dn with flushing")
 	type asserts = struct {
 		result  bool
 		columns []string
