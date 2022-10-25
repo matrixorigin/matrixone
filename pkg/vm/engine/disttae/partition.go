@@ -50,7 +50,7 @@ func (r RowID) Less(than RowID) bool {
 }
 
 type DataValue struct {
-	op    Op
+	op    uint8
 	value map[string]memtable.Nullable
 }
 
@@ -61,10 +61,8 @@ type DataRow struct {
 	uniqueIndexes []memtable.Tuple
 }
 
-type Op uint8
-
 const (
-	opInsert Op = iota + 1
+	opInsert = iota + 1
 	opDelete
 )
 
@@ -326,7 +324,7 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 		for ok := iter.First(); ok; ok = iter.Next() {
 			entry := iter.Item()
 			rowID := entry.Key
-			switch Op(entry.Index[3].(memtable.Uint)) {
+			switch entry.Index[3].(memtable.Uint) {
 			case opInsert:
 				inserted[rowID] = true
 			case opDelete:
