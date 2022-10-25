@@ -15,9 +15,7 @@ drop table t1
 
 drop table if exists t2;
 create table t2(a uuid primary key);
--- @bvt:issue#5241
 desc t2;
--- @bvt:issue
 show create table t2;
 drop table t2;
 

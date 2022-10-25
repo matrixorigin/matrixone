@@ -39,6 +39,7 @@ var (
 	defaultExecutionLevels    = int16(30)
 	defaultCatalogCkpInterval = time.Second * 30
 	defaultCatalogUnCkpLimit  = int64(10)
+	defaultLogstoreType       = "batchstore"
 )
 
 // Config dn store configuration
@@ -103,6 +104,10 @@ type Config struct {
 			}
 		}
 	}
+
+	LogStore struct {
+		LogService string `toml:"logstore"`
+	}
 }
 
 func (c *Config) Validate() error {
@@ -157,6 +162,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Ckp.CatalogUnCkpLimit == 0 {
 		c.Ckp.CatalogUnCkpLimit = defaultCatalogUnCkpLimit
+	}
+	if c.LogStore.LogService == "" {
+		c.LogStore.LogService = defaultLogstoreType
 	}
 	return nil
 }

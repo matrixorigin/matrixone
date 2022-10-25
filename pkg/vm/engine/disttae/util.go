@@ -133,7 +133,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 }
 
 func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
-	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
@@ -143,10 +143,6 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 	}
 
 	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
-	if err != nil {
-		return nil, 0, err
-	}
-	rows, err := obs[0].GetRows()
 	if err != nil {
 		return nil, 0, err
 	}
