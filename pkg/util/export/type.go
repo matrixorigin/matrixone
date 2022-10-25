@@ -96,7 +96,7 @@ type MergeLogType string
 func (t MergeLogType) String() string { return string(t) }
 
 const MergeLogTypeMerged MergeLogType = "merged"
-const MergeLogTypeLog MergeLogType = "log"
+const MergeLogTypeLogs MergeLogType = "logs"
 const MergeLogTypeALL MergeLogType = "*"
 
 const FilenameSeparator = "_"
@@ -190,7 +190,7 @@ func (p *MetricLogPath) Parse() error {
 		p.fileType = MergeLogTypeMerged
 		p.timestamps = fnElems[:2]
 	} else {
-		p.fileType = MergeLogTypeLog
+		p.fileType = MergeLogTypeLogs
 		p.timestamps = fnElems[:1]
 	}
 
