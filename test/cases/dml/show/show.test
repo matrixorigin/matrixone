@@ -75,3 +75,17 @@ show table status from `1;drop table t1;`;
 show index from `1;drop table t1;`;
 show variables like `1;drop table t1;`;
 select * from t1;
+
+-- @case
+-- @desc:test for show collation
+-- @label:bvt
+show collation;
+show collation like '%';
+show collation where 'Charset'='utf8mb4';
+
+-- @case
+-- @desc:test for set and show variables
+-- @label:bvt
+show variables like 'sql_safe_updates';
+set sql_safe_updates=1;
+show variables like 'sql_safe_updates';

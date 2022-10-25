@@ -154,7 +154,7 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_createsql
-		if err := bat.Vecs[idx].Append([]byte(sql), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.createSql), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATED_TIME_IDX
@@ -974,11 +974,12 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	}
 
 	for i, blockInfo := range blockInfos {
-		zm, err := fetchZonemapFromBlockInfo(idxs, blockInfo, fs, m)
+		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(idxs, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}
 		metas[i] = BlockMeta{
+			Rows:    int64(rows),
 			Info:    blockInfo,
 			Zonemap: zm,
 		}
