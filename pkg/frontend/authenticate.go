@@ -3354,7 +3354,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 						if mi.privilegeTyp == PrivilegeTypeRoleWGO {
 							//TODO: normalize the name
 							//TODO: simplify the logic
-							yes, err = determineUserCanGrantRolesToOthers(ctx, ses, []*tree.Role{mi.role})
+							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 							if err != nil {
 								return false, err
 							}
@@ -3599,9 +3599,9 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 	return err
 }
 
-// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
-// the same as the grant/revoke privilege, role.
-func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
+// determineUserCanGrantRolesToOthersInternal decides if the user can grant roles to other users or roles
+// the same as the grant/revoke privilege, role with inputted transaction and BackgroundExec
+func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh BackgroundExec, ses *Session, fromRoles []*tree.Role) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
 	err = normalizeNamesOfRoles(fromRoles)
@@ -3611,8 +3611,6 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var vr *verifiedRole
@@ -3633,12 +3631,6 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 
 	//step 1 : add the primary role
 	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
-		goto handleFailed
-	}
 
 	for i, role := range fromRoles {
 		sql = getSqlForRoleIdOfRole(role.UserName)
@@ -3702,6 +3694,37 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 			ret = false
 			break
 		}
+	}
+	return ret, err
+
+handleFailed:
+	return false, err
+}
+
+// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
+// the same as the grant/revoke privilege, role.
+func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
+	//step1: normalize the names of roles and users
+	var err error
+	var ret bool
+	err = normalizeNamesOfRoles(fromRoles)
+	if err != nil {
+		return false, err
+	}
+
+	//step2: decide the current user
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	ret, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, fromRoles)
+	if err != nil {
+		goto handleFailed
 	}
 
 	err = bh.Exec(ctx, "commit;")
