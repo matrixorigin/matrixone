@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -140,8 +141,8 @@ func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 
 func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
-		for i, entry := range Entries {
-			Entries[i].Data, err = m.Alloc(int(entry.Size))
+		for i := range Entries {
+			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
 			if err != nil {
 				return
 			}
