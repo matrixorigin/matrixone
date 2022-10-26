@@ -120,7 +120,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(rowidDescCompare, rowidCopy, nullsLast)
 		}
 		return newCompare(rowidAscCompare, rowidCopy, nullsLast)
-
+	case types.T_uuid:
+		if desc {
+			return newCompare(uuidDescCompare, uuidCopy, nullsLast)
+		}
+		return newCompare(uuidAscCompare, uuidCopy, nullsLast)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return &strCompare{
 			desc:      desc,
@@ -147,6 +151,11 @@ func decimal64AscCompare(x, y types.Decimal64) int {
 func decimal128AscCompare(x, y types.Decimal128) int {
 	return x.Compare(y)
 }
+
+func uuidAscCompare(x, y types.Uuid) int {
+	return x.Compare(y)
+}
+
 func txntsAscCompare(x, y types.TS) int {
 	return bytes.Compare(x[:], y[:])
 }
@@ -181,6 +190,10 @@ func decimal128DescCompare(x, y types.Decimal128) int {
 	return -x.Compare(y)
 }
 
+func uuidDescCompare(x, y types.Uuid) int {
+	return -x.Compare(y)
+}
+
 func txntsDescCompare(x, y types.TS) int {
 	return bytes.Compare(y[:], x[:])
 }
@@ -207,6 +220,10 @@ func decimal64Copy(vecDst, vecSrc []types.Decimal64, dst, src int64) {
 }
 
 func decimal128Copy(vecDst, vecSrc []types.Decimal128, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func uuidCopy(vecDst, vecSrc []types.Uuid, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

@@ -198,7 +198,12 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 			v.(types.Rowid),
 			types.CompareRowidRowidAligned,
 			skipmask)
-
+	case types.T_uuid:
+		return GetOffsetWithFunc(
+			data.Slice().([]types.Uuid),
+			v.(types.Uuid),
+			types.CompareUuid,
+			skipmask)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
