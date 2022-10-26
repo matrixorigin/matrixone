@@ -24,7 +24,7 @@ SELECT ... FROM <query_name>;
 
 Download the TPCH test dataset and create the tables. See[TPCH Test](../../Tutorial/TPCH-test-with-matrixone.md).
 
-## CTE Example:
+## CTE Example
 
 In the following example, `q15_revenue0` is created as a temporary result set and the corresponding query results are cached in MatrixOne. You can perform a formal `q15_revenue0` query better than in a non-CTE scenario.
 
