@@ -203,3 +203,41 @@ func TestMetricSingleTable(t *testing.T) {
 		require.Contains(t, string(content), "# HELP") // check we have metrics output
 	})
 }
+
+func TestGetSchemaForAccount(t *testing.T) {
+	type args struct {
+		account string
+	}
+	tests := []struct {
+		name     string
+		args     args
+		wantPath string
+	}{
+		{
+			name: "test_account_user1",
+			args: args{
+				account: "user1",
+			},
+			wantPath: "/user1/*/*/*/*/metric/*.csv",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schemas := GetSchemaForAccount(tt.args.account)
+			found := false
+			for _, sche := range schemas {
+				t.Logf("schma: %s", sche)
+				if strings.Contains(sche, tt.wantPath) {
+					found = true
+				}
+			}
+			require.Equal(t, 6, len(schemas))
+			require.Equal(t, true, found)
+			found = false
+			if strings.Contains(SingleMetricTable.ToCreateSql(true), "/*/*/*/*/*/metric/*.csv") {
+				found = true
+			}
+			require.Equal(t, true, found)
+		})
+	}
+}

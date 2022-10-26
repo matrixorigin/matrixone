@@ -353,6 +353,8 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
 		return true, val.Fval
 	case *plan.Const_Dateval:
 		return true, val.Dateval
+	case *plan.Const_Timeval:
+		return true, val.Timeval
 	case *plan.Const_Datetimeval:
 		return true, val.Datetimeval
 	case *plan.Const_Decimal64Val:

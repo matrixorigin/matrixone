@@ -599,6 +599,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			pc.Value = &plan.Const_Fval{Fval: c.Fval}
 		case *plan.Const_Dateval:
 			pc.Value = &plan.Const_Dateval{Dateval: c.Dateval}
+		case *plan.Const_Timeval:
+			pc.Value = &plan.Const_Timeval{Timeval: c.Timeval}
 		case *plan.Const_Datetimeval:
 			pc.Value = &plan.Const_Datetimeval{Datetimeval: c.Datetimeval}
 		case *plan.Const_Decimal64Val:

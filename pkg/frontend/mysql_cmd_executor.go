@@ -809,6 +809,19 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = vs[rowIndex].String2(precision)
 			}
 		}
+	case types.T_time:
+		precision := vec.Typ.Precision
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Time)
+			row[i] = vs[rowIndex].String2(precision)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Time)
+				row[i] = vs[rowIndex].String2(precision)
+			}
+		}
 	case types.T_timestamp:
 		precision := vec.Typ.Precision
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
@@ -1837,7 +1850,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	txnHandler := cwft.ses.GetTxnHandler()
 	if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
-	} else {
+	} else if cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator = txnHandler.GetTxn()
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
@@ -3054,6 +3067,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_time:
+		col.SetColumnType(defines.MYSQL_TYPE_TIME)
 	case types.T_timestamp:
 		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
 	case types.T_decimal64:
