@@ -24,14 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_showSchema(t *testing.T) {
-
-	t.Logf("%s", sqlCreateStatementInfoTable)
-	t.Logf("%s", sqlCreateSpanInfoTable)
-	t.Logf("%s", sqlCreateLogInfoTable)
-	t.Logf("%s", sqlCreateErrorInfoTable)
-}
-
 var _ ie.InternalExecutor = &dummySqlExecutor{}
 
 type dummySqlExecutor struct {

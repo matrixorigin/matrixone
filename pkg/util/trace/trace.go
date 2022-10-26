@@ -102,10 +102,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// register buffer pipe implements
-		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		panic(moerr.NewNotSupported("not support process mode: %s", config.batchProcessMode))
 	case config.batchProcessMode == FileService:
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
