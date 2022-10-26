@@ -46,6 +46,7 @@ type Service interface {
 
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
+	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string

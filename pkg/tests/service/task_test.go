@@ -140,7 +140,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 			i++
 			continue
 		}
-		require.Equal(t, 4, len(tasks))
+		require.Equal(t, 1, len(tasks))
 		t.Logf("task status: %s", tasks[0].Status)
 		break
 	}
@@ -178,7 +178,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	tasks, err := taskService.QueryTask(ctx,
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
 	require.NoError(t, err)
-	require.Equal(t, 4, len(tasks))
+	require.Equal(t, 1, len(tasks))
 
 	uuid1 := waitTaskScheduled(t, ctx, taskService)
 
