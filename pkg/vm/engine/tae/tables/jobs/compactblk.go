@@ -129,6 +129,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
+	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, err := task.PrepareData(newMeta.MakeKey())
 	if err != nil {
@@ -139,13 +140,25 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newBlkData := newMeta.GetBlockData()
-
+	oldBlkData := oldBMeta.GetBlockData()
+	var deletes *containers.Batch
+	var deltaLoc string
+	if !oldBMeta.IsAppendable() {
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS())
+		if err != nil {
+			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
+		}
+	}
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
 		newBlkData.GetFs(),
 		task.txn.GetStartTS(),
 		newMeta,
-		preparer.Columns)
+		preparer.Columns,
+		deletes)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
@@ -162,34 +175,44 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
+	if deletes != nil {
+		deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+			ioTask.blocks[1].GetExtent(),
+			0,
+			ioTask.blocks)
+		if err != nil {
+			return
+		}
+		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+			return err
+		}
+	}
+
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
 	// write ablock
-	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	if aBlkMeta.IsAppendable() {
+	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
-		var deletes *containers.Batch
-		aBlkData := aBlkMeta.GetBlockData()
-		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
+		data, err = oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
 		if err != nil {
 			return
 		}
 		defer data.Close()
-		deletes, err = aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS())
 		if err != nil {
 			return
 		}
 		if deletes != nil {
 			defer deletes.Close()
 		}
-		ablockTask := NewFlushABlkTask(
+		ablockTask := NewFlushBlkTask(
 			tasks.WaitableCtx,
-			aBlkData.GetFs(),
+			oldBlkData.GetFs(),
 			task.txn.GetStartTS(),
-			aBlkMeta,
+			oldBMeta,
 			data,
 			deletes,
 		)
@@ -211,19 +234,18 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			var deltaLocABlk string
-			deltaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+			deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
 				ablockTask.blocks[1].GetExtent(),
 				0,
 				ablockTask.blocks)
 			if err != nil {
 				return
 			}
-			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 				return err
 			}
 		}
-		if err = aBlkData.ReplayIndex(); err != nil {
+		if err = oldBlkData.ReplayIndex(); err != nil {
 			return err
 		}
 	}
