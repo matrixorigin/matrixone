@@ -36,9 +36,9 @@ import (
 )
 
 func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
-	logutil.Infof("[Logtail] begin handle %v", req)
+	logutil.Debugf("[Logtail] begin handle %v", req)
 	defer func() {
-		logutil.Infof("[Logtail] end handle err %v", err)
+		logutil.Debugf("[Logtail] end handle err %v", err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
