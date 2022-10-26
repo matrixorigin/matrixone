@@ -89,10 +89,8 @@ col4 decimal(20,5)
 
 insert into t3 values (1.3,1.3,1.3,1.3);
 select * from t3;
--- @bvt:issue#5104
 load data infile '$resources/load_data/float_1.csv' into table t3;
 select * from t3;
--- @bvt:issue
 delete from t3;
 
 -- load data
@@ -106,11 +104,9 @@ delete from t3;
 -- load data
 load data infile '$resources/into_outfile/outfile_float_2.csv' into table t3 ignore 1 lines;
 select * from t3;
-delete from t3
+delete from t3;
 
--- @bvt:issue#5112
 load data infile '$resources/load_data/float_3.csv' into table t3;
--- @bvt:issue
 
 drop table t3;
 
@@ -151,10 +147,8 @@ load data infile '$resources/load_data/time_date_4.csv' into table t4 fields ter
 select * from t4;
 delete from t4;
 
--- @bvt:issue#5118
 load data infile '$resources/load_data/time_date_5.csv' into table t4;
 select * from t4;
--- @bvt:issue
 delete from t4;
 
 drop table t4;

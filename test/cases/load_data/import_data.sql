@@ -45,6 +45,7 @@ col4 varchar(225)
 import data infile '$resources/load_data/char_varchar_1.csv' into table t2;
 select * from t2;
 
+-- @bvt:issue#5148
 -- into outfile
 select * from t2 into outfile '$resources/into_outfile_2/outfile_char_varchar_1.csv';
 delete from t2;
@@ -53,6 +54,7 @@ delete from t2;
 import data infile '$resources/into_outfile_2/outfile_char_varchar_1.csv' into table t2 ignore 1 lines;
 select * from t2;
 delete from t2;
+-- @bvt:issue
 
 -- @bvt:issue#5087
 import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
@@ -102,7 +104,7 @@ delete from t3;
 -- import data
 import data infile '$resources/into_outfile_2/outfile_float_2.csv' into table t3 ignore 1 lines;
 select * from t3;
-delete from t3
+delete from t3;
 
 import data infile '$resources/load_data/float_3.csv' into table t3;
 
@@ -117,8 +119,10 @@ col3 timestamp,
 col4 bool
 );
 
+-- @bvt:issue#5046
 import data infile '$resources/load_data/time_date_1.csv' into table t4;
 select * from t4;
+-- @bvt:issue
 delete from t4;
 
 -- import data
