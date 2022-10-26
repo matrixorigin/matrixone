@@ -16,12 +16,11 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -890,6 +889,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
@@ -1324,6 +1331,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
+	table.Ranges(ctx, nil) // TODO
 	return table, nil
 }
 

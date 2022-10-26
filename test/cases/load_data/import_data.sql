@@ -45,7 +45,6 @@ col4 varchar(225)
 import data infile '$resources/load_data/char_varchar_1.csv' into table t2;
 select * from t2;
 
--- @bvt:issue#5148
 -- into outfile
 select * from t2 into outfile '$resources/into_outfile_2/outfile_char_varchar_1.csv';
 delete from t2;
@@ -54,13 +53,10 @@ delete from t2;
 import data infile '$resources/into_outfile_2/outfile_char_varchar_1.csv' into table t2 ignore 1 lines;
 select * from t2;
 delete from t2;
--- @bvt:issue
 
--- @bvt:issue#5087
 import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
 select * from t2;
 delete from t2;
--- @bvt:issue
 
 
 import data infile '$resources/load_data/char_varchar_3.csv' into table t2;
@@ -138,9 +134,7 @@ import data infile '$resources/into_outfile_2/outfile_time_date_2.csv' into tabl
 select * from t4;
 delete from t4;
 
--- @bvt:issue#5115
 import data infile '$resources/load_data/time_date_3.csv' into table t4;
--- @bvt:issue
 delete from t4;
 
 import data infile '$resources/load_data/time_date_4.csv' into table t4 fields terminated by';';

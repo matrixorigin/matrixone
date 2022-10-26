@@ -7,9 +7,7 @@ a bigint primary key auto_increment,
 b varchar(10)
 );
 
--- @bvt:issue#4825
 show create table t1;
--- @bvt:issue
 
 insert into t1(b) values ('bbb');
 
@@ -49,10 +47,8 @@ insert into t1 values ('0', 'yyy');
 
 select * from t1;
 
--- @bvt:issue#4825
-insert into t1 values (NULL, 'yyy')
-select * from t4 order by a;
--- @bvt:issue
+insert into t1 values (NULL, 'yyy');
+select * from t1 order by a;
 
 -- echo error
 update t1 set a=0 where b='ccc';
@@ -87,20 +83,14 @@ d varchar(10)
 insert into t2 values (-2147483648, 'aaa');
 select * from t2 order by c;
 -- echo error
--- @bvt:issue#4832
 insert into t2 values (-2147483649, 'aaa');
--- @bvt:issue
 
--- @bvt:issue#4833
 insert into t2(d) values ('1111');
 select * from t2 order by c;
--- @bvt:issue
 
 insert into t2 values(2147483647, 'bbb');
 -- echo error
--- @bvt:issue#4834
 insert into t2 values(2147483648, 'bbb');
--- @bvt:issue
 
 insert into t2(d) values ('22222');
 select * from t2 order by c;
@@ -131,11 +121,9 @@ select * from t3 order by a;
 insert into t3 values (2,'ccc');
 select * from t3 order by a;
 
--- @bvt:issue#4836
 delete from t3;
 insert into t3(b) values ('bbb');
 select * from t3 order by a;
--- @bvt:issue
 
 drop table t3;
 
@@ -183,10 +171,8 @@ insert into t4 values ('0', 'yyy');
 
 select * from t4 order by a;
 
--- @bvt:issue#4825
 insert into t4 values (NULL, 'yyy');
 select * from t4 order by a;
--- @bvt:issue
 
 -- echo error
 update t4 set a=0 where b='ccc';
@@ -200,9 +186,7 @@ select * from t4 order by a;
 -- test bigint min value
 insert into t4 values (-9223372036854775808,'xefrsdfgds');
 -- echo error msg
--- @bvt:issue#4844
 insert into t4 values (-9223372036854775809,'xefrsdfgds');
--- @bvt:issue
 
 -- test bigint max value
 insert into t4 values (9223372036854775807,'xefrsdfgds');
@@ -223,21 +207,15 @@ d varchar(10)
 insert into t5 values (-2147483648, 'aaa');
 select * from t5 order by c;
 -- echo error
--- @bvt:issue#4832
 insert into t5 values (-2147483649, 'aaa');
--- @bvt:issue
 
--- @bvt:issue#4833
 insert into t5(d) values ('1111');
 select * from t5 order by c;
--- @bvt:issue
 
 insert into t5 values(2147483647, 'bbb');
 -- echo error
--- @bvt:issue#4834
 insert into t5 values(2147483648, 'bbb');
 select * from t5 order by c;
--- @bvt:issue
 
 insert into t5(d) values ('22222');
 select * from t5 order by c;
@@ -256,9 +234,7 @@ d int auto_increment,
 e bigint auto_increment
 );
 
--- @bvt:issue#4825
-show create table t1;
--- @bvt:issue
+show create table t6;
 
 insert into t6 values (),(),(),();
 select * from t6 order by a;
@@ -351,9 +327,7 @@ b int auto_increment
 insert into t10 values (10, 10);
 insert into t10 values (),(),();
 select * from t10 order by a;
--- @bvt:issue#5538
 truncate table t10;
--- @bvt:issue
 insert into t10 values ();
 select * from t10 order by a;
 
@@ -368,10 +342,8 @@ b bigint auto_increment,
 c varchar(25)
 );
 
--- @bvt:issue#4852
 load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11;
 select * from t11 order by a;
--- @bvt:issue
 drop table t11;
 
 
@@ -381,10 +353,8 @@ a int primary key auto_increment,
 b bigint auto_increment,
 c varchar(25)
 );
--- @bvt:issue#4852
 load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12;
 select * from t12 order by a;
--- @bvt:issue
 
 drop table t12;
 

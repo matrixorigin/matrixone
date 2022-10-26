@@ -17,9 +17,11 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -119,7 +121,6 @@ func (l *store) hakeeperCheck() {
 		l.taskScheduler.StopScheduleCronTask()
 		return
 	}
-	l.taskScheduler.StartScheduleCronTask()
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
@@ -137,6 +138,15 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
+		if state.TaskState == pb.TaskInitNotStart {
+			if err := l.setTaskTableUser(pb.TaskTableUser{
+				Username: uuid.NewString(),
+				Password: uuid.NewString(),
+			}); err != nil {
+				l.logger.Error("failed to set task table user", zap.Error(err))
+				return
+			}
+		}
 		l.healthCheck(term, state)
 		l.taskSchedule(state)
 	default:
@@ -189,6 +199,7 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 	l.assertHAKeeperState(pb.HAKeeperRunning)
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 
+	l.taskScheduler.StartScheduleCronTask()
 	l.taskScheduler.Schedule(state.GetCNState(), state.Tick)
 }
 
@@ -268,9 +279,27 @@ func (l *store) getScheduleCommand(check bool,
 	}
 
 	if check {
-		return l.checker.Check(l.alloc,
-			state.ClusterInfo, state.DNState, state.LogState, state.Tick), nil
+		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo, nil)
 	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
+}
+
+func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
+	cmd := hakeeper.GetTaskTableUserCmd(user)
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.logger.Error("failed to propose task user info", zap.Error(err))
+		return err
+	}
+	if result.Value == uint64(pb.TaskInitFailed) {
+		panic("failed to set task user")
+	}
+	if result.Value != uint64(pb.TaskInitNotStart) {
+		l.logger.Error("task user info already set")
+	}
+	return nil
 }

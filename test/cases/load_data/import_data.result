@@ -83,17 +83,6 @@ delete from t2;
 import data infile '$resources/into_outfile_2/outfile_char_varchar_1.csv' into table t2 ignore 1 lines;
 
 select * from t2;
-[unknown result because it is related to issue#5148]
-delete from t2;
-
-import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
-
-select * from t2;
-[unknown result because it is related to issue#5087]
-delete from t2;
-
-import data infile '$resources/load_data/char_varchar_3.csv' into table t2;
-select * from t2;
 col1    col2    col3    col4
 a    b    c    d
 a    b    c    d
@@ -110,12 +99,29 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
-            
-            
+
+
 null    null    null    null
-            
+
 "    "    "    "
 ""    ""    ""    ""
+delete from t2;
+
+import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
+
+select * from t2;
+col1    col2    col3    col4
+aa""aa    bb""bb    cc""cc    dd""dd
+aa"aa    bb"bb    cc"cc    dd"dd
+aa"""aa    bb"""bb    cc"""cc    dd"""dd
+aa""aa    bb""bb    cc""cc    dd""dd
+aa""""aa    bb""""bb    cc""""cc    dd""""dd
+aa"""aa    bb""bb    cc""cc    dd""dd
+delete from t2;
+
+import data infile '$resources/load_data/char_varchar_3.csv' into table t2;
+select * from t2;
+col1    col2    col3    col4
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"    aa"    bb"    bb"
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
@@ -222,6 +228,7 @@ col3 timestamp,
 col4 bool
 );
 import data infile '$resources/load_data/time_date_1.csv' into table t4;
+data truncated: data type TIMESTAMP, value '1970-01-01 00:00:01' for column 'col3' at row '1'
 
 select * from t4;
 [unknown result because it is related to issue#5046]
