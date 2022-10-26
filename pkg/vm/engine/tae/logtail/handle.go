@@ -26,6 +26,7 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -286,8 +287,6 @@ func bytesToRowID(bs []byte) types.Rowid {
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
@@ -298,6 +297,8 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 		}
 		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
 	}
+	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
+	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
 	return bat
 }
 
@@ -528,6 +529,9 @@ type CheckpointLogtailRespBuilder struct {
 	blkMetaInsTxnBatch *containers.Batch
 	blkMetaDelBatch    *containers.Batch
 	blkMetaDelTxnBatch *containers.Batch
+
+	tempKey  string
+	tempName string
 }
 
 func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailRespBuilder {
@@ -561,8 +565,8 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 	return b
 }
 func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
-	name := blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
-	writer := blockio.NewWriter(fs, name)
+	b.tempName = blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
+	writer := blockio.NewWriter(fs, b.tempName)
 	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
 		panic(err)
 	}
@@ -617,144 +621,146 @@ func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
 	if _, err := writer.WriteBlock(b.blkMetaDelTxnBatch); err != nil {
 		panic(err)
 	}
-	if _, err := writer.Sync(); err != nil {
-		panic(err)
-	}
-}
-
-func (b *CheckpointLogtailRespBuilder) ReadFromFS(fs *objectio.ObjectFS) {
-	name := blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
-	reader, err := blockio.NewReader(fs, name)
+	blks, err := writer.Sync()
 	if err != nil {
 		panic(err)
 	}
-	metas, err := reader.ReadMetas(nil) //todo mpool
+	b.tempKey = blockio.EncodeMetalocFromMetas(b.tempName, blks)
+}
+
+func (b *CheckpointLogtailRespBuilder) ReadFromFS(fs *objectio.ObjectFS, m *mpool.MPool) {
+	b.tempName = blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
+	reader, err := blockio.NewCheckpointReader(fs, b.tempKey)
+	if err != nil {
+		panic(err)
+	}
+	metas, err := reader.ReadMetas(m) //todo mpool
 	if err != nil {
 		panic(err)
 	}
 	if b.dbInsBatch, err = reader.LoadBlkColumnsByMeta(
-		catalog.SystemDBSchema.Types(),
-		catalog.SystemDBSchema.AllNames(),
-		catalog.SystemDBSchema.AllNullables(),
+		append(catalog.SystemDBSchema.Types(), BaseTypes...),
+		append(catalog.SystemDBSchema.AllNames(), BaseAttr...),
+		append(catalog.SystemDBSchema.AllNullables(), []bool{false, false}...),
 		metas[0]); err != nil {
 		panic(err)
 	}
 	if b.dbInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		TxnNodeSchema.Types(),
-		TxnNodeSchema.AllNames(),
-		TxnNodeSchema.AllNullables(),
+		append(TxnNodeSchema.Types(), BaseTypes...),
+		append(TxnNodeSchema.AllNames(), BaseAttr...),
+		append(TxnNodeSchema.AllNullables(), []bool{false, false}...),
 		metas[1]); err != nil {
 		panic(err)
 	}
 	if b.dbDelBatch, err = reader.LoadBlkColumnsByMeta(
-		DelSchema.Types(),
-		DelSchema.AllNames(),
-		DelSchema.AllNullables(),
+		BaseTypes,
+		BaseAttr,
+		[]bool{false, false},
 		metas[2]); err != nil {
 		panic(err)
 	}
 	if b.dbDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		DBDNSchema.Types(),
-		DBDNSchema.AllNames(),
-		DBDNSchema.AllNullables(),
+		append(DBDNSchema.Types(), BaseTypes...),
+		append(DBDNSchema.AllNames(), BaseAttr...),
+		append(DBDNSchema.AllNullables(), []bool{false, false}...),
 		metas[3]); err != nil {
 		panic(err)
 	}
 	if b.tblInsBatch, err = reader.LoadBlkColumnsByMeta(
-		catalog.SystemTableSchema.Types(),
-		catalog.SystemTableSchema.AllNames(),
-		catalog.SystemTableSchema.AllNullables(),
+		append(catalog.SystemTableSchema.Types(), BaseTypes...),
+		append(catalog.SystemTableSchema.AllNames(), BaseAttr...),
+		append(catalog.SystemTableSchema.AllNullables(), []bool{false, false}...),
 		metas[4]); err != nil {
 		panic(err)
 	}
 	if b.tblInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		TxnNodeSchema.Types(),
-		TxnNodeSchema.AllNames(),
-		TxnNodeSchema.AllNullables(),
+		append(TxnNodeSchema.Types(), BaseTypes...),
+		append(TxnNodeSchema.AllNames(), BaseAttr...),
+		append(TxnNodeSchema.AllNullables(), []bool{false, false}...),
 		metas[5]); err != nil {
 		panic(err)
 	}
 	if b.tblDelBatch, err = reader.LoadBlkColumnsByMeta(
-		DelSchema.Types(),
-		DelSchema.AllNames(),
-		DelSchema.AllNullables(),
+		BaseTypes,
+		BaseAttr,
+		[]bool{false, false},
 		metas[6]); err != nil {
 		panic(err)
 	}
 	if b.tblDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		TblDNSchema.Types(),
-		TblDNSchema.AllNames(),
-		TblDNSchema.AllNullables(),
+		append(TblDNSchema.Types(), BaseTypes...),
+		append(TblDNSchema.AllNames(), BaseAttr...),
+		append(TblDNSchema.AllNullables(), []bool{false, false}...),
 		metas[7]); err != nil {
 		panic(err)
 	}
 	if b.tblColInsBatch, err = reader.LoadBlkColumnsByMeta(
-		catalog.SystemColumnSchema.Types(),
-		catalog.SystemColumnSchema.AllNames(),
-		catalog.SystemColumnSchema.AllNullables(),
+		append(catalog.SystemColumnSchema.Types(), BaseTypes...),
+		append(catalog.SystemColumnSchema.AllNames(), BaseAttr...),
+		append(catalog.SystemColumnSchema.AllNullables(), []bool{false, false}...),
 		metas[8]); err != nil {
 		panic(err)
 	}
 	if b.tblColDelBatch, err = reader.LoadBlkColumnsByMeta(
-		DelSchema.Types(),
-		DelSchema.AllNames(),
-		DelSchema.AllNullables(),
+		BaseTypes,
+		BaseAttr,
+		[]bool{false, false},
 		metas[9]); err != nil {
 		panic(err)
 	}
 	if b.segInsBatch, err = reader.LoadBlkColumnsByMeta(
-		SegSchema.Types(),
-		SegSchema.AllNames(),
-		SegSchema.AllNullables(),
+		append(SegSchema.Types(), BaseTypes...),
+		append(SegSchema.AllNames(), BaseAttr...),
+		append(SegSchema.AllNullables(), []bool{false, false}...),
 		metas[10]); err != nil {
 		panic(err)
 	}
 	if b.segInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		SegDNSchema.Types(),
-		SegDNSchema.AllNames(),
-		SegDNSchema.AllNullables(),
+		append(SegDNSchema.Types(), BaseTypes...),
+		append(SegDNSchema.AllNames(), BaseAttr...),
+		append(SegDNSchema.AllNullables(), []bool{false, false}...),
 		metas[11]); err != nil {
 		panic(err)
 	}
 	if b.segDelBatch, err = reader.LoadBlkColumnsByMeta(
-		DelSchema.Types(),
-		DelSchema.AllNames(),
-		DelSchema.AllNullables(),
+		BaseTypes,
+		BaseAttr,
+		[]bool{false, false},
 		metas[12]); err != nil {
 		panic(err)
 	}
 	if b.segDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		SegDNSchema.Types(),
-		SegDNSchema.AllNames(),
-		SegDNSchema.AllNullables(),
+		append(SegDNSchema.Types(), BaseTypes...),
+		append(SegDNSchema.AllNames(), BaseAttr...),
+		append(SegDNSchema.AllNullables(), []bool{false, false}...),
 		metas[13]); err != nil {
 		panic(err)
 	}
 	if b.blkMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
-		BlkMetaSchema.Types(),
-		BlkMetaSchema.AllNames(),
-		BlkMetaSchema.AllNullables(),
+		append(BlkMetaSchema.Types(), BaseTypes...),
+		append(BlkMetaSchema.AllNames(), BaseAttr...),
+		append(BlkMetaSchema.AllNullables(), []bool{false, false}...),
 		metas[14]); err != nil {
 		panic(err)
 	}
 	if b.blkMetaInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		BlkDNSchema.Types(),
-		BlkDNSchema.AllNames(),
-		BlkDNSchema.AllNullables(),
+		append(BlkDNSchema.Types(), BaseTypes...),
+		append(BlkDNSchema.AllNames(), BaseAttr...),
+		append(BlkDNSchema.AllNullables(), []bool{false, false}...),
 		metas[15]); err != nil {
 		panic(err)
 	}
 	if b.blkMetaDelBatch, err = reader.LoadBlkColumnsByMeta(
-		DelSchema.Types(),
-		DelSchema.AllNames(),
-		DelSchema.AllNullables(),
+		BaseTypes,
+		BaseAttr,
+		[]bool{false, false},
 		metas[16]); err != nil {
 		panic(err)
 	}
 	if b.blkMetaDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		BlkDNSchema.Types(),
-		BlkDNSchema.AllNames(),
-		BlkDNSchema.AllNullables(),
+		append(BlkDNSchema.Types(), BaseTypes...),
+		append(BlkDNSchema.AllNames(), BaseAttr...),
+		append(BlkDNSchema.AllNullables(), []bool{false, false}...),
 		metas[17]); err != nil {
 		panic(err)
 	}

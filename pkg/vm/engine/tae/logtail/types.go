@@ -49,10 +49,10 @@ var (
 	DelSchema     *catalog.Schema
 	SegSchema     *catalog.Schema
 	TxnNodeSchema *catalog.Schema
-	DBDNSchema *catalog.Schema
-	TblDNSchema *catalog.Schema
-	SegDNSchema *catalog.Schema
-	BlkDNSchema *catalog.Schema
+	DBDNSchema    *catalog.Schema
+	TblDNSchema   *catalog.Schema
+	SegDNSchema   *catalog.Schema
+	BlkDNSchema   *catalog.Schema
 )
 
 var (
@@ -164,6 +164,14 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 	}
+	BaseAttr = []string{
+		catalog.AttrRowID,
+		catalog.AttrCommitTs,
+	}
+	BaseTypes = []types.Type{
+		types.T_Rowid.ToType(),
+		types.T_TS.ToType(),
+	}
 )
 
 func init() {
@@ -212,7 +220,7 @@ func init() {
 			}
 		}
 	}
-	
+
 	DBDNSchema = catalog.NewEmptySchema("db_dn")
 	for i, colname := range DBDNSchemaAttr {
 		if i == 0 {

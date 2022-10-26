@@ -106,7 +106,16 @@ func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows u
 	)
 	return metaLoc
 }
-
+func EncodeCkpMetaLoc(name string, extent objectio.Extent, rows uint32) string {
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
+		name,
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		rows,
+	)
+	return metaLoc
+}
 func EncodeBlkMetaLocWithObject(
 	id *common.ID,
 	extent objectio.Extent,
