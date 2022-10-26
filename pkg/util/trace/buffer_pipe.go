@@ -119,14 +119,14 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		}
 	}
 
-	var f = func(b any) {
+	var f = func(batch any) {
 		_, span := Start(DefaultContext(), "batchCSVHandler")
 		defer span.End()
-		switch b.(type) {
+		switch b := batch.(type) {
 		case *CSVRequest:
 			handle(b)
 		case CSVRequests:
-			for _, req := range b.(CSVRequests) {
+			for _, req := range b {
 				handle(req)
 			}
 		default:
