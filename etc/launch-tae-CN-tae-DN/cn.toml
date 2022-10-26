@@ -12,7 +12,8 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/cn"
 
 [[fileservice]]
 name = "S3"
