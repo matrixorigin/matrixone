@@ -425,7 +425,7 @@ const (
 	PrivilegeTypeTableAll
 	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
-	PrivilegeTypeRoleWGO
+	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
 )
 
@@ -1289,8 +1289,8 @@ func (p *privilege) privilegeKind() privilegeKind {
 type privilegeEntryType int
 
 const (
-	privilegeEntryTypeGeneral privilegeEntryType = iota
-	privilegeEntryTypeMulti                      //multi privileges take effect together
+	privilegeEntryTypeGeneral  privilegeEntryType = iota
+	privilegeEntryTypeCompound                    //multi privileges take effect together
 )
 
 // privilegeItem is the item for in the compound entry
@@ -2943,16 +2943,16 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			me2 := &compoundEntry{
 				items: []privilegeItem{
 					{PrivilegeTypeCreateUser, nil, nil, "", ""},
-					{PrivilegeTypeRoleWGO, st.Role, st.Users, "", ""},
+					{PrivilegeTypeCanGrantRoleToOthersInCreateUser, st.Role, st.Users, "", ""},
 				},
 			}
 
 			entry1 := privilegeEntry{
-				privilegeEntryTyp: privilegeEntryTypeMulti,
+				privilegeEntryTyp: privilegeEntryTypeCompound,
 				compound:          me1,
 			}
 			entry2 := privilegeEntry{
-				privilegeEntryTyp: privilegeEntryTypeMulti,
+				privilegeEntryTyp: privilegeEntryTypeCompound,
 				compound:          me2,
 			}
 			extraEntries = append(extraEntries, entry1, entry2)
@@ -3220,7 +3220,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	}
 
 	me := &compoundEntry{multiPrivs}
-	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeMulti, compound: me})
+	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 
 	//optional predefined privilege : tableAll, ownership
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -3413,15 +3413,15 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					cache.add(dbName, entry.tableName, entry.privilegeId)
 					return true, nil
 				}
-			} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+			} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 				if entry.compound != nil {
 					allTrue := true
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
-						if mi.privilegeTyp == PrivilegeTypeRoleWGO {
+						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 							//TODO: normalize the name
 							//TODO: simplify the logic
-							yes, err = determineUserCanGrantRolesToOthers(ctx, ses, []*tree.Role{mi.role})
+							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 							if err != nil {
 								return false, err
 							}
@@ -3477,14 +3477,16 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	return false, nil
 }
 
-// determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
+// determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
 	var erArray []ExecResult
 	var yes bool
 	var err error
 	var roleB int64
 	var ret bool
+	var ok bool
+	var grantedIds *btree.Set[int64]
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
@@ -3496,6 +3498,8 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	roleSetOfKthIteration := &btree.Set[int64]{}
 	//the set of roles visited by traversal algorithm
 	roleSetOfVisited := &btree.Set[int64]{}
+	//simple mo_role_grant cache
+	cacheOfMoRoleGrant := &btree.Map[int64, *btree.Set[int64]]{}
 
 	//step 1: The Set R1 {default role id}
 	//The primary role (in use)
@@ -3562,6 +3566,14 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 		//get roleB of roleA
 		for _, roleA := range roleSetOfKthIteration.Keys() {
+			if grantedIds, ok = cacheOfMoRoleGrant.Get(roleA); ok {
+				for _, grantedId := range grantedIds.Keys() {
+					roleSetOfKPlusOneThIteration.Insert(grantedId)
+				}
+				continue
+			}
+			grantedIds = &btree.Set[int64]{}
+			cacheOfMoRoleGrant.Set(roleA, grantedIds)
 			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleA)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
@@ -3585,6 +3597,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 					if !roleSetOfVisited.Contains(roleB) {
 						roleSetOfVisited.Insert(roleB)
 						roleSetOfKPlusOneThIteration.Insert(roleB)
+						grantedIds.Insert(roleB)
 					}
 				}
 			}
@@ -3666,9 +3679,9 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 	return err
 }
 
-// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
-// the same as the grant/revoke privilege, role.
-func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
+// determineUserCanGrantRolesToOthersInternal decides if the user can grant roles to other users or roles
+// the same as the grant/revoke privilege, role with inputted transaction and BackgroundExec
+func determineUserCanGrantRolesToOthersInternal(ctx context.Context, bh BackgroundExec, ses *Session, fromRoles []*tree.Role) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
 	err = normalizeNamesOfRoles(fromRoles)
@@ -3678,8 +3691,6 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var vr *verifiedRole
@@ -3700,12 +3711,6 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 
 	//step 1 : add the primary role
 	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
-		goto handleFailed
-	}
 
 	for i, role := range fromRoles {
 		sql = getSqlForRoleIdOfRole(role.UserName)
@@ -3769,6 +3774,37 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 			ret = false
 			break
 		}
+	}
+	return ret, err
+
+handleFailed:
+	return false, err
+}
+
+// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
+// the same as the grant/revoke privilege, role.
+func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
+	//step1: normalize the names of roles and users
+	var err error
+	var ret bool
+	err = normalizeNamesOfRoles(fromRoles)
+	if err != nil {
+		return false, err
+	}
+
+	//step2: decide the current user
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	ret, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, fromRoles)
+	if err != nil {
+		goto handleFailed
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -3849,15 +3885,15 @@ func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, role
 	return rset, err
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
-func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
+func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	var err error
 	var ok, yes bool
 	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
 		return true, nil
 	}
-	ok, err = determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
 	if err != nil {
 		return false, err
 	}
@@ -3880,8 +3916,8 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 	return ok, nil
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
-func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
+func authenticateUserCanExecuteStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
 		arr := extractPrivilegeTipsFromPlan(p)
@@ -3889,7 +3925,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, se
 			return true, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
 		if err != nil {
 			return false, err
 		}
@@ -4194,8 +4230,8 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 	return privType, nil
 }
 
-// authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
-func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+// authenticateUserCanExecuteStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
+func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
 	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeNone { //do nothing
 		return true, nil

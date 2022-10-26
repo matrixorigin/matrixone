@@ -1832,7 +1832,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.plan = newPlan
 
 		//check privilege
-		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
 		if err != nil {
 			return nil, err
 		}
@@ -1902,7 +1902,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -1930,7 +1930,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -2004,17 +2004,16 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
-// authenticatePrivilegeOfStatement checks the user can execute the statement
-func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+// authenticateUserCanExecuteStatement checks the user can execute the statement
+func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-
 	var havePrivilege bool
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
-		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
@@ -2024,7 +2023,7 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 			return err
 		}
 
-		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
@@ -2037,13 +2036,12 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 	return err
 }
 
-// authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
-func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+// authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
+func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-
-	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -2054,12 +2052,12 @@ func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Se
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
-	err := authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
 	}
-	err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, p)
+	err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -2150,7 +2148,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 			if err != nil {
 				return err
 			}
@@ -2241,7 +2239,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2251,7 +2249,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
