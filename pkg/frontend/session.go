@@ -60,6 +60,7 @@ type TxnHandler struct {
 	ses       *Session
 	txn       TxnOperator
 	mu        sync.Mutex
+	entryMu   sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -1152,6 +1153,8 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1192,6 +1195,8 @@ func (th *TxnHandler) CommitTxn() error {
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
