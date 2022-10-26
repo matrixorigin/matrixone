@@ -103,7 +103,7 @@ func NewRunner(
 		observers: new(observers),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.start.Less(b.start)
+		return a.end.Less(b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -166,6 +166,13 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	// TODO
+	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
+	if err != nil {
+		panic(err)
+	}
+	fs := r.catalog.GetFS()
+	builder.WriteToFS(fs)
+	entry.SetState(ST_Finished)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
@@ -199,8 +206,8 @@ func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool)
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	maxEntry, _ := r.storage.entries.Max()
-	if maxEntry != nil {
-		if !maxEntry.GetEnd().Equal(entry.GetStart().Next()) {
+	if maxEntry != nil && entry.IsIncremental() {
+		if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
 			success = false
 		} else if !maxEntry.IsFinished() {
 			success = false

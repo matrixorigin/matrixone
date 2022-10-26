@@ -134,6 +134,11 @@ func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 		scheduler:    scheduler,
 	}
 	catalog.InitSystemDB()
+	//scan dir
+	//for filename
+		// newEmpty builder
+		// builder.read
+		// builder.replay
 	replayer := NewReplayer(dataFactory, catalog)
 	err := catalog.store.Replay(replayer.ReplayerHandle)
 	return catalog, err
