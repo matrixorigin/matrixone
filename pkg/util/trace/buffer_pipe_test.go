@@ -468,8 +468,6 @@ error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test
 }
 
 func Test_genCsvData_diffAccount(t *testing.T) {
-	errorFormatter.Store("%v")
-	logStackFormatter.Store("%n")
 	type args struct {
 		in  []IBuffer2SqlItem
 		buf *bytes.Buffer
@@ -635,9 +633,11 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(*CSVRequest)
+			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
-			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			require.Equal(t, 1, len(req))
+			batch := req[0]
+			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
 			t.Logf("%s", tt.want)
 			GetTracerProvider().longQueryTime = 0
 		})
