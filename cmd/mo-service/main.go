@@ -147,6 +147,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
+			cnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -155,6 +156,7 @@ func startCNService(
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
+		// TODO: global client need to refactor
 		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
 		if err != nil {
 			panic(err)

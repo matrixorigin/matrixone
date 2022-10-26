@@ -17,17 +17,26 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
+)
+
+var (
+	initTasks = []task.TaskCode{task.TaskCode_TraceInit,
+		task.TaskCode_SysViewInit,
+		task.TaskCode_FrontendInit,
+		task.TaskCode_MetricInit}
 )
 
 func (s *service) adjustSQLAddress() {
@@ -52,13 +61,17 @@ func (s *service) initTaskServiceHolder() {
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(s.logger,
 			func() (string, error) { return s.cfg.SQLAddress, nil })
-		return
+	} else {
+		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
+			func() (string, error) { return s.cfg.SQLAddress, nil },
+			func(_, _, _ string) taskservice.TaskStorageFactory {
+				return s.task.storageFactory
+			})
 	}
-	s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(s.logger,
-		func() (string, error) { return s.cfg.SQLAddress, nil },
-		func(_, _, _ string) taskservice.TaskStorageFactory {
-			return s.task.storageFactory
-		})
+
+	if err := s.stopper.RunTask(s.waitAllInitTaskCompleted); err != nil {
+		panic(err)
+	}
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
@@ -117,6 +130,43 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	s.task.RLock()
 	defer s.task.RUnlock()
 	return s.task.holder.Get()
+}
+
+func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
+	s.logger.Debug("wait all init task completed task started")
+	wait := func() {
+		time.Sleep(time.Second)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Debug("wait all init task completed task stopped")
+			return
+		default:
+			ts, ok := s.GetTaskService()
+			if ok {
+				tasks, err := ts.QueryTask(ctx,
+					taskservice.WithTaskExecutorCond(taskservice.LE, uint32(task.TaskCode_FrontendInit)),
+					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
+				if err != nil {
+					s.logger.Error("wait all init task completed failed", zap.Error(err))
+					break
+				}
+				s.logger.Debug("waiting all init task completed",
+					zap.Int("all", len(initTasks)),
+					zap.Int("completed", len(tasks)))
+				if len(tasks) == len(initTasks) {
+					if err := file.WriteFile(s.metadataFS,
+						"./system_init_completed",
+						[]byte("OK")); err != nil {
+						panic(err)
+					}
+					return
+				}
+			}
+		}
+		wait()
+	}
 }
 
 func (s *service) stopTask() error {

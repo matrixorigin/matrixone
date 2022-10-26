@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -66,7 +65,7 @@ func NewService(
 	for _, opt := range options {
 		opt(srv)
 	}
-	srv.logger = logutil.Adjust(srv.logger).Named("cn-service").With(zap.String("uuid", cfg.UUID))
+	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {

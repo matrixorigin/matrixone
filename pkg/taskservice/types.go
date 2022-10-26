@@ -70,6 +70,28 @@ type conditions struct {
 	hasTaskParentIDCond bool
 	taskParentTaskIDOp  Op
 	taskParentTaskID    string
+
+	hasTaskExecutorCond bool
+	taskExecutorOp      Op
+	taskExecutor        uint32
+
+	orderByDesc bool
+}
+
+// WithTaskIDDesc set query with order by task id desc
+func WithTaskIDDesc() Condition {
+	return func(qo *conditions) {
+		qo.orderByDesc = true
+	}
+}
+
+// WithTaskExecutorCond set task executor condition
+func WithTaskExecutorCond(op Op, value uint32) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskExecutorCond = true
+		qo.taskExecutorOp = op
+		qo.taskExecutor = value
+	}
 }
 
 // WithLimitCond set query result limit

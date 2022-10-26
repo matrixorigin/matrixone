@@ -35,7 +35,8 @@ func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservic
 			assert.FailNow(t, "task not allocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO())
+			tasks, err := taskService.QueryTask(context.TODO(),
+				taskservice.WithTaskIDDesc())
 			require.NoError(t, err)
 
 			if len(tasks) != 0 && tasks[0].TaskRunner != "" {
@@ -58,6 +59,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 		default:
 			t.Logf("iteration: %d", i)
 			tasks, err := taskService.QueryTask(context.TODO(),
+				taskservice.WithTaskIDDesc(),
 				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 			require.NoError(t, err)
 			if tasks[0].TaskRunner == uuid {

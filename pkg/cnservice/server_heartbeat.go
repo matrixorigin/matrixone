@@ -67,6 +67,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 					s.createTaskService(command.CreateTaskService)
 				}
 			}
+			s.logger.Debug("send DNShard heartbeat request completed")
 		}
 	}
 }
