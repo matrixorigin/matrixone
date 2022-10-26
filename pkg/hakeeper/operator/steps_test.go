@@ -39,11 +39,12 @@ func TestIsFinish(t *testing.T) {
 	}
 
 	dnState := pb.DNState{}
+	cnState := pb.CNState{}
 
-	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
-	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
-	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState))
-	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState))
+	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState, cnState))
+	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState, cnState))
+	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState, cnState))
+	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState, cnState))
 }
 
 func TestAddLogService(t *testing.T) {
@@ -87,7 +88,7 @@ func TestAddLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
 	}
 }
 
@@ -133,7 +134,7 @@ func TestRemoveLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
 	}
 }
 
@@ -186,7 +187,7 @@ func TestStartLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
 	}
 }
 
@@ -237,7 +238,7 @@ func TestStopLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
 	}
 }
 
@@ -285,7 +286,7 @@ func TestAddDnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state))
+		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state, pb.CNState{}))
 	}
 }
 
@@ -333,6 +334,6 @@ func TestRemoveDnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state))
+		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state, pb.CNState{}))
 	}
 }

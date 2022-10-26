@@ -62,22 +62,46 @@ func NewTaskService(store TaskStorage, logger *zap.Logger) TaskService {
 }
 
 func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error {
-	_, err := s.store.Add(ctx, newTaskFromMetadata(value))
-	return err
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Error("create task timeout")
+			return errNotReady
+		default:
+			if _, err := s.store.Add(ctx, newTaskFromMetadata(value)); err != nil {
+				if err == errNotReady {
+					time.Sleep(300 * time.Millisecond)
+					continue
+				}
+				return err
+			}
+			return nil
+		}
+	}
 }
 
 func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata) error {
-	now := time.Now().UnixMilli()
 	values := make([]task.Task, 0, len(tasks))
 	for _, v := range tasks {
-		values = append(values, task.Task{
-			Metadata: v,
-			Status:   task.TaskStatus_Created,
-			CreateAt: now,
-		})
+		values = append(values, newTaskFromMetadata(v))
 	}
-	_, err := s.store.Add(ctx, values...)
-	return err
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Error("create task timeout")
+			return errNotReady
+		default:
+			if _, err := s.store.Add(ctx, values...); err != nil {
+				if err == errNotReady {
+					time.Sleep(300 * time.Millisecond)
+					continue
+				}
+				return err
+			}
+			return nil
+		}
+	}
 }
 
 func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadata, cronExpr string) error {
@@ -106,7 +130,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return nil
 	}
 	if len(exists) != 1 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 
 	old := exists[0]
@@ -121,17 +145,18 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		old.TaskRunner = taskRunner
 		old.LastHeartbeat = time.Now().UnixMilli()
 	default:
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 
 	n, err := s.store.Update(ctx,
 		[]task.Task{old},
+		WithTaskIDCond(EQ, old.ID),
 		WithTaskEpochCond(EQ, old.Epoch-1))
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 	return nil
 }
@@ -181,5 +206,10 @@ func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error
 }
 
 func (s *taskService) Close() error {
+	s.StopScheduleCronTask()
 	return s.store.Close()
+}
+
+func (s *taskService) GetStorage() TaskStorage {
+	return s.store
 }

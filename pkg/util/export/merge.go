@@ -194,7 +194,7 @@ func (m *Merge) Main(ts time.Time) error {
 			logutil.Warnf("path is not dir: %s", account.Name)
 			continue
 		}
-		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLog, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
+		rootPath := m.pathBuilder.Build(account.Name, MergeLogTypeLogs, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 		// get all file entry
 
 		fileEntrys, err := m.FS.List(m.ctx, rootPath)

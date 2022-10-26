@@ -24,7 +24,7 @@ import (
 )
 
 func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, infos pb.LogState,
-	executing operator.ExecutingReplicas, currentTick uint64) (operators []*operator.Operator) {
+	executing operator.ExecutingReplicas, user pb.TaskTableUser, currentTick uint64) (operators []*operator.Operator) {
 	working, expired := parseLogStores(cfg, infos, currentTick)
 	for _, node := range expired {
 		logutil.Info("node is expired", zap.String("uuid", node))
@@ -77,6 +77,15 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 	for _, zombie := range stats.zombies {
 		operators = append(operators, operator.CreateKillZombie("",
 			zombie.uuid, zombie.shardID, zombie.replicaID))
+	}
+
+	if user.Username != "" {
+		for _, store := range working {
+			if !infos.Stores[store].TaskServiceCreated {
+				operators = append(operators, operator.CreateTaskServiceOp("",
+					store, pb.LogService, user))
+			}
+		}
 	}
 
 	return operators
