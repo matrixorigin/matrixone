@@ -411,9 +411,6 @@ node    VARCHAR    YES        NULL        mo node uuid
 role    VARCHAR    YES        NULL        mo node role, like: CN, DN, LOG
 account    VARCHAR    YES        NULL        account name
 type    VARCHAR    NO        NULL        sql type, like: insert, select, ...
-SELECT metric_name, role, account FROM metric LIMIT 1;
-metric_name    role    account
-process_cpu_percent    ALL    sys
 SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 count(*)
 10
@@ -512,9 +509,6 @@ value    DOUBLE    YES        NULL
 node    VARCHAR    YES        NULL        
 role    VARCHAR    YES        NULL        
 account    VARCHAR    YES        NULL        
-SELECT account, role, value FROM server_connections LIMIT 1;
-account    role    value
-sys    ALL    0.0
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(*)
 10
@@ -563,25 +557,6 @@ SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS 
 count()
 10
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
-count(null)
-0
-SHOW COLUMNS FROM process_open_fds;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
-SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-count(*)
-10
-SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-count(0)
-10
-SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-count()
-10
-SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 count(null)
 0
 SHOW COLUMNS FROM sys_cpu_seconds_total;

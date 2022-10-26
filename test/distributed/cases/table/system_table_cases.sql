@@ -128,7 +128,6 @@ USE system_metrics;
 SHOW TABLES;
 -- metric
 SHOW COLUMNS FROM metric;
-SELECT metric_name, role, account FROM metric LIMIT 1;
 SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM metric LIMIT 10) AS temp;
@@ -164,7 +163,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 
 -- server_connections
 SHOW COLUMNS FROM server_connections;
-SELECT account, role, value FROM server_connections LIMIT 1;
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
@@ -183,13 +181,6 @@ SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS t
 SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
-
--- process_open_fds
-SHOW COLUMNS FROM process_open_fds;
-SELECT COUNT(*) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
-SELECT COUNT(NULL) FROM (SELECT * FROM process_open_fds LIMIT 10) AS temp;
 
 -- sys_cpu_seconds_total
 SHOW COLUMNS FROM sys_cpu_seconds_total;
