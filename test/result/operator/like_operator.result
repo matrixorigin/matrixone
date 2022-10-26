@@ -190,8 +190,6 @@ INSERT INTO like_test VALUES('ABCD\\123');
 INSERT INTO like_test VALUES(' ');
 SELECT * FROM like_test WHERE str1 LIKE '%D\\%';
 str1
-123ABCD\
-ABCD\123
 SELECT * FROM like_test WHERE str1 LIKE '% ';
 str1
  
