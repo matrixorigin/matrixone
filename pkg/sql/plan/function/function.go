@@ -328,6 +328,8 @@ func setDefaultPrecision(typ *types.Type) {
 		typ.Precision = 6
 	} else if typ.Oid == types.T_datetime {
 		typ.Precision = 6
+	} else if typ.Oid == types.T_time {
+		typ.Precision = 6
 	}
 	typ.Size = int32(typ.Oid.TypeLen())
 }

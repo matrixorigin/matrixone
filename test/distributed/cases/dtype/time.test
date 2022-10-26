@@ -1,0 +1,66 @@
+-- @suite                                                                                                                                                                                
+-- @case
+-- @desc:test for decimal datatype
+-- @label:bvt
+
+#Basic insert table test with format yyyy-mm-dd hh:mm:ss(.msec)
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("100:00:20");
+insert into t1 values("-800:59:59");
+insert into t1 values("2012-12-12 12:00:20");
+insert into t1 values("2012-12-12 12:00:20.1234");
+insert into t1 values("2012-12-12 12:00:20.1235");
+select * from t1;
+insert into t1 values("839:00:00");
+
+#Basic insert table test with format yyyymmddhhmmss(.msec)
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("20201122112233");
+insert into t1 values("20201122112233.1234");
+insert into t1 values("20201122112233.1235");
+select * from t1;
+
+#Basic insert table test with format different length input 
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("1"), ("11"), ("112"), ("1122"), ("11223"),("112233"),("-1"), ("-11"), ("-112"), ("-1122"), ("-11223"),("-112233");
+insert into t1 values("112233.4445"),("-112233.4445");
+select * from t1;
+
+#Date to time cast
+drop table if exists t1;
+drop table if exists myd;
+create table myd(d date);
+create table t1(t time);
+insert into myd values("2020-12-12"), ("20201212");
+insert into t1 select * from myd;
+select * from t1;
+
+#Datetime to time cast
+drop table if exists t1;
+drop table if exists mydt;
+create table mydt(d datetime(6));
+create table t1(t time(3));
+insert into mydt values("2020-12-12 11:22:33"), ("2020-12-12 11:22:33.4444"), ("2020-12-12 11:22:33.4445");
+insert into mydt values ("20221212112233"), ("20221212112233.5555");
+insert into t1 select * from mydt;
+select * from t1;
+
+#Test cases of query without table
+select time("2012-12-12 12:00:20");
+select time("20201122112233");
+select time("11223");
+select cast('11:22:33.445566' as time(0));
+select cast('11:22:33.445566' as time(3));
+select cast('123.445' as time(6));
+
+#DateAdd
+select adddate(time'00:00:00', interval 1 hour);
+select adddate(time'00:00:00', interval 1 minute);
+select adddate(time'00:00:00', interval 1 second);
+select adddate(time'800:00:00', interval 1 hour);
+select adddate(time'838:00:00', interval 1 hour);
+select adddate(time'100:00:00', interval -100 minute);
+select adddate(time'100:00:00', interval -1000 second);

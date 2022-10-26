@@ -77,7 +77,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 	}
 	if len(w.filepath) == 0 {
 		filename := w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
-		p := w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
+		p := w.pathBuilder.Build(w.account, MergeLogTypeLogs, w.ts, w.database, w.name)
 		w.filepath = path.Join(p, filename)
 	}
 	return w
