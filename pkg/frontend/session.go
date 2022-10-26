@@ -1092,6 +1092,9 @@ func (th *TxnHandler) TxnClientNew() error {
 	if err != nil {
 		return err
 	}
+	if th.txn == nil {
+		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+	}
 	return err
 }
 
@@ -1162,13 +1165,28 @@ func (th *TxnHandler) CommitTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Commit(ctx, txnOp); err != nil {
-		txnOp.Rollback(ctx)
+	if txnOp == nil {
+		logutil.Errorf("CommitTxn: txn operator is null")
+	}
+	if err = storage.Commit(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Commit(ctx)
+	if txnOp != nil {
+		err = txnOp.Commit(ctx)
+		if err != nil {
+			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
@@ -1187,12 +1205,28 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Rollback(ctx, txnOp); err != nil {
+	if txnOp == nil {
+		logutil.Errorf("RollbackTxn: txn operator is null")
+	}
+	if err = storage.Rollback(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Rollback(ctx)
+	if txnOp != nil {
+		err = txnOp.Rollback(ctx)
+		if err != nil {
+			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
@@ -1212,6 +1246,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 }
 
 func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn
 }
 
