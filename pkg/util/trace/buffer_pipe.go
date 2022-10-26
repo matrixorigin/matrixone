@@ -27,20 +27,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-
-	"github.com/google/uuid"
 )
 
 const defaultClock = 15 * time.Second
 
 var errorFormatter atomic.Value
+var logStackFormatter atomic.Value
 var insertSQLPrefix []string
 
 func init() {
@@ -57,294 +52,6 @@ type IBuffer2SqlItem interface {
 	bp.HasName
 	Size() int64
 	Free()
-}
-
-var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
-
-type batchSqlHandler struct {
-	defaultOpts []bufferOption
-}
-
-func NewBufferPipe2SqlWorker(opt ...bufferOption) bp.PipeImpl[bp.HasName, any] {
-	return &batchSqlHandler{opt}
-}
-
-// NewItemBuffer implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
-	var opts []bufferOption
-	var f genBatchFunc
-	logutil.Debugf("NewItemBuffer name: %s", name)
-	switch name {
-	case MOSpanType:
-		f = genSpanBatchSql
-	case MOLogType:
-		f = genZapLogBatchSql
-	case MOStatementType:
-		f = genStatementBatchSql
-		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
-	case MOErrorType:
-		f = genErrorBatchSql
-	default:
-		panic(moerr.NewInternalError("unknown type %s", name))
-	}
-	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
-	opts = append(opts, t.defaultOpts...)
-	return newBuffer2Sql(opts...)
-}
-
-// NewItemBatchHandler implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
-	var f = func(b any) {}
-	sqlExecutor := GetTracerProvider().GetSqlExecutor()
-	if sqlExecutor == nil {
-		// fixme: handle error situation, should panic
-		logutil.Errorf("[Trace] no SQL Executor.")
-		return f
-	}
-	exec := sqlExecutor()
-	if exec == nil {
-		// fixme: handle error situation, should panic
-		logutil.Errorf("[Trace] no SQL Executor.")
-		return f
-	}
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
-	f = func(b any) {
-		// fixme: CollectCycle
-		_, span := Start(DefaultContext(), "BatchHandle")
-		defer span.End()
-		batch := b.(string)
-		if len(batch) == 0 {
-			logutil.Warnf("meet empty sql")
-			return
-		}
-		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
-			// fixme: error -> log -> exec.Exec -> ... cycle
-			// fixme: handle error situation re-try
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), logutil.NoReportFiled())
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. err: %v", err), logutil.NoReportFiled())
-		}
-	}
-	return f
-}
-
-func quote(value string) string {
-	replaceRules := []struct{ src, dst string }{
-		{`\\`, `\\\\`},
-		{`'`, `\'`},
-		{`\0`, `\\0`},
-		{"\n", "\\n"},
-		{"\r", "\\r"},
-		{"\t", "\\t"},
-		{`"`, `\"`},
-		{"\x1a", "\\\\Z"},
-	}
-	for _, rule := range replaceRules {
-		value = strings.Replace(value, rule.src, rule.dst, -1)
-	}
-	return value
-}
-
-func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
-	buf.Reset()
-	if len(in) == 0 {
-		logutil.Debugf("genSpanBatchSql empty")
-		return ""
-	}
-
-	buf.WriteString(fmt.Sprintf("insert into %s.%s ", StatsDatabase, spanInfoTbl))
-	buf.WriteString("(")
-	buf.WriteString("`span_id`")
-	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `parent_span_id`")
-	buf.WriteString(", `node_uuid`")
-	buf.WriteString(", `node_type`")
-	buf.WriteString(", `resource`")
-	buf.WriteString(", `name`")
-	buf.WriteString(", `start_time`")
-	buf.WriteString(", `end_time`")
-	buf.WriteString(", `duration`")
-	buf.WriteString(") values ")
-
-	moNode := GetNodeResource()
-
-	for _, item := range in {
-		s, ok := item.(*MOSpan)
-		if !ok {
-			panic("Not MOSpan")
-		}
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.TraceID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.parent.SpanContext().SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                            // node_uuid
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType))                            // node_type
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.tracer.provider.resource.String()))) // resource
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name.String())))                     // Name
-		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.StartTimeNS)))      // start_time
-		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.EndTimeNS)))        // end_time
-		buf.WriteString(fmt.Sprintf(", %d", s.Duration))                                   // Duration
-		buf.WriteString("),")
-	}
-	return string(buf.Next(buf.Len() - 1))
-}
-
-var logStackFormatter atomic.Value
-
-func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
-	buf.Reset()
-	if len(in) == 0 {
-		logutil.Debugf("genZapLogBatchSql empty")
-		return ""
-	}
-
-	buf.WriteString(fmt.Sprintf("insert into %s.%s ", StatsDatabase, logInfoTbl))
-	buf.WriteString("(")
-	buf.WriteString("`span_id`")
-	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_uuid`")
-	buf.WriteString(", `node_type`")
-	buf.WriteString(", `timestamp`")
-	buf.WriteString(", `name`")
-	buf.WriteString(", `level`")
-	buf.WriteString(", `caller`")
-	buf.WriteString(", `message`")
-	buf.WriteString(", `extra`")
-	buf.WriteString(") values ")
-
-	moNode := GetNodeResource()
-
-	for _, item := range in {
-		s, ok := item.(*MOZapLog)
-		if !ok {
-			panic("Not MOZapLog")
-		}
-
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`%q`, s.SpanContext.SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.SpanContext.TraceID.String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeUuid))                        // node_uuid
-		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeType))                        // node_type
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Timestamp.Format(timestampFormatter))) // timestamp
-		buf.WriteString(fmt.Sprintf(`, %q`, s.LoggerName))                           // name
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Level.String()))                       // log level
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Caller))                               // caller
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Message))                              // message
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Extra))                                // extra
-		buf.WriteString("),")
-	}
-	return string(buf.Next(buf.Len() - 1))
-}
-
-var genStatementBatchSql = func(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
-	buf.Reset()
-	if len(in) == 0 {
-		logutil.Debugf("genStatementBatchSql empty")
-		return ""
-	}
-
-	buf.WriteString(fmt.Sprintf("insert into %s.%s ", StatsDatabase, statementInfoTbl))
-	buf.WriteString("(")
-	buf.WriteString("`statement_id`")
-	buf.WriteString(", `transaction_id`")
-	buf.WriteString(", `session_id`")
-	buf.WriteString(", `account`")
-	buf.WriteString(", `user`")
-	buf.WriteString(", `host`")
-	buf.WriteString(", `database`")
-	buf.WriteString(", `statement`")
-	buf.WriteString(", `statement_tag`")
-	buf.WriteString(", `statement_fingerprint`")
-	buf.WriteString(", `node_uuid`")
-	buf.WriteString(", `node_type`")
-	buf.WriteString(", `request_at`")
-	buf.WriteString(", `response_at`")
-	buf.WriteString(", `status`")
-	buf.WriteString(", `error`")
-	buf.WriteString(", `duration`")
-	buf.WriteString(", `exec_plan`")
-	buf.WriteString(") values ")
-
-	moNode := GetNodeResource()
-
-	for _, item := range in {
-		s, ok := item.(*StatementInfo)
-		if !ok {
-			panic("Not StatementInfo")
-		}
-		s.mux.Lock()
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`%q`, uuid.UUID(s.StatementID).String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, uuid.UUID(s.TransactionID).String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, uuid.UUID(s.SessionID).String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Account))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.User))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Host))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Database))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Statement))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.StatementFingerprint))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.StatementTag))
-		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeUuid))
-		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeType))
-		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.RequestAt)))
-		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.ResponseAt)))
-		buf.WriteString(fmt.Sprintf(`, %d`, s.Duration))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Status.String()))
-		if s.Error == nil {
-			buf.WriteString(`, ""`)
-		} else {
-			buf.WriteString(fmt.Sprintf(`, %q`, s.Error))
-		}
-		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlan2Json()))
-		buf.WriteString("),")
-
-		s.exported = true
-		s.mux.Unlock()
-	}
-	return string(buf.Next(buf.Len() - 1))
-}
-
-func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
-	buf.Reset()
-	if len(in) == 0 {
-		logutil.Debugf("genErrorBatchSql empty")
-		return ""
-	}
-
-	buf.WriteString(fmt.Sprintf("insert into %s.%s ", StatsDatabase, errorInfoTbl))
-	buf.WriteString("(")
-	buf.WriteString("`statement_id`")
-	buf.WriteString(", `span_id`")
-	buf.WriteString(", `node_uuid`")
-	buf.WriteString(", `node_type`")
-	buf.WriteString(", `err_code`")
-	buf.WriteString(", `stack`")
-	buf.WriteString(", `timestamp`")
-	buf.WriteString(") values ")
-
-	moNode := GetNodeResource()
-
-	var span Span
-	for _, item := range in {
-		s, ok := item.(*MOErrorHolder)
-		if !ok {
-			panic("Not MOErrorHolder")
-		}
-		if ct := errutil.GetContextTracer(s.Error); ct != nil && ct.Context() != nil {
-			span = SpanFromContext(ct.Context())
-		} else {
-			span = SpanFromContext(DefaultContext())
-		}
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`"%s"`, span.SpanContext().TraceID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, span.SpanContext().SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Error.Error())))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.Timestamp)))
-		buf.WriteString("),")
-	}
-	return string(buf.Next(buf.Len() - 1))
 }
 
 type batchCSVHandler struct {
@@ -452,7 +159,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 	opts := export.CommonCsvOptions
 
-	ts := util.Now()
+	ts := time.Now()
 	row := i.GetRow()
 	for _, i := range in {
 		item, ok := i.(CsvFields)
@@ -634,20 +341,6 @@ func bufferWithGenBatchFunc(f genBatchFunc) bufferOption {
 }
 
 const timestampFormatter = "2006-01-02 15:04:05.000000"
-
-// nanoSec2Datetime implement container/types/datetime.go Datetime.String2
-func nanoSec2Datetime(t util.TimeMono) types.Datetime {
-	sec, nsec := t/1e9, t%1e9
-	// calculate like Datetime::Now() in datetime.go, but year = 0053
-	return types.Datetime((sec << 20) + nsec/1000)
-}
-
-// nanoSec2Datetime
-func nanoSec2DatetimeString(t util.TimeMono) string {
-	sec, nsec := t/1e9, t%1e9
-	// fixme: format() should use db's time-zone
-	return time.Unix(int64(sec), int64(nsec)).Format(timestampFormatter)
-}
 
 // time2DatetimeString
 func time2DatetimeString(t time.Time) string {

@@ -37,6 +37,7 @@ var (
 	decimal64Type  = types.T_decimal64.ToType()
 	decimal128Type = types.T_decimal128.ToType()
 	dateType       = types.T_date.ToType()
+	timeType       = types.T_time.ToType()
 	datetimeType   = types.T_datetime.ToType()
 	timestampType  = types.T_timestamp.ToType()
 	blobType       = types.T_blob.ToType()

@@ -224,7 +224,7 @@ func TestCheck(t *testing.T) {
 
 		clusterInfo := mockClusterInfo(10, 11)
 
-		steps := Check(idAlloc, config, clusterInfo, dnState, currTick, logger)
+		steps := Check(idAlloc, config, clusterInfo, dnState, pb.TaskTableUser{}, currTick, logger)
 		require.Equal(t, len(steps), 0)
 	}
 
@@ -268,7 +268,7 @@ func TestCheck(t *testing.T) {
 		//  10 - add replica
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		operators := Check(idAlloc, config, clusterInfo, dnState, currTick, logger)
+		operators := Check(idAlloc, config, clusterInfo, dnState, pb.TaskTableUser{}, currTick, logger)
 		require.Equal(t, 2, len(operators))
 
 		// shard 10 - single operator step
@@ -322,13 +322,13 @@ func TestCheck(t *testing.T) {
 		// at the tick of `staleTick`, shard 14, 20:
 		//  14 - no command
 		//  20 - add replica after a while
-		operators := Check(idAlloc, config, cluster, dnState, staleTick, logger)
+		operators := Check(idAlloc, config, cluster, dnState, pb.TaskTableUser{}, staleTick, logger)
 		require.Equal(t, 0, len(operators))
 
 		// at the tick of `currTick`, shard 14, 20:
 		//  14 - add replica
 		//  20 - add replica
-		operators = Check(idAlloc, config, cluster, dnState, currTick, logger)
+		operators = Check(idAlloc, config, cluster, dnState, pb.TaskTableUser{}, currTick, logger)
 		require.Equal(t, 2, len(operators))
 
 		// shard 14 - single operator step

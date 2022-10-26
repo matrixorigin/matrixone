@@ -53,83 +53,96 @@ create database if not exists db11111111111;
 show table status from db11111111111;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
 drop database db11111111111;
-show grants;
-Grants for dump@localhost
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT * ON database `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT *.* ON table `dump`@`localhost`
-GRANT t ON table `dump`@`localhost`
-GRANT * ON account `dump`@`localhost`
-show grants for 'root'@'localhost';
-Grants for root@localhost
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT * ON database `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT *.* ON table `root`@`localhost`
-GRANT t ON table `root`@`localhost`
-GRANT * ON account `root`@`localhost`
-show grants for 'test'@'localhost';
-Grants for test@localhost
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
+show grants;
+Grants for dump@localhost
+GRANT create account ON account  `dump`@`localhost`
+GRANT drop account ON account  `dump`@`localhost`
+GRANT alter account ON account  `dump`@`localhost`
+GRANT create user ON account  `dump`@`localhost`
+GRANT drop user ON account  `dump`@`localhost`
+GRANT alter user ON account  `dump`@`localhost`
+GRANT create role ON account  `dump`@`localhost`
+GRANT drop role ON account  `dump`@`localhost`
+GRANT create database ON account  `dump`@`localhost`
+GRANT drop database ON account  `dump`@`localhost`
+GRANT show databases ON account  `dump`@`localhost`
+GRANT connect ON account  `dump`@`localhost`
+GRANT manage grants ON account  `dump`@`localhost`
+GRANT account all ON account  `dump`@`localhost`
+GRANT show tables ON database * `dump`@`localhost`
+GRANT create table ON database * `dump`@`localhost`
+GRANT drop table ON database * `dump`@`localhost`
+GRANT alter table ON database * `dump`@`localhost`
+GRANT create view ON database * `dump`@`localhost`
+GRANT drop view ON database * `dump`@`localhost`
+GRANT alter view ON database * `dump`@`localhost`
+GRANT database all ON database * `dump`@`localhost`
+GRANT database ownership ON database * `dump`@`localhost`
+GRANT select ON table *.* `dump`@`localhost`
+GRANT insert ON table *.* `dump`@`localhost`
+GRANT update ON table *.* `dump`@`localhost`
+GRANT truncate ON table *.* `dump`@`localhost`
+GRANT delete ON table *.* `dump`@`localhost`
+GRANT reference ON table *.* `dump`@`localhost`
+GRANT index ON table *.* `dump`@`localhost`
+GRANT table all ON table *.* `dump`@`localhost`
+GRANT table ownership ON table *.* `dump`@`localhost`
+GRANT values ON table t `dump`@`localhost`
+GRANT connect ON account  `dump`@`localhost`
+show grants for 'root'@'localhost';
+Grants for root@localhost
+GRANT create account ON account  `root`@`localhost`
+GRANT drop account ON account  `root`@`localhost`
+GRANT alter account ON account  `root`@`localhost`
+GRANT create user ON account  `root`@`localhost`
+GRANT drop user ON account  `root`@`localhost`
+GRANT alter user ON account  `root`@`localhost`
+GRANT create role ON account  `root`@`localhost`
+GRANT drop role ON account  `root`@`localhost`
+GRANT create database ON account  `root`@`localhost`
+GRANT drop database ON account  `root`@`localhost`
+GRANT show databases ON account  `root`@`localhost`
+GRANT connect ON account  `root`@`localhost`
+GRANT manage grants ON account  `root`@`localhost`
+GRANT account all ON account  `root`@`localhost`
+GRANT show tables ON database * `root`@`localhost`
+GRANT create table ON database * `root`@`localhost`
+GRANT drop table ON database * `root`@`localhost`
+GRANT alter table ON database * `root`@`localhost`
+GRANT create view ON database * `root`@`localhost`
+GRANT drop view ON database * `root`@`localhost`
+GRANT alter view ON database * `root`@`localhost`
+GRANT database all ON database * `root`@`localhost`
+GRANT database ownership ON database * `root`@`localhost`
+GRANT select ON table *.* `root`@`localhost`
+GRANT insert ON table *.* `root`@`localhost`
+GRANT update ON table *.* `root`@`localhost`
+GRANT truncate ON table *.* `root`@`localhost`
+GRANT delete ON table *.* `root`@`localhost`
+GRANT reference ON table *.* `root`@`localhost`
+GRANT index ON table *.* `root`@`localhost`
+GRANT table all ON table *.* `root`@`localhost`
+GRANT table ownership ON table *.* `root`@`localhost`
+GRANT values ON table t `root`@`localhost`
+GRANT connect ON account  `root`@`localhost`
+show grants for 'test'@'localhost';
+Grants for test@localhost
+create role role1;
+grant all on table *.* to role1;
+grant create table, drop table on database *.* to role1;
+create user user1 identified by 'pass1';
+grant role1 to user1;
+show grants for 'user1'@'localhost';
+Grants for user1@localhost
+GRANT connect ON account  `user1`@`localhost`
+GRANT table all ON table *.* `user1`@`localhost`
+GRANT create table ON database *.* `user1`@`localhost`
+GRANT drop table ON database *.* `user1`@`localhost`
+drop user user1;
+drop role role1;
 create database if not exists test03;
 use test03;
 drop view if exists v1;
