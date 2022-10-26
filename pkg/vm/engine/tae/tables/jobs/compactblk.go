@@ -183,7 +183,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err != nil {
 			return
 		}
+		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+			return err
+		}
 	}
+
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
@@ -237,13 +241,11 @@ func (task *compactBlockTask) Execute() (err error) {
 			if err != nil {
 				return
 			}
+			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+				return err
+			}
 		}
 		if err = oldBlkData.ReplayIndex(); err != nil {
-			return err
-		}
-	}
-	if deletes != nil {
-		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 			return err
 		}
 	}
