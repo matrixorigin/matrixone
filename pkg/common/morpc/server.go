@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // WithServerLogger set rpc server logger
@@ -248,6 +247,12 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				fetch()
 
 				if len(responses) > 0 {
+					var fields []zap.Field
+					ce := s.logger.Check(zap.DebugLevel, "write responses")
+					if ce != nil {
+						fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
+					}
+
 					written := 0
 					sendResponses := responses[:0]
 					for idx := range responses {
@@ -262,6 +267,15 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							continue
 						}
 						timeout += v
+
+						// Record the information of some responses in advance, because after flush,
+						// these responses will be released, thus avoiding causing data race.
+						if ce != nil {
+							fields = append(fields, zap.Uint64("request-id",
+								sendResponses[idx].Message.GetID()))
+							fields = append(fields, zap.String("response",
+								sendResponses[idx].Message.DebugString()))
+						}
 						if err := cs.conn.Write(sendResponses[idx], goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", sendResponses[idx].Message.GetID()),
@@ -272,20 +286,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 
 					if written > 0 {
-						// Record the information of some responses in advance, because after flush,
-						// these responses will be released, thus avoiding causing data race.
-						var fields []zap.Field
-						var ce *zapcore.CheckedEntry
-						if ce = s.logger.Check(zap.DebugLevel, "write responses"); ce != nil {
-							fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
-							for idx := range sendResponses {
-								fields = append(fields, zap.Uint64("request-id",
-									sendResponses[idx].Message.GetID()))
-								fields = append(fields, zap.String("response",
-									sendResponses[idx].Message.DebugString()))
-							}
-						}
-
 						if err := cs.conn.Flush(timeout); err != nil {
 							if ce != nil {
 								fields = append(fields, zap.Error(err))

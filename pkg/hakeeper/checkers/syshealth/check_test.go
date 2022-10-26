@@ -48,7 +48,7 @@ func TestShutdownStores(t *testing.T) {
 
 	// operator for dn service
 	{
-		serviceType := pb.DnService
+		serviceType := pb.DNService
 		ops := shutdownStores(serviceType, stores)
 		require.Equal(t, len(stores), len(ops))
 
@@ -132,7 +132,7 @@ func TestParseDnStores(t *testing.T) {
 
 	dnStores := parseDnState(cfg, dnState, currTick)
 	require.Equal(t, len(dnState.Stores), dnStores.length())
-	require.Equal(t, pb.DnService, dnStores.serviceType)
+	require.Equal(t, pb.DNService, dnStores.serviceType)
 	require.Equal(t, 1, len(dnStores.expired))
 	require.Equal(t, 1, len(dnStores.shutdownExpiredStores()))
 	require.Equal(t, 2, len(dnStores.working))
