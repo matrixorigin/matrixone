@@ -38,19 +38,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -launch ./etc/launch-tae-CN-tae-DN/launch.toml &>mo-service.log &
-          flag=1
-          for num in {1..300}  
-          do  
-            if [ -f "$SYSTEM_INIT_COMPLETED" ]; then
-              echo "ok"
-              flag=0
-              break
-            fi 
-            echo "mo init not completed"
-            sleep 1
-          done
-          if [ $flag -gt 0 ]; then exit -1; else exit 0; fi
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
