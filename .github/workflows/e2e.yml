@@ -67,7 +67,9 @@ jobs:
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+      
       - name: generate upload files
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
