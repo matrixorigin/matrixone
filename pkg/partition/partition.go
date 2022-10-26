@@ -168,6 +168,31 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
+	case types.T_time:
+		var n bool
+		var v types.Time
+
+		vs := vec.Col.([]types.Time)
+		if nulls.Any(vec.Nsp) {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else {
+					diffs[i] = diffs[i] || (v != vs[sel])
+				}
+				v = w
+				n = isNull
+			}
+			break
+		}
+		for i, sel := range sels {
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
+			v = w
+		}
+
 	case types.T_uint8:
 		var n bool
 		var v uint8
