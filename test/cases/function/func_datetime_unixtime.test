@@ -113,3 +113,17 @@ SELECT FROM_UNIXTIME(9223372036854775808);
 
 SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);
 select count(unix_timestamp());
+select from_unixtime(now());
+select from_unixtime(now(),'%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y');
+drop table if exists t1;
+create table t1(
+b datetime(6)
+);
+insert into t1 values('1999-04-05 11:01:02');
+insert into t1 values('2004-04-03 13:11:10');
+insert into t1 values('1999-04-05 11:01:02');
+insert into t1 values('2004-04-03 13:11:10');
+insert into t1 values('1999-04-05 11:01:02.123456');
+insert into t1 values('2004-04-03 13:11:10.123456');
+select from_unixtime(b) from t1;
+drop table t1;

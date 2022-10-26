@@ -1412,6 +1412,7 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+
 	FROM_UNIXTIME: {
 		Id:     FROM_UNIXTIME,
 		Flag:   plan.Function_STRICT,
@@ -1441,23 +1442,37 @@ var builtins = map[int]Functions{
 			{
 				Index:     3,
 				Volatile:  true,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_any,
+				Fn:        multi.FromUnixTimeDatetime,
+			},
+			{
+				Index:     4,
+				Volatile:  true,
 				Args:      []types.T{types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeInt64Format,
 			},
 			{
-				Index:     4,
+				Index:     5,
 				Volatile:  true,
 				Args:      []types.T{types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeUint64Format,
 			},
 			{
-				Index:     5,
+				Index:     6,
 				Volatile:  true,
 				Args:      []types.T{types.T_float64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeFloat64Format,
+			},
+			{
+				Index:     7,
+				Volatile:  true,
+				Args:      []types.T{types.T_datetime, types.T_varchar},
+				ReturnTyp: types.T_any,
+				Fn:        multi.FromUnixTimeDatetimeFormat,
 			},
 		},
 	},

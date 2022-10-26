@@ -291,3 +291,42 @@ func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vect
 		return vec, nil
 	}
 }
+
+// When the parameter type is datetime, the return value is null
+func FromUnixTimeDatetime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inVec := lv[0]
+	times := vector.MustTCols[types.Datetime](inVec)
+	size := types.T(types.T_datetime).TypeLen()
+	if inVec.IsScalar() {
+		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
+	}
+	if inVec.IsScalar() {
+		return proc.AllocScalarNullVector(types.T_datetime.ToType()), nil
+	} else {
+		rs := make([]types.Datetime, len(times))
+		t := types.Type{Oid: types.T_datetime, Size: int32(size), Precision: 6}
+		vec := vector.NewWithFixed(t, rs, nulls.NewWithSize(len(rs)), proc.Mp())
+		nulls.AddRange(vec.Nsp, 0, uint64(len(times)))
+		return vec, nil
+	}
+}
+
+// When the parameter type is datetime, the return value is null
+func FromUnixTimeDatetimeFormat(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inVec := vs[0]
+	formatVec := vs[1]
+	resultType := types.T_varchar.ToType()
+	if !formatVec.IsScalar() {
+		return nil, moerr.NewInvalidArg("from_unixtime format", "not constant")
+	}
+
+	if inVec.IsScalar() {
+		return proc.AllocScalarNullVector(resultType), nil
+	} else {
+		times := vector.MustTCols[types.Datetime](inVec)
+		resCol := make([]string, len(times))
+		vec := vector.NewWithStrings(resultType, resCol, inVec.Nsp, proc.Mp())
+		nulls.AddRange(vec.Nsp, 0, uint64(len(times)))
+		return vec, nil
+	}
+}
