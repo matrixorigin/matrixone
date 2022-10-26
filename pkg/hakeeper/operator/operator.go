@@ -113,14 +113,14 @@ func (o *Operator) CheckExpired() bool {
 	return o.status.CheckExpired(ExpireTime)
 }
 
-func (o *Operator) Check(logState pb.LogState, dnState pb.DNState) OpStep {
+func (o *Operator) Check(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) OpStep {
 	if o.IsEnd() {
 		return nil
 	}
 	// CheckExpired will call CheckSuccess first
 	defer func() { _ = o.CheckExpired() }()
 	for step := o.currentStep; int(step) < len(o.steps); step++ {
-		if o.steps[int(step)].IsFinish(logState, dnState) {
+		if o.steps[int(step)].IsFinish(logState, dnState, cnState) {
 			o.currentStep = step + 1
 		} else {
 			return o.steps[int(step)]
