@@ -75,7 +75,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			case *plan.Const_Timeval:
 				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
+				vec = vector.NewConstFixed(constDatetimeType, length, types.Datetime(t.C.GetDatetimeval()), proc.Mp())
 			case *plan.Const_Decimal64Val:
 				cd64 := t.C.GetDecimal64Val()
 				d64 := types.Decimal64FromInt64Raw(cd64.A)

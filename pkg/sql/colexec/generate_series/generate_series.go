@@ -59,21 +59,21 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			if rbat != nil {
 				rbat.Clean(proc.Mp())
 			}
-			if startVec != nil {
-				startVec.Free(proc.Mp())
-			}
-			if endVec != nil {
-				endVec.Free(proc.Mp())
-			}
-			if stepVec != nil {
-				stepVec.Free(proc.Mp())
-			}
-			if startVecTmp != nil {
-				startVecTmp.Free(proc.Mp())
-			}
-			if endVecTmp != nil {
-				endVecTmp.Free(proc.Mp())
-			}
+		}
+		if startVec != nil {
+			startVec.Free(proc.Mp())
+		}
+		if endVec != nil {
+			endVec.Free(proc.Mp())
+		}
+		if stepVec != nil {
+			stepVec.Free(proc.Mp())
+		}
+		if startVecTmp != nil {
+			startVecTmp.Free(proc.Mp())
+		}
+		if endVecTmp != nil {
+			endVecTmp.Free(proc.Mp())
 		}
 	}()
 	param := arg.(*Argument).Es
@@ -91,7 +91,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	rbat = batch.New(false, param.Attrs)
 	rbat.Cnt = 1
-	for i := range param.Cols {
+	for i := range param.Attrs {
 		rbat.Vecs[i] = vector.New(dupType(plan.MakePlan2Type(&startVec.Typ)))
 	}
 	if len(param.ExprList) == 3 {
@@ -108,7 +108,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if endVec.Typ.Oid != types.T_int32 || (stepVec != nil && stepVec.Typ.Oid != types.T_int32) {
 			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
-		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, proc, rbat)
+		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -116,7 +116,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if endVec.Typ.Oid != types.T_int64 || (stepVec != nil && stepVec.Typ.Oid != types.T_int64) {
 			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
-		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, proc, rbat)
+		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, false, proc, rbat)
 		if err != nil {
 			return false, err
 		}
@@ -164,7 +164,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 
 	default:
-		return false, moerr.NewInvalidInput("generate_series", "unsupported type")
+		return false, moerr.NewNotSupported("generate_series not support type %s", startVec.Typ.Oid.String())
 
 	}
 	proc.SetInputBatch(rbat)
@@ -300,7 +300,7 @@ func generateDatetime(start, end types.Datetime, stepStr string, precision int32
 	return res, nil
 }
 
-func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(T, T, T) ([]T, error), proc *process.Process, rbat *batch.Batch) error {
+func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(T, T, T) ([]T, error), toString bool, proc *process.Process, rbat *batch.Batch) error {
 	var (
 		start, end, step T
 	)
@@ -323,7 +323,11 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 		return err
 	}
 	for i := range res {
-		err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+		if toString {
+			err = rbat.Vecs[0].Append([]byte(strconv.FormatInt(int64(res[i]), 10)), false, proc.Mp())
+		} else {
+			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+		}
 		if err != nil {
 			return err
 		}
@@ -385,6 +389,7 @@ func makeVector(p types.Type, v interface{}, mp *mpool.MPool) (*vector.Vector, e
 	vec := vector.NewConst(p, 1)
 	err := vec.Append(v, false, mp)
 	if err != nil {
+		vec.Free(mp)
 		return nil, err
 	}
 	return vec, nil
@@ -396,17 +401,14 @@ func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch
 		err                       error
 	)
 	defer func() {
-		if err != nil {
-			if startVec != nil {
-				startVec.Free(proc.Mp())
-			}
-			if endVec != nil {
-				endVec.Free(proc.Mp())
-			}
-			if stepVec != nil {
-				stepVec.Free(proc.Mp())
-			}
-
+		if startVec != nil {
+			startVec.Free(proc.Mp())
+		}
+		if endVec != nil {
+			endVec.Free(proc.Mp())
+		}
+		if stepVec != nil {
+			stepVec.Free(proc.Mp())
 		}
 	}()
 	startInt, err := strconv.ParseInt(startStr, 10, 64)
@@ -434,7 +436,7 @@ func tryInt(startStr, endStr, stepStr string, proc *process.Process, rbat *batch
 	if err != nil {
 		return err
 	}
-	err = handleInt[int64](startVec, endVec, stepVec, generateInt64, proc, rbat)
+	err = handleInt[int64](startVec, endVec, stepVec, generateInt64, true, proc, rbat)
 	if err != nil {
 		return err
 	}

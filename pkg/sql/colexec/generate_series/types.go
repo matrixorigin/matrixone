@@ -25,7 +25,6 @@ type Number interface {
 
 type Param struct {
 	Attrs    []string
-	Cols     []*plan.ColDef
 	ExprList []*plan.Expr
 }
 

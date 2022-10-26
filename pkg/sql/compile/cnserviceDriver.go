@@ -744,15 +744,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
 			Exprs: t.Es.ExprList,
-			//Name:  "unnest",
 			Param: []byte(t.Es.ColName),
 		}
 	case *generate_series.Argument:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs: t.Es.Attrs,
-			Cols:  t.Es.Cols,
 			Exprs: t.Es.ExprList,
-			//Name:  "generate_series",
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -985,7 +982,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
 				Attrs:    opr.TableFunction.Attrs,
-				Cols:     opr.TableFunction.Cols,
 				ExprList: opr.TableFunction.Exprs,
 			},
 		}

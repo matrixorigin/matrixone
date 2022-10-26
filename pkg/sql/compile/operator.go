@@ -237,7 +237,6 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
 				Attrs:    arg.Es.Attrs,
-				Cols:     arg.Es.Cols,
 				ExprList: arg.Es.ExprList,
 			},
 		}
@@ -433,7 +432,6 @@ func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series
 	return &generate_series.Argument{
 		Es: &generate_series.Param{
 			Attrs:    attrs,
-			Cols:     n.TableDef.Cols,
 			ExprList: n.TblFuncExprList,
 		},
 	}
