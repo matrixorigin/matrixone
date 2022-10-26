@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zapcore"
 )
 
 func TestDefaultOptons(t *testing.T) {
@@ -73,12 +72,6 @@ func TestWithHostAddress(t *testing.T) {
 	host := "127.0.0.1"
 	opt := Options{}.WithHostAddress(host)
 	require.Equal(t, host, opt.hostAddr)
-}
-
-func TestWithLogLevel(t *testing.T) {
-	lvl := zapcore.WarnLevel
-	opt := Options{}.WithLogLevel(lvl)
-	require.Equal(t, lvl, opt.logLevel)
 }
 
 func TestWithHKTickPerSecond(t *testing.T) {
@@ -164,9 +157,4 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
 	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
-}
-
-func TestTaskStorage(t *testing.T) {
-	opt := DefaultOptions()
-	require.NotNil(t, opt.task.taskStorage)
 }

@@ -170,7 +170,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 	}
 }
 
-func waitClusterContidion(
+func waitClusterCondition(
 	cfg logservice.HAKeeperClientConfig,
 	waitFunc func(logservice.CNHAKeeperClient) error,
 ) error {

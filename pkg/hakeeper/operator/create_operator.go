@@ -46,3 +46,9 @@ func CreateStartReplica(brief, uuid string, shardID, replicaID uint64) *Operator
 	return NewOperator(brief, shardID, 0,
 		StartLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
 }
+
+func CreateTaskServiceOp(brief, uuid string, serviceType pb.ServiceType, user pb.TaskTableUser) *Operator {
+	return NewOperator(brief, 0, 0,
+		CreateTaskService{StoreID: uuid, StoreType: serviceType, TaskUser: user},
+	)
+}

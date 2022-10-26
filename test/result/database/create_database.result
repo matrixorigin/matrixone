@@ -11,6 +11,7 @@ create database t012345678901234567890123456789012345678901234567890123456789012
 show databases;
 Database
 mo_catalog
+mo_task
 system
 system_metrics
 mysql
@@ -34,6 +35,7 @@ create database if not exists db1;
 show schemas;
 Database
 mo_catalog
+mo_task
 system
 system_metrics
 mysql
