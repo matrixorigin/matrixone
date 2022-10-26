@@ -32,13 +32,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	initTasks = []task.TaskCode{task.TaskCode_TraceInit,
-		task.TaskCode_SysViewInit,
-		task.TaskCode_FrontendInit,
-		task.TaskCode_MetricInit}
-)
-
 func (s *service) adjustSQLAddress() {
 	if s.cfg.SQLAddress == "" {
 		ip := "127.0.0.1"
@@ -69,7 +62,7 @@ func (s *service) initTaskServiceHolder() {
 			})
 	}
 
-	if err := s.stopper.RunTask(s.waitAllInitTaskCompleted); err != nil {
+	if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
 		panic(err)
 	}
 }
@@ -132,7 +125,12 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	return s.task.holder.Get()
 }
 
-func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
+func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
+	s.waitSystemInitCompleted(ctx)
+	return ctx.Err()
+}
+
+func (s *service) waitSystemInitCompleted(ctx context.Context) {
 	s.logger.Debug("wait all init task completed task started")
 	wait := func() {
 		time.Sleep(time.Second)
@@ -146,16 +144,15 @@ func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
 			ts, ok := s.GetTaskService()
 			if ok {
 				tasks, err := ts.QueryTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.LE, uint32(task.TaskCode_FrontendInit)),
+					taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_SystemInit)),
 					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
 				if err != nil {
 					s.logger.Error("wait all init task completed failed", zap.Error(err))
 					break
 				}
 				s.logger.Debug("waiting all init task completed",
-					zap.Int("all", len(initTasks)),
 					zap.Int("completed", len(tasks)))
-				if len(tasks) == len(initTasks) {
+				if len(tasks) > 0 {
 					if err := file.WriteFile(s.metadataFS,
 						"./system_init_completed",
 						[]byte("OK")); err != nil {
@@ -196,24 +193,20 @@ func (s *service) registerExecutors() {
 		return frontend.NewInternalExecutor(pu)
 	}
 
-	executors := map[task.TaskCode]func(context.Context, func() ie.InternalExecutor) error{
-		task.TaskCode_TraceInit:   trace.InitSchema,
-		task.TaskCode_MetricInit:  metric.InitSchema,
-		task.TaskCode_SysViewInit: sysview.InitSchema,
-		task.TaskCode_FrontendInit: func(moServerCtx context.Context, _ func() ie.InternalExecutor) error {
-			return frontend.InitSysTenant(moServerCtx)
-		},
-	}
-
-	for code, exec := range executors {
-		fn := func(handler func(context.Context, func() ie.InternalExecutor) error) taskservice.TaskExecutor {
-			return func(ctx context.Context, task task.Task) error {
-				if err := handler(moServerCtx, ieFactory); err != nil {
-					panic(err)
-				}
-				return nil
+	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
+		func(ctx context.Context, task task.Task) error {
+			if err := frontend.InitSysTenant(moServerCtx); err != nil {
+				return err
 			}
-		}
-		s.task.runner.RegisterExecutor(uint32(code), fn(exec))
-	}
+			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+			return nil
+		})
 }
