@@ -27,7 +27,7 @@ load data infile {'filepath'='data.txt', 'format'='jsonline','jsondata'='object'
 
 * filepath: The file path.
 * compression: Compression format, BZIP2, GZIP, LZO, SNAPPY, ZLIB are supported.
-* format: format, the file format.csv* and.jsonline* are supported
+* format: format, the file format *.csv* and *.jsonline* are supported.
 * jsondata: jsondata format. object and array are supported. If `format` is *jsonline*, must specify *jsondata*.
 
 **Import Principles**
