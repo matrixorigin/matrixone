@@ -135,6 +135,8 @@ type Session struct {
 	//that the internal or background program executes
 	fromRealUser bool
 
+	cache *privilegeCache
+
 	mu sync.Mutex
 }
 
@@ -209,6 +211,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
+		cache: &privilegeCache{},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -244,6 +247,12 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+
+func (ses *Session) GetPrivilegeCache() *privilegeCache {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.cache
 }
 
 // GetBackgroundExec generates a background executor

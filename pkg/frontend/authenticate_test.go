@@ -6508,3 +6508,96 @@ func Test_graph(t *testing.T) {
 		convey.So(g2.hasLoop(1), convey.ShouldBeTrue)
 	})
 }
+
+func Test_cache(t *testing.T) {
+	type arg struct {
+		db    string
+		table string
+	}
+	cnt := 10
+	args := make([]arg, 10)
+	for i := 0; i < cnt; i++ {
+		args[i].db = fmt.Sprintf("db%d", i)
+		args[i].table = fmt.Sprintf("table%d", i)
+	}
+
+	cache1 := &privilegeCache{}
+	convey.Convey("has", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	//add some privilege
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeCreateObject; i++ {
+			cache1.add(a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has2", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.add(a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has3", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	//set
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.set(a.db, a.table)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeExecute; i++ {
+			cache1.add(a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	cache1.invalidate()
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+}

@@ -1453,6 +1453,60 @@ const (
 	userType
 )
 
+// privilegeCache cache privileges on table
+type privilegeCache struct {
+	//store map <database,table> -> privileges
+	store btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+}
+
+// has checks the cache has privilege on a table
+func (pc *privilegeCache) has(dbName, tableName string, priv PrivilegeType) bool {
+	if tableStore, ok1 := pc.store.Get(dbName); ok1 {
+		if privSet, ok2 := tableStore.Get(tableName); ok2 {
+			if privSet.Contains(priv) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (pc *privilegeCache) getPrivilegeSet(dbName, tableName string) *btree.Set[PrivilegeType] {
+	tableStore, ok1 := pc.store.Get(dbName)
+	if !ok1 {
+		tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
+		pc.store.Set(dbName, tableStore)
+	}
+	privSet, ok2 := tableStore.Get(tableName)
+	if !ok2 {
+		privSet = &btree.Set[PrivilegeType]{}
+		tableStore.Set(tableName, privSet)
+	}
+	return privSet
+}
+
+// set replaces the privileges by new ones
+func (pc *privilegeCache) set(dbName, tableName string, priv ...PrivilegeType) {
+	privSet := pc.getPrivilegeSet(dbName, tableName)
+	privSet.Clear()
+	for _, p := range priv {
+		privSet.Insert(p)
+	}
+}
+
+// add puts the privileges without replacing existed ones
+func (pc *privilegeCache) add(dbName, tableName string, priv ...PrivilegeType) {
+	privSet := pc.getPrivilegeSet(dbName, tableName)
+	for _, p := range priv {
+		privSet.Insert(p)
+	}
+}
+
+// invalidate makes the cache empty
+func (pc *privilegeCache) invalidate() {
+	pc.store.Clear()
+}
+
 // verifiedRole holds the role info that has been checked
 type verifiedRole struct {
 	typ         verifiedRoleType
@@ -3328,6 +3382,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false
 	}
 
+	cache := ses.GetPrivilegeCache()
 	for _, roleId := range roleIds.Keys() {
 		for _, entry := range priv.entries {
 			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
@@ -3335,6 +3390,17 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if err != nil {
 					return false, err
 				}
+
+				dbName := entry.databaseName
+				if len(dbName) == 0 {
+					dbName = ses.GetDatabaseName()
+				}
+
+				yes = cache.has(dbName, entry.tableName, entry.privilegeId)
+				if yes {
+					return true, nil
+				}
+
 				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, entry, pls)
 				if err != nil {
 					return false, err
@@ -3344,6 +3410,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					yes = false
 				}
 				if yes {
+					cache.add(dbName, entry.tableName, entry.privilegeId)
 					return true, nil
 				}
 			} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
