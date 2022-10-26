@@ -184,6 +184,8 @@ func (v *Vector) colFromData() {
 			v.Col = DecodeFixedCol[types.Uuid](v, tlen)
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)
+		case types.T_time:
+			v.Col = DecodeFixedCol[types.Time](v, tlen)
 		case types.T_datetime:
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)
 		case types.T_timestamp:
@@ -239,6 +241,8 @@ func (v *Vector) setupColFromData(start, end int) {
 			v.Col = DecodeFixedCol[types.Uuid](v, tlen)[start:end]
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)[start:end]
+		case types.T_time:
+			v.Col = DecodeFixedCol[types.Time](v, tlen)[start:end]
 		case types.T_datetime:
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)[start:end]
 		case types.T_timestamp:
@@ -288,6 +292,8 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeSlice(v.Col.([]types.Uuid))
 	case types.T_date:
 		return types.EncodeSlice(v.Col.([]types.Date))
+	case types.T_time:
+		return types.EncodeSlice(v.Col.([]types.Time))
 	case types.T_datetime:
 		return types.EncodeSlice(v.Col.([]types.Datetime))
 	case types.T_timestamp:
@@ -377,6 +383,8 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		return checkNumberIntersect[float64](v, vec)
 	case types.T_date:
 		return checkNumberIntersect[types.Date](v, vec)
+	case types.T_time:
+		return checkNumberIntersect[types.Time](v, vec)
 	case types.T_datetime:
 		return checkNumberIntersect[types.Datetime](v, vec)
 	case types.T_timestamp:
@@ -498,6 +506,8 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 		return compareNumber[float64](v, vec, funName)
 	case types.T_date:
 		return compareNumber[types.Date](v, vec, funName)
+	case types.T_time:
+		return compareNumber[types.Time](v, vec, funName)
 	case types.T_datetime:
 		return compareNumber[types.Datetime](v, vec, funName)
 	case types.T_timestamp:
@@ -587,12 +597,12 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 
 type compT interface {
 	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Datetime | types.Timestamp | types.Uuid | string
+		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
 }
 
 type compFn[T compT] func(T, T) bool
 
-func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
+func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {

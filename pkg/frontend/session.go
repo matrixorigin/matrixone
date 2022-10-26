@@ -889,6 +889,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
