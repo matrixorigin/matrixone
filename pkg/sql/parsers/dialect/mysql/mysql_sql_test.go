@@ -1215,7 +1215,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
+			output: "create table t1 (t time(26, 3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",

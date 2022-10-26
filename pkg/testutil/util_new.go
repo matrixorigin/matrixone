@@ -184,6 +184,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewDateVector(n, typ, m, random, vs)
 		}
 		return NewDateVector(n, typ, m, random, nil)
+	case types.T_time:
+		if vs, ok := Values.([]string); ok {
+			return NewTimeVector(n, typ, m, random, vs)
+		}
+		return NewTimeVector(n, typ, m, random, nil)
 	case types.T_datetime:
 		if vs, ok := Values.([]string); ok {
 			return NewDatetimeVector(n, typ, m, random, vs)
@@ -546,6 +551,34 @@ func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 			v = rand.Int()
 		}
 		if err := vec.Append(types.Date(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			d, err := types.ParseTime(vs[i], 6)
+			if err != nil {
+				return nil
+			}
+			if err := vec.Append(d, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(types.Time(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

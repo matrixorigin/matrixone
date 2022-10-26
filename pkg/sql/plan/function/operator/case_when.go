@@ -82,6 +82,10 @@ var (
 		return cwGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
 	}
 
+	CaseWhenTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+	}
+
 	CaseWhenDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
 	}

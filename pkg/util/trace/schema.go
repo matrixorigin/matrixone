@@ -68,6 +68,7 @@ var (
 	bytesScanCol = export.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
 
 	SingleStatementTable = &export.Table{
+		Account:  export.AccountAll,
 		Database: StatsDatabase,
 		Table:    statementInfoTbl,
 		Columns: []export.Column{
@@ -98,6 +99,8 @@ var (
 		Comment:          "record each statement and stats info",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,
+		// SupportUserAccess
+		SupportUserAccess: true,
 	}
 
 	rawItemCol      = export.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
@@ -117,6 +120,7 @@ var (
 	resourceCol     = export.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
 
 	SingleRowLogTable = &export.Table{
+		Account:  export.AccountAll,
 		Database: StatsDatabase,
 		Table:    rawLogTbl,
 		Columns: []export.Column{
@@ -146,6 +150,8 @@ var (
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
+		// SupportUserAccess
+		SupportUserAccess: false,
 	}
 
 	logView = &export.View{
@@ -303,6 +309,25 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	createCost = time.Since(instant)
 	return nil
+}
+
+// GetSchemaForAccount return account's table, and view's schema
+func GetSchemaForAccount(account string) []string {
+	var sqls = make([]string, 0, 1)
+	for _, tbl := range tables {
+		if tbl.SupportUserAccess {
+			t := tbl.Clone()
+			t.Account = account
+			sqls = append(sqls, t.ToCreateSql(true))
+		}
+	}
+	for _, v := range views {
+		if v.OriginTable.SupportUserAccess {
+			sqls = append(sqls, v.ToCreateSql(true))
+		}
+
+	}
+	return sqls
 }
 
 func init() {

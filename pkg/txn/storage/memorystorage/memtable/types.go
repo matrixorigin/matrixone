@@ -163,7 +163,7 @@ func TypeMatch(v any, typ types.T) bool {
 	case types.T_date:
 		_, ok = v.(types.Date)
 	case types.T_time:
-		_, ok = v.(types.TimeType)
+		_, ok = v.(types.Time)
 	case types.T_datetime:
 		_, ok = v.(types.Datetime)
 	case types.T_timestamp:

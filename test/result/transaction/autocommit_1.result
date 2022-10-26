@@ -10,20 +10,18 @@ SELECT @@session.autocommit;
 @@autocommit
 0
 SET @@session.autocommit=OFF;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 0
 SET @@session.autocommit=ON;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
-0
+1
 SET @@session.autocommit=foo;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
+internal error: convert to the system variable bool type failed
 SELECT @@session.autocommit;
 @@autocommit
-0
+1
 commit;
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;

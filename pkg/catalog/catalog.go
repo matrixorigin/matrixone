@@ -322,6 +322,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_time:
+			col := vector.GetFixedVectorValues[types.Time](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_datetime:
 			col := vector.GetFixedVectorValues[types.Datetime](vec)
 			for j := 0; j < vec.Length(); j++ {
