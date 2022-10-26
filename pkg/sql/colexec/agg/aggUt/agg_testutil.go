@@ -268,6 +268,8 @@ func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
 		return testutil.MakeVarcharVector(input.([]string), nsp), len(input.([]string))
 	case types.T_date:
 		return testutil.MakeDateVector(input.([]string), nsp), len(input.([]string))
+	case types.T_time:
+		return testutil.MakeTimeVector(input.([]string), nsp), len(input.([]string))
 	case types.T_datetime:
 		return testutil.MakeDateTimeVector(input.([]string), nsp), len(input.([]string))
 	case types.T_timestamp:
@@ -315,6 +317,8 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		require.Equal(t, expected.([]string), vector.GetStrColumn(vec))
 	case types.T_date:
 		require.Equal(t, expected.([]types.Date), vector.GetColumn[types.Date](vec))
+	case types.T_time:
+		require.Equal(t, expected.([]types.Time), vector.GetColumn[types.Datetime](vec))
 	case types.T_datetime:
 		require.Equal(t, expected.([]types.Datetime), vector.GetColumn[types.Datetime](vec))
 	case types.T_timestamp:

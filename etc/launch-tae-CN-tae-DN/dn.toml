@@ -37,3 +37,6 @@ execution-interval = "10000s"
 catalog-ckp-interval = "10000s"
 catalog-unckp-limit = 10000
 flush-interval = "10000s"
+
+[dn.LogStore]
+logstore = "logservice"
