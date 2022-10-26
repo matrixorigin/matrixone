@@ -96,7 +96,7 @@ type MergeLogType string
 func (t MergeLogType) String() string { return string(t) }
 
 const MergeLogTypeMerged MergeLogType = "merged"
-const MergeLogTypeLog MergeLogType = "log"
+const MergeLogTypeLogs MergeLogType = "logs"
 const MergeLogTypeALL MergeLogType = "*"
 
 const FilenameSeparator = "_"
@@ -104,6 +104,8 @@ const CsvExtension = ".csv"
 
 const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
+
+const AccountAll = ETLParamAccountAll
 
 var ETLParamTSAll = time.Time{}
 
@@ -114,7 +116,7 @@ type PathBuilder interface {
 	// BuildETLPath return path for EXTERNAL table 'infile' options
 	//
 	// like: {account}/merged/*/*/*/{name}/*.csv
-	BuildETLPath(db string, name string) string
+	BuildETLPath(db, name, account string) string
 	// ParsePath
 	//
 	// switch path {
@@ -188,7 +190,7 @@ func (p *MetricLogPath) Parse() error {
 		p.fileType = MergeLogTypeMerged
 		p.timestamps = fnElems[:2]
 	} else {
-		p.fileType = MergeLogTypeLog
+		p.fileType = MergeLogTypeLogs
 		p.timestamps = fnElems[:1]
 	}
 
@@ -229,8 +231,8 @@ func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time
 //
 // #     account | typ | ts   | table | filename
 // like: *       /*    /*/*/* /metric /*.csv
-func (b *AccountDatePathBuilder) BuildETLPath(db string, name string) string {
-	etlDirectory := b.Build(ETLParamAccountAll, ETLParamTypeAll, ETLParamTSAll, db, name)
+func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
+	etlDirectory := b.Build(account, ETLParamTypeAll, ETLParamTSAll, db, name)
 	etlFilename := "*" + CsvExtension
 	return path.Join("/", etlDirectory, etlFilename)
 }
@@ -259,7 +261,7 @@ type DBTablePathBuilder struct{}
 // BuildETLPath implement PathBuilder
 //
 // like: system/metric_*.csv
-func (m *DBTablePathBuilder) BuildETLPath(db string, name string) string {
+func (m *DBTablePathBuilder) BuildETLPath(db, name, account string) string {
 	return fmt.Sprintf("%s/%s_*", db, name) + CsvExtension
 }
 
