@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -45,72 +44,51 @@ func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (er
 	return
 }
 
-type RunnerState int8
-
-const (
-	RS_Finished RunnerState = iota
-	RS_Pendding
-	RS_Running
-)
-
-type CheckpointEntry struct {
-	start, end types.TS
-	state      RunnerState
+type timeBasedPolicy struct {
+	interval time.Duration
 }
 
-func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
-	return &CheckpointEntry{
-		start: start,
-		end:   end,
-		state: RS_Pendding,
-	}
-}
-
-func (e *CheckpointEntry) MakeBatches() *containers.Batch {
-	logutil.Infof("make batches")
-	return nil
+func (p *timeBasedPolicy) Check(last types.TS) bool {
+	physical := last.Physical()
+	return physical <= time.Now().UTC().UnixNano()-p.interval.Nanoseconds()
 }
 
 type runner struct {
 	options struct {
-		collectInterval     time.Duration
-		maxFlushInterval    time.Duration
+		collectInterval        time.Duration
+		maxFlushInterval       time.Duration
+		minIncrementalInterval time.Duration
+		minGlobalInterval      time.Duration
+
 		dirtyEntryQueueSize int
 		waitQueueSize       int
 		checkpointQueueSize int
+		minCount            int
 	}
 
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	scheduler tasks.TaskScheduler
+	observers *observers
 
 	stopper *stopper.Stopper
 
 	storage struct {
 		sync.RWMutex
-		entries *btree.BTreeG[*CheckpointEntry]
-		maxTS   types.TS
+		entries    *btree.BTreeG[*CheckpointEntry]
+		prevGlobal *CheckpointEntry
 	}
-	policy *policy
 
-	dirtyEntryQueue sm.Queue
-	waitQueue       sm.Queue
-	checkpointQueue sm.Queue
+	incrementalPolicy *timeBasedPolicy
+	globalPolicy      *timeBasedPolicy
+
+	dirtyEntryQueue     sm.Queue
+	waitQueue           sm.Queue
+	checkpointQueue     sm.Queue
+	postCheckpointQueue sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
-}
-
-type policy struct {
-	t0 time.Time
-}
-
-func (p *policy) NeedCheckpoint() bool {
-	if time.Since(p.t0) > time.Minute*5 {
-		p.t0 = time.Now()
-		return true
-	}
-	return false
 }
 
 func NewRunner(
@@ -122,93 +100,182 @@ func NewRunner(
 		catalog:   catalog,
 		scheduler: scheduler,
 		source:    source,
-		storage: struct {
-			sync.RWMutex
-			entries *btree.BTreeG[*CheckpointEntry]
-			maxTS   types.TS
-		}{
-			RWMutex: sync.RWMutex{},
-			entries: btree.NewBTreeG(func(a, b *CheckpointEntry) bool {
-				return a.start.Less(b.start)
-			}),
-		},
+		observers: new(observers),
 	}
+	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
+		return a.start.Less(b.start)
+	}, btree.Options{
+		NoLocks: true,
+	})
 	for _, opt := range opts {
 		opt(r)
 	}
 	r.fillDefaults()
+
+	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
+	r.globalPolicy = &timeBasedPolicy{interval: r.options.minGlobalInterval}
 	r.stopper = stopper.NewStopper("CheckpointRunner")
 	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
 	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
 	r.checkpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onCheckpointEntries)
+	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	return r
 }
 
 func (r *runner) onCheckpointEntries(items ...any) {
-	for _, item := range items {
-		ckpEntry := item.(*CheckpointEntry)
-		bat := ckpEntry.MakeBatches()
-		logutil.Infof("Flush batch %v", bat)
+	entry := r.MaxCheckpoint()
+	if entry.IsFinished() {
+		return
+	}
+
+	check := func() (done bool) {
+		tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
+		tree.GetTree().Compact()
+		if tree.IsEmpty() {
+			done = true
+		}
+		return
+	}
+
+	if !check() {
+		logutil.Infof("%s is waiting", entry.String())
+		return
+	}
+
+	now := time.Now()
+	if entry.IsIncremental() {
+		r.doIncrementalCheckpoint(entry)
+	} else {
+		r.doGlobalCheckpoint(entry)
+	}
+
+	entry.SetState(ST_Finished)
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+
+	r.postCheckpointQueue.Enqueue(entry)
+}
+
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
+	// TODO
+}
+
+func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
+	// TODO
+}
+
+func (r *runner) onPostCheckpointEntries(entries ...any) {
+	for _, e := range entries {
+		entry := e.(*CheckpointEntry)
+
+		// 1. broadcast event
+		r.observers.OnNewCheckpoint(entry.GetEnd())
+
+		// TODO:
+		// 2. remove previous checkpoint
+
+		logutil.Infof("Post %s", entry.String())
 	}
 }
-func (r *runner) GetLastEntry() *CheckpointEntry {
+
+func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
+	r.storage.RLock()
+	defer r.storage.RUnlock()
+	return r.storage.prevGlobal
+}
+
+func (r *runner) MaxCheckpoint() *CheckpointEntry {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	entry, _ := r.storage.entries.Max()
 	return entry
 }
-func (r *runner) NeedWait(entry *CheckpointEntry) bool {
-	e := r.source.ScanInRange(entry.start, entry.end)
-	return !e.GetTree().Compact()
+
+func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	maxEntry, _ := r.storage.entries.Max()
+	if maxEntry != nil {
+		if !maxEntry.GetEnd().Equal(entry.GetStart().Next()) {
+			success = false
+		} else if !maxEntry.IsFinished() {
+			success = false
+		} else {
+			r.storage.entries.Set(entry)
+			success = true
+		}
+		return
+	}
+	r.storage.entries.Set(entry)
+	r.storage.prevGlobal = entry
+	success = true
+	return
 }
 
-func (r *runner) TryCheckpoint(ts types.TS) {
-	var state RunnerState
-	entry := r.GetLastEntry()
+func (r *runner) tryScheduleFirstCheckpoint() {
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	_, count := r.source.ScanInRange(types.TS{}, ts)
+	if count < r.options.minCount {
+		return
+	}
+
+	entry := NewCheckpointEntry(types.TS{}, ts)
+	r.tryAddNewCheckpointEntry(entry)
+	r.checkpointQueue.Enqueue(struct{}{})
+}
+
+func (r *runner) tryScheduleIncrementalCheckpoint(prev types.TS) {
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	_, count := r.source.ScanInRange(prev.Next(), ts)
+	if count < r.options.minCount {
+		return
+	}
+	entry := NewCheckpointEntry(prev.Next(), ts)
+	r.tryAddNewCheckpointEntry(entry)
+	r.checkpointQueue.Enqueue(struct{}{})
+}
+
+func (r *runner) tryScheduleGlobalCheckpoint(ts types.TS) {
+	entry := NewCheckpointEntry(types.TS{}, ts)
+	r.tryAddNewCheckpointEntry(entry)
+	r.checkpointQueue.Enqueue(struct{}{})
+}
+
+func (r *runner) tryScheduleCheckpoint() {
+	entry := r.MaxCheckpoint()
+
+	// no prev checkpoint found. try schedule the first
+	// checkpoint
 	if entry == nil {
-		state = RS_Finished
-	} else {
-		state = entry.state
-	}
-	switch state {
-	case RS_Finished:
-		if r.policy.NeedCheckpoint() {
-			maxTS := ts
-			minTS := r.GetLastCheckpointTS().Next()
-			newEntry := NewCheckpointEntry(minTS, maxTS)
-			r.SetCheckpointEntry(newEntry)
-			if !r.NeedWait(newEntry) {
-				newEntry.state = RS_Running
-				r.checkpointQueue.Enqueue(newEntry)
-			}
-		}
-		return
-	case RS_Pendding:
-		if !r.NeedWait(entry) {
-			entry.state = RS_Running
-			r.checkpointQueue.Enqueue(entry)
-		}
-	case RS_Running:
+		r.tryScheduleFirstCheckpoint()
 		return
 	}
+
+	if entry.IsRunning() {
+		r.checkpointQueue.Enqueue(struct{}{})
+		return
+	}
+
+	// if the prev checkpoint is a global checkpoint, try
+	// schedule an incremental checkpoint this time
+	if !entry.IsIncremental() {
+		if r.incrementalPolicy.Check(entry.GetEnd()) {
+			r.tryScheduleIncrementalCheckpoint(entry.GetEnd())
+		}
+		return
+	}
+
+	prevGlobal := r.MaxGlobalCheckpoint()
+
+	if r.globalPolicy.Check(prevGlobal.GetEnd()) {
+		r.tryScheduleGlobalCheckpoint(entry.GetEnd())
+		return
+	}
+
+	if r.incrementalPolicy.Check(entry.GetEnd()) {
+		r.tryScheduleIncrementalCheckpoint(entry.GetEnd())
+	}
 }
-func (r *runner) SetCheckpointEntry(entry *CheckpointEntry) {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	r.storage.entries.Set(entry)
-	r.storage.maxTS = entry.end
-}
-func (r *runner) LogCheckpointEntry(entry *CheckpointEntry) {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	r.storage.entries.Set(entry)
-	r.storage.maxTS = entry.end
-}
-func (r *runner) GetLastCheckpointTS() types.TS {
-	r.storage.RLock()
-	defer r.storage.RUnlock()
-	return r.storage.maxTS
-}
+
 func (r *runner) fillDefaults() {
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
@@ -222,6 +289,15 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.checkpointQueueSize <= 1000 {
 		r.options.checkpointQueueSize = 1000
+	}
+	if r.options.minIncrementalInterval <= 0 {
+		r.options.minIncrementalInterval = time.Minute
+	}
+	if r.options.minGlobalInterval < 10*r.options.minIncrementalInterval {
+		r.options.minGlobalInterval = 10 * r.options.minIncrementalInterval
+	}
+	if r.options.minCount <= 0 {
+		r.options.minCount = 10000
 	}
 }
 
@@ -295,22 +371,21 @@ func (r *runner) onDirtyEntries(entries ...any) {
 	}
 }
 
-func (r *runner) cronCollect(ctx context.Context) {
+func (r *runner) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
 		r.source.Run()
 		entry := r.source.GetAndRefreshMerged()
 		if entry.IsEmpty() {
 			logutil.Info("No dirty block found")
-			return
+		} else {
+			r.dirtyEntryQueue.Enqueue(entry)
 		}
-		r.dirtyEntryQueue.Enqueue(entry)
+		r.tryScheduleCheckpoint()
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
 	hb.Stop()
 }
-
-func (r *runner) EnqueueCheckpoint(item any)
 
 func (r *runner) EnqueueWait(item any) (err error) {
 	_, err = r.waitQueue.Enqueue(item)
@@ -319,10 +394,11 @@ func (r *runner) EnqueueWait(item any) (err error) {
 
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
-		r.waitQueue.Start()
-		r.dirtyEntryQueue.Start()
+		r.postCheckpointQueue.Start()
 		r.checkpointQueue.Start()
-		if err := r.stopper.RunNamedTask("dirty-collector-job", r.cronCollect); err != nil {
+		r.dirtyEntryQueue.Start()
+		r.waitQueue.Start()
+		if err := r.stopper.RunNamedTask("dirty-collector-job", r.crontask); err != nil {
 			panic(err)
 		}
 	})
@@ -332,7 +408,8 @@ func (r *runner) Stop() {
 	r.onceStop.Do(func() {
 		r.stopper.Stop()
 		r.dirtyEntryQueue.Stop()
-		r.waitQueue.Stop()
 		r.checkpointQueue.Stop()
+		r.postCheckpointQueue.Stop()
+		r.waitQueue.Stop()
 	})
 }
