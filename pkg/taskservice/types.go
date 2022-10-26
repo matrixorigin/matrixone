@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
@@ -69,6 +70,28 @@ type conditions struct {
 	hasTaskParentIDCond bool
 	taskParentTaskIDOp  Op
 	taskParentTaskID    string
+
+	hasTaskExecutorCond bool
+	taskExecutorOp      Op
+	taskExecutor        uint32
+
+	orderByDesc bool
+}
+
+// WithTaskIDDesc set query with order by task id desc
+func WithTaskIDDesc() Condition {
+	return func(qo *conditions) {
+		qo.orderByDesc = true
+	}
+}
+
+// WithTaskExecutorCond set task executor condition
+func WithTaskExecutorCond(op Op, value uint32) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskExecutorCond = true
+		qo.taskExecutorOp = op
+		qo.taskExecutor = value
+	}
 }
 
 // WithLimitCond set query result limit
@@ -157,6 +180,9 @@ type TaskService interface {
 	StartScheduleCronTask()
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
+
+	// GetStorage returns the task storage
+	GetStorage() TaskStorage
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to
@@ -178,7 +204,7 @@ type TaskRunner interface {
 	// Parallelism maximum number of concurrently executing Tasks
 	Parallelism() int
 	// RegisterExecutor register the task executor
-	RegisterExecutor(code int, executor TaskExecutor)
+	RegisterExecutor(code uint32, executor TaskExecutor)
 }
 
 // TaskStorage task storage
@@ -205,4 +231,19 @@ type TaskStorage interface {
 	// This update must be transactional and needs to be done conditionally
 	// using CronTask.TriggerTimes and the task.Metadata.ID field.
 	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
+}
+
+// TaskServiceHolder create and hold the task service in the cn, dn and log node. Create
+// the TaskService from the heartbeat's CreateTaskService schedule command.
+type TaskServiceHolder interface {
+	// Close close the holder
+	Close() error
+	// Get returns the taskservice
+	Get() (TaskService, bool)
+	// Create create the taskservice
+	Create(command logservicepb.CreateTaskService) error
+}
+
+type TaskStorageFactory interface {
+	Create(address string) (TaskStorage, error)
 }

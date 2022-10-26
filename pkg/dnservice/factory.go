@@ -150,5 +150,5 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 	if err != nil {
 		return nil, err
 	}
-	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg)
+	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg, options.LogstoreType(s.cfg.LogStore.LogService))
 }

@@ -2,8 +2,8 @@
 service-type = "LOG"
 
 [log]
-level = "info"
-format = "json"
+level = "debug"
+format = "console"
 max-size = 512
 
 [logservice]
@@ -15,6 +15,7 @@ logservice-address = "127.0.0.1:32001"
 gossip-address = "127.0.0.1:32002"
 gossip-seed-addresses = [
   "127.0.0.1:32012",
+  "127.0.0.1:32002",
 ]
 
 [logservice.BootstrapConfig]
@@ -42,7 +43,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/etl"
+data-dir = "mo-data/local/etl"
 
 [observability]
 statusPort = 7001

@@ -16,7 +16,8 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 drop table if exists t2;";
 create table t2(a uuid primary key);
 desc t2;
-[unknown result because it is related to issue#5241]
+Field    Type    Null    Key    Default    Extra    Comment
+a    UUID    NO    PRI    NULL
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n`a` UUID DEFAULT NULL,\nPRIMARY KEY (`a`)\n)

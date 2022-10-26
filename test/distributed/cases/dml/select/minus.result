@@ -90,11 +90,11 @@ null
 (select col1 from t2) minus (select col2 from t2 limit 0);
 col1
 null
-2022-01-01
+2022-01-01 00:00:00
 (select col1 from t2) minus (select col3 from t2 limit 0);
 col1
 null
-2022-01-01
+2022-01-01 00:00:00
 (select col2 from t2) minus (select col1 from t2 limit 0);
 col2
 null
@@ -110,15 +110,18 @@ null
 (select col3 from t2) minus (select col1 from t2 limit 0);
 col3
 2022-01-02 00:00:00
+null
 2022-01-01 00:00:00
 (select col3 from t2) minus (select col2 from t2 limit 0);
 col3
+null
 2022-01-01 00:00:00
 2022-01-02 00:00:00
 (select col3 from t2) minus (select col3 from t2 limit 0);
 col3
-2022-01-01 00:00:00
 2022-01-02 00:00:00
+null
+2022-01-01 00:00:00
 drop table t2;
 drop table if exists t3;
 create table t3(

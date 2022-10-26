@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,18 +33,18 @@ import (
 )
 
 type Argument struct {
-	Ts                 uint64
-	TargetTable        engine.Relation
-	TargetColDefs      []*plan.ColDef
-	Affected           uint64
-	Engine             engine.Engine
-	DB                 engine.Database
-	TableID            string
-	CPkeyColDef        *plan.ColDef
-	DBName             string
-	TableName          string
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan.ComputeIndexInfo
+	Ts            uint64
+	TargetTable   engine.Relation
+	TargetColDefs []*plan.ColDef
+	Affected      uint64
+	Engine        engine.Engine
+	DB            engine.Database
+	TableID       string
+	CPkeyColDef   *plan.ColDef
+	DBName        string
+	TableName     string
+	IndexTables   []engine.Relation
+	IndexInfos    []*plan.IndexInfo
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -59,10 +60,10 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
-	for idx, info := range n.ComputeIndexInfos {
+	for idx, info := range n.IndexInfos {
 		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
 		if rowNum != 0 {
-			err := n.ComputeIndexTables[idx].Write(ctx, b)
+			err := n.IndexTables[idx].Write(ctx, b)
 			if err != nil {
 				return err
 			}
@@ -186,7 +187,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].AutoIncrement) {
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
@@ -221,6 +222,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 		}
+	}
+	// set null value's data
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
 	if !proc.LoadTag {
 		return false, handleWrite(n, proc, ctx, bat)

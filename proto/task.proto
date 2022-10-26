@@ -31,6 +31,21 @@
      // Completed the task has been completed.
      Completed = 2;
  }
+
+ // TaskCode task code
+ enum TaskCode {
+   // TestOnly reserved for testing.
+   TestOnly   = 0;
+
+   // TraceInit trace.InitSchema
+   TraceInit = 1;
+   // MetricInit metric.InitSchema
+   MetricInit = 2;
+   // SysViewInit sysview.InitSchema
+   SysViewInit = 3;
+   // FrontendInit frontend.InitSysTenant
+   FrontendInit = 4;
+ }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
  message TaskMetadata {

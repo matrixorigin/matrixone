@@ -273,12 +273,25 @@ func (e *DBEntry) txnGetNodeByName(name string,
 	return node.TxnGetNodeLocked(txnCtx)
 }
 
-func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
+func (e *DBEntry) TxnGetTableEntryByName(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
 	n, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
 	}
 	entry = n.GetPayload()
+	return
+}
+
+func (e *DBEntry) TxnGetTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
+	entry, err = e.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	//check whether visible and dropped.
+	visible, dropped := entry.GetVisibility(txnCtx.GetStartTS())
+	if !visible || dropped {
+		return nil, moerr.NewNotFound()
+	}
 	return
 }
 
@@ -297,6 +310,21 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (newEntry b
 		return
 	}
 	entry := dn.GetPayload()
+	entry.Lock()
+	defer entry.Unlock()
+	newEntry, err = entry.DropEntryLocked(txnCtx)
+	if err == nil {
+		deleted = entry
+	}
+	return
+}
+
+func (e *DBEntry) DropTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
+	entry, err := e.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+
 	entry.Lock()
 	defer entry.Unlock()
 	newEntry, err = entry.DropEntryLocked(txnCtx)

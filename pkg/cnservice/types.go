@@ -20,9 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -32,10 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
+)
+
+var (
+	defaultListenAddress = "127.0.0.1:6002"
 )
 
 type Service interface {
@@ -43,6 +45,7 @@ type Service interface {
 	Close() error
 
 	GetTaskRunner() taskservice.TaskRunner
+	GetTaskService() (taskservice.TaskService, bool)
 }
 
 type EngineType string
@@ -63,6 +66,11 @@ type Config struct {
 
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
+	// ServiceAddress service address for communication, if this address is not set, use
+	// ListenAddress as the communication address.
+	ServiceAddress string `toml:"service-address"`
+	// SQLAddress service address for receiving external sql clientß
+	SQLAddress string `toml:"sql-address"`
 	// FileService file service configuration
 
 	Engine struct {
@@ -122,6 +130,12 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	}
 	if c.Role == "" {
 		c.Role = metadata.CNRole_TP.String()
 	}
@@ -180,8 +194,13 @@ type service struct {
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
-	stopper                *stopper.Stopper
 
-	taskService taskservice.TaskService
-	taskRunner  taskservice.TaskRunner
+	stopper *stopper.Stopper
+
+	task struct {
+		sync.RWMutex
+		holder         taskservice.TaskServiceHolder
+		runner         taskservice.TaskRunner
+		storageFactory taskservice.TaskStorageFactory
+	}
 }

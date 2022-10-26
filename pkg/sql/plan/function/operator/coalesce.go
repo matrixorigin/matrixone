@@ -70,6 +70,10 @@ var (
 		return coalesceGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
 	}
 
+	CoalesceTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+	}
+
 	CoalesceDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
 	}

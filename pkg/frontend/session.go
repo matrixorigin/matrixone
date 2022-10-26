@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
@@ -888,6 +889,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
@@ -1155,6 +1164,7 @@ func (th *TxnHandler) CommitTxn() error {
 	defer cancel()
 	txnOp := th.GetTxnOperator()
 	if err := storage.Commit(ctx, txnOp); err != nil {
+		txnOp.Rollback(ctx)
 		th.SetInvalid()
 		return err
 	}
@@ -1249,6 +1259,12 @@ func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.txnHandler
+}
+
+func (tcc *TxnCompilerContext) GetUserName() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.GetUserName()
 }
 
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
@@ -1359,12 +1375,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
+					AutoIncr:  attr.Attr.AutoIncrement,
+					Table:     tableName,
 				},
-				Primary:       attr.Attr.Primary,
-				Default:       attr.Attr.Default,
-				OnUpdate:      attr.Attr.OnUpdate,
-				Comment:       attr.Attr.Comment,
-				AutoIncrement: attr.Attr.AutoIncrement,
+				Primary:  attr.Attr.Primary,
+				Default:  attr.Attr.Default,
+				OnUpdate: attr.Attr.OnUpdate,
+				Comment:  attr.Attr.Comment,
 			}
 			if isCPkey {
 				col.IsCPkey = isCPkey
@@ -1411,12 +1428,19 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 			})
 		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			fields := make([]*plan.Field, len(indexDef.Fields))
+			for i := range indexDef.Fields {
+				fields[i] = &plan.Field{
+					ColNames: indexDef.Fields[i],
+				}
+			}
 			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_ComputeIndex{
-					ComputeIndex: &plan2.ComputeIndexDef{
-						Names:      indexDef.Names,
+				Def: &plan2.TableDef_DefType_Idx{
+					Idx: &plan2.IndexDef{
+						IndexNames: indexDef.IndexNames,
 						TableNames: indexDef.TableNames,
 						Uniques:    indexDef.Uniques,
+						Fields:     fields,
 					},
 				},
 			})

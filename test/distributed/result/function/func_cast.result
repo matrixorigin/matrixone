@@ -36,12 +36,12 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-data out of range: data type int64, 
+data out of range: data type int, 
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-data out of range: data type int64, 
+data out of range: data type int, 
 select cast('-10a' as signed integer);
 invalid argument cast to int, bad value -10a
 select cast('a10' as unsigned integer);
