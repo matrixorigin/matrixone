@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -126,7 +125,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -155,14 +154,15 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 
 		// should be transparently handled
 		cc := c1.(*managedHAKeeperClient)
-		assert.NoError(t, cc.client.close())
-		cc.client = nil
+		assert.NoError(t, cc.mu.client.close())
+		cc.mu.client = nil
 
 		hb := pb.CNStoreHeartbeat{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 		}
-		require.NoError(t, c1.SendCNHeartbeat(ctx, hb))
+		_, err = c1.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
 
 		c2, err := NewDNHAKeeperClient(ctx, cfg)
 		require.NoError(t, err)
@@ -172,8 +172,8 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 
 		// should be transparently handled
 		cc = c2.(*managedHAKeeperClient)
-		assert.NoError(t, cc.client.close())
-		cc.client = nil
+		assert.NoError(t, cc.mu.client.close())
+		cc.mu.client = nil
 
 		hb2 := pb.DNStoreHeartbeat{
 			UUID:           s.ID(),
@@ -185,8 +185,8 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 
 		// should be transparently handled
 		cc = c1.(*managedHAKeeperClient)
-		assert.NoError(t, cc.client.close())
-		cc.client = nil
+		assert.NoError(t, cc.mu.client.close())
+		cc.mu.client = nil
 
 		cd, err := c1.GetClusterDetails(ctx)
 		require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestHAKeeperClientSendDNHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -254,8 +254,8 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 		// should be transparently handled
 		cc := c.(*managedHAKeeperClient)
-		assert.NoError(t, cc.client.close())
-		cc.client = nil
+		assert.NoError(t, cc.mu.client.close())
+		cc.mu.client = nil
 
 		hb := s.store.getHeartbeatMessage()
 		cb, err := c.SendLogHeartbeat(ctx, hb)
@@ -264,7 +264,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DnService,
+			ServiceType: pb.DNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -307,7 +307,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -319,7 +318,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -355,7 +353,8 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	require.NoError(t, err)
 	c.addr = cfg1.ServiceAddress
 	c.client = cc
-	client := &managedHAKeeperClient{client: c, cfg: cfg}
+	client := &managedHAKeeperClient{cfg: cfg}
+	client.mu.client = c
 	defer func() {
 		require.NoError(t, client.Close())
 	}()
@@ -364,48 +363,48 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 
 func TestGetClusterDetailsWhenNotConnectedToHAKeeper(t *testing.T) {
 	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.client
+		oldc := c.mu.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := c.GetClusterDetails(ctx)
 		require.NoError(t, err)
-		require.True(t, oldc != c.client)
+		require.True(t, oldc != c.mu.client)
 	}
 	testNotHAKeeperErrorIsHandled(t, fn)
 }
 
 func TestSendCNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.client
+		oldc := c.mu.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+		_, err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
 		require.NoError(t, err)
-		require.True(t, oldc != c.client)
+		require.True(t, oldc != c.mu.client)
 	}
 	testNotHAKeeperErrorIsHandled(t, fn)
 }
 
 func TestSendDNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.client
+		oldc := c.mu.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := c.SendDNHeartbeat(ctx, pb.DNStoreHeartbeat{})
 		require.NoError(t, err)
-		require.True(t, oldc != c.client)
+		require.True(t, oldc != c.mu.client)
 	}
 	testNotHAKeeperErrorIsHandled(t, fn)
 }
 
 func TestSendLogHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.client
+		oldc := c.mu.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := c.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
 		require.NoError(t, err)
-		require.True(t, oldc != c.client)
+		require.True(t, oldc != c.mu.client)
 	}
 	testNotHAKeeperErrorIsHandled(t, fn)
 }
