@@ -26,6 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
+const (
+	DEFAULT_ESCAPE_CHAR = '\\'
+)
+
 // <source column> like 'rule'
 // XXX: rs here is the selection list.
 func BtSliceAndConst(xs []string, expr []byte, rs []bool) ([]bool, error) {
@@ -37,6 +41,18 @@ func isNotNull(n *nulls.Nulls, i uint64) bool {
 		return true
 	}
 	return !n.Contains(i)
+}
+
+func removeEscapeChar(src []byte, escapeChar byte) []byte {
+	var target []byte
+	max := len(src)
+	for i := 0; i < max; i++ {
+		if src[i] == escapeChar && i+1 < max {
+			i = i + 1
+		}
+		target = append(target, src[i])
+	}
+	return target
 }
 
 func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) ([]bool, error) {
@@ -78,6 +94,9 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
+		if n > 2 && expr[n-2] == DEFAULT_ESCAPE_CHAR {
+			c1 = DEFAULT_ESCAPE_CHAR
+		}
 		switch {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 			// Rule 4.1: no wild card, so it is a simple compare eq.
@@ -93,35 +112,35 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 			return rs, nil
 		case c0 == '%' && !(c1 == '%' || c1 == '_'):
 			// Rule 4.3, %foobarzoo, it turns into a suffix match.
-			suffix := expr[1:]
+			suffix := removeEscapeChar(expr[1:], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				rs[i] = isNotNull(ns, uint64(i)) && bytes.HasSuffix([]byte(s), suffix)
 			}
 			return rs, nil
 		case c1 == '_' && !(c0 == '%' || c0 == '_'):
 			// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
-			prefix := expr[:n-1]
+			prefix := removeEscapeChar(expr[:n-1], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				rs[i] = isNotNull(ns, uint64(i)) && uint32(len(s)) == n && bytes.Equal(prefix, []byte(s)[:n-1])
 			}
 			return rs, nil
 		case c1 == '%' && !(c0 == '%' || c0 == '_'):
 			// Rule 4.5 foobarzoo%, prefix match
-			prefix := expr[:n-1]
+			prefix := removeEscapeChar(expr[:n-1], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				rs[i] = isNotNull(ns, uint64(i)) && bytes.HasPrefix([]byte(s), prefix)
 			}
 			return rs, nil
 		case c0 == '%' && c1 == '%':
 			// Rule 4.6 %foobarzoo%, now it is contains
-			substr := expr[1 : n-1]
+			substr := removeEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				rs[i] = isNotNull(ns, uint64(i)) && bytes.Contains([]byte(s), substr)
 			}
 			return rs, nil
 		case c0 == '%' && c1 == '_':
 			// Rule 4.7 %foobarzoo_,
-			suffix := expr[1 : n-1]
+			suffix := removeEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				bs := []byte(s)
 				rs[i] = isNotNull(ns, uint64(i)) && len(s) > 0 && bytes.HasSuffix(bs[:len(bs)-1], suffix)
@@ -129,7 +148,7 @@ func BtSliceNullAndConst(xs []string, expr []byte, ns *nulls.Nulls, rs []bool) (
 			return rs, nil
 		case c0 == '_' && c1 == '%':
 			// Rule 4.8 _foobarzoo%
-			prefix := expr[1 : n-1]
+			prefix := removeEscapeChar(expr[1:n-1], DEFAULT_ESCAPE_CHAR)
 			for i, s := range xs {
 				rs[i] = isNotNull(ns, uint64(i)) && len(s) > 0 && bytes.HasPrefix([]byte(s)[1:], prefix)
 			}

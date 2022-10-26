@@ -223,6 +223,13 @@ func randInsertValues(v *vector.Vector, t types.T, rowCount int, valueCount map[
 			valueCount[valueBegin+i] = vs[i]
 		}
 		vector.AppendFixed(v, vs, mp)
+	case types.T_time:
+		vs := make([]types.Time, rowCount)
+		for i := 0; i < rowCount; i++ {
+			vs[i] = randTime()
+			valueCount[valueBegin+i] = vs[i]
+		}
+		vector.AppendFixed(v, vs, mp)
 	case types.T_datetime:
 		vs := make([]types.Datetime, rowCount)
 		for i := 0; i < rowCount; i++ {
@@ -313,6 +320,18 @@ func randDate() types.Date {
 	month := rand.Intn(12) + 1
 	day := rand.Intn(int(types.LastDay(int32(year), uint8(month)))) + 1
 	return types.FromCalendar(int32(year), uint8(month), uint8(day))
+}
+
+func randTime() types.Time {
+	isNeg := false
+	if tmp := rand.Intn(2); tmp == 0 {
+		isNeg = true
+	}
+	hour := rand.Intn(839)
+	minute := rand.Intn(60)
+	second := rand.Intn(60)
+	microSecond := rand.Intn(1e6)
+	return types.FromTimeClock(isNeg, int32(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randDatetime() types.Datetime {

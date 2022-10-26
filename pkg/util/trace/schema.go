@@ -68,6 +68,7 @@ var (
 	bytesScanCol = export.Column{Name: "bytes_scan", Type: bigintUnsignedType, Default: "0", Comment: "bytes scan total"}
 
 	SingleStatementTable = &export.Table{
+		Account:  export.AccountAll,
 		Database: StatsDatabase,
 		Table:    statementInfoTbl,
 		Columns: []export.Column{
@@ -98,6 +99,8 @@ var (
 		Comment:          "record each statement and stats info",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    &accountCol,
+		// SupportUserAccess
+		SupportUserAccess: true,
 	}
 
 	rawItemCol      = export.Column{Name: "raw_item", Type: stringType, Comment: "raw log item"}
@@ -117,6 +120,7 @@ var (
 	resourceCol     = export.Column{Name: "resource", Type: "JSON", Default: jsonColumnDEFAULT, Comment: "static resource information"}
 
 	SingleRowLogTable = &export.Table{
+		Account:  export.AccountAll,
 		Database: StatsDatabase,
 		Table:    rawLogTbl,
 		Columns: []export.Column{
@@ -146,6 +150,8 @@ var (
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      export.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
+		// SupportUserAccess
+		SupportUserAccess: false,
 	}
 
 	logView = &export.View{
@@ -187,8 +193,8 @@ var (
 		Table:       spanInfoTbl,
 		OriginTable: SingleRowLogTable,
 		Columns: []export.Column{
-			spanIDCol,
 			stmtIDCol,
+			spanIDCol,
 			parentSpanIDCol,
 			nodeUUIDCol,
 			nodeTypeCol,
@@ -204,63 +210,6 @@ var (
 
 const (
 	sqlCreateDBConst = `create database if not exists ` + StatsDatabase
-
-	sqlCreateSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
- span_id varchar(16) NOT NULL,
- statement_id varchar(36) NOT NULL,
- parent_span_id varchar(16) NOT NULL,
- node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
- node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService",
- name varchar(1024) NOT NULL COMMENT "span name, for example: step name of execution plan, function name in code, ...",
- start_time datetime(6) NOT NULL,
- end_time datetime(6) NOT NULL,
- duration BIGINT default 0 COMMENT "execution time, unit: ns",
- resource JSON NOT NULL COMMENT "json, static resource information"
-)`
-	sqlCreateLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
- statement_id varchar(36) NOT NULL,
- span_id varchar(16) NOT NULL,
- node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
- node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
- timestamp datetime(6) NOT NULL COMMENT "log timestamp",
- name varchar(1024) NOT NULL COMMENT "logger name",
- level varchar(32) NOT NULL COMMENT "log level, enum: debug, info, warn, error, panic, fatal",
- caller varchar(4096) NOT NULL,
- message TEXT NOT NULL COMMENT "log message",
- extra JSON NOT NULL COMMENT "log extra fields"
-)`
-	sqlCreateStatementInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
- statement_id varchar(36) NOT NULL,
- transaction_id varchar(36) NOT NULL,
- session_id varchar(36) NOT NULL,
- account varchar(1024) NOT NULL COMMENT 'account name',
- user varchar(1024) NOT NULL COMMENT 'user name',
- host varchar(1024) NOT NULL COMMENT 'user client ip',
- ` + "`database`" + ` varchar(1024) NOT NULL COMMENT 'database name',
- statement TEXT NOT NULL COMMENT 'sql statement',
- statement_tag TEXT NOT NULL DEFAULT '',
- statement_fingerprint TEXT NOT NULL DEFAULT '' COMMENT 'sql statement fingerprint',
- node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
- node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
- request_at datetime(6) NOT NULL,
- response_at datetime(6) NOT NULL,
- duration bigint unsigned default 0 COMMENT 'exec time, unit: ns',
- ` + "`status`" + ` varchar(32) default 'Running' COMMENT 'sql statement running status, enum: Running, Success, Failed',
- error TEXT NOT NULL COMMENT 'error message',
- exec_plan JSON NOT NULL COMMENT "sql execution plan",
- rows_read bigint default 0 COMMENT 'rows read total',
- bytes_scan bigint default 0 COMMENT 'bytes scan total',
-PRIMARY KEY (statement_id)
-)`
-	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
- statement_id varchar(36) NOT NULL,
- span_id varchar(16) NOT NULL,
- node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
- node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
- err_code varchar(1024) NOT NULL,
- stack varchar(4096) NOT NULL,
- timestamp datetime(6) NOT NULL
-)`
 )
 
 var tables = []*export.Table{SingleStatementTable, SingleRowLogTable}
@@ -303,6 +252,25 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	createCost = time.Since(instant)
 	return nil
+}
+
+// GetSchemaForAccount return account's table, and view's schema
+func GetSchemaForAccount(account string) []string {
+	var sqls = make([]string, 0, 1)
+	for _, tbl := range tables {
+		if tbl.SupportUserAccess {
+			t := tbl.Clone()
+			t.Account = account
+			sqls = append(sqls, t.ToCreateSql(true))
+		}
+	}
+	for _, v := range views {
+		if v.OriginTable.SupportUserAccess {
+			sqls = append(sqls, v.ToCreateSql(true))
+		}
+
+	}
+	return sqls
 }
 
 func init() {

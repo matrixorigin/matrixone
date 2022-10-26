@@ -506,6 +506,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -580,6 +581,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -622,6 +624,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_char,
 			types.T_varchar,
 			types.T_date,
+			types.T_time,
 			types.T_datetime,
 			types.T_json,
 		}
@@ -644,6 +647,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
+			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 		}
