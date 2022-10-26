@@ -2209,6 +2209,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 		case *tree.SetRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			//switch role
 			err = mce.handleSwitchRole(requestCtx, st)
 			if err != nil {
@@ -2222,6 +2223,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.DropDatabase:
+			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
@@ -2314,38 +2316,47 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.CreateAccount:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropAccount:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterAccount: //TODO
+			ses.InvalidatePrivilegeCache()
 		case *tree.CreateUser:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropUser:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterUser: //TODO
+			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			switch st.Typ {
 			case tree.GrantTypeRole:
 				if err = mce.handleGrantRole(requestCtx, &st.GrantRole); err != nil {
@@ -2358,6 +2369,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.Revoke:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			switch st.Typ {
 			case tree.RevokeTypeRole:
 				if err = mce.handleRevokeRole(requestCtx, &st.RevokeRole); err != nil {
@@ -2508,6 +2520,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
 			*tree.Delete, *tree.TruncateTable:
+			//change privilege
+			switch cw.GetAst().(type) {
+			case *tree.DropTable, *tree.DropDatabase, *tree.DropView, *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+				*tree.CreateRole, *tree.DropRole,
+				*tree.Revoke, *tree.Grant,
+				*tree.SetDefaultRole, *tree.SetRole:
+				ses.InvalidatePrivilegeCache()
+			}
 			runBegin := time.Now()
 			/*
 				Step 1: Start

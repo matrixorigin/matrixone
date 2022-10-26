@@ -255,6 +255,12 @@ func (ses *Session) GetPrivilegeCache() *privilegeCache {
 	return ses.cache
 }
 
+func (ses *Session) InvalidatePrivilegeCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.cache.invalidate()
+}
+
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 	return NewBackgroundHandler(ctx, ses.GetMemPool(), ses.GetParameterUnit())
