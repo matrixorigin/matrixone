@@ -345,5 +345,5 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 }
 
 func (t *Table) GetTableID(ctx context.Context) string {
-	return fmt.Sprintf("%x", t.id)
+	return fmt.Sprintf("%d", t.id)
 }
