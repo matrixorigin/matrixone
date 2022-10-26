@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1048,142 +1046,4 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 
 func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
-}
-
-func appendBytes(v any, buf *bytes.Buffer) {
-	if v == nil {
-		panic("should not be nil")
-	}
-	switch v := v.(type) {
-	case bool:
-		if v {
-			buf.WriteByte(byte(1))
-		} else {
-			buf.WriteByte(byte(0))
-		}
-	case int8:
-		buf.Write(types.EncodeInt8(&v))
-	case int16:
-		buf.Write(types.EncodeInt16(&v))
-	case int32:
-		buf.Write(types.EncodeInt32(&v))
-	case int64:
-		buf.Write(types.EncodeInt64(&v))
-	case uint8:
-		buf.Write(types.EncodeUint8(&v))
-	case uint16:
-		buf.Write(types.EncodeUint16(&v))
-	case uint32:
-		buf.Write(types.EncodeUint32(&v))
-	case uint64:
-		buf.Write(types.EncodeUint64(&v))
-	case float32:
-		buf.Write(types.EncodeFloat32(&v))
-	case float64:
-		buf.Write(types.EncodeFloat64(&v))
-	case []byte:
-		buf.Write(v)
-	case types.Date:
-		buf.Write(types.EncodeDate(&v))
-	case types.Datetime:
-		buf.Write(types.EncodeDatetime(&v))
-	case types.Timestamp:
-		buf.Write(types.EncodeTimestamp(&v))
-	case types.Decimal64:
-		buf.Write(types.EncodeDecimal64(&v))
-	case types.Decimal128:
-		buf.Write(types.EncodeDecimal128(&v))
-	case types.TS:
-		buf.Write(v[:])
-	case types.Rowid:
-		buf.Write(v[:])
-	case types.Uuid:
-		buf.Write(v[:])
-	case memtable.ID:
-		var id uint64
-
-		id = uint64(v)
-		buf.Write(types.EncodeUint64(&id))
-	default:
-		panic(fmt.Sprintf("unknown type: %T", v))
-	}
-}
-
-func genRow(val *DataValue, cols []string) []any {
-	row := make([]any, len(cols))
-	for i, col := range cols {
-		switch v := val.value[col].Value.(type) {
-		case bool:
-			row[i] = v
-		case int8:
-			row[i] = v
-		case int16:
-			row[i] = v
-		case int32:
-			row[i] = v
-		case int64:
-			row[i] = v
-		case uint8:
-			row[i] = v
-		case uint16:
-			row[i] = v
-		case uint32:
-			row[i] = v
-		case uint64:
-			row[i] = v
-		case float32:
-			row[i] = v
-		case float64:
-			row[i] = v
-		case []byte:
-			row[i] = v
-		case types.Date:
-			row[i] = v
-		case types.Datetime:
-			row[i] = v
-		case types.Timestamp:
-			row[i] = v
-		case types.Decimal64:
-			row[i] = v
-		case types.Decimal128:
-			row[i] = v
-		case types.TS:
-			row[i] = v
-		case types.Rowid:
-			row[i] = v
-		case types.Uuid:
-			row[i] = v
-		default:
-			panic(fmt.Sprintf("unknown type: %T", v))
-		}
-	}
-	return row
-}
-
-func genDatabaseIndexKey(databaseName string, accountId uint32) string {
-	var buf bytes.Buffer
-
-	buf.WriteByte(1) // not null
-	buf.WriteString(databaseName)
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint32(&accountId))
-	return buf.String()
-}
-
-func genTableIndexKey(tableName string, databaseId uint64) string {
-	var buf bytes.Buffer
-
-	buf.WriteByte(1) // not null
-	buf.WriteString(tableName)
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint64(&databaseId))
-	return buf.String()
-}
-
-func genColumnIndexKey(id uint64) string {
-	var buf bytes.Buffer
-
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint64(&id))
-	return buf.String()
 }
