@@ -104,6 +104,7 @@ type Date int32
 
 type Datetime int64
 type Timestamp int64
+type Time int64
 
 type Decimal64 [8]byte
 type Decimal128 [16]byte
@@ -143,7 +144,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered | Date | Datetime | Timestamp
+	constraints.Ordered | Date | Time | Datetime | Timestamp
 }
 
 type Decimal interface {
@@ -182,6 +183,7 @@ var Types map[string]T = map[string]T{
 
 	"date":      T_date,
 	"datetime":  T_datetime,
+	"time":      T_time,
 	"timestamp": T_timestamp,
 	"interval":  T_interval,
 
@@ -301,7 +303,7 @@ func (t T) ToType() Type {
 		typ.Size = 2
 	case T_int32, T_date:
 		typ.Size = 4
-	case T_int64, T_datetime, T_timestamp:
+	case T_int64, T_datetime, T_time, T_timestamp:
 		typ.Size = 8
 	case T_uint8:
 		typ.Size = 1
@@ -366,6 +368,8 @@ func (t T) String() string {
 		return "DATE"
 	case T_datetime:
 		return "DATETIME"
+	case T_time:
+		return "TIME"
 	case T_timestamp:
 		return "TIMESTAMP"
 	case T_char:
@@ -431,6 +435,8 @@ func (t T) OidString() string {
 		return "T_date"
 	case T_datetime:
 		return "T_datetime"
+	case T_time:
+		return "T_time"
 	case T_timestamp:
 		return "T_timestamp"
 	case T_decimal64:
@@ -460,7 +466,7 @@ func (t T) TypeLen() int {
 		return 2
 	case T_int32, T_date:
 		return 4
-	case T_int64, T_datetime, T_timestamp:
+	case T_int64, T_datetime, T_time, T_timestamp:
 		return 8
 	case T_uint8:
 		return 1
@@ -503,7 +509,7 @@ func (t T) FixedLength() int {
 		return 2
 	case T_int32, T_uint32, T_date, T_float32:
 		return 4
-	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
+	case T_int64, T_uint64, T_datetime, T_time, T_float64, T_timestamp:
 		return 8
 	case T_decimal64:
 		return 8
@@ -562,7 +568,7 @@ func IsString(t T) bool {
 }
 
 func IsDateRelate(t T) bool {
-	if t == T_date || t == T_datetime || t == T_timestamp {
+	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
 		return true
 	}
 	return false

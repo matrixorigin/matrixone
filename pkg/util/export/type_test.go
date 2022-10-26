@@ -154,7 +154,7 @@ func TestPathBuilder(t *testing.T) {
 			field: field{builder: NewDBTablePathBuilder()},
 			args: args{
 				account:  "user",
-				typ:      MergeLogTypeLog,
+				typ:      MergeLogTypeLogs,
 				ts:       time.Unix(0, 0),
 				db:       "db",
 				name:     "table",
@@ -170,14 +170,14 @@ func TestPathBuilder(t *testing.T) {
 			field: field{builder: NewAccountDatePathBuilder()},
 			args: args{
 				account:  "user",
-				typ:      MergeLogTypeLog,
+				typ:      MergeLogTypeLogs,
 				ts:       time.Unix(0, 0),
 				db:       "db",
 				name:     "table",
 				nodeUUID: "123456",
 				nodeType: "node",
 			},
-			wantDir:     `user/log` + `/1970/01/01` + `/table`,
+			wantDir:     `user/logs` + `/1970/01/01` + `/table`,
 			wantETLPath: `/*/*` + `/*/*/*` + `/table/*.csv`,
 			wantLogFN:   `0_123456_node.csv`,
 		},
@@ -187,7 +187,7 @@ func TestPathBuilder(t *testing.T) {
 			m := tt.field.builder
 			gotDir := m.Build(tt.args.account, tt.args.typ, tt.args.ts, tt.args.db, tt.args.name)
 			require.Equal(t, tt.wantDir, gotDir)
-			gotETLPath := m.BuildETLPath(tt.args.db, tt.args.name)
+			gotETLPath := m.BuildETLPath(tt.args.db, tt.args.name, ETLParamAccountAll)
 			require.Equal(t, tt.wantETLPath, gotETLPath)
 			gotLogFN := m.NewLogFilename(tt.args.name, tt.args.nodeUUID, tt.args.nodeType, tt.args.ts)
 			require.Equal(t, tt.wantLogFN, gotLogFN)
