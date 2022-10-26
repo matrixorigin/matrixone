@@ -578,9 +578,9 @@ var MergeTaskMetadata = func(id task.TaskCode, args ...string) task.TaskMetadata
 	}
 }
 
-func InitCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
+func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
 	var err error
-	// should init once in with schema-init.
+	// should init once in/with schema-init.
 	tables := GetAllTable()
 	for _, tbl := range tables {
 		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
