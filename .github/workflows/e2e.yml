@@ -90,4 +90,4 @@ jobs:
         if: ${{ always() }}
         continue-on-error: true
         run: |
-          rm -rf ${{ github.workspace }}
+          rm -rf ${{ github.workspace }}/head
