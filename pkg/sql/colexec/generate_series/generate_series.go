@@ -106,7 +106,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	switch startVec.GetType().Oid {
 	case types.T_int32:
 		if endVec.Typ.Oid != types.T_int32 || (stepVec != nil && stepVec.Typ.Oid != types.T_int32) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type")
+			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleInt[int32](startVec, endVec, stepVec, generateInt32, proc, rbat)
 		if err != nil {
@@ -114,7 +114,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	case types.T_int64:
 		if endVec.Typ.Oid != types.T_int64 || (stepVec != nil && stepVec.Typ.Oid != types.T_int64) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type")
+			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleInt[int64](startVec, endVec, stepVec, generateInt64, proc, rbat)
 		if err != nil {
@@ -122,7 +122,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	case types.T_datetime:
 		if endVec.Typ.Oid != types.T_datetime || (stepVec != nil && stepVec.Typ.Oid != types.T_varchar) {
-			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type")
+			return false, moerr.NewInvalidInput("generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.Typ.Oid.String(), endVec.Typ.Oid.String())
 		}
 		err = handleDatetime(startVec, endVec, stepVec, false, proc, rbat)
 	case types.T_varchar:
