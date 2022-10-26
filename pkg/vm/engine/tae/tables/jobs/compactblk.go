@@ -204,7 +204,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		if deletes != nil {
 			defer deletes.Close()
 		}
-		ablockTask := NewFlushABlkTask(
+		ablockTask := NewFlushBlkTask(
 			tasks.WaitableCtx,
 			oldBlkData.GetFs(),
 			task.txn.GetStartTS(),
