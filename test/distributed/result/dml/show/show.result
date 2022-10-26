@@ -169,7 +169,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 show create database `1;drop table t1;`;
 invalid database 1;drop table t1;
 show create table `1;drop table t1;`;
-invalid database 1;drop table t1;
+no such table test03.1;drop table t1;
 show columns from `1;drop table t1;`;
 no such table test03.1;drop table t1;
 show table status from `1;drop table t1;`;
