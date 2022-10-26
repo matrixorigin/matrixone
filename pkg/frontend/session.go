@@ -16,12 +16,11 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -61,6 +60,7 @@ type TxnHandler struct {
 	ses       *Session
 	txn       TxnOperator
 	mu        sync.Mutex
+	entryMu   sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -890,6 +890,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
@@ -1085,6 +1093,9 @@ func (th *TxnHandler) TxnClientNew() error {
 	if err != nil {
 		return err
 	}
+	if th.txn == nil {
+		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+	}
 	return err
 }
 
@@ -1142,6 +1153,8 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1155,18 +1168,35 @@ func (th *TxnHandler) CommitTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Commit(ctx, txnOp); err != nil {
-		txnOp.Rollback(ctx)
+	if txnOp == nil {
+		logutil.Errorf("CommitTxn: txn operator is null")
+	}
+	if err = storage.Commit(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Commit(ctx)
+	if txnOp != nil {
+		err = txnOp.Commit(ctx)
+		if err != nil {
+			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1180,12 +1210,28 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Rollback(ctx, txnOp); err != nil {
+	if txnOp == nil {
+		logutil.Errorf("RollbackTxn: txn operator is null")
+	}
+	if err = storage.Rollback(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Rollback(ctx)
+	if txnOp != nil {
+		err = txnOp.Rollback(ctx)
+		if err != nil {
+			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
@@ -1205,6 +1251,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 }
 
 func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn
 }
 
@@ -1324,6 +1372,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
+	table.Ranges(ctx, nil) // TODO
 	return table, nil
 }
 

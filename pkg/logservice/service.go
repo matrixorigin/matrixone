@@ -58,6 +58,7 @@ func firstError(err1 error, err2 error) error {
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
+	logger      *zap.Logger
 	store       *store
 	server      morpc.RPCServer
 	pool        *sync.Pool
@@ -71,23 +72,38 @@ type Service struct {
 		backendFilter func(msg morpc.Message, backendAddr string) bool
 	}
 
-	logger *zap.Logger
+	task struct {
+		sync.RWMutex
+		created        bool
+		holder         taskservice.TaskServiceHolder
+		storageFactory taskservice.TaskStorageFactory
+	}
 }
 
 func NewService(
 	cfg Config,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 	opts ...Option,
 ) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	logger := logutil.GetGlobalLogger().Named("LogService").With(zap.String("uuid", cfg.UUID))
-	store, err := newLogStore(cfg, taskService, logger)
+
+	service := &Service{
+		cfg:         cfg,
+		stopper:     stopper.NewStopper("log-service"),
+		fileService: fileService,
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	service.logger = logutil.Adjust(service.logger).Named("LogService").With(zap.String("uuid", cfg.UUID))
+
+	store, err := newLogStore(cfg, service.getTaskService, service.logger)
 	if err != nil {
-		logger.Error("failed to create log store", zap.Error(err))
+		service.logger.Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
@@ -115,39 +131,31 @@ func NewService(
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)
 		})),
-		morpc.WithServerLogger(logger),
+		morpc.WithServerLogger(service.logger),
 	)
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{
-		cfg:         cfg,
-		store:       store,
-		server:      server,
-		pool:        pool,
-		respPool:    respPool,
-		stopper:     stopper.NewStopper("log-service"),
-		fileService: fileService,
 
-		logger: logger,
-	}
-	for _, opt := range opts {
-		opt(service)
-	}
+	service.store = store
+	service.server = server
+	service.pool = pool
+	service.respPool = respPool
+
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
-		logger.Error("failed to start the server", zap.Error(err))
+		service.logger.Error("failed to start the server", zap.Error(err))
 		if err := store.close(); err != nil {
-			logger.Error("failed to close the store", zap.Error(err))
+			service.logger.Error("failed to close the store", zap.Error(err))
 		}
 		return nil, err
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
-			logger.Info("logservice heartbeat worker started")
+			service.logger.Info("logservice heartbeat worker started")
 
 			// transfer morpc options via context
 			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)
@@ -157,6 +165,7 @@ func NewService(
 			return nil, err
 		}
 	}
+	service.initTaskHolder()
 	return service, nil
 }
 
@@ -172,6 +181,12 @@ func (s *Service) Close() (err error) {
 	err = firstError(err, s.server.Close())
 	if s.store != nil {
 		err = firstError(err, s.store.close())
+	}
+	s.task.RLock()
+	ts := s.task.holder
+	s.task.RUnlock()
+	if ts != nil {
+		err = firstError(err, ts.Close())
 	}
 	return err
 }
@@ -363,9 +378,11 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
-	if err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
+	if cb, err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
+	} else {
+		resp.CommandBatch = &cb
 	}
 
 	return resp

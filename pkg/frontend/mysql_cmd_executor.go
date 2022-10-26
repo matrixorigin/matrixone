@@ -2036,6 +2036,10 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticatePrivilegeOfStatement checks the user can execute the statement
 func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	var havePrivilege bool
 	var err error
 	if ses.GetTenantInfo() != nil {
@@ -2065,6 +2069,10 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 
 // authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
 func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err

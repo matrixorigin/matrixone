@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -77,10 +76,6 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	return fs
-}
-
-func NewTaskService() taskservice.TaskService {
-	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {

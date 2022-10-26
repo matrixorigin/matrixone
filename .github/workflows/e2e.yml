@@ -38,7 +38,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -launch ./etc/launch-tae-CN-tae-DN/launch.toml &>mo-service.log &
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -59,7 +59,6 @@ jobs:
         run: |
           export LC_ALL="C.UTF-8"
           locale
-          sleep 120s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
 
@@ -86,3 +85,9 @@ jobs:
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
+
+      - name: clean workspace
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          rm -rf ${{ github.workspace }}

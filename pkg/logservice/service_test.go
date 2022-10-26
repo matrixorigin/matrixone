@@ -26,15 +26,13 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -68,7 +66,6 @@ func runServiceTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -112,7 +109,6 @@ func TestNewService(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -238,7 +234,7 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 			},
 		}
 		resp := s.handleCNHeartbeat(ctx, req)
-		assert.Nil(t, resp.CommandBatch)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
@@ -543,7 +539,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -558,7 +553,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -678,7 +672,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
 			testutil.NewFS(),
-			taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -787,7 +780,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
