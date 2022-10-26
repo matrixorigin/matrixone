@@ -97,6 +97,9 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
 			id := f.id
+			// keep future in the futures map
+			f.ref()
+			defer f.unRef()
 			f.Close()
 			b.mu.RLock()
 			_, ok := b.mu.futures[id]

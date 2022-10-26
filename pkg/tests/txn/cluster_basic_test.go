@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	testBackends = []string{memKVTxnStorage, memTxnStorage}
+	testBackends = []string{memTxnStorage}
 )
 
 func TestBasicSingleShard(t *testing.T) {
@@ -35,7 +35,9 @@ func TestBasicSingleShard(t *testing.T) {
 				getBasicClusterOptions(backend))
 			require.NoError(t, err)
 			c.Start()
-			defer c.Stop()
+			defer func() {
+				c.Stop()
+			}()
 
 			cli := c.NewClient()
 
