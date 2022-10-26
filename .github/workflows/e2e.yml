@@ -9,9 +9,9 @@ on:
 
 jobs:
   bvt-linux-x86:
-    runs-on: ubuntu-latest
+    runs-on: x86-runner
     name: e2e BVT Test on Linux/x64
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: checkout head
@@ -61,15 +61,15 @@ jobs:
           locale
           sleep 120s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases/ -i func_string_left.sql,func_string_empty.test,\
-          func_string_char_length.test,func_string_bin.test,func_math_power.test,\
-          func_math_log.test,func_math_exp.test,datatype.test,subquery.sql 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
 
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+      
       - name: generate upload files
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
@@ -84,5 +84,5 @@ jobs:
         with:
           name: linux_x86_ci_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/upload
           retention-days: 7

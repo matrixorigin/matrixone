@@ -48,6 +48,9 @@ func appendFunction(fid int, newFunctions Functions) error {
 	registerMutex.Lock()
 	defer registerMutex.Unlock()
 	for _, newFunction := range newFunctions.Overloads {
+		newFunction.flag = newFunctions.Flag
+		newFunction.layout = newFunctions.Layout
+
 		requiredIndex := len(functionRegister[fid].Overloads)
 		if int(newFunction.Index) != requiredIndex {
 			return moerr.NewInternalError("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)

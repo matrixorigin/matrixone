@@ -96,6 +96,8 @@ func (f *Future) done(response Message, cb func()) {
 		}
 		f.mu.cb = cb
 		f.c <- response
+	} else if cb != nil {
+		cb()
 	}
 }
 

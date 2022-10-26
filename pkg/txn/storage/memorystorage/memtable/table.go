@@ -477,7 +477,7 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 	iter := t.NewIndexIter(
 		tx,
 		index,
-		append(index, Min),
+		index,
 	)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {

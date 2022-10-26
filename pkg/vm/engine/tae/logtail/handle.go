@@ -391,10 +391,14 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 	logutil.Infof("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
 		e.AsCommonID().String(), e.IsAppendable(),
 		metaNode.CreatedAt.ToString(), metaNode.DeletedAt.ToString(), metaNode.MetaLoc, metaNode.DeltaLoc)
-
+	is_sorted := false
+	if !e.IsAppendable() && e.GetSchema().HasPK() {
+		is_sorted = true
+	}
 	insBatch := b.blkMetaInsBatch
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable())
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())

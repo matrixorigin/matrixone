@@ -16,7 +16,6 @@ package dnservice
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -146,14 +145,7 @@ func (s *store) validDNShard(request *txn.TxnRequest, response *txn.TxnResponse)
 	r := s.getReplica(shard.ShardID)
 	if r == nil ||
 		r.shard.GetReplicaID() != shard.GetReplicaID() {
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		response.TxnError = &txn.TxnError{
-			Code: int32(moerr.ErrDNShardNotFound),
-			Message: fmt.Sprintf("DNShard[%s] not found on DNStore[%s]",
-				shard.DebugString(),
-				s.mu.metadata.UUID),
-		}
+		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(s.cfg.UUID, shard.ShardID), 0)
 		return nil
 	}
 	return r
@@ -198,7 +190,7 @@ func (s *store) maybeRetry(ctx context.Context, request *txn.TxnRequest, respons
 		return false
 	default:
 		for _, code := range request.Options.RetryCodes {
-			if code == response.TxnError.Code {
+			if code == int32(response.TxnError.TxnErrCode) {
 				wait := time.Duration(request.Options.RetryInterval)
 				if wait == 0 {
 					wait = defaultRetryInterval

@@ -85,7 +85,7 @@ func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed 
 	col, err := res.resultSet.GetColumn(i)
 	if err == nil {
 		name = col.Name()
-		typ = col.ColumnType()
+		typ = uint8(col.ColumnType())
 		signed = col.IsSigned()
 	}
 	return

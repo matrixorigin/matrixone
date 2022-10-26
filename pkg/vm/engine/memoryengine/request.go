@@ -101,8 +101,7 @@ func DoTxnRequest[
 	}
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {
-			//TODO no way to construct moerr.Error by code and message now
-			err = moerr.NewInternalError(resp.TxnError.Message)
+			err = resp.TxnError.UnwrapError()
 			return
 		}
 	}

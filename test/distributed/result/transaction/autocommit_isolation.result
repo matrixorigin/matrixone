@@ -114,21 +114,18 @@ invalid input: delete has no table def
 select * from test_11;
 SQL parser error: table "test_11" does not exist
 Insert into test_11 values(1,1);
-tae data: duplicate
 select * from test_11;
-c	d
-1	1
-2	2
+c    d
+1    1
+2    2
+1    1
 commit;
+tae data: duplicate
 set @@autocommit=1;
 select * from test_11;
-c	d
-1	1
-2	2
+SQL parser error: table "test_11" does not exist
 select * from test_11;
-c	d
-1	1
-2	2
+SQL parser error: table "test_11" does not exist
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -208,12 +205,13 @@ c	d
 2	2
 50	50
 Insert into test_11 values(50,50);
-w-w conflict
 select * from test_11;
-c	d
-1	1
-2	2
+c    d
+50    50
+1    1
+2    2
 commit;
+w-w conflict
 set @@autocommit=1;
 select * from test_11;
 c	d
@@ -328,7 +326,6 @@ c	d
 2	2
 50	50
 Insert into test_11 values(100,50);
-w-w conflict
 commit;
 w-w conflict
 set @@autocommit=1;
@@ -450,8 +447,8 @@ c	d
 2	2
 50	50
 update test_11 set c = 100 where d = 50;
-w-w conflict
 commit;
+w-w conflict
 set @@autocommit=1;
 select * from test_11;
 c	d

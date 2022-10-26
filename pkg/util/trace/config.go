@@ -16,6 +16,7 @@ package trace
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -39,9 +40,9 @@ const (
 const (
 	MOStatementType = "statement"
 	MOSpanType      = "span"
-	MORawLogType    = "raw_log"
 	MOLogType       = "log"
 	MOErrorType     = "error"
+	MORawLogType    = rawLogTbl
 )
 
 // tracerProviderConfig.
@@ -53,29 +54,29 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
-	enable bool // see SetEnable
+	enable bool // SetEnable
 
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
-	resource *Resource // see WithMOVersion, WithNode,
+	resource *Resource // WithMOVersion, WithNode,
 
 	// TODO: can check span's END
-	debugMode bool // see DebugMode
+	debugMode bool // DebugMode
 
-	batchProcessMode string // see WithBatchProcessMode
+	batchProcessMode string // WithBatchProcessMode
 
 	// writerFactory gen writer for CSV output
-	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default from export.GetFSWriterFactory result
+	writerFactory export.FSWriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory result
 
-	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
+	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
-	needInit bool // see WithInitAction
+	needInit bool // WithInitAction
 
-	exportInterval time.Duration // see WithExportInterval
+	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
-	longQueryTime int64 // see WithLongQueryTime
+	longQueryTime int64 //  WithLongQueryTime
 
 	mux sync.RWMutex
 }
@@ -113,20 +114,20 @@ type TracerProviderOption interface {
 	apply(*tracerProviderConfig)
 }
 
-type tracerProviderOptionFunc func(config *tracerProviderConfig)
+type tracerProviderOption func(config *tracerProviderConfig)
 
-func (f tracerProviderOptionFunc) apply(config *tracerProviderConfig) {
+func (f tracerProviderOption) apply(config *tracerProviderConfig) {
 	f(config)
 }
 
-func WithMOVersion(v string) tracerProviderOptionFunc {
+func WithMOVersion(v string) tracerProviderOption {
 	return func(config *tracerProviderConfig) {
 		config.resource.Put("version", v)
 	}
 }
 
 // WithNode give id as NodeId, t as NodeType
-func WithNode(uuid string, t string) tracerProviderOptionFunc {
+func WithNode(uuid string, t string) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.resource.Put("Node", &MONodeResource{
 			NodeUuid: uuid,
@@ -135,43 +136,43 @@ func WithNode(uuid string, t string) tracerProviderOptionFunc {
 	}
 }
 
-func EnableTracer(enable bool) tracerProviderOptionFunc {
+func EnableTracer(enable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.SetEnable(enable)
 	}
 }
 
-func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
-	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
 	})
 }
 
-func WithExportInterval(secs int) tracerProviderOptionFunc {
-	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+func WithExportInterval(secs int) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.exportInterval = time.Second * time.Duration(secs)
 	})
 }
 
-func WithLongQueryTime(secs float64) tracerProviderOptionFunc {
-	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+func WithLongQueryTime(secs float64) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longQueryTime = int64(float64(time.Second) * secs)
 	})
 }
 
-func DebugMode(debug bool) tracerProviderOptionFunc {
+func DebugMode(debug bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.debugMode = debug
 	}
 }
 
-func WithBatchProcessMode(mode string) tracerProviderOptionFunc {
+func WithBatchProcessMode(mode string) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessMode = mode
 	}
 }
 
-func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
+func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.mux.Lock()
 		defer cfg.mux.Unlock()
@@ -179,7 +180,7 @@ func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	}
 }
 
-func WithInitAction(init bool) tracerProviderOptionFunc {
+func WithInitAction(init bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.mux.Lock()
 		defer cfg.mux.Unlock()
@@ -216,6 +217,9 @@ func (t TraceID) IsZero() bool {
 }
 
 func (t TraceID) String() string {
+	if t.IsZero() {
+		return "0"
+	}
 	return uuid.UUID(t).String()
 }
 
@@ -237,6 +241,9 @@ func (s *SpanID) IsZero() bool {
 }
 
 func (s SpanID) String() string {
+	if s.IsZero() {
+		return "0"
+	}
 	return hex.EncodeToString(s[:])
 }
 
@@ -250,6 +257,10 @@ func SpanField(sc SpanContext) zap.Field {
 
 func IsSpanField(field zapcore.Field) bool {
 	return field.Key == SpanFieldKey
+}
+
+func ContextField(ctx context.Context) zap.Field {
+	return SpanField(SpanFromContext(ctx).SpanContext())
 }
 
 // SpanContext contains identifying trace information about a Span.
@@ -321,7 +332,7 @@ type SpanConfig struct {
 	// NewRoot identifies a Span as the root Span for a new trace. This is
 	// commonly used when an existing trace crosses trust boundaries and the
 	// remote parent span context should be ignored for security.
-	NewRoot bool `json:"NewRoot"` // see WithNewRoot
+	NewRoot bool `json:"NewRoot"` // WithNewRoot
 	parent  Span `json:"-"`
 }
 
