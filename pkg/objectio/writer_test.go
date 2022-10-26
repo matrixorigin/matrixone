@@ -138,6 +138,17 @@ func TestNewObjectWriter(t *testing.T) {
 		pool.Free(indexes[i].(*BloomFilter).buf)
 	}
 	assert.True(t, nb0 == pool.CurrNB())
+
+	fs := NewObjectFS(service, dir)
+	dirs, err := fs.ListDir("/")
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(dirs))
+	objectReader, err = NewObjectReader(name, service)
+	assert.Nil(t, err)
+	bs, err = objectReader.ReadAllMeta(dirs[0].Size, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(bs))
+
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

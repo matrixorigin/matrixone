@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
@@ -161,7 +162,7 @@ func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, erro
 	}
 	defer r.freeData(data.Entries, m)
 	err = r.object.fs.Read(context.Background(), data)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return nil, err
 	}
 	footer := &Footer{}
