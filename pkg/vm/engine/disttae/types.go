@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -120,8 +119,6 @@ type Partition struct {
 	data *memtable.Table[RowID, DataValue, *DataRow]
 	// last updated timestamp
 	ts timestamp.Timestamp
-	// secondary index - hash map
-	index *indexInfo
 }
 
 // Transaction represents a transaction
@@ -248,24 +245,6 @@ type column struct {
 	updateExpr      []byte
 }
 
-type entries []entry
-
-type entry struct {
-	key   string
-	val   *DataValue
-	rowid types.Rowid
-	ts    timestamp.Timestamp
-}
-
-type indexInfo struct {
-	sync.RWMutex
-	keyCols        []int // entry key columns
-	mapKeyCols     []int
-	keyColNames    []string // entry key columns name
-	mapKeyColNames []string
-	mp             map[string]entries
-}
-
 type blockReader struct {
 	blks     []BlockMeta
 	ctx      context.Context
@@ -306,24 +285,6 @@ type Columns []column
 func (cols Columns) Len() int           { return len(cols) }
 func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
-
-func (es entries) Len() int      { return len(es) }
-func (es entries) Swap(i, j int) { es[i], es[j] = es[j], es[i] }
-func (es entries) Less(i, j int) bool {
-	if es[i].key < es[j].key {
-		return true
-	}
-	if es[i].key > es[j].key {
-		return false
-	}
-	if es[i].ts.Less(es[j].ts) {
-		return true
-	}
-	if es[i].ts.Greater(es[j].ts) {
-		return false
-	}
-	return es[i].val == nil && es[j].val != nil
-}
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
 	return a.Info.BlockID == b.Info.BlockID
