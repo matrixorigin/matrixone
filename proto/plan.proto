@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package plan;
 
@@ -213,17 +213,6 @@ message OnUpdate {
 	string origin_string = 2;
 }
 
-message IndexDef {
-	enum IndexType {
-		INVAILD		= 0;
-		ZONEMAP 	= 1;
-		BSI 		= 2;
-	}
-	IndexType typ				= 1;
-	string name 				= 2;
-	repeated string col_names 	= 3;
-}
-
 message PrimaryKeyDef {
 	repeated string names = 1;
 }
@@ -275,16 +264,22 @@ message ViewDef {
 	string view  = 1;
 }
 
-message ComputeIndexDef {
-	repeated string names = 1;
+message IndexDef {
+	repeated string index_names = 1;
 	repeated string table_names = 2;
 	repeated bool uniques = 3;
+	repeated Field fields = 4;
 }
 
-message ComputeIndexInfo {
+message Field {
+	repeated string col_names = 1;
+}
+
+message IndexInfo {
 	string table_name = 1;
-	repeated string attrs = 2;
+	repeated string col_names = 2;
 	repeated ColDef cols = 3;
+	Field field = 4;
 }
 
 message TableDef {
@@ -295,7 +290,6 @@ message TableDef {
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
 			PartitionInfo partition				= 5;
-			ComputeIndexDef compute_index = 6;
 		}
 	}
 	string name				= 1;
@@ -306,7 +300,7 @@ message TableDef {
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
 	TableFunction tbl_func = 8;
-	repeated ComputeIndexInfo compute_index_infos = 9;
+	repeated IndexInfo index_infos = 9;
 }
 
 message TableFunction{
@@ -504,7 +498,7 @@ message DeleteTableCtx {
 	bool canTruncate = 4;
 	bool isHideKey = 5;
 	int32 colIndex = 6;
-	repeated ComputeIndexInfo compute_index_infos = 7;
+	repeated IndexInfo index_infos = 7;
 	repeated string index_attrs = 8;
 }
 
@@ -598,7 +592,7 @@ message InsertValues {
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
 	ColDef composite_pkey = 7;
-	repeated ComputeIndexInfo compute_index_infos = 8;
+	repeated IndexInfo index_infos = 8;
 }
 
 message column{
@@ -763,9 +757,4 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
-}
-
-message IndexTableInfo {
-	string index_table_name = 1;
-	repeated ColDef cols = 2;
 }

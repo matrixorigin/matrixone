@@ -868,4 +868,5 @@ type ComputeIndexInfo struct {
 	Name      string
 	TableName string
 	Unique    bool
+	Field     []string
 }
