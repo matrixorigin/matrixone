@@ -207,7 +207,3 @@ set autocommit = 1;
 show variables like 'autocommit';
 Variable_name    Value
 autocommit    on
-set autocommit = 0;
-show variables like 'autocommit';
-Variable_name    Value
-autocommit    off

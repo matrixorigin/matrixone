@@ -107,5 +107,3 @@ set autocommit = off;
 show variables like 'autocommit';
 set autocommit = 1;
 show variables like 'autocommit';
-set autocommit = 0;
-show variables like 'autocommit';
