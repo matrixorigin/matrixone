@@ -3857,6 +3857,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
 		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
 		err = txn.Commit()
+		assert.Nil(t, err)
 		err = meta.GetSegment().RemoveEntry(meta)
 		assert.Nil(t, err)
 	}
@@ -3886,6 +3887,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
 		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
 		err = txn.Commit()
+		assert.Nil(t, err)
 	}
 
 	_, rel = tae.getRelation()
