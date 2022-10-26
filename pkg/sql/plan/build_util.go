@@ -84,6 +84,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date), Size: 4}, nil
+		case defines.MYSQL_TYPE_TIME:
+			return &plan.Type{Id: int32(types.T_time), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
 			return &plan.Type{Id: int32(types.T_datetime), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil

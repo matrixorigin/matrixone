@@ -432,6 +432,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
+		case types.T_time:
+			vs := make([]types.Time, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vector.GetValueAt[types.Time](vec, 0)
+					}
+				}
+			}
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+				return err
+			}
 		case types.T_datetime:
 			vs := make([]types.Datetime, rowCount)
 			{

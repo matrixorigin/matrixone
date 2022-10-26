@@ -125,6 +125,22 @@ var (
 		return vector.NewWithFixed(types.T_date.ToType(), ds, ns, TestUtilMp)
 	}
 
+	MakeTimeVector = func(values []string, nsp []uint64) *vector.Vector {
+		ds := make([]types.Time, len(values))
+		ns := nulls.Build(len(values), nsp...)
+		for i, s := range values {
+			if nulls.Contains(ns, uint64(i)) {
+				continue
+			}
+			d, err := types.ParseTime(s, 6)
+			if err != nil {
+				panic(err)
+			}
+			ds[i] = d
+		}
+		return vector.NewWithFixed(types.T_time.ToType(), ds, ns, TestUtilMp)
+	}
+
 	MakeDateTimeVector = func(values []string, nsp []uint64) *vector.Vector {
 		ds := make([]types.Datetime, len(values))
 		ns := nulls.Build(len(values), nsp...)
@@ -248,6 +264,14 @@ var (
 			panic(err)
 		}
 		return vector.NewConstFixed(dateType, length, d, TestUtilMp)
+	}
+
+	MakeScalarTime = func(value string, length int) *vector.Vector {
+		d, err := types.ParseTime(value, 6)
+		if err != nil {
+			panic(err)
+		}
+		return vector.NewConstFixed(timeType, length, d, TestUtilMp)
 	}
 
 	MakeScalarDateTime = func(value string, length int) *vector.Vector {
