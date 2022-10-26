@@ -9,7 +9,7 @@ t1    CREATE TABLE `t1` (\n`a` UUID DEFAULT NULL\n)
 drop table t1;
 drop table if exists t1;
 create table t1 (a int default uuid());
-[unknown result because it is related to issue#5414]
+invalid input: invalid default value for column 'a'
 drop table t1
 drop table if exists t2;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
