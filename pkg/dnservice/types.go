@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 // Option store option
@@ -33,4 +34,7 @@ type Service interface {
 	StartDNReplica(metadata.DNShard) error
 	// CloseDNReplica close the DNShard replica.
 	CloseDNReplica(shard metadata.DNShard) error
+
+	// GetTaskService returns taskservice
+	GetTaskService() (taskservice.TaskService, bool)
 }

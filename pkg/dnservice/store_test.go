@@ -98,7 +98,7 @@ func TestRemoveReplica(t *testing.T) {
 		thc.setCommandBatch(logservicepb.CommandBatch{
 			Commands: []logservicepb.ScheduleCommand{
 				{
-					ServiceType: logservicepb.DnService,
+					ServiceType: logservicepb.DNService,
 					ConfigChange: &logservicepb.ConfigChange{
 						ChangeType: logservicepb.RemoveReplica,
 						Replica: logservicepb.Replica{
@@ -201,7 +201,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	thc.setCommandBatch(logservicepb.CommandBatch{
 		Commands: []logservicepb.ScheduleCommand{
 			{
-				ServiceType: logservicepb.DnService,
+				ServiceType: logservicepb.DNService,
 				ConfigChange: &logservicepb.ConfigChange{
 					ChangeType: logservicepb.AddReplica,
 					Replica: logservicepb.Replica{
@@ -292,4 +292,11 @@ var nextID uint64
 
 func (thc *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return atomic.AddUint64(&nextID, 1), nil
+}
+
+func (thc *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservicepb.ClusterDetails, error) {
+	return logservicepb.ClusterDetails{}, nil
+}
+func (thc *testHAKeeperClient) GetClusterState(ctx context.Context) (logservicepb.CheckerState, error) {
+	return logservicepb.CheckerState{}, nil
 }

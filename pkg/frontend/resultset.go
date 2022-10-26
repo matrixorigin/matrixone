@@ -503,6 +503,8 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 		return strconv.FormatInt(int64(v), 10), nil
 	case uint:
 		return strconv.FormatUint(uint64(v), 10), nil
+	case types.Time:
+		return v.String(), nil
 	case types.Datetime:
 		return v.String(), nil
 	case bytejson.ByteJson:

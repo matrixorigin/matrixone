@@ -119,9 +119,10 @@ type ViewDef struct {
 }
 
 type ComputeIndexDef struct {
-	Names      []string
+	IndexNames []string
 	TableNames []string
 	Uniques    []bool
+	Fields     [][]string
 }
 
 type TableDef interface {

@@ -1,7 +1,7 @@
 service-type = "CN"
 
 [log]
-level = "error"
+level = "info"
 format = "json"
 max-size = 512
 
@@ -12,7 +12,8 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/cn"
 
 [[fileservice]]
 name = "S3"
@@ -21,7 +22,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/cn"
+data-dir = "mo-data/local/etl"
 
 [observability]
 disableTrace = true
