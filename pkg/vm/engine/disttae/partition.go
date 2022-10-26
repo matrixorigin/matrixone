@@ -32,14 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const (
-	index_PrimaryKey      = memtable.Text("primary key")
-	index_BlockID_Time_OP = memtable.Text("block id, time, op")
-)
-
-func NewPartition() *Partition {
+func NewPartition(
+	columnsIndexDefs []ColumnsIndexDef,
+) *Partition {
 	return &Partition{
-		data: memtable.NewTable[RowID, DataValue, *DataRow](),
+		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
+		columnsIndexDefs: columnsIndexDefs,
 	}
 }
 
@@ -249,6 +247,16 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			ts,
 			memtable.ToOrdered(opInsert),
 		})
+		// columns indexes
+		for _, def := range p.columnsIndexDefs {
+			index := memtable.Tuple{
+				def.Name,
+			}
+			for _, col := range def.Columns {
+				index = append(index, memtable.ToOrdered(tuple[col].Value))
+			}
+			indexes = append(indexes, index)
+		}
 
 		err = p.data.Upsert(tx, &DataRow{
 			rowID:   rowID,
@@ -265,6 +273,52 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	}
 
 	return nil
+}
+
+func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple) (rows []DataValue, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(tx, index, index)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, data)
+	}
+	return
+}
+
+func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable.Tuple) (rows []DataValue, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(
+		tx,
+		append(append(prefix[:0:0], prefix...), memtable.Min),
+		append(append(prefix[:0:0], prefix...), memtable.Max),
+	)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, data)
+	}
+	return
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
@@ -388,6 +442,7 @@ func (p *Partition) NewReader(
 		}
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
+
 	readers[0] = &PartitionReader{
 		typsMap:  mp,
 		iter:     p.data.NewIter(tx),
