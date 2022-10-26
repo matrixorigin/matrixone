@@ -214,7 +214,7 @@ import (
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT DOUBLECOLON
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT
@@ -5638,6 +5638,10 @@ simple_expr:
 |   CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
+    }
+|   expression DOUBLECOLON mo_cast_type
+    {
+        $$ = tree.NewCastExpr($1, $3)
     }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {

@@ -105,6 +105,10 @@ func (s *Scanner) Scan() (int, string) {
 			s.incN(2)
 			return ASSIGNMENT, ""
 		}
+		if s.peek(1) == ':' {
+			s.incN(2)
+			return DOUBLECOLON, ""
+		}
 		// Like mysql -h ::1 ?
 		return s.scanBindVar()
 	case ch == ';':
