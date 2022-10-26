@@ -355,7 +355,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
@@ -2107,7 +2107,13 @@ show_stmt:
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
+|   show_collation_stmt
 
+show_collation_stmt:
+    SHOW COLLATION like_opt where_expression_opt
+    {
+        $$ = &tree.ShowCollation{}  
+    }
 show_grants_stmt:
     SHOW GRANTS
     {
@@ -6768,50 +6774,47 @@ decimal_type:
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
-        Family: tree.FloatFamily,
+        		Family: tree.FloatFamily,
                 FamilyString: $1,
-        Width:  64,
-        Locale: &locale,
-        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Precision: $2.Precision,
-        },
+        	},
         }
     }
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        return 1
+        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        	return 1
         }
-        if $2.DisplayWith > 53 {
-            yylex.Error("For float(M), M must between 0 and 53.")
-                return 1
-        } else if $2.DisplayWith >= 24 {
+        if $2.DisplayWith >= 24 {
             $$ = &tree.T{
-            InternalType: tree.InternalType{
-            Family: tree.FloatFamily,
-            FamilyString: $1,
-            Width:  64,
-            Locale: &locale,
-            Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
-            DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
-            },
-        }
+            	InternalType: tree.InternalType{
+            		Family: tree.FloatFamily,
+            		FamilyString: $1,
+            		Width:  64,
+            		Locale: &locale,
+           			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+            		DisplayWith: $2.DisplayWith,
+            		Precision: $2.Precision,
+            	},
+            }
         } else {
             $$ = &tree.T{
-            InternalType: tree.InternalType{
-            Family: tree.FloatFamily,
-            FamilyString: $1,
-            Width:  32,
-            Locale: &locale,
-            Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
-            DisplayWith: $2.DisplayWith,
-            Precision: $2.Precision,
-            },
-                }
+            	InternalType: tree.InternalType{
+            		Family: tree.FloatFamily,
+            		FamilyString: $1,
+            		Width:  32,
+            		Locale: &locale,
+            		Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+            		DisplayWith: $2.DisplayWith,
+            		Precision: $2.Precision,
+            	},
+            }
         }
     }
 

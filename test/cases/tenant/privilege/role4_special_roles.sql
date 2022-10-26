@@ -30,5 +30,25 @@ revoke show databases on account * from public;
 grant create account on account * to rolex;
 grant drop account on account * to rolex;
 grant alter account on account * to rolex;
+
+drop user root;
+drop user dump;
+drop user root,dump;
+
+drop role moadmin;
+drop role public;
+drop role moadmin,public;
+drop role accountadmin;
+drop role if exists accountadmin;
+drop account if exists acc1;
+create account acc1 admin_name 'admin' identified by '111';
+
+-- @session:id=2&user=acc1:admin&password=111
+drop user admin;
+drop role accountadmin;
+drop role public;
+-- @session
+drop account acc1;
+drop account sys;
 drop role rolex;
 drop user userx;

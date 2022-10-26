@@ -27,6 +27,21 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// CheckInsertVector  vector.data will not be nil when insert rows
+func CheckInsertVector(v *Vector, m *mpool.MPool) *Vector {
+	if v.data == nil && v.Typ.Oid != types.T_any && v.Length() > 0 {
+		newVec := New(v.Typ)
+		newVec.isConst = v.isConst
+		val := GetInitConstVal(v.Typ)
+		for i := 0; i < v.Length(); i++ {
+			newVec.Append(val, true, m)
+		}
+		newVec.length = v.length
+		return newVec
+	}
+	return v
+}
+
 func MustTCols[T types.FixedSizeT](v *Vector) []T {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
@@ -291,7 +306,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 	}
 }
 
-// XXX extend will extend the vector's Data to accormordate rows more entry.
+// XXX extend will extend the vector's Data to accommodate rows more entry.
 func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	origSz := len(v.data)
 	growSz := rows * v.GetType().TypeSize()
@@ -320,6 +335,11 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
 	// extend the null map
+	v.extendNullBitmap(newRows)
+	return nil
+}
+
+func (v *Vector) extendNullBitmap(target int) {
 	if v.IsScalar() {
 		if v.IsScalarNull() {
 			v.Nsp = nulls.NewWithSize(1)
@@ -328,9 +348,8 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 			v.Nsp = &nulls.Nulls{}
 		}
 	} else {
-		nulls.TryExpand(v.Nsp, newRows)
+		nulls.TryExpand(v.Nsp, target)
 	}
-	return nil
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap

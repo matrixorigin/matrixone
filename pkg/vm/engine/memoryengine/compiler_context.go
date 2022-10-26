@@ -93,6 +93,10 @@ func (*CompilerContext) GetRootSql() string {
 	return ""
 }
 
+func (*CompilerContext) GetUserName() string {
+	return "root"
+}
+
 func (c *CompilerContext) GetAccountId() uint32 {
 	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
 		return v.(uint32)
