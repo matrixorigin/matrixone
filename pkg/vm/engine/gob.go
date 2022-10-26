@@ -71,6 +71,7 @@ func init() {
 	gob.Register(&plan.Const_Uval{})
 	gob.Register(&plan.Const_Fval{})
 	gob.Register(&plan.Const_Dateval{})
+	gob.Register(&plan.Const_Timeval{})
 	gob.Register(&plan.Const_Datetimeval{})
 	gob.Register(&plan.Const_Decimal64Val{})
 	gob.Register(&plan.Const_Decimal128Val{})

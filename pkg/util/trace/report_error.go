@@ -18,11 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
@@ -34,8 +34,8 @@ var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
 var _ CsvFields = (*MOErrorHolder)(nil)
 
 type MOErrorHolder struct {
-	Error     error         `json:"error"`
-	Timestamp util.TimeNano `json:"timestamp"`
+	Error     error     `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 func (h *MOErrorHolder) GetName() string {
@@ -54,7 +54,7 @@ func (h *MOErrorHolder) GetRow() *export.Row { return errorView.OriginTable.GetR
 func (h *MOErrorHolder) CsvFields(row *export.Row) []string {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, errorView.Table)
-	row.SetColumnVal(timestampCol, nanoSec2DatetimeString(h.Timestamp))
+	row.SetColumnVal(timestampCol, time2DatetimeString(h.Timestamp))
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
 	row.SetColumnVal(errorCol, h.Error.Error())
@@ -83,6 +83,6 @@ func ReportError(ctx context.Context, err error, depth int) {
 	if ctx == nil {
 		ctx = DefaultContext()
 	}
-	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
+	e := &MOErrorHolder{Error: err, Timestamp: time.Now()}
 	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }

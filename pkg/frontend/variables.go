@@ -1162,6 +1162,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("sql_safe_updates", 0, 1, false),
 		Default:           int64(0),
 	},
+	"profiling": {
+		Name:              "profiling",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling", 0, 1, false),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

@@ -100,6 +100,18 @@ func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
 	return result
 }
 
+func parseTaskTableUserCmd(cmd []byte) pb.TaskTableUser {
+	if parseCmdTag(cmd) != pb.TaskTableUserUpdate {
+		panic("not a task table user update")
+	}
+	payload := cmd[headerSize:]
+	var result pb.TaskTableUser
+	if err := result.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return result
+}
+
 func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 	b := pb.CommandBatch{
 		Term:     term,
@@ -132,10 +144,30 @@ func parseSetStateCmd(cmd []byte) pb.HAKeeperState {
 	return pb.HAKeeperState(binaryEnc.Uint32(cmd[headerSize:]))
 }
 
+func parseSetInitTaskStateCmd(cmd []byte) pb.TaskInitState {
+	return pb.TaskInitState(binaryEnc.Uint32(cmd[headerSize:]))
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
 	binaryEnc.PutUint32(cmd[headerSize:], uint32(state))
+	return cmd
+}
+
+func GetSetInitTaskStateCmd(state pb.TaskInitState) []byte {
+	cmd := make([]byte, headerSize+4)
+	binaryEnc.PutUint32(cmd, uint32(pb.SetInitTaskStateUpdate))
+	binaryEnc.PutUint32(cmd[headerSize:], uint32(state))
+	return cmd
+}
+
+func GetTaskTableUserCmd(user pb.TaskTableUser) []byte {
+	cmd := make([]byte, headerSize+user.Size())
+	binaryEnc.PutUint32(cmd, uint32(pb.TaskTableUserUpdate))
+	if _, err := user.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
 	return cmd
 }
 
@@ -232,6 +264,7 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 		return sm.Result{Data: data}
 	}
 	return sm.Result{}
+
 }
 
 func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
@@ -309,6 +342,51 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	default:
 		panic("unknown HAKeeper state")
 	}
+}
+
+func (s *stateMachine) handleSetInitTaskStateCmd(cmd []byte) sm.Result {
+	re := func() sm.Result {
+		data := make([]byte, 4)
+		binaryEnc.PutUint32(data, uint32(s.state.TaskInitState))
+		return sm.Result{Data: data}
+	}
+	defer func() {
+		plog.Infof("Init Task Table is in %s state", s.state.TaskInitState)
+	}()
+	state := parseSetInitTaskStateCmd(cmd)
+	switch s.state.TaskInitState {
+	case pb.TaskInitNotStart:
+		return re()
+	case pb.TaskInitStarted:
+		if state == pb.TaskInitFailed || state == pb.TaskInitCompleted {
+			s.state.TaskInitState = state
+			return sm.Result{}
+		}
+		return re()
+	case pb.TaskInitFailed:
+		return re()
+	case pb.TaskInitCompleted:
+		return re()
+	default:
+		panic("unknown task table init state")
+	}
+}
+
+func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
+	result := sm.Result{Value: uint64(s.state.TaskInitState)}
+	if s.state.TaskInitState != pb.TaskInitNotStart {
+		return result
+	}
+	req := parseTaskTableUserCmd(cmd)
+	if req.Username == "" || req.Password == "" {
+		panic("task table username and password cannot be null")
+	}
+
+	s.state.TaskTableUser = req
+	plog.Infof("task table user set, InitTaskState in TaskTableInitStarted state")
+
+	s.state.TaskInitState = pb.TaskInitStarted
+	return result
 }
 
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
@@ -390,8 +468,14 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUpdateCommandsCmd(cmd), nil
 	case pb.SetStateUpdate:
 		return s.handleSetStateCmd(cmd), nil
+	case pb.SetInitTaskStateUpdate:
+		s.assertState()
+		return s.handleSetInitTaskStateCmd(cmd), nil
 	case pb.InitialClusterUpdate:
 		return s.handleInitialClusterRequestCmd(cmd), nil
+	case pb.TaskTableUserUpdate:
+		s.assertState()
+		return s.handleTaskTableUserCmd(cmd), nil
 	default:
 		panic(moerr.NewInvalidInput("unknownn haKeeper cmd '%v'", cmd))
 	}
@@ -399,12 +483,14 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
-		Tick:        s.state.Tick,
-		ClusterInfo: s.state.ClusterInfo,
-		DNState:     s.state.DNState,
-		LogState:    s.state.LogState,
-		CNState:     s.state.CNState,
-		State:       s.state.State,
+		Tick:          s.state.Tick,
+		ClusterInfo:   s.state.ClusterInfo,
+		DNState:       s.state.DNState,
+		LogState:      s.state.LogState,
+		CNState:       s.state.CNState,
+		State:         s.state.State,
+		TaskState:     s.state.TaskInitState,
+		TaskTableUser: s.state.TaskTableUser,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -433,6 +519,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			UUID:           uuid,
 			Tick:           info.Tick,
 			ServiceAddress: info.ServiceAddress,
+			SQLAddress:     info.SQLAddress,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}

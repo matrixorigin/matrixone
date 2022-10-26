@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
 	"github.com/google/uuid"
@@ -36,23 +36,23 @@ var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 var _ CsvFields = (*StatementInfo)(nil)
 
 type StatementInfo struct {
-	StatementID          [16]byte      `json:"statement_id"`
-	TransactionID        [16]byte      `json:"transaction_id"`
-	SessionID            [16]byte      `jons:"session_id"`
-	Account              string        `json:"account"`
-	User                 string        `json:"user"`
-	Host                 string        `json:"host"`
-	Database             string        `json:"database"`
-	Statement            string        `json:"statement"`
-	StatementFingerprint string        `json:"statement_fingerprint"`
-	StatementTag         string        `json:"statement_tag"`
-	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
+	StatementID          [16]byte  `json:"statement_id"`
+	TransactionID        [16]byte  `json:"transaction_id"`
+	SessionID            [16]byte  `jons:"session_id"`
+	Account              string    `json:"account"`
+	User                 string    `json:"user"`
+	Host                 string    `json:"host"`
+	Database             string    `json:"database"`
+	Statement            string    `json:"statement"`
+	StatementFingerprint string    `json:"statement_fingerprint"`
+	StatementTag         string    `json:"statement_tag"`
+	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
 
 	// after
 	Status     StatementInfoStatus `json:"status"`
 	Error      error               `json:"error"`
-	ResponseAt util.TimeNano       `json:"response_at"`
-	Duration   uint64              `json:"duration"` // unit: ns
+	ResponseAt time.Time           `json:"response_at"`
+	Duration   time.Duration       `json:"duration"` // unit: ns
 	ExecPlan   any                 `json:"exec_plan"`
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
@@ -107,8 +107,8 @@ func (s *StatementInfo) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
 	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
 	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(reqAtCol, nanoSec2DatetimeString(s.RequestAt))
-	row.SetColumnVal(respAtCol, nanoSec2DatetimeString(s.ResponseAt))
+	row.SetColumnVal(reqAtCol, time2DatetimeString(s.RequestAt))
+	row.SetColumnVal(respAtCol, time2DatetimeString(s.ResponseAt))
 	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
 	row.SetColumnVal(statusCol, s.Status.String())
 	if s.Error != nil {
@@ -194,14 +194,13 @@ var EndStatement = func(ctx context.Context, err error) {
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
-	endTime := util.NowNS()
 	if !s.end {
 		// do report
 		s.mux.Lock()
 		defer s.mux.Unlock()
 		s.end = true
-		s.ResponseAt = endTime
-		s.Duration = s.ResponseAt - s.RequestAt
+		s.ResponseAt = time.Now()
+		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

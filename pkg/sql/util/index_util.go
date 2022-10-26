@@ -204,6 +204,15 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 			}
 		}
 		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+	case types.T_time:
+		s := vector.MustTCols[types.Time](v)
+		ns := make([]types.Time, 0)
+		for i, b := range s {
+			if !nulls.Contains(v.Nsp, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustTCols[types.Datetime](v)
 		ns := make([]types.Datetime, 0)

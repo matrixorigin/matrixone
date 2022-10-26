@@ -24,14 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_showSchema(t *testing.T) {
-
-	t.Logf("%s", sqlCreateStatementInfoTable)
-	t.Logf("%s", sqlCreateSpanInfoTable)
-	t.Logf("%s", sqlCreateLogInfoTable)
-	t.Logf("%s", sqlCreateErrorInfoTable)
-}
-
 var _ ie.InternalExecutor = &dummySqlExecutor{}
 
 type dummySqlExecutor struct {
@@ -115,6 +107,44 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 					break loop
 				}
 			}
+		})
+	}
+}
+
+func TestGetSchemaForAccount(t *testing.T) {
+	type args struct {
+		account string
+	}
+	tests := []struct {
+		name     string
+		args     args
+		wantPath string
+	}{
+		{
+			name: "with_account_user1",
+			args: args{
+				account: "user1",
+			},
+			wantPath: "/user1/*/*/*/*/statement_info/*.csv",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schemas := GetSchemaForAccount(tt.args.account)
+			found := false
+			for _, sche := range schemas {
+				t.Logf("schma: %s", sche)
+				if strings.Contains(sche, tt.wantPath) {
+					found = true
+				}
+			}
+			require.Equal(t, 1, len(schemas))
+			require.Equal(t, true, found)
+			found = false
+			if strings.Contains(SingleStatementTable.ToCreateSql(true), "/*/*/*/*/*/statement_info/*.csv") {
+				found = true
+			}
+			require.Equal(t, true, found)
 		})
 	}
 }
