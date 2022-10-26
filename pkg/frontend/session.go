@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
@@ -888,6 +889,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
@@ -1419,12 +1428,19 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 			})
 		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			fields := make([]*plan.Field, len(indexDef.Fields))
+			for i := range indexDef.Fields {
+				fields[i] = &plan.Field{
+					ColNames: indexDef.Fields[i],
+				}
+			}
 			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_ComputeIndex{
-					ComputeIndex: &plan2.ComputeIndexDef{
-						Names:      indexDef.Names,
+				Def: &plan2.TableDef_DefType_Idx{
+					Idx: &plan2.IndexDef{
+						IndexNames: indexDef.IndexNames,
 						TableNames: indexDef.TableNames,
 						Uniques:    indexDef.Uniques,
+						Fields:     fields,
 					},
 				},
 			})

@@ -5821,7 +5821,7 @@ mysql_cast_type:
                 Family: tree.TimeFamily,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Precision: 0,
+                Precision: $2,
                 TimePrecisionIsSet: false,
                 Locale: &locale,
                 Oid: uint32(defines.MYSQL_TYPE_TIME),
@@ -7044,19 +7044,24 @@ time_type:
             },
         }
     }
-|   TIME length_opt
+|   TIME timestamp_option_opt
     {
         locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.TimeFamily,
-                FamilyString: $1,
-                DisplayWith: $2,
-                Precision: 0,
-                TimePrecisionIsSet: false,
-                Locale: &locale,
-                Oid: uint32(defines.MYSQL_TYPE_TIME),
+        if $2 < 0 || $2 > 6 {
+                yylex.Error("For Time(fsp), fsp must in [0, 6]")
+                return 1
+                } else {
+                $$ = &tree.T{
+                    InternalType: tree.InternalType{
+                Family:             tree.TimeFamily,
+                Precision:          $2,
+                    FamilyString: $1,
+                    DisplayWith: 26,
+                TimePrecisionIsSet: true,
+                Locale:             &locale,
+                Oid:                uint32(defines.MYSQL_TYPE_TIME),
             },
+        }
         }
     }
 |   TIMESTAMP timestamp_option_opt

@@ -16,10 +16,20 @@ package logservice
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/zap"
+)
+
+var (
+	initTaskCodes = []task.TaskCode{
+		task.TaskCode_TraceInit,
+		task.TaskCode_MetricInit,
+		task.TaskCode_SysViewInit,
+		task.TaskCode_FrontendInit,
+	}
 )
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
@@ -61,5 +71,32 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		s.logger.Info("initial cluster info set")
 		break
 	}
+	for i := 0; i < checkBootstrapCycles; i++ {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if err := s.createInitTasks(ctx); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	return nil
+}
+
+func (s *Service) createInitTasks(ctx context.Context) error {
+	tasks := make([]task.TaskMetadata, 0, len(initTaskCodes))
+	for _, init := range initTaskCodes {
+		tasks = append(tasks, task.TaskMetadata{
+			ID:       init.String(),
+			Executor: uint32(init),
+		})
+	}
+	if err := s.store.taskScheduler.Create(ctx, tasks); err != nil {
+		s.logger.Error("failed to create init tasks", zap.Error(err))
+		return err
+	}
+	s.logger.Info("init tasks created")
 	return nil
 }

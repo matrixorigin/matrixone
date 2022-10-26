@@ -14,7 +14,8 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/cn"
 
 [[fileservice]]
 name = "S3"
@@ -23,7 +24,7 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/etl"
+data-dir = "mo-data/local/etl"
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
