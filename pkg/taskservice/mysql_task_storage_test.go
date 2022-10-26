@@ -52,8 +52,11 @@ func TestBuildWhereClause(t *testing.T) {
 				hasTaskParentIDCond: true,
 				taskParentTaskIDOp:  GE,
 				taskParentTaskID:    "ab",
+				hasTaskExecutorCond: true,
+				taskExecutorOp:      GE,
+				taskExecutor:        1,
 			},
-			expected: "task_id=1 AND task_runner='abc' AND task_status=0 AND task_epoch<=100 AND task_parent_id>='ab'",
+			expected: "task_id=1 AND task_runner='abc' AND task_status=0 AND task_epoch<=100 AND task_parent_id>='ab' AND task_metadata_executor>=1",
 		},
 		{
 			condition: conditions{
@@ -66,8 +69,11 @@ func TestBuildWhereClause(t *testing.T) {
 				hasTaskParentIDCond: true,
 				taskParentTaskIDOp:  GE,
 				taskParentTaskID:    "ab",
+				hasTaskExecutorCond: true,
+				taskExecutorOp:      LE,
+				taskExecutor:        1,
 			},
-			expected: "task_runner='abc' AND task_status=0 AND task_parent_id>='ab'",
+			expected: "task_runner='abc' AND task_status=0 AND task_parent_id>='ab' AND task_metadata_executor<=1",
 		},
 	}
 

@@ -1,7 +1,7 @@
 service-type = "CN"
 
 [log]
-level = "error"
+level = "info"
 format = "json"
 max-size = 512
 
@@ -12,7 +12,8 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/local/cn"
 
 [[fileservice]]
 name = "S3"
