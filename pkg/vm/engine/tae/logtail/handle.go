@@ -301,16 +301,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	return bat
 }
 
-func addDBIDVector(bat *containers.Batch) {
-	bat.AddVector(SnapshotAttr_DBID, containers.MakeVector(types.T_uint64.ToType(), false))
-}
-func addTIDVector(bat *containers.Batch) {
-	bat.AddVector(SnapshotAttr_TID, containers.MakeVector(types.T_uint64.ToType(), false))
-}
-func addSegIDVector(bat *containers.Batch) {
-	bat.AddVector(SnapshotAttr_SegID, containers.MakeVector(types.T_uint64.ToType(), false))
-}
-
 // consume containers.Batch to construct api batch
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
 	mobat := containers.CopyToMoBatch(bat)
@@ -548,42 +538,29 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 		dbInsBatch:         makeRespBatchFromSchema(catalog.SystemDBSchema),
 		dbInsTxnBatch:      makeRespBatchFromSchema(TxnNodeSchema),
 		dbDelBatch:         makeRespBatchFromSchema(DelSchema),
-		dbDelTxnBatch:      makeRespBatchFromSchema(TxnNodeSchema),
+		dbDelTxnBatch:      makeRespBatchFromSchema(DBDNSchema),
 		tblInsBatch:        makeRespBatchFromSchema(catalog.SystemTableSchema),
 		tblInsTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
 		tblDelBatch:        makeRespBatchFromSchema(DelSchema),
-		tblDelTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		tblDelTxnBatch:     makeRespBatchFromSchema(TblDNSchema),
 		tblColInsBatch:     makeRespBatchFromSchema(catalog.SystemColumnSchema),
 		tblColDelBatch:     makeRespBatchFromSchema(DelSchema),
 		segInsBatch:        makeRespBatchFromSchema(SegSchema),
-		segInsTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		segInsTxnBatch:     makeRespBatchFromSchema(SegDNSchema),
 		segDelBatch:        makeRespBatchFromSchema(DelSchema),
-		segDelTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		segDelTxnBatch:     makeRespBatchFromSchema(SegDNSchema),
 		blkMetaInsBatch:    makeRespBatchFromSchema(BlkMetaSchema),
-		blkMetaInsTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+		blkMetaInsTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
 		blkMetaDelBatch:    makeRespBatchFromSchema(DelSchema),
-		blkMetaDelTxnBatch: makeRespBatchFromSchema(TxnNodeSchema),
+		blkMetaDelTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
 	}
-	addTIDVector(b.segInsTxnBatch)
-	addTIDVector(b.segDelTxnBatch)
-	addTIDVector(b.blkMetaInsTxnBatch)
-	addTIDVector(b.blkMetaDelTxnBatch)
-	addTIDVector(b.tblDelTxnBatch)
-	addDBIDVector(b.segInsTxnBatch)
-	addDBIDVector(b.segDelTxnBatch)
-	addDBIDVector(b.blkMetaInsTxnBatch)
-	addDBIDVector(b.blkMetaDelTxnBatch)
-	addDBIDVector(b.tblDelTxnBatch)
-	addDBIDVector(b.dbDelTxnBatch)
-	addSegIDVector(b.blkMetaInsTxnBatch)
-	addSegIDVector(b.blkMetaDelTxnBatch)
 	b.DatabaseFn = b.VisitDB
 	b.TableFn = b.VisitTable
 	b.SegmentFn = b.VisitSeg
 	b.BlockFn = b.VisitBlk
 	return b
 }
-func (b *CheckpointLogtailRespBuilder) FlushBatches(fs *objectio.ObjectFS) {
+func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
 	name := blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
 	writer := blockio.NewWriter(fs, name)
 	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
@@ -641,6 +618,144 @@ func (b *CheckpointLogtailRespBuilder) FlushBatches(fs *objectio.ObjectFS) {
 		panic(err)
 	}
 	if _, err := writer.Sync(); err != nil {
+		panic(err)
+	}
+}
+
+func (b *CheckpointLogtailRespBuilder) ReadFromFS(fs *objectio.ObjectFS) {
+	name := blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
+	reader, err := blockio.NewReader(fs, name)
+	if err != nil {
+		panic(err)
+	}
+	metas, err := reader.ReadMetas(nil) //todo mpool
+	if err != nil {
+		panic(err)
+	}
+	if b.dbInsBatch, err = reader.LoadBlkColumnsByMeta(
+		catalog.SystemDBSchema.Types(),
+		catalog.SystemDBSchema.AllNames(),
+		catalog.SystemDBSchema.AllNullables(),
+		metas[0]); err != nil {
+		panic(err)
+	}
+	if b.dbInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		TxnNodeSchema.Types(),
+		TxnNodeSchema.AllNames(),
+		TxnNodeSchema.AllNullables(),
+		metas[1]); err != nil {
+		panic(err)
+	}
+	if b.dbDelBatch, err = reader.LoadBlkColumnsByMeta(
+		DelSchema.Types(),
+		DelSchema.AllNames(),
+		DelSchema.AllNullables(),
+		metas[2]); err != nil {
+		panic(err)
+	}
+	if b.dbDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		DBDNSchema.Types(),
+		DBDNSchema.AllNames(),
+		DBDNSchema.AllNullables(),
+		metas[3]); err != nil {
+		panic(err)
+	}
+	if b.tblInsBatch, err = reader.LoadBlkColumnsByMeta(
+		catalog.SystemTableSchema.Types(),
+		catalog.SystemTableSchema.AllNames(),
+		catalog.SystemTableSchema.AllNullables(),
+		metas[4]); err != nil {
+		panic(err)
+	}
+	if b.tblInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		TxnNodeSchema.Types(),
+		TxnNodeSchema.AllNames(),
+		TxnNodeSchema.AllNullables(),
+		metas[5]); err != nil {
+		panic(err)
+	}
+	if b.tblDelBatch, err = reader.LoadBlkColumnsByMeta(
+		DelSchema.Types(),
+		DelSchema.AllNames(),
+		DelSchema.AllNullables(),
+		metas[6]); err != nil {
+		panic(err)
+	}
+	if b.tblDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		TblDNSchema.Types(),
+		TblDNSchema.AllNames(),
+		TblDNSchema.AllNullables(),
+		metas[7]); err != nil {
+		panic(err)
+	}
+	if b.tblColInsBatch, err = reader.LoadBlkColumnsByMeta(
+		catalog.SystemColumnSchema.Types(),
+		catalog.SystemColumnSchema.AllNames(),
+		catalog.SystemColumnSchema.AllNullables(),
+		metas[8]); err != nil {
+		panic(err)
+	}
+	if b.tblColDelBatch, err = reader.LoadBlkColumnsByMeta(
+		DelSchema.Types(),
+		DelSchema.AllNames(),
+		DelSchema.AllNullables(),
+		metas[9]); err != nil {
+		panic(err)
+	}
+	if b.segInsBatch, err = reader.LoadBlkColumnsByMeta(
+		SegSchema.Types(),
+		SegSchema.AllNames(),
+		SegSchema.AllNullables(),
+		metas[10]); err != nil {
+		panic(err)
+	}
+	if b.segInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		SegDNSchema.Types(),
+		SegDNSchema.AllNames(),
+		SegDNSchema.AllNullables(),
+		metas[11]); err != nil {
+		panic(err)
+	}
+	if b.segDelBatch, err = reader.LoadBlkColumnsByMeta(
+		DelSchema.Types(),
+		DelSchema.AllNames(),
+		DelSchema.AllNullables(),
+		metas[12]); err != nil {
+		panic(err)
+	}
+	if b.segDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		SegDNSchema.Types(),
+		SegDNSchema.AllNames(),
+		SegDNSchema.AllNullables(),
+		metas[13]); err != nil {
+		panic(err)
+	}
+	if b.blkMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
+		BlkMetaSchema.Types(),
+		BlkMetaSchema.AllNames(),
+		BlkMetaSchema.AllNullables(),
+		metas[14]); err != nil {
+		panic(err)
+	}
+	if b.blkMetaInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		BlkDNSchema.Types(),
+		BlkDNSchema.AllNames(),
+		BlkDNSchema.AllNullables(),
+		metas[15]); err != nil {
+		panic(err)
+	}
+	if b.blkMetaDelBatch, err = reader.LoadBlkColumnsByMeta(
+		DelSchema.Types(),
+		DelSchema.AllNames(),
+		DelSchema.AllNullables(),
+		metas[16]); err != nil {
+		panic(err)
+	}
+	if b.blkMetaDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
+		BlkDNSchema.Types(),
+		BlkDNSchema.AllNames(),
+		BlkDNSchema.AllNullables(),
+		metas[17]); err != nil {
 		panic(err)
 	}
 }

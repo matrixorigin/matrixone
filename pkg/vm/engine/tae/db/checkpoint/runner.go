@@ -161,7 +161,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 		panic(err)
 	}
 	fs := r.catalog.GetFS()
-	builder.FlushBatches(fs)
+	builder.WriteToFS(fs)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {

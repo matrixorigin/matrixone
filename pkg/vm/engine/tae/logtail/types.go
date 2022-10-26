@@ -49,6 +49,10 @@ var (
 	DelSchema     *catalog.Schema
 	SegSchema     *catalog.Schema
 	TxnNodeSchema *catalog.Schema
+	DBDNSchema *catalog.Schema
+	TblDNSchema *catalog.Schema
+	SegDNSchema *catalog.Schema
+	BlkDNSchema *catalog.Schema
 )
 
 var (
@@ -78,6 +82,88 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),
 		types.New(types.T_uint32, 0, 0, 0),
 	}
+	DBDNSchemaAttr = []string{
+		txnbase.SnapshotAttr_LogIndex_LSN,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
+		txnbase.SnapshotAttr_LogIndex_CSN,
+		txnbase.SnapshotAttr_LogIndex_Size,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+	}
+	DBDNSchemaType = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+	}
+	TblDNSchemaAttr = []string{
+		txnbase.SnapshotAttr_LogIndex_LSN,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
+		txnbase.SnapshotAttr_LogIndex_CSN,
+		txnbase.SnapshotAttr_LogIndex_Size,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+	}
+	TblDNSchemaType = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+	}
+	SegmentDNSchemaAttr = []string{
+		txnbase.SnapshotAttr_LogIndex_LSN,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
+		txnbase.SnapshotAttr_LogIndex_CSN,
+		txnbase.SnapshotAttr_LogIndex_Size,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+	}
+	SegmentDNSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+	}
+	BlockDNSchemaAttr = []string{
+		txnbase.SnapshotAttr_LogIndex_LSN,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
+		txnbase.SnapshotAttr_LogIndex_CSN,
+		txnbase.SnapshotAttr_LogIndex_Size,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		SnapshotAttr_SegID,
+	}
+	BlockDNSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint64, 0, 0, 0),
+	}
 )
 
 func init() {
@@ -102,7 +188,6 @@ func init() {
 	DelSchema = catalog.NewEmptySchema("del")
 
 	SegSchema = catalog.NewEmptySchema("segment")
-
 	for i, colname := range SegmentSchemaAttr {
 		if i == 0 {
 			if err := SegSchema.AppendPKCol(colname, SegmentSchemaTypes[i], 0); err != nil {
@@ -114,8 +199,8 @@ func init() {
 			}
 		}
 	}
-	TxnNodeSchema = catalog.NewEmptySchema("segment")
 
+	TxnNodeSchema = catalog.NewEmptySchema("txn_node")
 	for i, colname := range TxnNodeSchemaAttr {
 		if i == 0 {
 			if err := TxnNodeSchema.AppendPKCol(colname, TxnNodeSchemaTypes[i], 0); err != nil {
@@ -123,6 +208,58 @@ func init() {
 			}
 		} else {
 			if err := TxnNodeSchema.AppendCol(colname, TxnNodeSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	
+	DBDNSchema = catalog.NewEmptySchema("db_dn")
+	for i, colname := range DBDNSchemaAttr {
+		if i == 0 {
+			if err := DBDNSchema.AppendPKCol(colname, DBDNSchemaType[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := DBDNSchema.AppendCol(colname, DBDNSchemaType[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	TblDNSchema = catalog.NewEmptySchema("table_dn")
+	for i, colname := range TblDNSchemaAttr {
+		if i == 0 {
+			if err := TblDNSchema.AppendPKCol(colname, TblDNSchemaType[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := TblDNSchema.AppendCol(colname, TblDNSchemaType[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	SegDNSchema = catalog.NewEmptySchema("segment_dn")
+	for i, colname := range SegmentDNSchemaAttr {
+		if i == 0 {
+			if err := SegDNSchema.AppendPKCol(colname, SegmentDNSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := SegDNSchema.AppendCol(colname, SegmentDNSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	BlkDNSchema = catalog.NewEmptySchema("block_dn")
+	for i, colname := range BlockDNSchemaAttr {
+		if i == 0 {
+			if err := BlkDNSchema.AppendPKCol(colname, BlockDNSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := BlkDNSchema.AppendCol(colname, BlockDNSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

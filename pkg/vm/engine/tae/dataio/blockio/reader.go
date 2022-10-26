@@ -81,6 +81,36 @@ func (r *Reader) LoadBlkColumns(
 	return bat, err
 }
 
+func (r *Reader) LoadBlkColumnsByMeta(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject) (*containers.Batch, error) {
+	bat := containers.NewBatch()
+
+	for i := range colNames {
+		vec := containers.MakeVector(colTypes[i], nullables[i], nil)
+		bat.AddVector(colNames[i], vec)
+		if r.meta.GetLoc().End() == 0 {
+			continue
+		}
+		col, err := block.GetColumn(uint16(i))
+		if err != nil {
+			return bat, err
+		}
+		data, err := col.GetData(nil)
+		if err != nil {
+			return bat, err
+		}
+		r := bytes.NewBuffer(data.Entries[0].Data)
+		if _, err = vec.ReadFrom(r); err != nil {
+			return bat, err
+		}
+		bat.Vecs[i] = vec
+	}
+	return bat, nil
+}
+
 func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
 	extents[0] = r.meta.GetLoc()
@@ -89,6 +119,13 @@ func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 		return nil, err
 	}
 	return block[0], err
+}
+
+func (r *Reader) ReadMetas(m *mpool.MPool) ([]objectio.BlockObject, error) {
+	extents := make([]objectio.Extent, 1)
+	extents[0] = r.meta.GetLoc()
+	block, err := r.reader.ReadMeta(extents, m)
+	return block, err
 }
 
 func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {

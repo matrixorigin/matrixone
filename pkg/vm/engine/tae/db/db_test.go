@@ -3835,6 +3835,8 @@ func TestSnapshotBatch(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	maxTs := txn.GetStartTS()
 	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	builder.WriteToFS(tae.Fs)
+	builder.ReadFromFS(tae.Fs)
 
 	ctlg := catalog.NewEmptyCatalog()
 	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
@@ -3869,6 +3871,8 @@ func TestSnapshotBatch(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	maxTs = txn.GetStartTS()
 	builder, _ = logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	builder.WriteToFS(tae.Fs)
+	builder.ReadFromFS(tae.Fs)
 	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
 	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
 	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
