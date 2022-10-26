@@ -50,10 +50,7 @@ type timeBasedPolicy struct {
 
 func (p *timeBasedPolicy) Check(last types.TS) bool {
 	physical := last.Physical()
-	if physical > time.Now().UTC().UnixNano()-p.interval.Nanoseconds() {
-		return false
-	}
-	return true
+	return physical <= time.Now().UTC().UnixNano()-p.interval.Nanoseconds()
 }
 
 type runner struct {
@@ -72,6 +69,7 @@ type runner struct {
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	scheduler tasks.TaskScheduler
+	observers *observers
 
 	stopper *stopper.Stopper
 
@@ -79,15 +77,15 @@ type runner struct {
 		sync.RWMutex
 		entries    *btree.BTreeG[*CheckpointEntry]
 		prevGlobal *CheckpointEntry
-		maxTS      types.TS
 	}
 
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *timeBasedPolicy
 
-	dirtyEntryQueue sm.Queue
-	waitQueue       sm.Queue
-	checkpointQueue sm.Queue
+	dirtyEntryQueue     sm.Queue
+	waitQueue           sm.Queue
+	checkpointQueue     sm.Queue
+	postCheckpointQueue sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -102,6 +100,7 @@ func NewRunner(
 		catalog:   catalog,
 		scheduler: scheduler,
 		source:    source,
+		observers: new(observers),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.start.Less(b.start)
@@ -119,6 +118,7 @@ func NewRunner(
 	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
 	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
 	r.checkpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onCheckpointEntries)
+	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	return r
 }
 
@@ -138,12 +138,43 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	}
 
 	if !check() {
+		logutil.Infof("%s is waiting", entry.String())
 		return
 	}
 
-	// TODO: do checkpoint
+	now := time.Now()
+	if entry.IsIncremental() {
+		r.doIncrementalCheckpoint(entry)
+	} else {
+		r.doGlobalCheckpoint(entry)
+	}
+
 	entry.SetState(ST_Finished)
-	logutil.Infof("%s is done", entry.String())
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+
+	r.postCheckpointQueue.Enqueue(entry)
+}
+
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
+	// TODO
+}
+
+func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
+	// TODO
+}
+
+func (r *runner) onPostCheckpointEntries(entries ...any) {
+	for _, e := range entries {
+		entry := e.(*CheckpointEntry)
+
+		// 1. broadcast event
+		r.observers.OnNewCheckpoint(entry.GetEnd())
+
+		// TODO:
+		// 2. remove previous checkpoint
+
+		logutil.Infof("Post %s", entry.String())
+	}
 }
 
 func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
@@ -243,28 +274,6 @@ func (r *runner) tryScheduleCheckpoint() {
 	if r.incrementalPolicy.Check(entry.GetEnd()) {
 		r.tryScheduleIncrementalCheckpoint(entry.GetEnd())
 	}
-
-	return
-}
-
-func (r *runner) SetCheckpointEntry(entry *CheckpointEntry) {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	r.storage.entries.Set(entry)
-	r.storage.maxTS = entry.end
-}
-
-func (r *runner) LogCheckpointEntry(entry *CheckpointEntry) {
-	r.storage.Lock()
-	defer r.storage.Unlock()
-	r.storage.entries.Set(entry)
-	r.storage.maxTS = entry.end
-}
-
-func (r *runner) GetLastCheckpointTS() types.TS {
-	r.storage.RLock()
-	defer r.storage.RUnlock()
-	return r.storage.maxTS
 }
 
 func (r *runner) fillDefaults() {
@@ -385,6 +394,7 @@ func (r *runner) EnqueueWait(item any) (err error) {
 
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
+		r.postCheckpointQueue.Start()
 		r.checkpointQueue.Start()
 		r.dirtyEntryQueue.Start()
 		r.waitQueue.Start()
@@ -399,6 +409,7 @@ func (r *runner) Stop() {
 		r.stopper.Stop()
 		r.dirtyEntryQueue.Stop()
 		r.checkpointQueue.Stop()
+		r.postCheckpointQueue.Stop()
 		r.waitQueue.Stop()
 	})
 }

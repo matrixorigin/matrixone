@@ -18,6 +18,12 @@ import "time"
 
 type Option func(*runner)
 
+func WithObserver(o Observer) Option {
+	return func(r *runner) {
+		r.observers.add(o)
+	}
+}
+
 func WithCollectInterval(interval time.Duration) Option {
 	return func(r *runner) {
 		r.options.collectInterval = interval
