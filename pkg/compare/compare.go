@@ -90,6 +90,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(genericDescCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
 		}
 		return newCompare(genericAscCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
+	case types.T_time:
+		if desc {
+			return newCompare(genericDescCompare[types.Time], genericCopy[types.Time], nullsLast)
+		}
+		return newCompare(genericAscCompare[types.Time], genericCopy[types.Time], nullsLast)
 	case types.T_timestamp:
 		if desc {
 			return newCompare(genericDescCompare[types.Timestamp], genericCopy[types.Timestamp], nullsLast)

@@ -168,6 +168,8 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 		return GetOffsetOfOrdered[float64](data.Slice(), v, skipmask)
 	case types.T_date:
 		return GetOffsetOfOrdered[types.Date](data.Slice(), v, skipmask)
+	case types.T_time:
+		return GetOffsetOfOrdered[types.Time](data.Slice(), v, skipmask)
 	case types.T_datetime:
 		return GetOffsetOfOrdered[types.Datetime](data.Slice(), v, skipmask)
 	case types.T_timestamp:

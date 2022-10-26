@@ -264,6 +264,14 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNull,
 			},
+			{
+				Index: 20,
+				Args: []types.T{
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNull,
+			},
 		},
 	},
 
@@ -428,6 +436,14 @@ var operators = map[int]Functions{
 				Index: 19,
 				Args: []types.T{
 					types.T_text,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotNull,
+			},
+			{
+				Index: 20,
+				Args: []types.T{
+					types.T_time,
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.IsNotNull,
@@ -780,6 +796,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.EqString,
 			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.EqGeneral[types.Time],
+			},
 		},
 	},
 
@@ -977,6 +1002,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtString,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtGeneral[types.Time],
 			},
 		},
 	},
@@ -1176,6 +1210,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeString,
 			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeGeneral[types.Time],
+			},
 		},
 	},
 
@@ -1373,6 +1416,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtString,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtGeneral[types.Time],
 			},
 		},
 	},
@@ -1572,6 +1624,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeString,
 			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeGeneral[types.Time],
+			},
 		},
 	},
 
@@ -1769,6 +1830,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeString,
+			},
+			{
+				Index: 21,
+				Args: []types.T{
+					types.T_time,
+					types.T_time,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeGeneral[types.Time],
 			},
 		},
 	},
@@ -4586,6 +4656,84 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_text,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     317,
+				Args:      []types.T{types.T_time, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     318,
+				Args:      []types.T{types.T_date, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     319,
+				Args:      []types.T{types.T_time, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     320,
+				Args:      []types.T{types.T_time, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     321,
+				Args:      []types.T{types.T_datetime, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     322,
+				Args:      []types.T{types.T_char, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     323,
+				Args:      []types.T{types.T_varchar, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     324,
+				Args:      []types.T{types.T_text, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     325,
+				Args:      []types.T{types.T_blob, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     326,
+				Args:      []types.T{types.T_time, types.T_char},
+				ReturnTyp: types.T_char,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     327,
+				Args:      []types.T{types.T_time, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     328,
+				Args:      []types.T{types.T_time, types.T_text},
+				ReturnTyp: types.T_text,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     329,
+				Args:      []types.T{types.T_time, types.T_blob},
+				ReturnTyp: types.T_blob,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 
@@ -4740,6 +4888,12 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_uuid,
 				Fn:        operator.CoalesceUuid,
+			},
+			{
+				Index:     19,
+				Volatile:  true,
+				ReturnTyp: types.T_time,
+				Fn:        operator.CoalesceTime,
 			},
 		},
 	},
@@ -4917,6 +5071,12 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_text,
 				Fn:        operator.CaseWhenText,
 			},
+			{
+				Index:     21,
+				Volatile:  true,
+				ReturnTyp: types.T_time,
+				Fn:        operator.CaseWhenTime,
+			},
 		},
 	},
 
@@ -5075,6 +5235,12 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_text,
 				Fn:        operator.IfText,
+			},
+			{
+				Index:     20,
+				Volatile:  true,
+				ReturnTyp: types.T_time,
+				Fn:        operator.IfTime,
 			},
 		},
 	},

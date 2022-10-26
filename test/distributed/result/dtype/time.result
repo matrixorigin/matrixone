@@ -1,0 +1,108 @@
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("100:00:20");
+insert into t1 values("-800:59:59");
+insert into t1 values("2012-12-12 12:00:20");
+insert into t1 values("2012-12-12 12:00:20.1234");
+insert into t1 values("2012-12-12 12:00:20.1235");
+select * from t1;
+t
+100:00:20
+-800:59:59
+12:00:20
+12:00:20.123000000
+12:00:20.124000000
+insert into t1 values("839:00:00");
+truncated type TIME value 839:00:00 for column t, 1
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("20201122112233");
+insert into t1 values("20201122112233.1234");
+insert into t1 values("20201122112233.1235");
+select * from t1;
+t
+11:22:33
+11:22:33.123000000
+11:22:33.124000000
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values("1"), ("11"), ("112"), ("1122"), ("11223"),("112233"),("-1"), ("-11"), ("-112"), ("-1122"), ("-11223"),("-112233");
+insert into t1 values("112233.4445"),("-112233.4445");
+select * from t1;
+t
+00:00:01
+00:00:11
+00:01:12
+00:11:22
+01:12:23
+11:22:33
+00:00:01
+00:00:11
+00:01:12
+00:11:22
+-1:12:23
+-11:22:33
+11:22:33.445000000
+-11:22:33.445000000
+drop table if exists t1;
+drop table if exists myd;
+create table myd(d date);
+create table t1(t time);
+insert into myd values("2020-12-12"), ("20201212");
+insert into t1 select * from myd;
+select * from t1;
+t
+00:00:00
+00:00:00
+drop table if exists t1;
+drop table if exists mydt;
+create table mydt(d datetime(6));
+create table t1(t time(3));
+insert into mydt values("2020-12-12 11:22:33"), ("2020-12-12 11:22:33.4444"), ("2020-12-12 11:22:33.4445");
+insert into mydt values ("20221212112233"), ("20221212112233.5555");
+insert into t1 select * from mydt;
+select * from t1;
+t
+11:22:33
+11:22:33.444000000
+11:22:33.445000000
+11:22:33
+11:22:33.556000000
+select time("2012-12-12 12:00:20");
+time(2012-12-12 12:00:20)
+12:00:20
+select time("20201122112233");
+time(20201122112233)
+11:22:33
+select time("11223");
+time(11223)
+01:12:23
+select cast('11:22:33.445566' as time(0));
+cast(11:22:33.445566 as time(26))
+11:22:33
+select cast('11:22:33.445566' as time(3));
+cast(11:22:33.445566 as time(26, 3))
+11:22:33.446000000
+select cast('123.445' as time(6));
+cast(123.445 as time(26, 6))
+00:01:23.445000000
+select adddate(time'00:00:00', interval 1 hour);
+adddate(time(00:00:00), interval(1, hour))
+01:00:00
+select adddate(time'00:00:00', interval 1 minute);
+adddate(time(00:00:00), interval(1, minute))
+00:01:00
+select adddate(time'00:00:00', interval 1 second);
+adddate(time(00:00:00), interval(1, second))
+00:00:01
+select adddate(time'800:00:00', interval 1 hour);
+adddate(time(800:00:00), interval(1, hour))
+801:00:00
+select adddate(time'838:00:00', interval 1 hour);
+data out of range: data type time, 
+select adddate(time'100:00:00', interval -100 minute);
+adddate(time(100:00:00), interval(-100, minute))
+98:20:00
+select adddate(time'100:00:00', interval -1000 second);
+adddate(time(100:00:00), interval(-1000, second))
+99:43:20

@@ -45,7 +45,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		for _, info := range arg.DeleteCtxs[0].ComputeIndexInfos {
+		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
 				return 0, err
@@ -150,18 +150,18 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
-	for _, computeIndexInfo := range p.ComputeIndexInfos {
-		computeRelation, err := dbSource.Relation(c.ctx, computeIndexInfo.TableName)
+	for _, indexInfo := range p.IndexInfos {
+		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
 		if err != nil {
 			return 0, err
 		}
-		computeBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, computeIndexInfo.Cols, c.proc)
+		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
 		if rowNum != 0 {
-			if err := computeRelation.Write(c.ctx, computeBatch); err != nil {
+			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
 				return 0, err
 			}
 		}
-		computeBatch.Clean(c.proc.Mp())
+		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {
@@ -426,6 +426,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
 						vs[j] = vector.GetValueAt[types.Date](vec, 0)
+					}
+				}
+			}
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+				return err
+			}
+		case types.T_time:
+			vs := make([]types.Time, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vector.GetValueAt[types.Time](vec, 0)
 					}
 				}
 			}

@@ -745,6 +745,19 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
+		case types.T_time:
+			//cols := vec.Col.([]types.Time)
+			cols := vector.MustTCols[types.Time](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseTime(field, vec.Typ.Precision)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not Datetime type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
 		case types.T_datetime:
 			//cols := vec.Col.([]types.Datetime)
 			cols := vector.MustTCols[types.Datetime](vec)
