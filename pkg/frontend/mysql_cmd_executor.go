@@ -470,7 +470,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	goID := GetRoutineId()
 
-	logutil.Infof("goid %d \n", goID)
+	logutil.Debugf("goid %d \n", goID)
 	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
 
 	var cpuf *os.File = nil
@@ -542,7 +542,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	//logutil.Infof("row group -+> %v ", oq.getData())
+	//logutil.Debugf("row group -+> %v ", oq.getData())
 
 	err := oq.flush()
 	if err != nil {
@@ -2715,7 +2715,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		}
 	}()
 
-	logutil.Infof("cmd %v", req.GetCmd())
+	logutil.Debugf("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
 	ses.SetCmd(req.GetCmd())
@@ -2898,7 +2898,7 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
-	logutil.Info("----close mce")
+	logutil.Debug("----close mce")
 	ses := mce.GetSession()
 	if ses != nil {
 		err := ses.TxnRollback()
