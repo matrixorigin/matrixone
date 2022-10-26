@@ -107,16 +107,7 @@ func _getDefaultColDefs() []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, childId int32) (int32, error) {
-	ctx.binder = NewTableBinder(builder, ctx)
-	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
-	for _, v := range tbl.Func.Exprs {
-		curExpr, err := ctx.binder.BindExpr(v, 0, false)
-		if err != nil {
-			return 0, err
-		}
-		exprs = append(exprs, curExpr)
-	}
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	colDefs := _getDefaultColDefs()
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
@@ -132,25 +123,15 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		TblFuncExprList: exprs, // now only support one func expr in unnest
+		TblFuncExprList: exprs,
+		Children:        []int32{childId},
 	}
-	if childId == -1 {
-		scanNode := &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-		}
-		childId = builder.appendNode(scanNode, ctx)
-	}
-	node.Children = []int32{childId}
-	nodeID := builder.appendNode(node, ctx)
-	clearBinding(ctx)
-	return nodeID, nil
+	return builder.appendNode(node, ctx), nil
 }
 
 func findColName(fn *tree.FuncExpr) string {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return ""
 	}
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-	fn.Exprs[0].Format(fmtCtx)
-	return fmtCtx.String()
+	return tree.String(fn.Exprs[0], dialect.MYSQL)
 }

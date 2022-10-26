@@ -2249,6 +2249,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	var (
 		childId int32 = -1
 		err     error
+		nodeId  int32
 	)
 	if tbl.SelectStmt != nil {
 		childId, err = builder.buildSelect(tbl.SelectStmt, ctx, false)
@@ -2256,14 +2257,30 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			return 0, err
 		}
 	}
-
+	if childId == -1 {
+		scanNode := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+		}
+		childId = builder.appendNode(scanNode, ctx)
+	}
+	ctx.binder = NewTableBinder(builder, ctx)
+	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
+	for _, v := range tbl.Func.Exprs {
+		curExpr, err := ctx.binder.BindExpr(v, 0, false)
+		if err != nil {
+			return 0, err
+		}
+		exprs = append(exprs, curExpr)
+	}
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		return builder.buildUnnest(tbl, ctx, childId)
+		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
 	case "generate_series":
-		return builder.buildGenerateSeries(tbl, ctx)
+		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	default:
-		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
+		err = moerr.NewNotSupported("table function '%s' not supported", id)
 	}
+	clearBinding(ctx)
+	return nodeId, err
 }

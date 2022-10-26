@@ -233,6 +233,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 				ColName:  arg.Es.ColName,
 			},
 		}
+	case *generate_series.Argument:
+		rin.Arg = &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs:    arg.Es.Attrs,
+				Cols:     arg.Es.Cols,
+				ExprList: arg.Es.ExprList,
+			},
+		}
 	default:
 		panic(moerr.NewInternalError(fmt.Sprintf("unsupport instruction %T\n", in.Arg)))
 	}
@@ -424,8 +432,9 @@ func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series
 	}
 	return &generate_series.Argument{
 		Es: &generate_series.Param{
-			Attrs: attrs,
-			Cols:  n.TableDef.Cols,
+			Attrs:    attrs,
+			Cols:     n.TableDef.Cols,
+			ExprList: n.TblFuncExprList,
 		},
 	}
 }

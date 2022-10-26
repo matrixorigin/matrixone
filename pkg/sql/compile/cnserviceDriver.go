@@ -740,16 +740,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
-		in.Unnest = &pipeline.Unnest{
-			Attrs:   t.Es.Attrs,
-			Cols:    t.Es.Cols,
-			Exprs:   t.Es.ExprList,
-			ColName: t.Es.ColName,
-		}
-	case *generate_series.Argument:
-		in.GenerateSeries = &pipeline.GenerateSeries{
+		in.TableFunction = &pipeline.TableFunction{
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
+			Exprs: t.Es.ExprList,
+			//Name:  "unnest",
+			Param: []byte(t.Es.ColName),
+		}
+	case *generate_series.Argument:
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs: t.Es.Attrs,
+			Cols:  t.Es.Cols,
+			Exprs: t.Es.ExprList,
+			//Name:  "generate_series",
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -972,17 +975,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Unnest:
 		v.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:    opr.Unnest.Attrs,
-				Cols:     opr.Unnest.Cols,
-				ExprList: opr.Unnest.Exprs,
-				ColName:  opr.Unnest.ColName,
+				Attrs:    opr.TableFunction.Attrs,
+				Cols:     opr.TableFunction.Cols,
+				ExprList: opr.TableFunction.Exprs,
+				ColName:  string(opr.TableFunction.Param),
 			},
 		}
 	case vm.GenerateSeries:
 		v.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
-				Attrs: opr.GenerateSeries.Attrs,
-				Cols:  opr.GenerateSeries.Cols,
+				Attrs:    opr.TableFunction.Attrs,
+				Cols:     opr.TableFunction.Cols,
+				ExprList: opr.TableFunction.Exprs,
 			},
 		}
 	case vm.HashBuild:
