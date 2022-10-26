@@ -247,7 +247,7 @@ func TestCastSameType2(t *testing.T) {
 	}
 
 	procs := testutil.NewProc()
-	//types.Date | types.Datetime | types.Timestamp
+	//types.Date | types.Time | types.Datetime | types.Timestamp
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -295,6 +295,13 @@ func TestCastSameType2(t *testing.T) {
 			vecs:       makeTempVectors(types.Timestamp(66122026122739712), types.T_timestamp, false),
 			proc:       procs,
 			wantValues: []types.Timestamp{66122026122739712},
+			wantScalar: false,
+		},
+		{
+			name:       "Test07",
+			vecs:       makeTempVectors(types.Time(661220261227), types.T_time, false),
+			proc:       procs,
+			wantValues: []types.Time{661220261227},
 			wantScalar: false,
 		},
 	}
@@ -4593,6 +4600,258 @@ func TestCastStringToUuid(t *testing.T) {
 	// tolerance test
 }
 
+func TestCastTimeToString(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		time, _ := types.ParseTime(src, 6)
+		vectors[0] = makeVector(time, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		precision  int32
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"11:22:33"},
+			wantType:   types.T_varchar,
+			precision:  0,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"11:22:33.00"},
+			wantType:   types.T_varchar,
+			precision:  2,
+			wantScalar: false,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"11:22:33.000000"},
+			wantType:   types.T_varchar,
+			precision:  6,
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors("-11223", true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"-01:12:23.000"},
+			wantType:   types.T_varchar,
+			precision:  3,
+			wantScalar: true,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors("-11223.4448", false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"-01:12:23.444"},
+			wantType:   types.T_varchar,
+			precision:  3,
+			wantScalar: false,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors("-11223.4448", true, types.T_char),
+			proc:       procs,
+			wantValues: []string{"-01:12:23.444"},
+			wantType:   types.T_char,
+			precision:  3,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			c.vecs[0].Typ.Precision = c.precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+
+			if castRes.GetType().IsVarlen() {
+				got := vector.GetStrVectorValues(castRes)
+				require.Equal(t, c.wantValues, got)
+			} else {
+				require.Equal(t, c.wantValues, castRes.Col)
+			}
+
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+func TestCastStringToTime(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeStringVector(src, types.T_varchar, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		precision  int32
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantType:   types.T_time,
+			precision:  0,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("2022-12-01 11:22:33.125", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 130000)},
+			wantType:   types.T_time,
+			precision:  2,
+			wantScalar: true,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantType:   types.T_time,
+			precision:  6,
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors("-11223", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(true, 1, 12, 23, 0)},
+			wantType:   types.T_time,
+			precision:  3,
+			wantScalar: true,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors("11223.4444", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 1, 12, 23, 444000)},
+			wantType:   types.T_time,
+			precision:  3,
+			wantScalar: true,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors("-11223.4448", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(true, 1, 12, 23, 445000)},
+			wantType:   types.T_time,
+			precision:  3,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			c.vecs[1].Typ.Precision = c.precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+func TestCastDateAndDatetimeToTime(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, precision int32, srcType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		switch srcType {
+		case types.T_date:
+			date, err := types.ParseDate(src)
+			require.NoError(t, err)
+			vectors[0] = makeVector(date, srcIsConst)
+		case types.T_datetime:
+			datetime, err := types.ParseDatetime(src, 6)
+			require.NoError(t, err)
+			vectors[0] = makeVector(datetime, srcIsConst)
+		default:
+			panic("wrong input test type")
+		}
+		vectors[1] = makeTypeVector(types.T_time)
+		vectors[1].Typ.Precision = precision
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		precision  int32
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("2022-12-01", true, 0, types.T_date),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 0, 0, 0, 0)},
+			precision:  0,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("2022-12-01 11:22:33", false, 0, types.T_datetime),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			precision:  0,
+			wantScalar: false,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors("2022-12-01 11:22:33.123456", true, 0, types.T_datetime),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 123000)},
+			precision:  3,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			c.vecs[1].Typ.Precision = c.precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, types.T_time, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
 func makeTypeVector(t types.T) *vector.Vector {
 	return vector.New(t.ToType())
 }
@@ -4690,6 +4949,14 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
 		} else {
 			vec = vector.NewWithFixed(typeOid.ToType(), []types.Date{val}, nil, mp)
+		}
+
+	case types.Time:
+		typeOid = types.T_time
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val, mp)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Time{val}, nil, mp)
 		}
 
 	case types.Datetime:

@@ -17,21 +17,20 @@ package unary
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/time"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	// XXX Why do we ever need this one?  Isn't this a noop?
+func TimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustTCols[types.Date](inputVector)
+	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.Typ.Precision}
+	inputValues := vector.MustTCols[types.Time](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
+		resultValues := make([]types.Time, 1)
 		copy(resultValues, inputValues)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
@@ -40,61 +39,62 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
+		resultValues := vector.MustTCols[types.Time](resultVector)
 		copy(resultValues, inputValues)
 		return resultVector, nil
 	}
 }
 
-func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func DatetimeToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
+	inputPrecision := inputVector.Typ.Precision
+	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputPrecision}
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
+		resultValues := make([]types.Time, 1)
+		vector.SetCol(resultVector, time.DatetimeToTime(inputValues, resultValues, inputPrecision))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.DatetimeToDate(inputValues, resultValues)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		time.DatetimeToTime(inputValues, resultValues, inputPrecision)
 		return resultVector, nil
 	}
 }
 
-func TimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func DateToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustTCols[types.Time](inputVector)
+	resultType := types.Type{Oid: types.T_time, Size: 8}
+	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date.TimeToDate(inputValues, resultValues))
+		resultValues := make([]types.Time, 1)
+		vector.SetCol(resultVector, time.DateToTime(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		date.TimeToDate(inputValues, resultValues)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		time.DateToTime(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
 
-func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
+	resultType := types.Type{Oid: types.T_time, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {
@@ -102,8 +102,8 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
-		result, err := date.DateStringToDate(inputValues, resultValues)
+		resultValues := make([]types.Time, 1)
+		result, err := time.DateStringToTime(inputValues, resultValues)
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
@@ -111,33 +111,8 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date.DateStringToDate(inputValues, resultValues)
-		return resultVector, err
-	}
-}
-
-func TimesToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_date, Size: 4}
-	inputValues := vector.MustStrCols(inputVector)
-
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Date, 1)
-		result, err := date.DateStringToDate(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
-		return resultVector, err
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := vector.MustTCols[types.Date](resultVector)
-		_, err = date.DateStringToDate(inputValues, resultValues)
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err = time.DateStringToTime(inputValues, resultValues)
 		return resultVector, err
 	}
 }
