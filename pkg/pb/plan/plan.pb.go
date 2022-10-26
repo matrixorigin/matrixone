@@ -813,6 +813,7 @@ type Const struct {
 	//	*Const_Fval
 	//	*Const_Dateval
 	//	*Const_Datetimeval
+	//	*Const_Timeval
 	//	*Const_Decimal64Val
 	//	*Const_Decimal128Val
 	//	*Const_Timestampval
@@ -889,23 +890,26 @@ type Const_Dateval struct {
 type Const_Datetimeval struct {
 	Datetimeval int64 `protobuf:"varint,9,opt,name=datetimeval,proto3,oneof" json:"datetimeval,omitempty"`
 }
+type Const_Timeval struct {
+	Timeval int64 `protobuf:"varint,10,opt,name=timeval,proto3,oneof" json:"timeval,omitempty"`
+}
 type Const_Decimal64Val struct {
-	Decimal64Val *Decimal64 `protobuf:"bytes,10,opt,name=decimal64val,proto3,oneof" json:"decimal64val,omitempty"`
+	Decimal64Val *Decimal64 `protobuf:"bytes,11,opt,name=decimal64val,proto3,oneof" json:"decimal64val,omitempty"`
 }
 type Const_Decimal128Val struct {
-	Decimal128Val *Decimal128 `protobuf:"bytes,11,opt,name=decimal128val,proto3,oneof" json:"decimal128val,omitempty"`
+	Decimal128Val *Decimal128 `protobuf:"bytes,12,opt,name=decimal128val,proto3,oneof" json:"decimal128val,omitempty"`
 }
 type Const_Timestampval struct {
-	Timestampval int64 `protobuf:"varint,12,opt,name=timestampval,proto3,oneof" json:"timestampval,omitempty"`
+	Timestampval int64 `protobuf:"varint,13,opt,name=timestampval,proto3,oneof" json:"timestampval,omitempty"`
 }
 type Const_Jsonval struct {
-	Jsonval string `protobuf:"bytes,13,opt,name=jsonval,proto3,oneof" json:"jsonval,omitempty"`
+	Jsonval string `protobuf:"bytes,14,opt,name=jsonval,proto3,oneof" json:"jsonval,omitempty"`
 }
 type Const_Defaultval struct {
-	Defaultval bool `protobuf:"varint,14,opt,name=defaultval,proto3,oneof" json:"defaultval,omitempty"`
+	Defaultval bool `protobuf:"varint,15,opt,name=defaultval,proto3,oneof" json:"defaultval,omitempty"`
 }
 type Const_UpdateVal struct {
-	UpdateVal bool `protobuf:"varint,15,opt,name=updateVal,proto3,oneof" json:"updateVal,omitempty"`
+	UpdateVal bool `protobuf:"varint,16,opt,name=updateVal,proto3,oneof" json:"updateVal,omitempty"`
 }
 
 func (*Const_Ival) isConst_Value()          {}
@@ -916,6 +920,7 @@ func (*Const_Uval) isConst_Value()          {}
 func (*Const_Fval) isConst_Value()          {}
 func (*Const_Dateval) isConst_Value()       {}
 func (*Const_Datetimeval) isConst_Value()   {}
+func (*Const_Timeval) isConst_Value()       {}
 func (*Const_Decimal64Val) isConst_Value()  {}
 func (*Const_Decimal128Val) isConst_Value() {}
 func (*Const_Timestampval) isConst_Value()  {}
@@ -993,6 +998,13 @@ func (m *Const) GetDatetimeval() int64 {
 	return 0
 }
 
+func (m *Const) GetTimeval() int64 {
+	if x, ok := m.GetValue().(*Const_Timeval); ok {
+		return x.Timeval
+	}
+	return 0
+}
+
 func (m *Const) GetDecimal64Val() *Decimal64 {
 	if x, ok := m.GetValue().(*Const_Decimal64Val); ok {
 		return x.Decimal64Val
@@ -1053,6 +1065,7 @@ func (*Const) XXX_OneofWrappers() []interface{} {
 		(*Const_Fval)(nil),
 		(*Const_Dateval)(nil),
 		(*Const_Datetimeval)(nil),
+		(*Const_Timeval)(nil),
 		(*Const_Decimal64Val)(nil),
 		(*Const_Decimal128Val)(nil),
 		(*Const_Timestampval)(nil),
@@ -6536,6 +6549,18 @@ func (m *Const_Datetimeval) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	dAtA[i] = 0x48
 	return len(dAtA) - i, nil
 }
+func (m *Const_Timeval) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Const_Timeval) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	i = encodeVarintPlan(dAtA, i, uint64(m.Timeval))
+	i--
+	dAtA[i] = 0x50
+	return len(dAtA) - i, nil
+}
 func (m *Const_Decimal64Val) MarshalTo(dAtA []byte) (int, error) {
 	size := m.ProtoSize()
 	return m.MarshalToSizedBuffer(dAtA[:size])
@@ -6553,7 +6578,7 @@ func (m *Const_Decimal64Val) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintPlan(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x52
+		dAtA[i] = 0x5a
 	}
 	return len(dAtA) - i, nil
 }
@@ -6574,7 +6599,7 @@ func (m *Const_Decimal128Val) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintPlan(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x5a
+		dAtA[i] = 0x62
 	}
 	return len(dAtA) - i, nil
 }
@@ -6587,7 +6612,7 @@ func (m *Const_Timestampval) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	i = encodeVarintPlan(dAtA, i, uint64(m.Timestampval))
 	i--
-	dAtA[i] = 0x60
+	dAtA[i] = 0x68
 	return len(dAtA) - i, nil
 }
 func (m *Const_Jsonval) MarshalTo(dAtA []byte) (int, error) {
@@ -6601,7 +6626,7 @@ func (m *Const_Jsonval) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	copy(dAtA[i:], m.Jsonval)
 	i = encodeVarintPlan(dAtA, i, uint64(len(m.Jsonval)))
 	i--
-	dAtA[i] = 0x6a
+	dAtA[i] = 0x72
 	return len(dAtA) - i, nil
 }
 func (m *Const_Defaultval) MarshalTo(dAtA []byte) (int, error) {
@@ -6618,7 +6643,7 @@ func (m *Const_Defaultval) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0
 	}
 	i--
-	dAtA[i] = 0x70
+	dAtA[i] = 0x78
 	return len(dAtA) - i, nil
 }
 func (m *Const_UpdateVal) MarshalTo(dAtA []byte) (int, error) {
@@ -6635,7 +6660,9 @@ func (m *Const_UpdateVal) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0
 	}
 	i--
-	dAtA[i] = 0x78
+	dAtA[i] = 0x1
+	i--
+	dAtA[i] = 0x80
 	return len(dAtA) - i, nil
 }
 func (m *ParamRef) Marshal() (dAtA []byte, err error) {
@@ -11362,6 +11389,15 @@ func (m *Const_Datetimeval) ProtoSize() (n int) {
 	n += 1 + sovPlan(uint64(m.Datetimeval))
 	return n
 }
+func (m *Const_Timeval) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += 1 + sovPlan(uint64(m.Timeval))
+	return n
+}
 func (m *Const_Decimal64Val) ProtoSize() (n int) {
 	if m == nil {
 		return 0
@@ -11420,7 +11456,7 @@ func (m *Const_UpdateVal) ProtoSize() (n int) {
 	}
 	var l int
 	_ = l
-	n += 2
+	n += 3
 	return n
 }
 func (m *ParamRef) ProtoSize() (n int) {
@@ -13991,6 +14027,26 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			m.Value = &Const_Datetimeval{v}
 		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Timeval", wireType)
+			}
+			var v int64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Value = &Const_Timeval{v}
+		case 11:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Decimal64Val", wireType)
 			}
@@ -14025,7 +14081,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			m.Value = &Const_Decimal64Val{v}
 			iNdEx = postIndex
-		case 11:
+		case 12:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Decimal128Val", wireType)
 			}
@@ -14060,7 +14116,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			m.Value = &Const_Decimal128Val{v}
 			iNdEx = postIndex
-		case 12:
+		case 13:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Timestampval", wireType)
 			}
@@ -14080,7 +14136,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Value = &Const_Timestampval{v}
-		case 13:
+		case 14:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Jsonval", wireType)
 			}
@@ -14112,7 +14168,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			m.Value = &Const_Jsonval{string(dAtA[iNdEx:postIndex])}
 			iNdEx = postIndex
-		case 14:
+		case 15:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Defaultval", wireType)
 			}
@@ -14133,7 +14189,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			b := bool(v != 0)
 			m.Value = &Const_Defaultval{b}
-		case 15:
+		case 16:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field UpdateVal", wireType)
 			}
@@ -14154,7 +14210,7 @@ func (m *Const) Unmarshal(dAtA []byte) error {
 			}
 			b := bool(v != 0)
 			m.Value = &Const_UpdateVal{b}
-		case 16:
+		case 17:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field IsBin", wireType)
 			}

@@ -166,7 +166,12 @@ var (
 	BoolToBytes         = boolToBytes
 	DateToBytes         = dateToBytes
 	DateToDatetime      = dateToDateTime
+	DateToTime          = dateToTime
 	DatetimeToBytes     = datetimeToBytes
+	DatetimeToTime      = datetimeToTime
+	TimeToBytes         = timeToBytes
+	TimeToDate          = timeToDate
+	TimeToDatetime      = timeToDatetime
 	DatetimeToDate      = datetimeToDate
 	UuidToBytes         = uuidToBytes
 )
@@ -773,6 +778,13 @@ func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, err
 	return rs, nil
 }
 
+func dateToTime(xs []types.Date, rs []types.Time) ([]types.Time, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToTime()
+	}
+	return rs, nil
+}
+
 func dateToBytes(xs []types.Date, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String()
@@ -790,6 +802,33 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
+	}
+	return rs, nil
+}
+func datetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTime(precision)
+	}
+	return rs, nil
+}
+
+func timeToBytes(xs []types.Time, rs []string, precision int32) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.String2(precision)
+	}
+	return rs, nil
+}
+
+func timeToDatetime(xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
+	for i, x := range xs {
+		rs[i] = x.ToDatetime(precision)
+	}
+	return rs, nil
+}
+
+func timeToDate(xs []types.Time, rs []types.Date) ([]types.Date, error) {
+	for i, x := range xs {
+		rs[i] = x.ToDate()
 	}
 	return rs, nil
 }
