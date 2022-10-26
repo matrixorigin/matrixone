@@ -46,15 +46,16 @@ message Const {
 		uint64 uval 	= 6;
 		float fval		= 7;
 		int32 dateval 		= 8;
-		int64 datetimeval		= 9;
-		decimal64 decimal64val = 10;
-		decimal128 decimal128val = 11;
-		int64 timestampval = 12;
-		string jsonval = 13;
-		bool defaultval = 14;
-		bool updateVal = 15;
+		int64 timeval = 9;
+		int64 datetimeval		= 10;
+		decimal64 decimal64val = 11;
+		decimal128 decimal128val = 12;
+		int64 timestampval = 13;
+		string jsonval = 14;
+		bool defaultval = 15;
+		bool updateVal = 16;
 	}
-	bool isBin = 16;
+	bool isBin = 17;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
