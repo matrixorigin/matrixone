@@ -19,12 +19,9 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/multierr"
@@ -43,7 +40,7 @@ type sqlClient struct {
 }
 
 func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout*10)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	env.WaitCNStoreReportedIndexed(ctx, 0)
@@ -52,27 +49,10 @@ func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts, _ := cn.GetTaskService()
-	for {
-		tasks, err := ts.QueryTask(ctx,
-			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
-		if err != nil {
-			continue
-		}
-		logger.Debug("get completed tasks", zap.Int("count", len(tasks)))
-		n := 0
-		for _, t := range tasks {
-			if t.Metadata.Executor == uint32(task.TaskCode_FrontendInit) {
-				n++
-			} else if t.Metadata.Executor == uint32(task.TaskCode_SysViewInit) {
-				n++
-			}
-		}
-		if n == 2 {
-			break
-		}
-		time.Sleep(time.Second)
+	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
+		return nil, err
 	}
+
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/", cn.SQLAddress()))
 	if err != nil {
 		return nil, err
