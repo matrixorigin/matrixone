@@ -1851,7 +1851,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	txnHandler := cwft.ses.GetTxnHandler()
 	if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
-	} else {
+	} else if cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator = txnHandler.GetTxn()
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
