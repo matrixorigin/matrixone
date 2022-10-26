@@ -1443,7 +1443,7 @@ var builtins = map[int]Functions{
 				Index:     3,
 				Volatile:  true,
 				Args:      []types.T{types.T_datetime},
-				ReturnTyp: types.T_any,
+				ReturnTyp: types.T_datetime,
 				Fn:        multi.FromUnixTimeDatetime,
 			},
 			{
@@ -1471,7 +1471,7 @@ var builtins = map[int]Functions{
 				Index:     7,
 				Volatile:  true,
 				Args:      []types.T{types.T_datetime, types.T_varchar},
-				ReturnTyp: types.T_any,
+				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeDatetimeFormat,
 			},
 		},
