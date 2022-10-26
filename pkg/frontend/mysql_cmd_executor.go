@@ -49,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -195,7 +194,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            fmtCtx.String(),
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            util.NowNS(),
+		RequestAt:            time.Now(),
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
