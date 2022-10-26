@@ -29,10 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+)
+
+const (
+	IncrementalPrefix = "incremental"
 )
 
 func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
@@ -577,6 +583,68 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 	b.BlockFn = b.VisitBlk
 	return b
 }
+func (b *CheckpointLogtailRespBuilder) FlushBatches(fs *objectio.ObjectFS) {
+	name := blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
+	writer := blockio.NewWriter(fs, name)
+	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.dbInsTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.dbDelBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.dbDelTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblInsBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblInsTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblDelBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblDelTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblColInsBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.tblColDelBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.segInsBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.segInsTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.segDelBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.segDelTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.blkMetaInsBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.blkMetaInsTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.blkMetaDelBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.WriteBlock(b.blkMetaDelTxnBatch); err != nil {
+		panic(err)
+	}
+	if _, err := writer.Sync(); err != nil {
+		panic(err)
+	}
+}
+
 func (b *CheckpointLogtailRespBuilder) GetDBBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
 	return b.dbInsBatch, b.dbInsTxnBatch, b.dbDelBatch, b.dbDelTxnBatch
 }

@@ -156,7 +156,12 @@ func (r *runner) onCheckpointEntries(items ...any) {
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
-	// TODO
+	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
+	if err != nil {
+		panic(err)
+	}
+	fs := r.catalog.GetFS()
+	builder.FlushBatches(fs)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
