@@ -1456,43 +1456,64 @@ const (
 
 // privilegeCache cache privileges on table
 type privilegeCache struct {
+	//For objectType table
 	//store map <database,table> -> privileges
-	store btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
-	total atomic.Uint64
-	hit   atomic.Uint64
+	storeForTable btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+	//For objectType database *
+	storeForDatabase btree.Set[PrivilegeType]
+	//For objectType account *
+	storeForAccount btree.Set[PrivilegeType]
+	//dummy
+	dummyStore btree.Set[PrivilegeType]
+	total      atomic.Uint64
+	hit        atomic.Uint64
+}
+
+func (pc *privilegeCache) isSpecial(objTyp objectType, plt privilegeLevelType) bool {
+	return objTyp == objectTypeAccount && plt != privilegeLevelStar ||
+		objTyp == objectTypeDatabase && plt != privilegeLevelStar
 }
 
 // has checks the cache has privilege on a table
-func (pc *privilegeCache) has(dbName, tableName string, priv PrivilegeType) bool {
+func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
 	pc.total.Add(1)
-	if tableStore, ok1 := pc.store.Get(dbName); ok1 {
-		if privSet, ok2 := tableStore.Get(tableName); ok2 {
-			if privSet.Contains(priv) {
-				pc.hit.Add(1)
-				return true
-			}
-		}
+	if pc.isSpecial(objTyp, plt) {
+		return false
 	}
-	return false
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	return privSet.Contains(priv)
 }
 
-func (pc *privilegeCache) getPrivilegeSet(dbName, tableName string) *btree.Set[PrivilegeType] {
-	tableStore, ok1 := pc.store.Get(dbName)
-	if !ok1 {
-		tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-		pc.store.Set(dbName, tableStore)
+func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string) *btree.Set[PrivilegeType] {
+	switch objTyp {
+	case objectTypeTable:
+		tableStore, ok1 := pc.storeForTable.Get(dbName)
+		if !ok1 {
+			tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
+			pc.storeForTable.Set(dbName, tableStore)
+		}
+		privSet, ok2 := tableStore.Get(tableName)
+		if !ok2 {
+			privSet = &btree.Set[PrivilegeType]{}
+			tableStore.Set(tableName, privSet)
+		}
+		return privSet
+	case objectTypeDatabase:
+		return &pc.storeForDatabase
+	case objectTypeAccount:
+		return &pc.storeForAccount
+	default:
+		return &pc.dummyStore
 	}
-	privSet, ok2 := tableStore.Get(tableName)
-	if !ok2 {
-		privSet = &btree.Set[PrivilegeType]{}
-		tableStore.Set(tableName, privSet)
-	}
-	return privSet
+
 }
 
 // set replaces the privileges by new ones
-func (pc *privilegeCache) set(dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(dbName, tableName)
+func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
+	if pc.isSpecial(objTyp, plt) {
+		return
+	}
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
 	privSet.Clear()
 	for _, p := range priv {
 		privSet.Insert(p)
@@ -1500,8 +1521,11 @@ func (pc *privilegeCache) set(dbName, tableName string, priv ...PrivilegeType) {
 }
 
 // add puts the privileges without replacing existed ones
-func (pc *privilegeCache) add(dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(dbName, tableName)
+func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
+	if pc.isSpecial(objTyp, plt) {
+		return
+	}
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
 	for _, p := range priv {
 		privSet.Insert(p)
 	}
@@ -1511,7 +1535,10 @@ func (pc *privilegeCache) add(dbName, tableName string, priv ...PrivilegeType) {
 func (pc *privilegeCache) invalidate() {
 	total := pc.total.Swap(0)
 	hit := pc.hit.Swap(0)
-	pc.store.Clear()
+	pc.storeForTable.Clear()
+	pc.storeForDatabase.Clear()
+	pc.storeForAccount.Clear()
+	pc.dummyStore.Clear()
 	ratio := float64(0)
 	if total == 0 {
 		ratio = 0
@@ -3359,8 +3386,18 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false, nil
 	}
 
+	cache := ses.GetPrivilegeCache()
+
 	verifyPrivilegeEntryInMultiPrivilegeLevels := func(ses *Session, roleId int64, entry privilegeEntry, pls []privilegeLevelType) (bool, error) {
+		dbName := entry.databaseName
+		if len(dbName) == 0 {
+			dbName = ses.GetDatabaseName()
+		}
 		for _, pl := range pls {
+			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+			if yes {
+				return true, nil
+			}
 			sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
 			if err != nil {
 				return false, err
@@ -3378,6 +3415,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			}
 
 			if execResultArrayHasData(erArray) {
+				cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
 				return true, nil
 			}
 		}
@@ -3396,23 +3434,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false
 	}
 
-	cache := ses.GetPrivilegeCache()
 	for _, roleId := range roleIds.Keys() {
 		for _, entry := range priv.entries {
 			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 				pls, err = getPrivilegeLevelsOfObjectType(entry.objType)
 				if err != nil {
 					return false, err
-				}
-
-				dbName := entry.databaseName
-				if len(dbName) == 0 {
-					dbName = ses.GetDatabaseName()
-				}
-
-				yes = cache.has(dbName, entry.tableName, entry.privilegeId)
-				if yes {
-					return true, nil
 				}
 
 				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, entry, pls)
@@ -3424,7 +3451,6 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					yes = false
 				}
 				if yes {
-					cache.add(dbName, entry.tableName, entry.privilegeId)
 					return true, nil
 				}
 			} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
@@ -3465,24 +3491,15 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if err != nil {
 								return false, err
 							}
-							dbName := entry.databaseName
-							if len(dbName) == 0 {
-								dbName = ses.GetDatabaseName()
+
+							//At least there is one success
+							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
+							if err != nil {
+								return false, err
 							}
-							yes = cache.has(dbName, entry.tableName, entry.privilegeId)
-							if !yes {
-								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
-								if err != nil {
-									return false, err
-								}
-								operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
-								if operateCatalog {
-									yes = false
-								}
-								if yes {
-									cache.add(dbName, entry.tableName, entry.privilegeId)
-								}
+							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
+							if operateCatalog {
+								yes = false
 							}
 						}
 						if !yes {
