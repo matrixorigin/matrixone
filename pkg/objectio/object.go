@@ -16,7 +16,7 @@ package objectio
 
 import "github.com/matrixorigin/matrixone/pkg/fileservice"
 
-const Magic = 0xFFFFFFFF
+const Magic = 0xFFFFFFFFFFFFFFFF
 const Version = 1
 const FSName = "local"
 

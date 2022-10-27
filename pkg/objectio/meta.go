@@ -141,11 +141,15 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	var err error
 	footer := data[len(data)-FooterSize:]
 	FooterCache := bytes.NewBuffer(footer)
+	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
+		return err
+	}
 	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
 		return err
 	}
-	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
-		return err
+	magic := uint64(Magic)
+	if f.magic != magic {
+		panic(any("Magic is err"))
 	}
 	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
 		return nil
