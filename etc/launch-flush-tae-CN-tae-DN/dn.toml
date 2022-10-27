@@ -1,4 +1,5 @@
 service-type = "DN"
+data-dir = "./mo-data"
 
 [log]
 level = "error"
@@ -10,11 +11,9 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
-
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK"
-data-dir = "mo-data/local/store"
 
 [[fileservice]]
 name = "S3"
@@ -23,10 +22,9 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
 
 [dn]
-uuid = "42"
+uuid = "dn1"
 
 [dn.Txn.Storage]
 backend = "TAE"
