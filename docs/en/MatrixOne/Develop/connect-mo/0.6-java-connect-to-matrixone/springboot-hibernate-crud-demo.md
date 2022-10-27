@@ -14,7 +14,7 @@ A brief introduction about these softwares concerned:
 
 ## Set up environment
 
-### 1. Install and Launch MatrixOne.
+### 1. Install and Launch MatrixOne
 
 Follow the [installation instruction and launch MatrixOne 0.6](../../../Get-Started/install-standalone-matrixone.md). Create a database `test` by MySQL client.
 
