@@ -15,20 +15,7 @@ docker run -d -p 6001:6001 -v ~/tmp/docker_loaddata_demo:/ssb-dbgen-path:rw --na
 
 上述示例为典型的安装和挂载方式，将其本地路径 *~/tmp/docker_loaddata_demo* 挂载到内部容器路径 */ssb-dbgen-path*。
 
-## 方式一：MySQL Client 中使用 `source` 命令，将 SQL 脚本导入 MatrixOne 中
-
-您可以使用 `source` 命令或 `\.` 命令来执行 SQL 脚本文件。
-
-```
-mysql> source file_name
-mysql> \. file_name
-```
-
-通常 `source` 命令可以被用来执行很多 SQL 语句，你可以在你的数据库写入或创建表，插入数据到一个 SQL 文件中，并在 MySQL 客户端中使用 `source` 命令执行这个文件。每个 SQL 语句都是单独的一行，以 `--` 开头或是以 `/*` 换行的语句皆为注释，在执行 SQL 的过程中将被忽略。
-
-如果你的 SQL 来自 `mysqldump`，参考[教程](../../../Migrate/migrate-from-mysql-to-matrixone.md)，了解如何修改 SQL 文件以适应 MatrixOne 格式。
-
-## 方式二：MySQL Client 中使用 `Load data` 命令导入数据
+## MySQL Client 中使用 `Load data` 命令导入数据
 
 在 MySQL Client 中使用 `Load data` 命令将外部大数据文件导入，但目前只支持 *.csv* 格式的文件导入。
 
