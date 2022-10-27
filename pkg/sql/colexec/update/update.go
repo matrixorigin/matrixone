@@ -127,12 +127,17 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
 		// in update, we can get a batch[b(update), b(old)]
 		// we should use old b as delete info
 		for i, info := range updateCtx.IndexInfos {
 			rel := updateCtx.IndexTables[i]
-			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
+			var attrs []string = nil
+			attrs = append(attrs, updateCtx.UpdateAttrs...)
+			attrs = append(attrs, updateCtx.OtherAttrs...)
+			attrs = append(attrs, updateCtx.IndexAttrs...)
+			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
 			if rowNum != 0 {
 				err := rel.Delete(ctx, oldBatch, info.ColNames[0])
 				if err != nil {
