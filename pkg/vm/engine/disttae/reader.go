@@ -61,7 +61,7 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 	r.sels = r.sels[:0]
 	sort.Ints(r.blks[0].deletes)
 	for i := 0; i < bat.Length(); i++ {
-		if i == r.blks[0].deletes[0] {
+		if len(r.blks[0].deletes) > 0 && i == r.blks[0].deletes[0] {
 			r.blks[0].deletes = r.blks[0].deletes[1:]
 			continue
 		}

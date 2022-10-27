@@ -975,7 +975,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 		}
 	}
 
-	metas := make([]BlockMeta, len(rows))
+	metas := make([]BlockMeta, len(blockInfos))
 
 	idxs := make([]uint16, columnLength)
 	for i := 0; i < columnLength; i++ {
@@ -989,7 +989,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 		}
 		metas[i] = BlockMeta{
 			Rows:    int64(rows),
-			Info:    blockInfo,
+			Info:    blockInfos[i],
 			Zonemap: zm,
 		}
 	}
