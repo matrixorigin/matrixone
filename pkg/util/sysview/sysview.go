@@ -283,6 +283,14 @@ var (
 			"CREATE_OPTIONS varchar(256)," +
 			"TABLE_COMMENT text" +
 			");",
+		"CREATE TABLE IF NOT EXISTS ENGINES (" +
+			"ENGINE varchar(64)," +
+			"SUPPORT varchar(8)," +
+			"COMMENT varchar(160)," +
+			"TRANSACTIONS varchar(3)," +
+			"XA varchar(3)," +
+			"SAVEPOINTS varchar(3)" +
+			");",
 	}
 )
 

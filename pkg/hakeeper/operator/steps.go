@@ -29,7 +29,7 @@ import (
 type OpStep interface {
 	fmt.Stringer
 
-	IsFinish(state pb.LogState, dnState pb.DNState) bool
+	IsFinish(state pb.LogState, dnState pb.DNState, cnState pb.CNState) bool
 }
 
 type Replica struct {
@@ -48,7 +48,7 @@ func (a AddLogService) String() string {
 	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
-func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if _, ok := state.Shards[a.ShardID]; !ok {
 		return true
 	}
@@ -68,7 +68,7 @@ func (a RemoveLogService) String() string {
 	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
-func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if shard, ok := state.Shards[a.ShardID]; ok {
 		if _, ok := shard.Replicas[a.ReplicaID]; ok {
 			return false
@@ -86,7 +86,7 @@ func (a StartLogService) String() string {
 	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
 }
 
-func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if _, ok := state.Stores[a.UUID]; !ok {
 		return true
 	}
@@ -107,7 +107,7 @@ func (a StopLogService) String() string {
 	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
 }
 
-func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if store, ok := state.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
@@ -127,7 +127,7 @@ func (a KillLogZombie) String() string {
 	return fmt.Sprintf("killing zombie on %s", a.UUID)
 }
 
-func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if store, ok := state.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
@@ -151,7 +151,7 @@ func (a AddDnReplica) String() string {
 	)
 }
 
-func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
+func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState, _ pb.CNState) bool {
 	for _, info := range state.Stores[a.StoreID].Shards {
 		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
 			return true
@@ -172,7 +172,7 @@ func (a RemoveDnReplica) String() string {
 	)
 }
 
-func (a RemoveDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
+func (a RemoveDnReplica) IsFinish(_ pb.LogState, state pb.DNState, _ pb.CNState) bool {
 	for _, info := range state.Stores[a.StoreID].Shards {
 		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
 			return false
@@ -190,7 +190,7 @@ func (a StopDnStore) String() string {
 	return fmt.Sprintf("stopping dn store %s", a.StoreID)
 }
 
-func (a StopDnStore) IsFinish(_ pb.LogState, state pb.DNState) bool {
+func (a StopDnStore) IsFinish(_ pb.LogState, state pb.DNState, _ pb.CNState) bool {
 	if _, ok := state.Stores[a.StoreID]; ok {
 		return false
 	}
@@ -206,9 +206,35 @@ func (a StopLogStore) String() string {
 	return fmt.Sprintf("stopping log store %s", a.StoreID)
 }
 
-func (a StopLogStore) IsFinish(state pb.LogState, _ pb.DNState) bool {
+func (a StopLogStore) IsFinish(state pb.LogState, _ pb.DNState, _ pb.CNState) bool {
 	if _, ok := state.Stores[a.StoreID]; ok {
 		return false
 	}
+	return true
+}
+
+type CreateTaskService struct {
+	StoreID   string
+	StoreType pb.ServiceType
+	TaskUser  pb.TaskTableUser
+}
+
+func (a CreateTaskService) String() string {
+	return fmt.Sprintf("create task service on %s(%s)", a.StoreID, a.StoreType)
+}
+
+func (a CreateTaskService) IsFinish(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) bool {
+	if state, ok := logState.Stores[a.StoreID]; ok {
+		return state.GetTaskServiceCreated()
+	}
+
+	if state, ok := dnState.Stores[a.StoreID]; ok {
+		return state.GetTaskServiceCreated()
+	}
+
+	if state, ok := cnState.Stores[a.StoreID]; ok {
+		return state.GetTaskServiceCreated()
+	}
+
 	return true
 }

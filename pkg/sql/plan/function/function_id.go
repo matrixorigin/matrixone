@@ -207,6 +207,7 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	TIME      //TIME
 	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
@@ -364,6 +365,7 @@ var functionIdRegister = map[string]int32{
 	"acos":                           ACOS,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
+	"time":                           TIME,
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
@@ -444,5 +446,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].Flag == plan.Function_WIN
+	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
 }

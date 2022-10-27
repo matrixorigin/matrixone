@@ -32,12 +32,17 @@ const (
 	NanoSecsPerSec  = 1000000000 // 10^9
 	microSecsPerSec = 1000000    // 10^6
 	MillisecsPerSec = 1000       // 10^3
+	microSecsPerDay = secsPerDay * microSecsPerSec
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
+)
+
+var (
+	precisionVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
@@ -226,6 +231,24 @@ func UTC() Datetime {
 
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
+}
+
+// We need to truncate the part after precision position when cast
+// between different precision.
+func (dt Datetime) ToTime(precision int32) Time {
+	if precision == 6 {
+		return Time(dt % microSecsPerDay)
+	}
+
+	// truncate the date part
+	ms := dt % microSecsPerDay
+
+	base := ms / precisionVal[precision]
+	if ms%precisionVal[precision]/precisionVal[precision+1] >= 5 { // check carry
+		base += 1
+	}
+
+	return Time(base * precisionVal[precision])
 }
 
 func (dt Datetime) Clock() (hour, minute, sec int8) {

@@ -48,7 +48,7 @@ var _errorLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal, noopContextField})
+	SetLogReporter(&TraceReporter{noopReportZap, noopContextField})
 	conf := &LogConfig{Level: "info", Format: "console"}
 	setGlobalLogConfig(conf)
 	logger, _ := initMOLogger(conf)

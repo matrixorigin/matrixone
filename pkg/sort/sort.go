@@ -159,6 +159,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, genericGreater[types.Datetime])
 		}
+	case types.T_time:
+		col := vector.GetFixedVectorValues[types.Time](vec)
+		if !desc {
+			genericSort(col, os, genericLess[types.Time])
+		} else {
+			genericSort(col, os, genericGreater[types.Time])
+		}
 	case types.T_timestamp:
 		col := vector.GetFixedVectorValues[types.Timestamp](vec)
 		if !desc {

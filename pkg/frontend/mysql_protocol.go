@@ -545,7 +545,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			tp := stmt.ParamTypes[i<<1]
 			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
 
-			switch tp {
+			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
 				vars[i] = nil
 
@@ -642,6 +642,22 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				pos = newPos
 				vars[i] = []byte(val)
 
+			case defines.MYSQL_TYPE_TIME:
+				length, newPos, ok := mp.io.ReadUint8(data, pos)
+				if !ok {
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
+					return
+				}
+				pos = newPos
+				switch length {
+				case 0:
+					vars[i] = "+00:00:00.000000"
+				case 5:
+					pos, vars[i] = mp.readTime(data, pos)
+				default:
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
+					return
+				}
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
 				// for more details.
@@ -692,6 +708,21 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 	day := data[pos]
 	pos++
 	return pos, fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
+	negate := data[pos]
+	pos++
+	hour := data[pos]
+	pos++
+	minute := data[pos]
+	pos++
+	second := data[pos]
+	pos++
+	ms := data[pos]
+	pos++
+
+	return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", negate, hour, minute, second, ms)
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -919,7 +950,15 @@ func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint6
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
-	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	if !math.IsInf(value, 0) {
+		mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
+	} else {
+		if math.IsInf(value, 1) {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("+Infinity")...)
+		} else {
+			mp.strconvBuffer = append(mp.strconvBuffer, []byte("-Infinity")...)
+		}
+	}
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
@@ -998,8 +1037,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	logutil.Infof("server calculated %v\n", hash1)
-	logutil.Infof("client calculated %v\n", auth)
+	logutil.Debugf("server calculated %v\n", hash1)
+	logutil.Debugf("client calculated %v\n", auth)
 
 	return bytes.Equal(hash1, auth)
 }
@@ -1570,6 +1609,26 @@ func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	}
 }
 
+func setColLength(column *MysqlColumn, width int32) {
+	column.length = column.columnType.GetLength(width)
+}
+
+func setColFlag(column *MysqlColumn) {
+	if column.auto_incr {
+		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
+	}
+}
+
+func setCharacter(column *MysqlColumn) {
+	switch column.columnType {
+	// blob type should use 0x3f to show the binary data
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
+		column.SetCharset(0x21)
+	default:
+		column.SetCharset(0x3f)
+	}
+}
+
 // make the column information with the format of column definition41
 func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, cmd int) []byte {
 	space := HeaderOffset + 8*9 + //lenenc bytes of 8 fields
@@ -1614,7 +1673,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	pos = mp.io.WriteUint32(data, pos, column.Length())
 
 	//int<1>              type
-	pos = mp.io.WriteUint8(data, pos, column.ColumnType())
+	pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 
 	//int<2>              flags
 	pos = mp.io.WriteUint16(data, pos, column.Flag())
@@ -1759,7 +1818,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				buffer = mp.appendUint64(buffer, math.Float64bits(value))
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
@@ -1783,6 +1842,29 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				return nil, err
 			} else {
 				data = mp.appendDate(data, value.(types.Date))
+			}
+		case defines.MYSQL_TYPE_TIME:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				var t types.Time
+				var err error
+				idx := strings.Index(value, ".")
+				if idx == -1 {
+					t, err = types.ParseTime(value, 0)
+				} else {
+					t, err = types.ParseTime(value, int32(len(value)-idx-1))
+				}
+				if err != nil {
+					data = mp.appendStringLenEnc(data, value)
+				} else {
+					data = mp.appendTime(data, t)
+				}
+			}
+			if value, err := mrs.GetValue(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendTime(data, value.(types.Time))
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
@@ -1919,15 +2001,18 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
+		case defines.MYSQL_TYPE_TIME:
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
-		case defines.MYSQL_TYPE_TIME:
-			return nil, moerr.NewInternalError("unsupported MYSQL_TYPE_TIME")
-
 		default:
 			return nil, moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}
@@ -2190,6 +2275,22 @@ func (mp *MysqlProtocolImpl) appendDatetime(data []byte, dt types.Datetime) []by
 		data = mp.append(data, 4)
 		data = mp.appendUint16(data, uint16(dt.Year()))
 		data = mp.append(data, dt.Month(), dt.Day())
+	}
+	return data
+}
+
+func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
+	if int64(t) == 0 {
+		data = mp.append(data, 0)
+	} else {
+		data = mp.append(data, 5)
+		h, m, s, ms, isNeg := t.ClockFormat()
+		if isNeg {
+			data = mp.append(data, byte('-'))
+		} else {
+			data = mp.append(data, byte('+'))
+		}
+		data = mp.append(data, byte(h), byte(m), byte(s), byte(ms))
 	}
 	return data
 }

@@ -17,7 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,30 +64,25 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		columnMap[int(idx)] = struct{}{}
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr) []int {
-	columnMap := make(map[int]struct{})
-	getColumnMapByExpr(expr, columnMap)
-
-	columns := make([]int, len(columnMap))
-	i := 0
-	for k := range columnMap {
-		columns[i] = k
-		i++
-	}
-	sort.Ints(columns)
-	return columns
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+	columnMap := make(map[int]int)
+	getColumnMapByExpr(expr, tableDef, columnMap)
+	return columnMap
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
@@ -132,40 +127,45 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
-	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
+	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
+	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	for i, data := range idxList {
+	for i, idx := range idxs {
+		column, err := obs[0].GetColumn(idx)
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		if err != nil {
+			return nil, 0, err
+		}
 		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, nil
+	return zonemapList, rows, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	getIdx := func(idx int) int {
-		return int(tableDef.Name2ColIndex[tableDef.Cols[idx].Name])
-	}
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 
 	for i := 0; i < dataLength; i++ {
-		idx := getIdx(columns[i])
-		dataTypes[i] = uint8(tableDef.Cols[columns[i]].Typ.Id)
+		idx := columns[i]
+		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
@@ -345,6 +345,8 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
 		return true, val.Fval
 	case *plan.Const_Dateval:
 		return true, val.Dateval
+	case *plan.Const_Timeval:
+		return true, val.Timeval
 	case *plan.Const_Datetimeval:
 		return true, val.Datetimeval
 	case *plan.Const_Decimal64Val:

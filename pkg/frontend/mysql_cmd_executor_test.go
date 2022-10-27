@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -505,6 +506,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -579,6 +581,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -621,12 +624,13 @@ func Test_typeconvert(t *testing.T) {
 			types.T_char,
 			types.T_varchar,
 			types.T_date,
+			types.T_time,
 			types.T_datetime,
 			types.T_json,
 		}
 
 		type kase struct {
-			tp     uint8
+			tp     defines.MysqlType
 			signed bool
 		}
 		output := []kase{
@@ -643,6 +647,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
+			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 		}
@@ -815,13 +820,15 @@ func Test_handleShowColumns(t *testing.T) {
 		data[0][1] = typ
 		data[0][2] = []byte("NULL")
 		data[0][3] = int8(2)
+		defaultV, err := types.Encode(&plan2.Default{NullAbility: true, Expr: nil, OriginString: "", XXX_NoUnkeyedLiteral: struct{}{}, XXX_unrecognized: []byte{}, XXX_sizecache: 0})
+		convey.So(err, convey.ShouldBeNil)
+		data[0][5] = defaultV
 		data[0][primaryKeyPos] = []byte("p")
 		ses.SetData(data)
 		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowColumns(ses)
-		convey.So(err, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

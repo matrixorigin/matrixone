@@ -350,6 +350,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
+		case defines.MYSQL_TYPE_TIME:
+			value, err := oq.mrs.GetValue(0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value.(types.Time).String()), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_DATETIME:
 			value, err := oq.mrs.GetValue(0, i)
 			if err != nil {
@@ -383,8 +391,6 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
-		case defines.MYSQL_TYPE_TIME:
-			return moerr.NewInternalError("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
 			return moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}

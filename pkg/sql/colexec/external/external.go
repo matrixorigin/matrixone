@@ -91,7 +91,11 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(nil)
 	param := arg.(*Argument).Es
 	param.Fileparam.mu.Lock()
 	if param.Fileparam.End {
@@ -115,6 +119,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	proc.SetInputBatch(bat)
+	anal.Output(bat)
+	anal.Alloc(int64(bat.Size()))
 	return false, nil
 }
 
@@ -742,6 +748,19 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Date type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_time:
+			//cols := vec.Col.([]types.Time)
+			cols := vector.MustTCols[types.Time](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseTime(field, vec.Typ.Precision)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not Datetime type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}

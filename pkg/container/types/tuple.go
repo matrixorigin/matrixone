@@ -89,6 +89,8 @@ func printTuple(tuple Tuple) string {
 			res += fmt.Sprintf("(uint64: %v)", t)
 		case Date:
 			res += fmt.Sprintf("(date: %v)", t.String())
+		case Time:
+			res += fmt.Sprintf("(time: %v)", t.String())
 		case Datetime:
 			res += fmt.Sprintf("(datetime: %v)", t.String())
 		case Timestamp:
@@ -135,6 +137,7 @@ const timestampCode = 0x43
 const decimal64Code = 0x44
 const decimal128Code = 0x45
 const stringTypeCode = 0x46
+const timeCode = 0x47 // TODO: reorder the list to put timeCode next to date type code?
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -323,6 +326,11 @@ func (p *packer) EncodeBool(e bool) {
 
 func (p *packer) EncodeDate(e Date) {
 	p.putByte(dateCode)
+	p.encodeInt(int64(e))
+}
+
+func (p *packer) EncodeTime(e Time) {
+	p.putByte(timeCode)
 	p.encodeInt(int64(e))
 }
 

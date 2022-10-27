@@ -15,9 +15,11 @@
 package blockio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type Meta struct {
@@ -74,6 +76,42 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 		objectSize: uint32(objectSize),
 	}
 	return meta, nil
+}
+
+func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
+	str := name
+	for _, blk := range blks {
+		str = fmt.Sprintf("%s:%d_%d_%d",
+			str,
+			blk.GetExtent().Offset(),
+			blk.GetExtent().Length(),
+			blk.GetExtent().OriginSize())
+	}
+	return str
+}
+
+func DecodeMetaLocToMetas(metaLoc string) (string, []objectio.Extent, error) {
+	info := strings.Split(metaLoc, ":")
+	name := info[0]
+	extents := make([]objectio.Extent, 0)
+	for i := 1; i < len(info); i++ {
+		location := strings.Split(info[i], "_")
+		offset, err := strconv.ParseUint(location[0], 10, 32)
+		if err != nil {
+			return "", nil, err
+		}
+		size, err := strconv.ParseUint(location[1], 10, 32)
+		if err != nil {
+			return "", nil, err
+		}
+		osize, err := strconv.ParseUint(location[2], 10, 32)
+		if err != nil {
+			return "", nil, err
+		}
+		extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+		extents = append(extents, extent)
+	}
+	return name, extents, nil
 }
 
 func DecodeDeltaLocToDelta(metaLoc string) (*Delta, error) {

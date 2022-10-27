@@ -15,6 +15,8 @@
 package dnservice
 
 import (
+	"path/filepath"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
@@ -22,11 +24,15 @@ import (
 )
 
 const (
-	metadataFile = "dnstore/metadata.data"
+	metadataDir = "dnservice"
 )
 
+func getMetadataFile(uuid string) string {
+	return filepath.Join(metadataDir, uuid)
+}
+
 func (s *store) initMetadata() error {
-	data, err := file.ReadFile(s.metadataFileService, metadataFile)
+	data, err := file.ReadFile(s.metadataFileService, getMetadataFile(s.cfg.UUID))
 	if err != nil {
 		return err
 	}
@@ -74,7 +80,9 @@ func (s *store) removeDNShard(id uint64) {
 }
 
 func (s *store) mustUpdateMetadataLocked() {
-	if err := file.WriteFile(s.metadataFileService, metadataFile, protoc.MustMarshal(&s.mu.metadata)); err != nil {
+	if err := file.WriteFile(s.metadataFileService,
+		getMetadataFile(s.cfg.UUID),
+		protoc.MustMarshal(&s.mu.metadata)); err != nil {
 		s.logger.Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}

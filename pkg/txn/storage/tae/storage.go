@@ -35,22 +35,24 @@ type taeStorage struct {
 }
 
 func NewTAEStorage(
+	dataDir string,
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
 	clock clock.Clock,
 	ckpCfg *options.CheckpointCfg,
+	logStore options.LogstoreType,
 ) (*taeStorage, error) {
-
 	opt := &options.Options{
 		Clock:         clock,
 		Fs:            fs,
 		Lc:            logservicedriver.LogServiceClientFactory(factory),
 		Shard:         shard,
 		CheckpointCfg: ckpCfg,
+		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
-		taeHandler: rpc.NewTAEHandle(opt),
+		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil
 }

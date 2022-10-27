@@ -43,12 +43,14 @@ drop table system.span_info;
 drop table system.log_info;
 drop table system.error_info;
 create table system.A(a int);
-update error_info set statement_id = "1111";
-update system.error_info set statement_id = "1111";
-insert into error_info values ("1","1","1","1","1","1","2022-10-09 00:00:00");
-insert into system.error_info values ("1","1","1","1","1","1","2022-10-09 00:00:00");
+update statement_info set statement_id = "1111";
+update error_info set err_code = "1111";
+update system.error_info set err_code = "1111";
+insert into error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
+insert into system.error_info values ("2022-10-09 00:00:00", "1", "1", "1", "1", "1");
 delete from error_info;
 delete from system.error_info;
+delete from system.statement_info;
 
 use system_metrics;
 drop table sql_statement_total;
