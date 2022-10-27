@@ -133,13 +133,13 @@ type Header struct {
 
 type Footer struct {
 	magic      uint64
-	blockCount uint64
+	blockCount uint32
 	extents    []Extent
 }
 
 func (f *Footer) UnMarshalFooter(data []byte) error {
 	var err error
-	footer := data[:len(data)-FooterSize]
+	footer := data[len(data)-FooterSize:]
 	FooterCache := bytes.NewBuffer(footer)
 	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
 		return err
@@ -147,12 +147,12 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
 		return err
 	}
-	if f.blockCount*ExtentTypeSize+FooterSize > uint64(len(data)) {
+	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
 		return nil
 	} else {
 		f.extents = make([]Extent, f.blockCount)
 	}
-	extents := data[:len(data)-int(FooterSize+f.blockCount*ExtentTypeSize)]
+	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
 	ExtentsCache := bytes.NewBuffer(extents)
 	for i := 0; i < int(f.blockCount); i++ {
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
