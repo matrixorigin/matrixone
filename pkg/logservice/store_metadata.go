@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"crypto/md5"
 	"fmt"
-	"go.uber.org/zap"
 	"io"
 	"path/filepath"
 	"runtime"
+
+	"go.uber.org/zap"
 
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/lni/vfs"
