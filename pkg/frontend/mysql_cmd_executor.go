@@ -1339,13 +1339,15 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		}
 		row[1] = value
 		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
-			if value == 1 {
-				row[1] = "on"
-			} else {
-				row[1] = "off"
+			v, ok := value.(int8)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
 			}
 		}
-
 		rows = append(rows, row)
 	}
 
