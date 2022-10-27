@@ -178,16 +178,16 @@ func FromTimeClock(isNegative bool, hour int32, minute, sec uint8, msec uint32) 
 }
 
 // ClockFormat: symbol part/hour part/minute part/second part/msecond part
-func (t Time) ClockFormat() (hour int32, minute, sec int8, msec int64, isNeg bool) {
+func (t Time) ClockFormat() (hour uint32, minute, sec uint8, msec uint64, isNeg bool) {
 	if t < 0 {
 		isNeg = true
 		t = -t
 	}
 	ts := t.sec()
-	h := int32(ts / secsPerHour)
-	m := int8(ts % secsPerHour / secsPerMinute)
-	s := int8(ts % secsPerMinute)
-	ms := int64(t % microSecsPerSec)
+	h := uint32(ts / secsPerHour)
+	m := uint8(ts % secsPerHour / secsPerMinute)
+	s := uint8(ts % secsPerMinute)
+	ms := uint64(t % microSecsPerSec)
 
 	return h, m, s, ms, isNeg
 }
