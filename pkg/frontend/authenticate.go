@@ -1456,11 +1456,6 @@ const (
 	userType
 )
 
-type privilegeLevelStore struct {
-	plt   privilegeLevelType
-	store btree.Set[PrivilegeType]
-}
-
 // privilegeCache cache privileges on table
 type privilegeCache struct {
 	//For objectType table
