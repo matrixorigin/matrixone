@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -1457,13 +1458,17 @@ const (
 type privilegeCache struct {
 	//store map <database,table> -> privileges
 	store btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+	total atomic.Uint64
+	hit   atomic.Uint64
 }
 
 // has checks the cache has privilege on a table
 func (pc *privilegeCache) has(dbName, tableName string, priv PrivilegeType) bool {
+	pc.total.Add(1)
 	if tableStore, ok1 := pc.store.Get(dbName); ok1 {
 		if privSet, ok2 := tableStore.Get(tableName); ok2 {
 			if privSet.Contains(priv) {
+				pc.hit.Add(1)
 				return true
 			}
 		}
@@ -1504,7 +1509,10 @@ func (pc *privilegeCache) add(dbName, tableName string, priv ...PrivilegeType) {
 
 // invalidate makes the cache empty
 func (pc *privilegeCache) invalidate() {
+	total := pc.total.Swap(0)
+	hit := pc.hit.Swap(0)
 	pc.store.Clear()
+	logutil.Debugf("-->hit %d total %d ratio %f", hit, total, float64(hit)/float64(total))
 }
 
 // verifiedRole holds the role info that has been checked
