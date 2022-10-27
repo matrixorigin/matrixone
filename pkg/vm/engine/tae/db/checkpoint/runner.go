@@ -70,6 +70,7 @@ type runner struct {
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	scheduler tasks.TaskScheduler
+	fs        *objectio.ObjectFS
 	observers *observers
 
 	stopper *stopper.Stopper
@@ -78,7 +79,6 @@ type runner struct {
 		sync.RWMutex
 		entries    *btree.BTreeG[*CheckpointEntry]
 		prevGlobal *CheckpointEntry
-		fs         *objectio.ObjectFS
 	}
 
 	incrementalPolicy *timeBasedPolicy
@@ -94,15 +94,16 @@ type runner struct {
 }
 
 func NewRunner(
+	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
 	source logtail.Collector,
-	fs *objectio.ObjectFS,
 	opts ...Option) *runner {
 	r := &runner{
 		catalog:   catalog,
 		scheduler: scheduler,
 		source:    source,
+		fs:        fs,
 		observers: new(observers),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
@@ -110,7 +111,6 @@ func NewRunner(
 	}, btree.Options{
 		NoLocks: true,
 	})
-	r.storage.fs = fs
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -164,7 +164,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	builder.WriteToFS(r.storage.fs)
+	builder.WriteToFS(r.fs)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
@@ -173,7 +173,7 @@ func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	builder.WriteToFS(r.storage.fs)
+	builder.WriteToFS(r.fs)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
