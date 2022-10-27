@@ -142,7 +142,7 @@ func TestNewObjectWriter(t *testing.T) {
 	fs := NewObjectFS(service, dir)
 	dirs, err := fs.ListDir("")
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(dirs))
+	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReader(name, service)
 	assert.Nil(t, err)
 	bs, err = objectReader.ReadAllMeta(dirs[0].Size, nil)

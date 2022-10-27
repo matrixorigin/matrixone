@@ -145,6 +145,9 @@ func (r *ObjectReader) ReadAllMeta(fileSize int64, m *mpool.MPool) ([]BlockObjec
 func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, error) {
 	var err error
 	var footer *Footer
+
+	// I don't know how many blocks there are in the object,
+	// read "ExtentsLength" blocks by default
 	size := int64(FooterSize + ExtentsLength*ExtentTypeSize)
 	if size > fileSize {
 		size = fileSize
