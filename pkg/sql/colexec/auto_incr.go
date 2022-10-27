@@ -46,8 +46,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, db engine.Database, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
-	ctx := context.TODO()
+func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		db:      db,
@@ -81,16 +80,16 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 		return err
 	}
 	rel.Ranges(ctx, nil) // TODO
-	return UpdateInsertBatch(e, db, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
+	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
 }
 
 func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
-	var err error
-	param.proc.TxnOperator, err = NewTxn(param.eg, param.proc, param.ctx)
+	txn, err := NewTxn(param.eg, param.proc, param.ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, param.proc, param.ctx)
+
+	param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -103,7 +102,7 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		var d, s uint64
 		param.rel.Ranges(param.ctx, nil) // TODO
 		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
-			if err2 := RolllbackTxn(param.eg, param.proc.TxnOperator, param.ctx); err2 != nil {
+			if err2 := RolllbackTxn(param.eg, txn, param.ctx); err2 != nil {
 				return nil, nil, err2
 			}
 			return nil, nil, err
@@ -111,7 +110,7 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		offset = append(offset, d)
 		step = append(step, s)
 	}
-	if err = CommitTxn(param.eg, param.proc.TxnOperator, param.ctx); err != nil {
+	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
 		return nil, nil, err
 	}
 	return offset, step, nil
@@ -205,7 +204,6 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	default:
 		return 0, 0, moerr.NewInvalidInput("the auto_incr col is not integer type")
 	}
-
 	if err := updateAutoIncrTable(param, maxNum, name, param.proc.Mp()); err != nil {
 		return 0, 0, err
 	}
@@ -317,7 +315,6 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string, mp *m
 		bat.Clean(mp)
 		return err
 	}
-
 	bat = makeAutoIncrBatch(name, curNum, 1, mp)
 	if err = param.rel.Write(param.ctx, bat); err != nil {
 		bat.Clean(mp)
@@ -414,11 +411,7 @@ func CreateAutoIncrCol(eg engine.Engine, db engine.Database, proc *process.Proce
 	}
 	name := rel.GetTableID(ctx) + "_"
 
-	proc.TxnOperator, err = NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, proc, ctx)
+	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
@@ -427,15 +420,19 @@ func CreateAutoIncrCol(eg engine.Engine, db engine.Database, proc *process.Proce
 		if !attr.Typ.AutoIncr {
 			continue
 		}
+		rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
+		if err != nil {
+			return err
+		}
 		bat := makeAutoIncrBatch(name+attr.Name, 0, 1, proc.Mp())
 		if err = rel2.Write(ctx, bat); err != nil {
-			if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 				return err2
 			}
 			return err
 		}
 	}
-	if err = CommitTxn(eg, proc.TxnOperator, ctx); err != nil {
+	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -444,12 +441,11 @@ func CreateAutoIncrCol(eg engine.Engine, db engine.Database, proc *process.Proce
 // for delete table operation, delete col in mo_increment_columns table
 func DeleteAutoIncrCol(eg engine.Engine, rel engine.Relation, proc *process.Process, dbName, tableID string) error {
 	ctx := context.TODO()
-	var err error
-	proc.TxnOperator, err = NewTxn(eg, proc, ctx)
+	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, proc, ctx)
+	rel2, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
 	if err != nil {
 		return err
 	}
@@ -468,7 +464,7 @@ func DeleteAutoIncrCol(eg engine.Engine, rel engine.Relation, proc *process.Proc
 			bat, _ := GetDeleteBatch(rel2, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
 			if err = rel2.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				bat.Clean(proc.Mp())
-				if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
@@ -476,7 +472,7 @@ func DeleteAutoIncrCol(eg engine.Engine, rel engine.Relation, proc *process.Proc
 			bat.Clean(proc.Mp())
 		}
 	}
-	if err = CommitTxn(eg, proc.TxnOperator, ctx); err != nil {
+	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -495,11 +491,11 @@ func MoveAutoIncrCol(eg engine.Engine, tblName string, db engine.Database, proc 
 		return err
 	}
 
-	proc.TxnOperator, err = NewTxn(eg, proc, ctx)
+	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, proc, ctx)
+	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
 	if err != nil {
 		return err
 	}
@@ -514,7 +510,7 @@ func MoveAutoIncrCol(eg engine.Engine, tblName string, db engine.Database, proc 
 
 			bat, currentNum := GetDeleteBatch(autoRel, ctx, oldTableID+"_"+d.Attr.Name, proc.Mp())
 			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
-				if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
@@ -522,14 +518,14 @@ func MoveAutoIncrCol(eg engine.Engine, tblName string, db engine.Database, proc 
 
 			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
-				if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
 			}
 		}
 	}
-	if err = CommitTxn(eg, proc.TxnOperator, ctx); err != nil {
+	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -547,11 +543,11 @@ func ResetAutoInsrCol(eg engine.Engine, tblName string, db engine.Database, proc
 		return err
 	}
 
-	proc.TxnOperator, err = NewTxn(eg, proc, ctx)
+	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
 	}
-	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, proc, ctx)
+	autoRel, err := GetNewRelation(eg, dbName, AUTO_INCR_TABLE, txn, ctx)
 	if err != nil {
 		return err
 	}
@@ -565,7 +561,7 @@ func ResetAutoInsrCol(eg engine.Engine, tblName string, db engine.Database, proc
 			}
 			bat, _ := GetDeleteBatch(autoRel, ctx, tableID+"_"+d.Attr.Name, proc.Mp())
 			if err = autoRel.Delete(ctx, bat, AUTO_INCR_TABLE_COLNAME[0]); err != nil {
-				if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
@@ -573,14 +569,14 @@ func ResetAutoInsrCol(eg engine.Engine, tblName string, db engine.Database, proc
 
 			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
-				if err2 := RolllbackTxn(eg, proc.TxnOperator, ctx); err2 != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
 			}
 		}
 	}
-	if err = CommitTxn(eg, proc.TxnOperator, ctx); err != nil {
+	if err = CommitTxn(eg, txn, ctx); err != nil {
 		return err
 	}
 	return nil
@@ -658,8 +654,8 @@ func RolllbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context)
 	return err
 }
 
-func GetNewRelation(eg engine.Engine, dbName, tbleName string,  proc *process.Process, ctx context.Context) (engine.Relation, error) {
-	dbHandler, err := eg.Database(ctx, dbName, proc.TxnOperator)
+func GetNewRelation(eg engine.Engine, dbName, tbleName string, txn client.TxnOperator, ctx context.Context) (engine.Relation, error) {
+	dbHandler, err := eg.Database(ctx, dbName, txn)
 	if err != nil {
 		return nil, err
 	}

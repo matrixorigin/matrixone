@@ -204,7 +204,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	}
 	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
+	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 		return false, err
 	}
 	if n.CPkeyColDef != nil {

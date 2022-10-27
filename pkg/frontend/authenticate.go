@@ -659,7 +659,6 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
@@ -4279,6 +4278,11 @@ func InitSysTenant(ctx context.Context) error {
 		return err
 	}
 
+	err = bh.Exec(ctx, "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);")
+	if err != nil {
+		return err
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -4469,6 +4473,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 
 	//USE the mo_catalog
 	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);")
 	if err != nil {
 		return err
 	}
