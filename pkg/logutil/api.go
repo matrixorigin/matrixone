@@ -47,7 +47,10 @@ func Fatal(msg string, fields ...zap.Field) {
 
 // Debugf only use in develop mode
 func Debugf(msg string, fields ...interface{}) {
-	GetSkip1Logger().Debug(fmt.Sprintf(msg, fields...))
+	logger := GetSkip1Logger()
+	if logger.Core().Enabled(zap.DebugLevel) {
+		logger.Debug(fmt.Sprintf(msg, fields...))
+	}
 }
 
 // Infof only use in develop mode
