@@ -457,10 +457,107 @@ error_info,node_uuid,Standalone,0,0,,0001-01-01 00:00:00.001001,,,,{},20101,test
 		t.Run(tt.name, func(t *testing.T) {
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(*CSVRequest)
+			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
-			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			require.Equal(t, 1, len(req))
+			batch := req[0]
+			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
 			t.Logf("%s", tt.want)
+		})
+	}
+}
+
+func Test_genCsvData_diffAccount(t *testing.T) {
+	type args struct {
+		in  []IBuffer2SqlItem
+		buf *bytes.Buffer
+	}
+	tests := []struct {
+		name string
+		args args
+		want []string
+	}{
+		{
+			name: "single_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						ExecPlan:             nil,
+					},
+				},
+				buf: buf,
+			},
+			want: []string{`00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+`},
+		},
+		{
+			name: "multi_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						ExecPlan:             nil,
+					},
+					&StatementInfo{
+						StatementID:          _2TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "sys",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show databases",
+						StatementFingerprint: "show databases",
+						StatementTag:         "dcl",
+						RequestAt:            zeroTime.Add(time.Microsecond),
+						ResponseAt:           zeroTime.Add(time.Microsecond + time.Second),
+						Duration:             time.Microsecond + time.Second,
+						Status:               StatementStatusFailed,
+						Error:                moerr.NewInternalError("test error"),
+						ExecPlan:             nil,
+					},
+				},
+				buf: buf,
+			},
+			want: []string{`00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0
+`, `00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,sys,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,0001-01-01 00:00:00.000001,0001-01-01 00:00:01.000001,1000001000,Failed,20101,internal error: test error,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000002""}",0,0
+`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := genCsvData(tt.args.in, tt.args.buf)
+			require.NotEqual(t, nil, got)
+			reqs, ok := got.(CSVRequests)
+			require.Equal(t, true, ok)
+			require.Equal(t, len(tt.args.in), len(reqs))
+			require.Equal(t, len(tt.args.in), len(tt.want))
+			for _, req := range reqs {
+				found := false
+				for idx, w := range tt.want {
+					if w == req.content {
+						found = true
+						t.Logf("idx %d: %s", idx, w)
+					}
+				}
+				assert.Equalf(t, true, found, "genCsvData: %v", req.content)
+			}
 		})
 	}
 }
@@ -542,9 +639,11 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			GetTracerProvider().longQueryTime = tt.args.queryT
 			got := genCsvData(tt.args.in, tt.args.buf)
 			require.NotEqual(t, nil, got)
-			req, ok := got.(*CSVRequest)
+			req, ok := got.(CSVRequests)
 			require.Equal(t, true, ok)
-			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			require.Equal(t, 1, len(req))
+			batch := req[0]
+			assert.Equalf(t, tt.want, batch.content, "genCsvData(%v, %v)", batch.content, tt.args.buf)
 			t.Logf("%s", tt.want)
 			GetTracerProvider().longQueryTime = 0
 		})

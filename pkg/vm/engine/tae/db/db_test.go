@@ -3815,6 +3815,71 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 16, b4.Vecs[0].Length())
 }
 
+func TestSnapshotBatch(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 30)
+	tae.createRelAndAppend(bat, true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs := types.BuildTS(0, 0)
+	txn, _ := tae.StartTxn(nil)
+	maxTs := txn.GetStartTS()
+	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	builder.WriteToFS(tae.Fs)
+	builder.ReadFromFS(tae.Fs, common.DefaultAllocator)
+
+	ctlg := catalog.NewEmptyCatalog()
+	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
+	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
+	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
+	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
+	t.Log(ctlg.SimplePPString(3))
+
+	txn, relation := tae.getRelation()
+	blkIt := relation.MakeBlockIt()
+	for blkIt.Valid() {
+		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
+		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
+		blkIt.Next()
+	}
+	segIt := relation.MakeSegmentIt()
+	for segIt.Valid() {
+		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
+		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
+		segIt.Next()
+	}
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName("test")
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs = maxTs.Next()
+	txn, _ = tae.StartTxn(nil)
+	maxTs = txn.GetStartTS()
+	builder, _ = logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
+	builder.WriteToFS(tae.Fs)
+	builder.ReadFromFS(tae.Fs, common.DefaultAllocator)
+	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
+	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
+	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
+	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
+	t.Log(ctlg.SimplePPString(3))
+}
+
 func TestCompactDeltaBlk(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
