@@ -294,24 +294,10 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
 	if SV.MergeCycle > 0 {
-		stopper.RunNamedTask("merge", func(ctx context.Context) {
-			merge, inited := export.NewMergeService(ctx,
-				export.WithTable(metric.SingleMetricTable),
-				export.WithFileService(fs),
-				export.WithMinFilesMerge(1),
-			)
-			if inited {
-				return
-			}
-			if merge == nil {
-				panic(moerr.NewInternalError("MergeService init failed."))
-			}
-			cycle := time.Duration(SV.MergeCycle) * time.Second
-			logutil.Infof("merge cycle: %v", cycle)
-			go merge.Start(cycle)
-			<-ctx.Done()
-			merge.Stop()
-		})
+		err = export.InitCronExpr(time.Duration(SV.MergeCycle) * time.Second)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

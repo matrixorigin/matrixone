@@ -115,8 +115,8 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
-	// defaultMergeCycle default: 0 sec, means disable merge as service
-	defaultMergeCycle = 0
+	// defaultMergeCycle default: 14400 sec
+	defaultMergeCycle = 14400
 
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
@@ -398,6 +398,8 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
+	// MergeCycle default: 14400 sec (4 hours).
+	// PS: only used while MO init.
 	MergeCycle int `toml:"mergeCycle"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]

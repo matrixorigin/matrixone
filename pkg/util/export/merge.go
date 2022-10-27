@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -559,11 +561,14 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 	}
 }
 
-// MergeTaskCronExpr                 s m h   d ...
-const MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
+// MergeTaskCronExpr support sec level
+var MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
+
 const MergeTaskCronExprEvery15Sec = "*/15 * * * * *"
+const MergeTaskCronExprEvery05Min = "0 */5 * * * *"
 const MergeTaskCronExprEvery15Min = "0 */15 * * * *"
 const MergeTaskCronExprEvery1Hour = "0 0 */1 * * *"
+const MergeTaskCronExprEvery2Hour = "0 0 */2 * * *"
 const MergeTaskCronExprEvery4Hour = "0 0 4,8,12,16,20 * * *"
 const MergeTaskCronExprYesterday = "0 5 0 * * *"
 const MergeTaskToday = "today"
@@ -585,6 +590,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	var err error
 	// should init once in/with schema-init.
 	tables := GetAllTable()
+	logutil.Infof("init merge task with CronExpr: %s", MergeTaskCronExpr)
 	for _, tbl := range tables {
 		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
 		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify()), MergeTaskCronExpr); err != nil {
@@ -592,6 +598,44 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 		}
 		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify(), MergeTaskYesterday), MergeTaskCronExprYesterday); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// InitCronExpr support min interval 5 min, max 12 hour
+func InitCronExpr(duration time.Duration) error {
+	if duration < 0 || duration > 12*time.Hour {
+		return moerr.NewNotSupported("export cron expr not support cycle: %v", duration)
+	}
+	if duration < 5*time.Minute {
+		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())
+	} else if duration < time.Hour {
+		const unit = 5 * time.Minute
+		duration = (duration + unit - 1) / unit * unit
+		switch duration {
+		case 5 * time.Minute:
+			MergeTaskCronExpr = MergeTaskCronExprEvery05Min
+		case 15 * time.Minute:
+			MergeTaskCronExpr = MergeTaskCronExprEvery15Min
+		default:
+			MergeTaskCronExpr = fmt.Sprintf("@every %.0fm", duration.Minutes())
+		}
+	} else {
+		minHour := duration / time.Hour
+		switch minHour {
+		case 1:
+			MergeTaskCronExpr = MergeTaskCronExprEvery1Hour
+		case 2:
+			MergeTaskCronExpr = MergeTaskCronExprEvery2Hour
+		case 4:
+			MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
+		default:
+			var hours = make([]string, 0, 12)
+			for h := minHour; h < 24; h += minHour {
+				hours = append(hours, strconv.Itoa(int(h)))
+			}
+			MergeTaskCronExpr = fmt.Sprintf("0 0 %s * * *", strings.Join(hours, ","))
 		}
 	}
 	return nil
