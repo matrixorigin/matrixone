@@ -417,7 +417,7 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 
 func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
-	insBatch, err := block.CollectAppendInRange(b.start, b.end)
+	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
 	if err != nil {
 		return
 	}
@@ -425,7 +425,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		b.dataInsBatch.Extend(insBatch)
 		// insBatch is freed, don't use anymore
 	}
-	delBatch, err := block.CollectDeleteInRange(b.start, b.end)
+	delBatch, err := block.CollectDeleteInRange(b.start, b.end, false)
 	if err != nil {
 		return
 	}

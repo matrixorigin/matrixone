@@ -32,7 +32,8 @@ drop table t3;
 drop table if exists t4;
 create table t4(a uuid default uuid());
 desc t4;
-[unknown result because it is related to issue#5400]
+Field    Type    Null    Key    Default    Extra    Comment
+a    UUID    YES        UUID
 show create table t4;
 Table    Create Table
 t4    CREATE TABLE `t4` (\n`a` UUID DEFAULT uuid()\n)

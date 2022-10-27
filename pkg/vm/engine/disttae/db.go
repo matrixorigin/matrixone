@@ -41,21 +41,35 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(
+				//TODO index defs
+				nil,
+			)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(
+				//TODO index defs
+				nil,
+			)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
 	{
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(
+				[]ColumnsIndexDef{
+					NewColumnsIndexDef(
+						index_TableID,
+						MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
+					),
+					//TODO other indexes
+				},
+			)
 		}
 		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -215,7 +229,7 @@ func (db *DB) getMetaPartitions(name string) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(nil)
 		}
 		db.metaTables[name] = parts
 	}
@@ -230,7 +244,7 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(nil)
 		}
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -245,7 +259,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op clien
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = NewPartition(nil)
 		}
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
