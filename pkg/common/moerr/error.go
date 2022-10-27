@@ -34,7 +34,8 @@ const (
 	// using a static instance, no alloc.
 	Ok              uint16 = 0
 	OkStopCurrRecur uint16 = 1
-	OkExpectedEOF   uint16 = 2
+	OkExpectedEOF   uint16 = 2 // Expected End Of File
+	OkExpectedEOB   uint16 = 3 // Expected End of Batch
 	OkMax           uint16 = 99
 
 	// 100 - 200 is Info
@@ -455,6 +456,7 @@ func (e *Error) Succeeded() bool {
 // with other error code checking.
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
 var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
+var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -471,6 +473,10 @@ func GetOkStopCurrRecur() *Error {
 
 func GetOkExpectedEOF() *Error {
 	return &errOkExptededEOF
+}
+
+func GetOkExpectedEOB() *Error {
+	return &errOkExptededEOB
 }
 
 func NewInfo(msg string) *Error {
