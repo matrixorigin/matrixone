@@ -195,3 +195,15 @@ set sql_safe_updates=1;
 show variables like 'sql_safe_updates';
 Variable_name    Value
 sql_safe_updates    1
+set autocommit = on;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+set autocommit = off;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+set autocommit = 1;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
