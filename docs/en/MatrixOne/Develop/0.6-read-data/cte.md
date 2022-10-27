@@ -22,53 +22,30 @@ SELECT ... FROM <query_name>;
 
 ### Preparation
 
-Download the TPCH test dataset and create the tables. See[TPCH Test](../../Tutorial/TPCH-test-with-matrixone.md).
+You can create a simple table and insert some data to help you understand the CTE statements shown later: 
+
+```sql
+> drop table if exists t1;
+> create table t1(a int, b int, c int);
+> insert into t1 values(null,null,null),(2,3,4);
+```
 
 ## CTE Example
 
-In the following example, `q15_revenue0` is created as a temporary result set and the corresponding query results are cached in MatrixOne. You can perform a formal `q15_revenue0` query better than in a non-CTE scenario.
+In the following example, `qn` is created as a temporary result set and the corresponding query results are cached in MatrixOne. You can perform a formal `qn` query better than in a non-CTE scenario.
 
 ```sql
-with q15_revenue0 as (
-    select
-        l_suppkey as supplier_no,
-        sum(l_extendedprice * (1 - l_discount)) as total_revenue
-    from
-        lineitem
-    where
-        l_shipdate >= date '1995-12-01'
-        and l_shipdate < date '1995-12-01' + interval '3' month
-    group by
-        l_suppkey
-    )
-select
-    s_suppkey,
-    s_name,
-    s_address,
-    s_phone,
-    total_revenue
-from
-    supplier,
-    q15_revenue0
-where
-    s_suppkey = supplier_no
-    and total_revenue = (
-        select
-            max(total_revenue)
-        from
-            q15_revenue0
-    )
-order by
-    s_suppkey
-;
+WITH qn AS (SELECT a FROM t1), qn2 as (select b from t1)
+SELECT * FROM qn;
 ```
 
 Result as below:
 
 ```
-+-----------+--------------------+----------------------------------+-----------------+---------------+
-| s_suppkey | s_name             | s_address                        | s_phone         | total_revenue |
-+-----------+--------------------+----------------------------------+-----------------+---------------+
-|      7895 | Supplier#000007895 | NYl,i8UhxTykLxGJ2voIRn20Ugk1KTzz | 14-559-808-3306 |  1678635.2636 |
-+-----------+--------------------+----------------------------------+-----------------+---------------+
++------+
+| a    |
++------+
+| NULL |
+|    2 |
++------+
 ```
