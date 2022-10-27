@@ -139,6 +139,11 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(store, nil)
 	defer func() {
+		if err := recover(); err != nil {
+			if err != "query task by primary key, return 0 records" {
+				panic(err)
+			}
+		}
 		assert.NoError(t, s.Close())
 	}()
 
