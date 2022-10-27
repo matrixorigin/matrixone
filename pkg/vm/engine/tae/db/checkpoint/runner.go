@@ -393,7 +393,7 @@ func (r *runner) crontask(ctx context.Context) {
 		} else {
 			r.dirtyEntryQueue.Enqueue(entry)
 		}
-		// r.tryScheduleCheckpoint()
+		_ = r.tryScheduleCheckpoint
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
