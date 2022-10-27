@@ -1127,27 +1127,25 @@ func genRow(val *DataValue, cols []string) []any {
 }
 
 func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
-	var t memtable.Tuple
+	return memtable.Tuple{
+		index_Database,
+		memtable.ToOrdered([]byte(databaseName)),
+		memtable.ToOrdered(accountId),
+	}
 
-	t = append(t, index_Database)
-	t = append(t, memtable.ToOrdered([]byte(databaseName)))
-	t = append(t, memtable.ToOrdered(accountId))
-	return t
 }
 
 func genTableIndexKey(tableName string, databaseId uint64) memtable.Tuple {
-	var t memtable.Tuple
-
-	t = append(t, index_Table)
-	t = append(t, memtable.ToOrdered([]byte(tableName)))
-	t = append(t, memtable.ToOrdered(databaseId))
-	return t
+	return memtable.Tuple{
+		index_Table,
+		memtable.ToOrdered([]byte(tableName)),
+		memtable.ToOrdered(databaseId),
+	}
 }
 
 func genColumnIndexKey(id uint64) memtable.Tuple {
-	var t memtable.Tuple
-
-	t = append(t, index_Database)
-	t = append(t, memtable.ToOrdered(id))
-	return t
+	return memtable.Tuple{
+		index_Column,
+		memtable.ToOrdered(id),
+	}
 }
