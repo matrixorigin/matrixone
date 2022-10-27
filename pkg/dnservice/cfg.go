@@ -15,6 +15,7 @@
 package dnservice
 
 import (
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,11 +40,16 @@ var (
 	defaultExecutionLevels    = int16(30)
 	defaultCatalogCkpInterval = time.Second * 30
 	defaultCatalogUnCkpLimit  = int64(10)
-	defaultLogstoreType       = "batchstore"
+	defaultLogBackend         = "batchstore"
+
+	storageDir     = "storage"
+	defaultDataDir = "./mo-data"
 )
 
 // Config dn store configuration
 type Config struct {
+	// DataDir data dir
+	DataDir string `toml:"-"`
 	// UUID dn store uuid
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
@@ -91,22 +97,15 @@ type Config struct {
 
 		// Storage txn storage config
 		Storage struct {
+			// dataDir data dir used to store the data
+			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend string `toml:"backend"`
-			Name    string `toml:"name"`
-
-			// TAE tae storage configuration
-			TAE struct {
-			}
-
-			// Mem mem storage configuration
-			Mem struct {
-			}
+			// FileService tae used fileservice, default is LOCAL
+			FileService string `toml:"fileservice"`
+			// LogBackend the backend used to store logs
+			LogBackend string `toml:"log-backend"`
 		}
-	}
-
-	LogStore struct {
-		LogService string `toml:"logstore"`
 	}
 }
 
@@ -114,6 +113,10 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return moerr.NewInternalError("Config.UUID not set")
 	}
+	if c.DataDir == "" {
+		c.DataDir = defaultDataDir
+	}
+	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 		c.ServiceAddress = defaultServiceAddress
@@ -124,8 +127,11 @@ func (c *Config) Validate() error {
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = taeStorageBackend
 	}
-	if c.Txn.Storage.Name == "" {
-		c.Txn.Storage.Name = localFileServiceName
+	if c.Txn.Storage.FileService == "" {
+		c.Txn.Storage.FileService = localFileServiceName
+	}
+	if c.Txn.Storage.LogBackend == "" {
+		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
 	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
 		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
@@ -162,9 +168,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Ckp.CatalogUnCkpLimit == 0 {
 		c.Ckp.CatalogUnCkpLimit = defaultCatalogUnCkpLimit
-	}
-	if c.LogStore.LogService == "" {
-		c.LogStore.LogService = defaultLogstoreType
 	}
 	return nil
 }

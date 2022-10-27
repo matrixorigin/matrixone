@@ -27,13 +27,14 @@ import (
 )
 
 func TestUnixTimestamp(t *testing.T) {
-	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-01 22:23:00"), 1641046980)
-	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-02 22:23:00"), 1641133380)
-	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-03 22:23:00"), 1641219780)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-01 22:23:00"), 1641075780, false)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-02 22:23:00"), 1641162180, false)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-03 22:23:00"), 1641248580, false)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-02-29 22:23:00"), 0, true)
 }
 
 // func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
-func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
+func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64, isNull bool) {
 	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
@@ -41,6 +42,7 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
 		proc       *process.Process
 		wantBytes  interface{}
 		wantScalar bool
+		wantNull   bool
 	}{
 		{
 			name:       "TEST01",
@@ -48,6 +50,7 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
 			proc:       procs,
 			wantBytes:  []int64{res},
 			wantScalar: true,
+			wantNull:   isNull,
 		},
 	}
 
@@ -57,7 +60,10 @@ func UnixtimeCase(t *testing.T, typ types.T, src types.Timestamp, res int64) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reflect.DeepEqual(c.wantBytes, plus.Col)
+			if !reflect.DeepEqual(c.wantBytes, plus.Col) {
+				t.Errorf("unixtimestamp() want %v but got %v", c.wantBytes, plus.Col)
+			}
+			require.Equal(t, c.wantNull, plus.ConstVectorIsNull())
 			require.Equal(t, c.wantScalar, plus.IsScalar())
 		})
 	}

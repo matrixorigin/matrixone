@@ -32,7 +32,8 @@ import (
 type Collector interface {
 	String() string
 	Run()
-	ScanInRange(from, to types.TS) *DirtyTreeEntry
+	ScanInRange(from, to types.TS) (*DirtyTreeEntry, int)
+	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	GetAndRefreshMerged() *DirtyTreeEntry
 	Merge() *DirtyTreeEntry
 }
@@ -136,9 +137,19 @@ func (d *dirtyCollector) Run() {
 	d.GetAndRefreshMerged()
 }
 
-func (d *dirtyCollector) ScanInRange(from, to types.TS) (entry *DirtyTreeEntry) {
+func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
+	tree *DirtyTreeEntry) {
+	tree, _ = d.ScanInRange(from, to)
+	if err := d.tryCompactTree(d.interceptor, tree.tree); err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (d *dirtyCollector) ScanInRange(from, to types.TS) (
+	entry *DirtyTreeEntry, count int) {
 	reader := d.sourcer.GetReader(from, to)
-	tree := reader.GetDirty()
+	tree, count := reader.GetDirty()
 
 	// make a entry
 	entry = &DirtyTreeEntry{
@@ -226,7 +237,7 @@ func (d *dirtyCollector) findRange() (from, to types.TS) {
 }
 
 func (d *dirtyCollector) rangeScanAndUpdate(from, to types.TS) (updated bool) {
-	entry := d.ScanInRange(from, to)
+	entry, _ := d.ScanInRange(from, to)
 
 	// try to store the entry
 	updated = d.tryStoreEntry(entry)

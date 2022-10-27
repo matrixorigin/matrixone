@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -54,12 +55,25 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	name string) (*table, []engine.TableDef, error) {
 	accountId := getAccountId(ctx)
-	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
+	key := genTableIndexKey(name, databaseId, accountId)
+	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
+		txn.dnStores[:1], catalog.MoTablesSchema, key,
 		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(rows) != 1 {
+		return nil, nil, moerr.NewDuplicate()
+	}
+	row := rows[0]
+	/*
+		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
+			genTableInfoExpr(accountId, databaseId, name))
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
 	tbl := new(table)
 	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
@@ -68,8 +82,16 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	tbl.comment = string(row[catalog.MO_TABLES_REL_COMMENT_IDX].([]byte))
 	tbl.partition = string(row[catalog.MO_TABLES_PARTITIONED_IDX].([]byte))
 	tbl.createSql = string(row[catalog.MO_TABLES_REL_CREATESQL_IDX].([]byte))
-	rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-		txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
+	/*
+		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
+			genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
+	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
+		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
 		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
 	if err != nil {
 		return nil, nil, err
@@ -124,17 +146,32 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
-	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		catalog.MoDatabaseTableDefs, []string{
+	key := genDatabaseIndexKey(name, accountId)
+	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, "",
+		txn.dnStores[:1], []string{
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		},
-		genDatabaseIdExpr(accountId, name))
+		}, key, genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
 	}
-	return row[0].(uint64), nil
+	if len(rows) != 1 {
+		return 0, moerr.NewDuplicate()
+	}
+	/*
+		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
+			catalog.MoDatabaseTableDefs, []string{
+				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+				catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+			},
+			genDatabaseIdExpr(accountId, name))
+		if err != nil {
+			return 0, err
+		}
+	*/
+	return rows[0][0].(uint64), nil
 }
 
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
@@ -267,6 +304,99 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 			rows = append(rows, catalog.GenRows(bat)...)
 		}
 		bat.Clean(txn.proc.Mp())
+	}
+	return rows, nil
+}
+
+func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
+	dnList []DNStore, columns []string, index memtable.Tuple, expr *plan.Expr) ([][]any, error) {
+	var rows [][]any
+
+	deletes := make(map[types.Rowid]uint8)
+	if len(name) == 0 {
+		for i := range txn.writes {
+			for _, entry := range txn.writes[i] {
+				if !(entry.databaseId == databaseId &&
+					entry.tableId == tableId) {
+					continue
+				}
+				if entry.typ == DELETE {
+					if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+						vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
+						for _, v := range vs {
+							deletes[v] = 0
+						}
+					}
+				}
+				if entry.typ == INSERT {
+					length := entry.bat.Length()
+					flags := make([]uint8, length)
+					for i := range flags {
+						flags[i]++
+					}
+					mp := make(map[string]int)
+					for _, col := range columns {
+						mp[col] = 0
+					}
+					for i, attr := range entry.bat.Attrs {
+						if _, ok := mp[attr]; ok {
+							mp[attr] = i
+						}
+					}
+					bat := batch.NewWithSize(len(columns))
+					for i := range bat.Vecs {
+						vec := entry.bat.Vecs[mp[columns[i]]]
+						bat.Vecs[i] = vector.New(vec.GetType())
+						if err := vector.UnionBatch(bat.Vecs[i], vec, 0, length,
+							flags[:length], txn.proc.Mp()); err != nil {
+							return nil, err
+						}
+					}
+					bat.SetZs(entry.bat.Length(), txn.proc.Mp())
+					if expr != nil {
+						vec, err := colexec.EvalExpr(bat, txn.proc, expr)
+						if err != nil {
+							return nil, err
+						}
+						bs := vector.GetColumn[bool](vec)
+						if vec.IsScalar() {
+							if !bs[0] {
+								bat.Shrink(nil)
+							}
+						} else {
+							sels := txn.proc.Mp().GetSels()
+							for i, b := range bs {
+								if b {
+									sels = append(sels, int64(i))
+								}
+							}
+							bat.Shrink(sels)
+							txn.proc.Mp().PutSels(sels)
+						}
+						vec.Free(txn.proc.Mp())
+					}
+					rows = append(rows, catalog.GenRows(bat)...)
+					bat.Clean(txn.proc.Mp())
+				}
+			}
+		}
+	}
+	accessed := make(map[string]uint8)
+	for _, dn := range dnList {
+		accessed[dn.GetUUID()] = 0
+	}
+	parts := txn.db.getPartitions(databaseId, tableId)
+	for i, dn := range txn.dnStores {
+		if _, ok := accessed[dn.GetUUID()]; !ok {
+			continue
+		}
+		tuples, err := parts[i].GetRowsByIndex(txn.meta.SnapshotTS, index, columns, deletes)
+		if err == nil {
+			rows = append(rows, tuples...)
+		}
+	}
+	if len(rows) == 0 {
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return rows, nil
 }

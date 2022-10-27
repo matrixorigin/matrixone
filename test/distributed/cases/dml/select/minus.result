@@ -283,7 +283,7 @@ set @a=1;
 prepare s1 from '(select a from t8 where a>?) minus (select b from t8 where b>?)';
 prepare s2 from '(select a from t8 where a>?)';
 execute s1 using @a;
-ERROR 1210 (HY000): Incorrect arguments to EXECUTE
+invalid input: Incorrect arguments to EXECUTE
 execute s1 using @a, @a;
 a
 2
@@ -292,7 +292,7 @@ a
 2
 3
 execute s2 using @a, @a;
-ERROR 1210 (HY000): Incorrect arguments to EXECUTE
+invalid input: Incorrect arguments to EXECUTE
 deallocate prepare s1;
 deallocate prepare s2;
 drop table t8;
