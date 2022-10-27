@@ -142,7 +142,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	}
 
 	if !check() {
-		logutil.Infof("%s is waiting", entry.String())
+		logutil.Debugf("%s is waiting", entry.String())
 		return
 	}
 
@@ -154,7 +154,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	}
 
 	entry.SetState(ST_Finished)
-	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
 
 	r.postCheckpointQueue.Enqueue(entry)
 }
@@ -186,7 +186,7 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 		// TODO:
 		// 2. remove previous checkpoint
 
-		logutil.Infof("Post %s", entry.String())
+		logutil.Debugf("Post %s", entry.String())
 	}
 }
 
@@ -333,7 +333,7 @@ func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error
 	}
 	blkData := blk.GetBlockData()
 	score := blkData.EstimateScore(r.options.maxFlushInterval)
-	logutil.Infof("%s [SCORE=%d]", blk.String(), score)
+	logutil.Debugf("%s [SCORE=%d]", blk.String(), score)
 	if score < 100 {
 		return
 	}
@@ -375,7 +375,7 @@ func (r *runner) onDirtyEntries(entries ...any) {
 	if merged.IsEmpty() {
 		return
 	}
-	logutil.Infof(merged.String())
+	logutil.Debugf(merged.String())
 	visitor := new(blockVisitor)
 	visitor.blockFn = r.tryCompactBlock
 
@@ -389,11 +389,11 @@ func (r *runner) crontask(ctx context.Context) {
 		r.source.Run()
 		entry := r.source.GetAndRefreshMerged()
 		if entry.IsEmpty() {
-			logutil.Info("No dirty block found")
+			logutil.Debugf("No dirty block found")
 		} else {
 			r.dirtyEntryQueue.Enqueue(entry)
 		}
-		r.tryScheduleCheckpoint()
+		// r.tryScheduleCheckpoint()
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
