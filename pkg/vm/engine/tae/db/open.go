@@ -115,11 +115,15 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	scanner.RegisterOp(catalogCheckpointer)
 
 	db.BGCheckpointRunner = checkpoint.NewRunner(
+		db.Fs,
 		db.Catalog,
 		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		checkpoint.WithFlushInterval(time.Duration(opts.CheckpointCfg.FlushInterval)*time.Millisecond),
-		checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond))
+		checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond),
+		checkpoint.WithMinCount(int(opts.CheckpointCfg.CatalogUnCkpLimit)),
+		checkpoint.WithMinIncrementalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond),
+		checkpoint.WithMinGlobalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval*1000)*time.Millisecond))
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(
