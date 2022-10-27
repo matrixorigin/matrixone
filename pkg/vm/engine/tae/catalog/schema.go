@@ -26,9 +26,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type IndexT uint16
@@ -36,6 +39,10 @@ type IndexT uint16
 const (
 	ZoneMap IndexT = iota
 )
+
+func i82bool(v int8) bool {
+	return v == 1
+}
 
 type IndexInfo struct {
 	Id      uint64
@@ -445,6 +452,56 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	}
 	buf = w.Bytes()
 	return
+}
+
+func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+	for {
+		nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
+		if offset >= nameVec.Length() {
+			break
+		}
+		name := string(nameVec.Get(offset).([]byte))
+		if name != s.Name {
+			break
+		}
+		def := new(ColDef)
+		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
+		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
+		types.Decode(data, def.Type)
+		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		if len(data) != len([]byte("")) {
+			pDefault := &plan.Default{
+				Expr: &plan.Expr{},
+			}
+			types.Decode(data, pDefault)
+			expr, err := pDefault.Expr.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			def.Default = Default{
+				Expr: expr,
+			}
+		}
+		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
+		def.NullAbility = i82bool(nullable)
+		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
+		def.Hidden = i82bool(isHidden)
+		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
+		def.AutoIncrement = i82bool(isAutoIncrement)
+		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
+		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
+		if len(data) != len([]byte("")) {
+			pupdate := &plan.Expr{}
+			types.Decode(data, pupdate)
+			update, err := pupdate.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			def.OnUpdate = update
+		}
+		offset++
+	}
+	return offset + 1
 }
 
 func (s *Schema) AppendColDef(def *ColDef) (err error) {

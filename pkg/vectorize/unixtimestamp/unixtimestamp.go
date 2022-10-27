@@ -29,9 +29,6 @@ func init() {
 func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
 	for i := range xs {
 		rs[i] = xs[i].Unix()
-		if rs[i] < 0 {
-			rs[i] = 0
-		}
 	}
 	return rs
 }
