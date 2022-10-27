@@ -142,7 +142,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		return nil, 0, err
 	}
 
-	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
+	obs, err := reader.ReadMeta(nil, []objectio.Extent{extent}, m)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -152,7 +152,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		if err != nil {
 			return nil, 0, err
 		}
-		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		data, err := column.GetIndex(nil, objectio.ZoneMapType, m)
 		if err != nil {
 			return nil, 0, err
 		}

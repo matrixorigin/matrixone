@@ -49,7 +49,7 @@ func (n *DeltaMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	reader, err := blockio.NewReader(n.fs, n.deltaloc)
+	reader, err := blockio.NewReader(nil, n.fs, n.deltaloc)
 	if err != nil {
 		panic(err)
 	}

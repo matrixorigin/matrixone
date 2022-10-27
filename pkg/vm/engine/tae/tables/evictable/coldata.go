@@ -128,7 +128,7 @@ func (n *ColDataNode) fetchData() (containers.Vector, error) {
 	defer h.Close()
 
 	// Do IO, fetch data buf
-	fsVector, err := metaNode.GetData(nil)
+	fsVector, err := metaNode.GetData(nil, nil)
 	if err != nil {
 		return nil, err
 	}

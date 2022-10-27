@@ -68,7 +68,7 @@ func (n *BfNode) onLoad() {
 	stat := metaNode.GetMeta()
 	compressTyp := stat.GetAlg()
 	// Do IO, fetch bloomfilter buf
-	fsData, err := metaNode.GetIndex(objectio.BloomFilterType, nil)
+	fsData, err := metaNode.GetIndex(nil, objectio.BloomFilterType, nil)
 	if err != nil {
 		panic(err)
 	}

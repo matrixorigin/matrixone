@@ -57,7 +57,7 @@ func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
 	name := blockio.EncodeBlkName(task.meta.AsCommonID(), task.ts)
-	writer := blockio.NewWriter(task.fs, name)
+	writer := blockio.NewWriter(nil, task.fs, name)
 	block, err := writer.WriteBlock(task.data)
 	if err != nil {
 		return err

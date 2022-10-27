@@ -101,7 +101,7 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 	}
 
 	// Do IO, fetch data buf
-	fsVector, err := col.GetData(nil)
+	fsVector, err := col.GetData(nil, nil)
 	if err != nil {
 		return nil, err
 	}

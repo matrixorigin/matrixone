@@ -566,7 +566,7 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 }
 func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
 	b.tempName = blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
-	writer := blockio.NewWriter(fs, b.tempName)
+	writer := blockio.NewWriter(nil,fs, b.tempName)
 	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
 		panic(err)
 	}

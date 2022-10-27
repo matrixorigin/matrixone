@@ -56,7 +56,7 @@ func (n *ColumnMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	reader, err := blockio.NewReader(n.fs, n.metaloc)
+	reader, err := blockio.NewReader(nil, n.fs, n.metaloc)
 	if err != nil {
 		panic(err)
 	}
@@ -64,7 +64,7 @@ func (n *ColumnMetaNode) onLoad() {
 	n.ColumnObject = meta
 
 	// deserialize zonemap
-	zmData, err := meta.GetIndex(objectio.ZoneMapType, nil)
+	zmData, err := meta.GetIndex(nil, objectio.ZoneMapType, nil)
 
 	// TODOa: Error Handling?
 	if err != nil {
