@@ -6,14 +6,6 @@ This document describes how to use subquery statements in MatrixOne.
 
 An subquery is a query within another SQL query. With subquery, the query result can be used in another query.
 
-**Key Feature**：
-
-- Subqueries allow structured queries so that each part of a query statement can be separated.
-
-- Subqueries provides another way to perform operations that require complex `JOIN` and `UNION`.
-
-## Subquery Types
-
 In most cases, there are five types of subqueries:
 
 - Scalar Subquery, such as `SELECT (SELECT s1 FROM t2) FROM t1`.
@@ -22,7 +14,41 @@ In most cases, there are five types of subqueries:
 - Quantified Comparison, such as `WHERE t1.a = ANY(SELECT ... FROM t2)`, `WHERE t1.a = ANY(SELECT ... FROM t2)`.
 - Subquery as a comparison operator operand, such as `WHERE t1.a > (SELECT ... FROM t2)`.
 
-## Before you start
+For more information on SQL statement, see [SUBQUERY](../../Reference/SQL-Reference/Data-Manipulation-Statements/subquery.md).
+
+In addition, from the execution of SQL statements, subquery generally has the following two types:
+
+- Correlated Subquery: In Correlated Subquery nested in databases, the inner and outer queries would not be independent, and the inner queries would depend on the outer queries.
+
+   The execution sequence is as follows:
+
+    + Queries a record from the outer query.
+
+    + Put the queried records into the inner query, then put the records that meet the conditions into the outer query.
+
+    + Repeat the above steps
+
+    For example: ``select * from tableA where tableA.cloumn &lt; (select column from tableB where tableA.id = tableB.id))``
+
+- Self-contained Subquery: In a database nested query, the inner query is entirely independent of the outer query.
+
+   The execution sequence is as follows:
+
+    + Execute the inner query first.
+
+    + The result of the inner query is carried into the outer layer, and then the outer query is executed.
+
+    For example: ``select * from tableA where tableA.column = (select tableB.column from tableB)``
+
+**Key Feature**：
+
+- Subqueries allow structured queries so that each part of a query statement can be separated.
+
+- Subqueries provides another way to perform operations that require complex `JOIN` and `UNION`.
+
+## Example
+
+### Before you start
 
 - Make sure you have already [installed and launched MatrixOne](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/).
 - Use MySQL client to [connect to MatrixOne](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/connect-to-matrixone-server/).
@@ -55,13 +81,7 @@ insert into t2 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subque
 insert into t2 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
 ```
 
-## Category of subquery
-
-The subquery can be categorized as Correlated Subquery and Self-contained Subquery. MatrixOne treats these two types differently.
-
-Whether a subquery is correlated or not depends on whether it refers to columns used in its outer query.
-
-### Self-contained subquery
+#### Self-contained subquery
 
 For a self-contained subquery that uses subquery as operand of comparison operators (`>`, `>=`, `<`, `<=`, `=` , or `! =`), the inner subquery queries only once, and MatrixOne rewrites it as a constant during the execution plan phase.
 
@@ -93,7 +113,7 @@ Result is as below:
 
 For self-contained subqueries such as Existential Test and Quantified Comparison, MatrixOne rewrites and replaces them with equivalent queries for better performance.
 
-### Correlated subquery
+#### Correlated subquery
 
 For correlated subquery, because the inner subquery references the columns from the outer query, each subquery is executed once for each row of the outer query. That is, assuming that the outer query gets 10 million results, the subquery will also be executed 10 million times, which will consume more time and resources.
 
