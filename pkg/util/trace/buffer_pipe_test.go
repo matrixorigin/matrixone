@@ -548,9 +548,15 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 			require.Equal(t, true, ok)
 			require.Equal(t, len(tt.args.in), len(reqs))
 			require.Equal(t, len(tt.args.in), len(tt.want))
-			for idx, req := range reqs {
-				assert.Equalf(t, tt.want[idx], req.content, "genCsvData(%v, %v)", req.content[idx], tt.args.buf)
-				t.Logf("idx %d: %s", idx, tt.want[idx])
+			for _, req := range reqs {
+				found := false
+				for idx, w := range tt.want {
+					if w == req.content {
+						found = true
+						t.Logf("idx %d: %s", idx, w)
+					}
+				}
+				assert.Equalf(t, true, found, "genCsvData: %v", req.content)
 			}
 		})
 	}
