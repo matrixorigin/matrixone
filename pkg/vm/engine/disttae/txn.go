@@ -396,7 +396,7 @@ func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
 		}
 	}
 	if len(rows) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return rows, nil
 }
