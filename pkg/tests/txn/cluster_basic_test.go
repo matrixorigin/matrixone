@@ -27,6 +27,11 @@ var (
 )
 
 func TestBasicSingleShard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
 	for _, backend := range testBackends {
@@ -52,6 +57,11 @@ func TestBasicSingleShard(t *testing.T) {
 }
 
 func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// 1. start t1
 	// 2. start t2
@@ -132,6 +142,11 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 }
 
 func TestSingleShardWithCreateTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	c, err := NewCluster(t,
 		getBasicClusterOptions(memTxnStorage))
 	require.NoError(t, err)
