@@ -275,7 +275,8 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	return nil
 }
 
-func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple) (rows []DataValue, err error) {
+func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
+	columns []string, deletes map[types.Rowid]uint8) (rows [][]any, err error) {
 	t := memtable.Time{
 		Timestamp: ts,
 	}
@@ -287,11 +288,14 @@ func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple)
 	iter := p.data.NewIndexIter(tx, index, index)
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
+		if _, ok := deletes[types.Rowid(entry.Key)]; ok {
+			continue
+		}
 		data, err := p.data.Get(tx, entry.Key)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, data)
+		rows = append(rows, genRow(&data, columns))
 	}
 	return
 }

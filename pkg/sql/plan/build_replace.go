@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unixtimestamp
+package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-var (
-	UnixTimestamp func([]types.Timestamp, []int64) []int64
-)
-
-func init() {
-	UnixTimestamp = unixTimestamp
-}
-
-func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
-	for i := range xs {
-		rs[i] = xs[i].Unix()
-	}
-	return rs
+func buildReplace(stmt *tree.Replace, ctx CompilerContext) (p *Plan, err error) {
+	// no support replace now
+	return nil, moerr.NewNotSupported("Not support replace statement")
 }

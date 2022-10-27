@@ -34,6 +34,7 @@ type FileWithChecksum[T FileLike] struct {
 const (
 	_ChecksumSize     = crc32.Size
 	_BlockContentSize = 2048 - _ChecksumSize
+	_BlockSize        = _BlockContentSize + _ChecksumSize
 )
 
 var (
@@ -96,6 +97,7 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 			return 0, err
 		}
 
+		// extend data
 		if len(data[offsetInBlock:]) == 0 {
 			nAppend := len(buf)
 			if nAppend+len(data) > f.blockContentSize {
@@ -104,6 +106,7 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 			data = append(data, make([]byte, nAppend)...)
 		}
 
+		// copy to data
 		nBytes := copy(data[offsetInBlock:], buf)
 		buf = buf[nBytes:]
 
@@ -138,9 +141,8 @@ func (f *FileWithChecksum[T]) Seek(offset int64, whence int) (int64, error) {
 		return 0, err
 	}
 
-	contentSize := fileSize
-	nBlock := ceilingDiv(contentSize, int64(f.blockSize))
-	contentSize -= _ChecksumSize * nBlock
+	nBlock := ceilingDiv(fileSize, int64(f.blockSize))
+	contentSize := fileSize - _ChecksumSize*nBlock
 
 	switch whence {
 	case io.SeekStart:
