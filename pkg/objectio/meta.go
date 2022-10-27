@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // +---------------------------------------------------------------------------------------------+
@@ -147,9 +148,8 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
 		return err
 	}
-	magic := uint64(Magic)
-	if f.magic != magic {
-		panic(any("Magic is err"))
+	if f.magic != uint64(Magic) {
+		return moerr.NewInternalError("object io: invalid footer")
 	}
 	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
 		return nil

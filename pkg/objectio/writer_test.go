@@ -140,7 +140,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
-	dirs, err := fs.ListDir("/")
+	dirs, err := fs.ListDir("")
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(dirs))
 	objectReader, err = NewObjectReader(name, service)
@@ -148,6 +148,38 @@ func TestNewObjectWriter(t *testing.T) {
 	bs, err = objectReader.ReadAllMeta(dirs[0].Size, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(bs))
+	idxs = make([]uint16, 3)
+	idxs[0] = 0
+	idxs[1] = 2
+	idxs[2] = 3
+	vec, err = objectReader.Read(blocks[0].GetExtent(), idxs, pool)
+	assert.Nil(t, err)
+	vector1 = newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Data)
+	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	vector2 = newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Data)
+	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	vector3 = newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Data)
+	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
+	indexes, err = objectReader.ReadIndex(blocks[0].GetExtent(), idxs, ZoneMapType, pool)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(indexes))
+	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
+	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
+	indexes, err = objectReader.ReadIndex(blocks[0].GetExtent(), idxs, BloomFilterType, pool)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(indexes))
+	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
+	assert.False(t, nb0 == pool.CurrNB())
+	for i := range vec.Entries {
+		pool.Free(vec.Entries[i].Data)
+	}
+	assert.False(t, nb0 == pool.CurrNB())
+	for i := range indexes {
+		pool.Free(indexes[i].(*BloomFilter).buf)
+	}
+	assert.True(t, nb0 == pool.CurrNB())
 
 }
 
