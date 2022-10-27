@@ -1,4 +1,5 @@
 service-type = "DN"
+data-dir = "./mo-data"
 
 [log]
 level = "info"
@@ -13,7 +14,7 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
 
 [[fileservice]]
 name = "S3"
@@ -22,13 +23,13 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
 
 [dn]
-uuid = "42"
+uuid = "dn1"
 
 [dn.Txn.Storage]
 backend = "TAE"
+log-backend = "logservice"
 
 [dn.Ckp]
 scanner-interval = "10000s"
@@ -37,6 +38,3 @@ execution-interval = "10000s"
 catalog-ckp-interval = "10000s"
 catalog-unckp-limit = 10000
 flush-interval = "10000s"
-
-[dn.LogStore]
-logstore = "logservice"
