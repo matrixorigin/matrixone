@@ -52,7 +52,7 @@ d2    d3    d4    d5
 2015-11-07    2013-09-14 13:45:13    null    null
 2013-08-07    2006-05-23 13:23:13    null    null
 2011-08-07    2018-07-08 23:59:59    null    null
-null    null    null    0
+null    null    null    null
 null    null    null    null
 DELETE FROM date_test;
 CREATE TABLE math_test(
