@@ -79,9 +79,6 @@ func BlockRead(
 	bat.Attrs = columns
 	for i, vec := range columnBatch.Vecs {
 		movec := containers.UnmarshalToMoVec(vec)
-		if vec.Allocated() != 0 { // allocated in mpool
-			movec.SetOriginal(false)
-		}
 		bat.Vecs[i] = movec
 	}
 	bat.SetZs(bat.Vecs[0].Length(), pool)
@@ -140,7 +137,7 @@ func readColumnBatchByMetaloc(
 				prefix,
 				0,
 				rows,
-				pool,
+				nil,
 			)
 			if err != nil {
 				return nil, err
