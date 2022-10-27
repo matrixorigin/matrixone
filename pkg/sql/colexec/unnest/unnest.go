@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -51,6 +52,18 @@ func Prepare(_ *process.Process, arg any) error {
 		}
 	}
 	param.filters = filters
+	if len(param.ExprList) < 1 || len(param.ExprList) > 3 {
+		return moerr.NewInvalidInput("unnest: argument number must be 1, 2 or 3")
+	}
+	if len(param.ExprList) == 1 {
+		vType := types.T_varchar.ToType()
+		bType := types.T_bool.ToType()
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Sval{Sval: "$"}}}})
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+	} else if len(param.ExprList) == 2 {
+		bType := types.T_bool.ToType()
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+	}
 	return nil
 }
 
@@ -85,7 +98,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-
 	jsonVec, err = colexec.EvalExpr(bat, proc, param.ExprList[0])
 	if err != nil {
 		return false, err

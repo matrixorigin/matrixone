@@ -159,7 +159,7 @@ func TestCall(t *testing.T) {
 	for _, ut := range utc {
 
 		err := Prepare(ut.proc, ut.arg)
-		require.Nil(t, err)
+		require.NotNil(t, err)
 		var inputBat *batch.Batch
 		switch ut.jsonType {
 		case "str":

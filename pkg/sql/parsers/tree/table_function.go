@@ -21,11 +21,9 @@ type TableFunction struct {
 }
 
 func (t *TableFunction) Format(ctx *FmtCtx) {
-	ctx.WriteString("table function {")
 	if t.Func != nil {
 		t.Func.Format(ctx)
 	}
-	ctx.WriteString("}")
 }
 
 func (t TableFunction) Id() string {
