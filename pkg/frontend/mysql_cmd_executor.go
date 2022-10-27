@@ -2290,7 +2290,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
-			ses.Data = nil
+			ses.SetData(nil)
 			switch st.Statement.(type) {
 			case *tree.Delete:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
@@ -2301,10 +2301,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowColumns:
 			ses.SetShowStmtType(ShowColumns)
-			ses.Data = nil
+			ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			ses.showStmtType = ShowTableStatus
-			ses.Data = nil
+			ses.SetData(nil)
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
@@ -2522,7 +2522,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Delete, *tree.TruncateTable:
 			//change privilege
 			switch cw.GetAst().(type) {
-			case *tree.DropTable, *tree.DropDatabase, *tree.DropView, *tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
+				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole,
 				*tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole:

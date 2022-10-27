@@ -3456,19 +3456,21 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								dbName = ses.GetDatabaseName()
 							}
 							yes = cache.has(dbName, entry.tableName, entry.privilegeId)
+							if !yes {
+								//At least there is one success
+								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
+								if err != nil {
+									return false, err
+								}
+								operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
+								if operateCatalog {
+									yes = false
+								}
+							}
+
 							if yes {
-								return true, nil
+								cache.add(dbName, entry.tableName, entry.privilegeId)
 							}
-							//At least there is one success
-							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ses, roleId, tempEntry, pls)
-							if err != nil {
-								return false, err
-							}
-							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
-							if operateCatalog {
-								yes = false
-							}
-							cache.add(dbName, entry.tableName, entry.privilegeId)
 						}
 						if !yes {
 							allTrue = false
