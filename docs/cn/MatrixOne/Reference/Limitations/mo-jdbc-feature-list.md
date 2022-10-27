@@ -173,7 +173,6 @@
 | update()(一连串数据类型) | Y |
 | updateNull() | Y |
 
-
 ## 4. ResultSetMetaData 中的方法
 
 | ResultSetMetaData 类中的方法 | 支持（Y）/不支持（N） |
