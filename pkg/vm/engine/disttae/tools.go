@@ -34,9 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -908,7 +910,12 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 	vs := vector.MustTCols[types.Rowid](vec)
 	for i, v := range vs {
 		for j, part := range tbl.parts {
-			if part.Get(v, txn.meta.SnapshotTS) {
+			var blks []BlockMeta
+
+			if tbl.meta != nil {
+				blks = tbl.meta.blocks[j]
+			}
+			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
 				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
@@ -954,9 +961,10 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok &&
-				blk.CommitTs.Less(blockInfos[i].CommitTs) {
-				mp[blk.BlockID] = blockInfos[i]
+			if blk, ok := mp[blockInfos[i].BlockID]; ok {
+				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
+					mp[blk.BlockID] = blockInfos[i]
+				}
 			} else {
 				mp[blk.BlockID] = blockInfos[i]
 			}
@@ -966,6 +974,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 			blockInfos = append(blockInfos, blk)
 		}
 	}
+
 	metas := make([]BlockMeta, len(rows))
 
 	idxs := make([]uint16, columnLength)
@@ -1046,4 +1055,98 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 
 func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
+}
+
+func inParttion(v types.Rowid, part *Partition,
+	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+	if part.Get(v, ts) {
+		return true
+	}
+	if len(blocks) == 0 {
+		return false
+	}
+	blkId := rowIDToBlockID(RowID(v))
+	for _, blk := range blocks {
+		if blk.Info.BlockID == blkId {
+			return true
+		}
+	}
+	return false
+}
+
+// transfer DataValue to rows
+func genRow(val *DataValue, cols []string) []any {
+	row := make([]any, len(cols))
+	for i, col := range cols {
+		switch v := val.value[col].Value.(type) {
+		case bool:
+			row[i] = v
+		case int8:
+			row[i] = v
+		case int16:
+			row[i] = v
+		case int32:
+			row[i] = v
+		case int64:
+			row[i] = v
+		case uint8:
+			row[i] = v
+		case uint16:
+			row[i] = v
+		case uint32:
+			row[i] = v
+		case uint64:
+			row[i] = v
+		case float32:
+			row[i] = v
+		case float64:
+			row[i] = v
+		case []byte:
+			row[i] = v
+		case types.Date:
+			row[i] = v
+		case types.Datetime:
+			row[i] = v
+		case types.Timestamp:
+			row[i] = v
+		case types.Decimal64:
+			row[i] = v
+		case types.Decimal128:
+			row[i] = v
+		case types.TS:
+			row[i] = v
+		case types.Rowid:
+			row[i] = v
+		case types.Uuid:
+			row[i] = v
+		default:
+			panic(fmt.Sprintf("unknown type: %T", v))
+		}
+	}
+	return row
+}
+
+func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Database,
+		memtable.ToOrdered([]byte(databaseName)),
+		memtable.ToOrdered(accountId),
+	}
+
+}
+
+func genTableIndexKey(tableName string, databaseId uint64, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Table,
+		memtable.ToOrdered([]byte(tableName)),
+		memtable.ToOrdered(databaseId),
+		memtable.ToOrdered(accountId),
+	}
+}
+
+func genColumnIndexKey(id uint64) memtable.Tuple {
+	return memtable.Tuple{
+		index_Column,
+		memtable.ToOrdered(id),
+	}
 }
