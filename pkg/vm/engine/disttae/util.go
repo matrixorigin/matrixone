@@ -17,7 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,30 +64,25 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		columnMap[int(idx)] = struct{}{}
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr) []int {
-	columnMap := make(map[int]struct{})
-	getColumnMapByExpr(expr, columnMap)
-
-	columns := make([]int, len(columnMap))
-	i := 0
-	for k := range columnMap {
-		columns[i] = k
-		i++
-	}
-	sort.Ints(columns)
-	return columns
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+	columnMap := make(map[int]int)
+	getColumnMapByExpr(expr, tableDef, columnMap)
+	return columnMap
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
@@ -164,16 +159,13 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	getIdx := func(idx int) int {
-		return int(tableDef.Name2ColIndex[tableDef.Cols[idx].Name])
-	}
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 
 	for i := 0; i < dataLength; i++ {
-		idx := getIdx(columns[i])
-		dataTypes[i] = uint8(tableDef.Cols[columns[i]].Typ.Id)
+		idx := columns[i]
+		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
