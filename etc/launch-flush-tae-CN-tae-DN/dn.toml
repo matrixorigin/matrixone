@@ -28,6 +28,7 @@ uuid = "dn1"
 
 [dn.Txn.Storage]
 backend = "TAE"
+log-backend = "logservice"
 
 [dn.Ckp]
 scanner-interval = "2s"

@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -45,4 +46,8 @@ func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 		Dir:     dir,
 	}
 	return fs
+}
+
+func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
+	return o.Service.List(context.Background(), dir)
 }
