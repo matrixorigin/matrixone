@@ -1,44 +1,7 @@
 USE mo_catalog;
-SHOW TABLES;
-tables_in_mo_catalog
-mo_database
-mo_tables
-mo_columns
-mo_user
-mo_account
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
 SELECT COUNT(*) FROM mo_database;
 count(*)
-6
-SHOW COLUMNS FROM mo_database;
-Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED    NO    PRI    NULL        
-datname    VARCHAR    YES        NULL        
-dat_catalog_name    VARCHAR    YES        NULL        
-dat_createsql    VARCHAR    YES        NULL        
-owner    INT UNSIGNED    YES        NULL        
-creator    INT UNSIGNED    YES        NULL        
-created_time    TIMESTAMP    YES        NULL        
-account_id    INT UNSIGNED    YES        NULL        
-SHOW COLUMNS FROM mo_tables;
-Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED    NO    PRI    NULL        
-relname    VARCHAR    YES        NULL        
-reldatabase    VARCHAR    YES        NULL        
-reldatabase_id    BIGINT UNSIGNED    YES        NULL        
-relpersistence    VARCHAR    YES        NULL        
-relkind    VARCHAR    YES        NULL        
-rel_comment    VARCHAR    YES        NULL        
-rel_createsql    VARCHAR    YES        NULL        
-created_time    TIMESTAMP    YES        NULL        
-creator    INT UNSIGNED    YES        NULL        
-owner    INT UNSIGNED    YES        NULL        
-account_id    INT UNSIGNED    YES        NULL        
-partitioned    BLOB    YES        NULL        
-viewdef    BLOB    YES        NULL        
+8
 SELECT COUNT(*) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
 count(*)
 10
@@ -51,29 +14,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_columns;
-Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR    NO    PRI    NULL        
-account_id    INT UNSIGNED    YES        NULL        
-att_database_id    BIGINT UNSIGNED    YES        NULL        
-att_database    VARCHAR    YES        NULL        
-att_relname_id    BIGINT UNSIGNED    YES        NULL        
-att_relname    VARCHAR    YES        NULL        
-attname    VARCHAR    YES        NULL        
-atttyp    VARCHAR    YES        NULL        
-attnum    INT    YES        NULL        
-att_length    INT    YES        NULL        
-attnotnull    TINYINT    YES        NULL        
-atthasdef    TINYINT    YES        NULL        
-att_default    VARCHAR    YES        NULL        
-attisdropped    TINYINT    YES        NULL        
-att_constraint_type    CHAR    YES        NULL        
-att_is_unsigned    TINYINT    YES        NULL        
-att_is_auto_increment    TINYINT    YES        NULL        
-att_comment    VARCHAR    YES        NULL        
-att_is_hidden    TINYINT    YES        NULL        
-attr_has_update    TINYINT    YES        NULL        
-attr_update    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_columns LIMIT 10) AS temp;
 count(*)
 10
@@ -86,19 +26,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_columns LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_user;
-Field    Type    Null    Key    Default    Extra    Comment
-user_id    INT    YES        NULL        
-user_host    VARCHAR    YES        NULL        
-user_name    VARCHAR    YES        NULL        
-authentication_string    VARCHAR    YES        NULL        
-status    VARCHAR    YES        NULL        
-created_time    TIMESTAMP    YES        NULL        
-expired_time    TIMESTAMP    YES        NULL        
-login_type    VARCHAR    YES        NULL        
-creator    INT    YES        NULL        
-owner    INT    YES        NULL        
-default_role    INT    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_user LIMIT 10) AS temp;
 count(*)
 2
@@ -111,33 +38,18 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_user LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_account;
-Field    Type    Null    Key    Default    Extra    Comment
-account_id    INT    YES        NULL        
-account_name    VARCHAR    YES        NULL        
-status    VARCHAR    YES        NULL        
-created_time    TIMESTAMP    YES        NULL        
-comments    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(*)
-1
+2
 SELECT COUNT(0) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(0)
-1
+2
 SELECT COUNT('') FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count()
-1
+2
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_role;
-Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT    YES        NULL        
-role_name    VARCHAR    YES        NULL        
-creator    INT    YES        NULL        
-owner    INT    YES        NULL        
-created_time    TIMESTAMP    YES        NULL        
-comments    TEXT    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_role LIMIT 10) AS temp;
 count(*)
 2
@@ -150,12 +62,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_role LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_user_grant;
-Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT    YES        NULL        
-user_id    INT    YES        NULL        
-granted_time    TIMESTAMP    YES        NULL        
-with_grant_option    BOOL    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_user_grant LIMIT 10) AS temp;
 count(*)
 4
@@ -168,14 +74,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_user_grant LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_role_grant;
-Field    Type    Null    Key    Default    Extra    Comment
-granted_id    INT    YES        NULL        
-grantee_id    INT    YES        NULL        
-operation_role_id    INT    YES        NULL        
-operation_user_id    INT    YES        NULL        
-granted_time    TIMESTAMP    YES        NULL        
-with_grant_option    BOOL    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_role_grant LIMIT 10) AS temp;
 count(*)
 0
@@ -188,18 +86,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_role_grant LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM mo_role_privs;
-Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT    YES        NULL        
-role_name    VARCHAR    YES        NULL        
-obj_type    VARCHAR    YES        NULL        
-obj_id    BIGINT UNSIGNED    YES        NULL        
-privilege_id    INT    YES        NULL        
-privilege_name    VARCHAR    YES        NULL        
-privilege_level    VARCHAR    YES        NULL        
-operation_user_id    INT UNSIGNED    YES        NULL        
-granted_time    TIMESTAMP    YES        NULL        
-with_grant_option    BOOL    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM mo_role_privs LIMIT 10) AS temp;
 count(*)
 10
@@ -213,36 +99,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM mo_role_privs LIMIT 10) AS temp;
 count(null)
 0
 USE system;
-SHOW TABLES;
-tables_in_system
-statement_info
-rawlog
-log_info
-error_info
-span_info
-SHOW COLUMNS FROM statement_info;
-Field    Type    Null    Key    Default    Extra    Comment
-statement_id    VARCHAR    YES    PRI    NULL        statement uniq id
-transaction_id    VARCHAR    YES        NULL        txn uniq id
-session_id    VARCHAR    YES        NULL        session uniq id
-account    VARCHAR    NO        NULL        account name
-user    VARCHAR    NO        NULL        user name
-host    VARCHAR    NO        NULL        user client ip
-database    VARCHAR    NO        NULL        what database current session stay in.
-statement    TEXT    NO        NULL        sql statement
-statement_tag    TEXT    NO        NULL        note tag in statement(Reserved)
-statement_fingerprint    TEXT    NO        NULL        note tag in statement(Reserved)
-node_uuid    VARCHAR    YES        NULL        node uuid, which node gen this data.
-node_type    VARCHAR    YES        NULL        node type in MO, val in [DN, CN, LOG]
-request_at    DATETIME    NO        NULL        request accept datetime
-response_at    DATETIME    NO        NULL        response send datetime
-duration    BIGINT UNSIGNED    YES        NULL        exec time, unit: ns
-status    VARCHAR    YES        NULL        sql statement running status, enum: Running, Success, Failed
-err_code    VARCHAR    YES        NULL        
-error    TEXT    NO        NULL        error message
-exec_plan    JSON    NO        NULL        statement execution plan
-rows_read    BIGINT UNSIGNED    YES        NULL        rows read total
-bytes_scan    BIGINT UNSIGNED    YES        NULL        bytes scan total
 SELECT COUNT(*) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 count(*)
 10
@@ -257,28 +113,6 @@ count(null)
 0
 (SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
 [unknown result because it is related to issue#5895]
-SHOW COLUMNS FROM rawlog;
-Field    Type    Null    Key    Default    Extra    Comment
-raw_item    VARCHAR    NO        NULL        raw log item
-node_uuid    VARCHAR    YES        NULL        node uuid, which node gen this data.
-node_type    VARCHAR    YES        NULL        node type in MO, val in [DN, CN, LOG]
-span_id    VARCHAR    YES        NULL        span uniq id
-statement_id    VARCHAR    YES        NULL        statement uniq id
-logger_name    VARCHAR    NO        NULL        logger name
-timestamp    DATETIME    NO        NULL        timestamp of action
-level    VARCHAR    NO        NULL        log level, enum: debug, info, warn, error, panic, fatal
-caller    VARCHAR    NO        NULL        where it log, like: package/file.go:123
-message    TEXT    NO        NULL        log message
-extra    JSON    NO        NULL        log dynamic fields
-err_code    VARCHAR    YES        NULL        
-error    TEXT    NO        NULL        error message
-stack    VARCHAR    NO        NULL        
-span_name    VARCHAR    NO        NULL        span name, for example: step name of execution plan, function name in code, ...
-parent_span_id    VARCHAR    YES        NULL        parent span uniq id
-start_time    DATETIME    NO        NULL        
-end_time    DATETIME    NO        NULL        
-duration    BIGINT UNSIGNED    YES        NULL        exec time, unit: ns
-resource    JSON    NO        NULL        static resource information
 SELECT COUNT(*) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 count(*)
 10
@@ -295,18 +129,6 @@ SELECT * FROM rawlog LIMIT 1;
 [unknown result because it is related to issue#5892]
 SELECT * FROM log_info LIMIT 1;
 [unknown result because it is related to issue#5892]
-SHOW COLUMNS FROM log_info;
-Field    Type    Null    Key    Default    Extra    Comment
-statement_id    VARCHAR    YES        NULL        
-span_id    VARCHAR    YES        NULL        
-node_uuid    VARCHAR    YES        NULL        
-node_type    VARCHAR    YES        NULL        
-timestamp    DATETIME    YES        NULL        
-logger_name    VARCHAR    YES        NULL        
-level    VARCHAR    YES        NULL        
-caller    VARCHAR    YES        NULL        
-message    TEXT    YES        NULL        
-extra    JSON    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 count(*)
 10
@@ -319,14 +141,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM error_info;
-Field    Type    Null    Key    Default    Extra    Comment
-timestamp    DATETIME    YES        NULL        
-err_code    VARCHAR    YES        NULL        
-error    TEXT    YES        NULL        
-node_uuid    VARCHAR    YES        NULL        
-node_type    VARCHAR    YES        NULL        
-stack    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 [unknown result because it is related to issue#5901]
 SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
@@ -335,18 +149,6 @@ SELECT COUNT('') FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 [unknown result because it is related to issue#5901]
 SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 [unknown result because it is related to issue#5901]
-SHOW COLUMNS FROM span_info;
-Field    Type    Null    Key    Default    Extra    Comment
-span_id    VARCHAR    YES        NULL        
-statement_id    VARCHAR    YES        NULL        
-parent_span_id    VARCHAR    YES        NULL        
-node_uuid    VARCHAR    YES        NULL        
-node_type    VARCHAR    YES        NULL        
-span_name    VARCHAR    YES        NULL        
-start_time    DATETIME    YES        NULL        
-end_time    DATETIME    YES        NULL        
-duration    BIGINT UNSIGNED    YES        NULL        
-resource    JSON    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(*)
 10
@@ -360,34 +162,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(null)
 0
 USE system_metrics;
-SHOW TABLES;
-tables_in_system_metrics
-metric
-sql_statement_total
-sql_statement_errors
-sql_transaction_total
-sql_transaction_errors
-server_connections
-process_cpu_percent
-process_resident_memory_bytes
-process_open_fds
-sys_cpu_seconds_total
-sys_cpu_combined_percent
-sys_memory_used
-sys_memory_available
-sys_disk_read_bytes
-sys_disk_write_bytes
-sys_net_recv_bytes
-sys_net_sent_bytes
-SHOW COLUMNS FROM metric;
-Field    Type    Null    Key    Default    Extra    Comment
-metric_name    VARCHAR    YES        NULL        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
-collecttime    DATETIME    NO        NULL        metric data collect time
-value    DOUBLE    YES        NULL        metric value
-node    VARCHAR    YES        NULL        mo node uuid
-role    VARCHAR    YES        NULL        mo node role, like: CN, DN, LOG
-account    VARCHAR    YES        NULL        account name
-type    VARCHAR    NO        NULL        sql type, like: insert, select, ...
 SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 count(*)
 10
@@ -400,14 +174,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM metric LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sql_statement_total;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
-type    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(*)
 10
@@ -420,101 +186,57 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sql_statement_errors;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
-type    VARCHAR    YES        NULL        
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sql_transaction_total;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(*)
-8
+10
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(0)
-8
+10
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count()
-8
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sql_transaction_errors;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
-type    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(*)
-8
+10
 SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(0)
-8
+10
 SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count()
-8
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM server_connections;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(*)
-6
+10
 SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(0)
-6
+10
 SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count()
-6
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM process_cpu_percent;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(*)
-9
+10
 SELECT COUNT(0) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(0)
-9
+10
 SELECT COUNT('') FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count()
-9
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM process_resident_memory_bytes;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -527,13 +249,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_cpu_seconds_total;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(*)
 10
@@ -546,13 +261,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_cpu_combined_percent;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(*)
 10
@@ -565,13 +273,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_memory_used;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(*)
 10
@@ -584,13 +285,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_memory_available;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(*)
 10
@@ -603,13 +297,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_disk_read_bytes;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -622,13 +309,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_disk_write_bytes;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -641,13 +321,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_net_recv_bytes;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -660,13 +333,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM sys_net_sent_bytes;
-Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME    YES        NULL        
-value    DOUBLE    YES        NULL        
-node    VARCHAR    YES        NULL        
-role    VARCHAR    YES        NULL        
-account    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(*)
 10
@@ -680,67 +346,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
 count(null)
 0
 USE mysql;
-SHOW TABLES;
-tables_in_mysql
-user
-db
-procs_priv
-columns_priv
-tables_priv
-SHOW COLUMNS FROM user;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL        
-user    CHAR    NO        NULL        
-select_priv    VARCHAR    NO        NULL        
-insert_priv    VARCHAR    NO        NULL        
-update_priv    VARCHAR    NO        NULL        
-delete_priv    VARCHAR    NO        NULL        
-create_priv    VARCHAR    NO        NULL        
-drop_priv    VARCHAR    NO        NULL        
-reload_priv    VARCHAR    NO        NULL        
-shutdown_priv    VARCHAR    NO        NULL        
-process_priv    VARCHAR    NO        NULL        
-file_priv    VARCHAR    NO        NULL        
-grant_priv    VARCHAR    NO        NULL        
-references_priv    VARCHAR    NO        NULL        
-index_priv    VARCHAR    NO        NULL        
-alter_priv    VARCHAR    NO        NULL        
-show_db_priv    VARCHAR    NO        NULL        
-super_priv    VARCHAR    NO        NULL        
-create_tmp_table_priv    VARCHAR    NO        NULL        
-lock_tables_priv    VARCHAR    NO        NULL        
-execute_priv    VARCHAR    NO        NULL        
-repl_slave_priv    VARCHAR    NO        NULL        
-repl_client_priv    VARCHAR    NO        NULL        
-create_view_priv    VARCHAR    NO        NULL        
-show_view_priv    VARCHAR    NO        NULL        
-create_routine_priv    VARCHAR    NO        NULL        
-alter_routine_priv    VARCHAR    NO        NULL        
-create_user_priv    VARCHAR    NO        NULL        
-event_priv    VARCHAR    NO        NULL        
-trigger_priv    VARCHAR    NO        NULL        
-create_tablespace_priv    VARCHAR    NO        NULL        
-ssl_type    VARCHAR    NO        NULL        
-ssl_cipher    BLOB    NO        NULL        
-x509_issuer    BLOB    NO        NULL        
-x509_subject    BLOB    NO        NULL        
-max_questions    INT UNSIGNED    NO        NULL        
-max_updates    INT UNSIGNED    NO        NULL        
-max_connections    INT UNSIGNED    NO        NULL        
-max_user_connections    INT UNSIGNED    NO        NULL        
-plugin    CHAR    NO        NULL        
-authentication_string    TEXT    YES        NULL        
-password_expired    VARCHAR    NO        NULL        
-password_last_changed    TIMESTAMP    YES        NULL        
-password_lifetime    SMALLINT UNSIGNED    YES        NULL        
-account_locked    VARCHAR    NO        NULL        
-create_role_priv    VARCHAR    NO        NULL        
-drop_role_priv    VARCHAR    NO        NULL        
-password_reuse_history    SMALLINT UNSIGNED    YES        NULL        
-password_reuse_time    SMALLINT UNSIGNED    YES        NULL        
-password_require_current    VARCHAR    YES        NULL        
-user_attributes    JSON    YES        NULL        
-__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL        
 SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
 count(*)
 0
@@ -753,31 +358,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM db;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL        
-db    CHAR    NO        NULL        
-user    CHAR    NO        NULL        
-select_priv    VARCHAR    NO        NULL        
-insert_priv    VARCHAR    NO        NULL        
-update_priv    VARCHAR    NO        NULL        
-delete_priv    VARCHAR    NO        NULL        
-create_priv    VARCHAR    NO        NULL        
-drop_priv    VARCHAR    NO        NULL        
-grant_priv    VARCHAR    NO        NULL        
-references_priv    VARCHAR    NO        NULL        
-index_priv    VARCHAR    NO        NULL        
-alter_priv    VARCHAR    NO        NULL        
-create_tmp_table_priv    VARCHAR    NO        NULL        
-lock_tables_priv    VARCHAR    NO        NULL        
-create_view_priv    VARCHAR    NO        NULL        
-show_view_priv    VARCHAR    NO        NULL        
-create_routine_priv    VARCHAR    NO        NULL        
-alter_routine_priv    VARCHAR    NO        NULL        
-execute_priv    VARCHAR    NO        NULL        
-event_priv    VARCHAR    NO        NULL        
-trigger_priv    VARCHAR    NO        NULL        
-__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL        
 SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
 count(*)
 0
@@ -790,17 +370,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM procs_priv;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL        
-db    CHAR    NO        NULL        
-user    CHAR    NO        NULL        
-routine_name    CHAR    NO        NULL        
-routine_type    VARCHAR    NO        NULL        
-grantor    VARCHAR    NO        NULL        
-proc_priv    VARCHAR    NO        NULL        
-timestamp    TIMESTAMP    NO        NULL        
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL        
 SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -813,16 +382,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM columns_priv;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL        
-db    CHAR    NO        NULL        
-user    CHAR    NO        NULL        
-table_name    CHAR    NO        NULL        
-column_name    CHAR    NO        NULL        
-timestamp    TIMESTAMP    NO        NULL        
-column_priv    VARCHAR    NO        NULL        
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL        
 SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -835,17 +394,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM tables_priv;
-Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL        
-db    CHAR    NO        NULL        
-user    CHAR    NO        NULL        
-table_name    CHAR    NO        NULL        
-grantor    VARCHAR    NO        NULL        
-timestamp    TIMESTAMP    NO        NULL        
-table_priv    VARCHAR    NO        NULL        
-column_priv    VARCHAR    NO        NULL        
-__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
 SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 count(*)
 0
@@ -859,31 +407,6 @@ SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 count(null)
 0
 USE information_schema;
-SHOW TABLES;
-tables_in_information_schema
-key_column_usage
-columns
-profiling
-PROCESSLIST
-user_privileges
-schemata
-character_sets
-triggers
-tables
-SHOW COLUMNS FROM key_column_usage;
-Field    Type    Null    Key    Default    Extra    Comment
-constraint_catalog    VARCHAR    YES        NULL        
-constraint_schema    VARCHAR    YES        NULL        
-constraint_name    VARCHAR    YES        NULL        
-table_catalog    VARCHAR    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-column_name    VARCHAR    YES        NULL        
-ordinal_position    INT UNSIGNED    YES        NULL        
-position_in_unique_constraint    INT UNSIGNED    YES        NULL        
-referenced_table_schema    VARCHAR    YES        NULL        
-referenced_table_name    VARCHAR    YES        NULL        
-referenced_column_name    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 count(*)
 0
@@ -896,30 +419,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM columns;
-Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-column_name    VARCHAR    YES        NULL        
-ordinal_position    INT UNSIGNED    YES        NULL        
-column_default    TEXT    YES        NULL        
-is_nullable    VARCHAR    YES        NULL        
-data_type    BLOB    YES        NULL        
-character_maximum_length    BIGINT    YES        NULL        
-character_octet_length    BIGINT    YES        NULL        
-numeric_precision    BIGINT UNSIGNED    YES        NULL        
-numeric_scale    BIGINT UNSIGNED    YES        NULL        
-datetime_precision    INT UNSIGNED    YES        NULL        
-character_set_name    VARCHAR    YES        NULL        
-collation_name    VARCHAR    YES        NULL        
-column_type    BLOB    YES        NULL        
-column_key    VARCHAR    YES        NULL        
-extra    VARCHAR    YES        NULL        
-PRIVILEGES    VARCHAR    YES        NULL        
-column_comment    TEXT    YES        NULL        
-generation_expression    BLOB    YES        NULL        
-srs_id    INT UNSIGNED    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(*)
 0
@@ -932,26 +431,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM profiling;
-Field    Type    Null    Key    Default    Extra    Comment
-query_id    INT    NO        NULL        
-seq    INT    NO        NULL        
-state    VARCHAR    NO        NULL        
-duration    DECIMAL64    NO        NULL        
-cpu_user    DECIMAL64    YES        NULL        
-cpu_system    DECIMAL64    YES        NULL        
-context_voluntary    INT    YES        NULL        
-context_involuntary    INT    YES        NULL        
-block_ops_in    INT    YES        NULL        
-block_ops_out    INT    YES        NULL        
-messages_sent    INT    YES        NULL        
-messages_received    INT    YES        NULL        
-page_faults_major    INT    YES        NULL        
-page_faults_minor    INT    YES        NULL        
-swaps    INT    YES        NULL        
-source_function    VARCHAR    YES        NULL        
-source_file    VARCHAR    YES        NULL        
-source_line    INT    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 count(*)
 0
@@ -964,12 +443,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM user_privileges;
-Field    Type    Null    Key    Default    Extra    Comment
-grantee    VARCHAR    NO        NULL        
-table_catalog    VARCHAR    NO        NULL        
-privilege_type    VARCHAR    NO        NULL        
-is_grantable    VARCHAR    NO        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(*)
 0
@@ -982,14 +455,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM schemata;
-Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR    YES        NULL        
-schema_name    VARCHAR    YES        NULL        
-default_character_set_name    VARCHAR    YES        NULL        
-default_collation_name    VARCHAR    YES        NULL        
-sql_path    VARCHAR    YES        NULL        
-default_encryption    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 count(*)
 0
@@ -1002,12 +467,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM character_sets;
-Field    Type    Null    Key    Default    Extra    Comment
-character_set_name    VARCHAR    YES        NULL        
-default_collate_name    VARCHAR    YES        NULL        
-description    VARCHAR    YES        NULL        
-maxlen    INT UNSIGNED    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 count(*)
 0
@@ -1020,30 +479,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM triggers;
-Field    Type    Null    Key    Default    Extra    Comment
-trigger_catalog    VARCHAR    YES        NULL        
-trigger_schema    VARCHAR    YES        NULL        
-trigger_name    VARCHAR    YES        NULL        
-event_manipulation    VARCHAR    YES        NULL        
-event_object_catalog    VARCHAR    YES        NULL        
-event_object_schema    VARCHAR    YES        NULL        
-event_object_table    VARCHAR    YES        NULL        
-action_order    INT UNSIGNED    YES        NULL        
-action_condition    VARCHAR    YES        NULL        
-action_statement    BLOB    YES        NULL        
-action_orientation    VARCHAR    YES        NULL        
-action_timing    VARCHAR    YES        NULL        
-action_reference_old_table    VARCHAR    YES        NULL        
-action_reference_new_table    VARCHAR    YES        NULL        
-action_reference_old_row    VARCHAR    YES        NULL        
-action_reference_new_row    VARCHAR    YES        NULL        
-created    TIMESTAMP    YES        NULL        
-sql_mode    VARCHAR    YES        NULL        
-definer    VARCHAR    YES        NULL        
-character_set_client    VARCHAR    YES        NULL        
-collation_connection    VARCHAR    YES        NULL        
-database_collation    VARCHAR    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 count(*)
 0
@@ -1056,29 +491,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
 count(null)
 0
-SHOW COLUMNS FROM tables;
-Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-table_type    VARCHAR    YES        NULL        
-engine    VARCHAR    YES        NULL        
-version    INT    YES        NULL        
-row_format    VARCHAR    YES        NULL        
-table_rows    BIGINT UNSIGNED    YES        NULL        
-avg_row_length    BIGINT UNSIGNED    YES        NULL        
-data_length    BIGINT UNSIGNED    YES        NULL        
-max_data_length    BIGINT UNSIGNED    YES        NULL        
-index_length    BIGINT UNSIGNED    YES        NULL        
-data_free    BIGINT UNSIGNED    YES        NULL        
-AUTO_INCREMENT    BIGINT UNSIGNED    YES        NULL        
-create_time    TIMESTAMP    YES        NULL        
-update_time    DATETIME    YES        NULL        
-check_time    DATETIME    YES        NULL        
-table_collation    VARCHAR    YES        NULL        
-checksum    BIGINT    YES        NULL        
-create_options    VARCHAR    YES        NULL        
-table_comment    TEXT    YES        NULL        
 SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 count(*)
 0
