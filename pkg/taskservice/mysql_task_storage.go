@@ -138,7 +138,7 @@ var (
     						create_at=?,
     						update_at=? where cron_task_id=?`
 
-	checkTaskExists = `select exists(select * from %s.sys_async_task where task_metadata_id=?)`
+	countTaskId = `select count(task_metadata_id) from %s.sys_async_task where task_metadata_id=?`
 
 	getTriggerTimes = `select trigger_times from %s.sys_cron_task where task_metadata_id=?`
 
@@ -671,12 +671,11 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 }
 
 func (m *mysqlTaskStorage) taskExists(ctx context.Context, conn *sql.Conn, taskMetadataID string) (bool, error) {
-	var exists bool
-	err := conn.QueryRowContext(ctx, fmt.Sprintf(checkTaskExists, m.dbname), taskMetadataID).Scan(&exists)
-	if err != nil {
+	var count int32
+	if err := conn.QueryRowContext(ctx, fmt.Sprintf(countTaskId, m.dbname), taskMetadataID).Scan(&count); err != nil {
 		return false, err
 	}
-	return exists, nil
+	return count != 0, nil
 }
 
 func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, conn *sql.Conn, taskMetadataID string) (uint64, error) {
