@@ -898,7 +898,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 
-		if isNullExpr(args[0]) || isNullExpr(args[1]){
+		if isNullExpr(args[0]) || isNullExpr(args[1]) {
 			break
 		}
 		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
