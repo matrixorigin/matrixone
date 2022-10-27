@@ -146,9 +146,16 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		CatalogCkpInterval: int64(s.cfg.Ckp.CatalogCkpInterval.Duration / time.Millisecond),
 		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
 	}
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.Name)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.FileService)
 	if err != nil {
 		return nil, err
 	}
-	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg, options.LogstoreType(s.cfg.LogStore.LogService))
+	return taestorage.NewTAEStorage(
+		s.cfg.Txn.Storage.dataDir,
+		shard,
+		factory,
+		fs,
+		s.clock,
+		ckpcfg,
+		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }
