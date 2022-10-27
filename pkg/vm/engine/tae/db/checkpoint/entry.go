@@ -19,14 +19,18 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
+	fileName   string
 	location   string
 }
 
@@ -34,7 +38,7 @@ func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
 	return &CheckpointEntry{
 		start: start,
 		end:   end,
-		state: ST_Running,
+		state: ST_Pending,
 	}
 }
 
@@ -79,7 +83,11 @@ func (e *CheckpointEntry) IsRunning() bool {
 	defer e.RUnlock()
 	return e.state == ST_Running
 }
-
+func (e *CheckpointEntry) IsPendding() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Pending
+}
 func (e *CheckpointEntry) IsFinished() bool {
 	e.RLock()
 	defer e.RUnlock()
@@ -98,7 +106,27 @@ func (e *CheckpointEntry) String() string {
 	return fmt.Sprintf("CKP[%s](%s->%s)", t, e.start.ToString(), e.end.ToString())
 }
 
-func (e *CheckpointEntry) MakeBatches() *containers.Batch {
-	logutil.Infof("make batches")
-	return nil
+func (e *CheckpointEntry) NewCheckpointWriter(fs *objectio.ObjectFS) *blockio.Writer {
+	e.fileName = blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
+	return blockio.NewWriter(fs, e.fileName)
+}
+
+func (e *CheckpointEntry) EncodeAndSetLocation(blks []objectio.BlockObject) {
+	metaLoc := blockio.EncodeMetalocFromMetas(e.fileName, blks)
+	e.SetLocation(metaLoc)
+}
+
+func (e *CheckpointEntry) NewCheckpointReader(fs *objectio.ObjectFS) *blockio.Reader {
+	reader, err := blockio.NewCheckpointReader(fs, e.location)
+	if err != nil {
+		panic(err)
+	}
+	return reader
+}
+
+func (e *CheckpointEntry) Replay(c *catalog.Catalog, fs *objectio.ObjectFS) {
+	reader := e.NewCheckpointReader(fs)
+	builder := logtail.NewCheckpointLogtailRespBuilder(e.start, e.end)
+	builder.ReadFromFS(reader, common.DefaultAllocator)
+	builder.ReplayCatalog(c)
 }
