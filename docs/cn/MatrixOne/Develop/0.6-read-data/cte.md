@@ -24,53 +24,31 @@ SELECT ... FROM <query_name>;
 
 ### 数据准备
 
-请下载 TPCH 测试数据集并完成建表，参见[TPCH 测试](../../Tutorial/TPCH-test-with-matrixone.md)。
+你可以新建一个简单的表，插入一些数据，帮助你理解后续所展示的 CTE 语句：
+
+```sql
+> drop table if exists t1;
+> create table t1(a int, b int, c int);
+> insert into t1 values(null,null,null),(2,3,4);
+```
 
 ## CTE 语句使用实例
 
-在下面的示例中，`q15_revenue0` 作为一个临时的结果集被创建，此时相应的查询结果会被缓存在 MatrixOne 中，你在执行正式的 `q15_revenue0` 查询时，比非 CTE 场景的性能有所提升。
+在下面的示例中，`qn` 作为一个临时的结果集被创建，此时相应的查询结果会被缓存在 MatrixOne 中，你在执行正式的 `qn` 查询时，比非 CTE 场景的性能有所提升。
 
 ```sql
-with q15_revenue0 as (
-    select
-        l_suppkey as supplier_no,
-        sum(l_extendedprice * (1 - l_discount)) as total_revenue
-    from
-        lineitem
-    where
-        l_shipdate >= date '1995-12-01'
-        and l_shipdate < date '1995-12-01' + interval '3' month
-    group by
-        l_suppkey
-    )
-select
-    s_suppkey,
-    s_name,
-    s_address,
-    s_phone,
-    total_revenue
-from
-    supplier,
-    q15_revenue0
-where
-    s_suppkey = supplier_no
-    and total_revenue = (
-        select
-            max(total_revenue)
-        from
-            q15_revenue0
-    )
-order by
-    s_suppkey
-;
+WITH qn AS (SELECT a FROM t1), qn2 as (select b from t1)
+SELECT * FROM qn;
 ```
 
 查询结果如下：
 
 ```
-+-----------+--------------------+----------------------------------+-----------------+---------------+
-| s_suppkey | s_name             | s_address                        | s_phone         | total_revenue |
-+-----------+--------------------+----------------------------------+-----------------+---------------+
-|      7895 | Supplier#000007895 | NYl,i8UhxTykLxGJ2voIRn20Ugk1KTzz | 14-559-808-3306 |  1678635.2636 |
-+-----------+--------------------+----------------------------------+-----------------+---------------+
++------+
+| a    |
++------+
+| NULL |
+|    2 |
++------+
+2 rows in set (0.00 sec)
 ```
