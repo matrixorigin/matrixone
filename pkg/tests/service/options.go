@@ -15,12 +15,12 @@
 package service
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -30,8 +30,8 @@ const (
 	defaultLogServiceNum = 3
 	defaultLogShardNum   = 1
 	defaultLogReplicaNum = 3
-	defaultCNServiceNum  = 0
-	defaultCNShardNum    = 0
+	defaultCNServiceNum  = 1
+	defaultCNShardNum    = 1
 
 	// default configuration for services
 	defaultHostAddr    = "127.0.0.1"
@@ -44,9 +44,6 @@ const (
 	defaultGossipSeedNum = 3
 	defaultHAKeeperNum   = 3
 
-	// default configuration for logger
-	defaultLogLevel = zapcore.InfoLevel
-
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10
 	defaultLogStoreTimeout = 4 * time.Second
@@ -57,16 +54,13 @@ const (
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
-
-	// default task configuration
-	defaultFetchInterval = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
 type Options struct {
 	hostAddr    string
 	rootDataDir string
-	logLevel    zapcore.Level
+	logger      *zap.Logger
 
 	initial struct {
 		dnServiceNum  int
@@ -93,11 +87,6 @@ type Options struct {
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
 		cnStoreTimeout  time.Duration
-	}
-
-	task struct {
-		taskStorage   taskservice.TaskStorage
-		FetchInterval time.Duration
 	}
 }
 
@@ -141,8 +130,6 @@ func (opt *Options) validate() {
 		opt.dn.txnStorageBackend = defaultDnStorage
 	}
 
-	opt.logLevel = defaultLogLevel
-
 	// hakeeper configuration
 	if opt.hakeeper.tickPerSecond == 0 {
 		opt.hakeeper.tickPerSecond = defaultTickPerSecond
@@ -166,14 +153,6 @@ func (opt *Options) validate() {
 	}
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
-	}
-
-	// task configuration
-	if opt.task.taskStorage == nil {
-		opt.task.taskStorage = taskservice.NewMemTaskStorage()
-	}
-	if opt.task.FetchInterval == 0 {
-		opt.task.FetchInterval = defaultFetchInterval
 	}
 }
 
@@ -235,8 +214,8 @@ func (opt Options) WithRootDataDir(root string) Options {
 	return opt
 }
 
-// WithDnStorage sets dn transaction storage.
-func (opt Options) WithDnTxnStorage(s string) Options {
+// WithDNStorage sets dn transaction storage.
+func (opt Options) WithDNTxnStorage(s string) Options {
 	opt.dn.txnStorageBackend = s
 	return opt
 }
@@ -249,7 +228,13 @@ func (opt Options) WithHostAddress(host string) Options {
 
 // WithLogLevel sets log level.
 func (opt Options) WithLogLevel(lvl zapcore.Level) Options {
-	opt.logLevel = lvl
+	opt.logger = logutil.GetPanicLoggerWithLevel(lvl)
+	return opt
+}
+
+// WithLogger sets logger.
+func (opt Options) WithLogger(logger *zap.Logger) Options {
+	opt.logger = logger
 	return opt
 }
 
@@ -294,9 +279,9 @@ func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 	return opt
 }
 
-func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
-	opt.task.taskStorage = storage
-	return opt
+// GetTxnStorageBackend returns the txn storage backend
+func (opt Options) GetTxnStorageBackend() string {
+	return opt.dn.txnStorageBackend
 }
 
 // gossipSeedNum calculates the count of gossip seed.

@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -45,8 +45,22 @@ func New(
 		}, math.MaxInt)
 	}
 
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnAddr := "1"
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: dnAddr,
+		Shards:         shards,
+	}
+
 	storage, err := memorystorage.NewMemoryStorage(
-		testutil.NewMheap(),
+		mpool.MustNewZero(),
 		memorystorage.SnapshotIsolation,
 		ck,
 		memoryengine.RandomIDGenerator,
@@ -57,26 +71,15 @@ func New(
 
 	client = memorystorage.NewStorageTxnClient(
 		ck,
-		storage,
+		map[string]*memorystorage.Storage{
+			dnAddr: storage,
+		},
 	)
-
-	shard := logservicepb.DNShardInfo{
-		ShardID:   2,
-		ReplicaID: 2,
-	}
-	shards := []logservicepb.DNShardInfo{
-		shard,
-	}
-	dnStore := logservicepb.DNStore{
-		UUID:           uuid.NewString(),
-		ServiceAddress: "1",
-		Shards:         shards,
-	}
 
 	e := memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(
-			testutil.NewMheap(),
+			mpool.MustNewZero(),
 		),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
@@ -85,6 +88,7 @@ func New(
 				},
 			}, nil
 		},
+		memoryengine.RandomIDGenerator,
 	)
 
 	txnOp, err := client.New()

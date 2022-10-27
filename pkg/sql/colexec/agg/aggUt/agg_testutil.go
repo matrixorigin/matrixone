@@ -17,14 +17,12 @@ package aggut
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,7 +68,7 @@ func RunTest(t *testing.T, testCases []testCase) {
 
 func RunBaseTest(t *testing.T, c *testCase) {
 	// base test: Grows(), Fill(), Eval() and Merge()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	m := mpool.MustNewZero()
 
 	// Grows(), Fill() and Eval() test
 	{
@@ -150,7 +148,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 
 func RunBaseMarshalTest(t *testing.T, c *testCase) {
 	// base test: Grows(), Fill() and Eval()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+	m := mpool.MustNewZero()
 	{
 		// New()
 		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp)
@@ -270,6 +268,8 @@ func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
 		return testutil.MakeVarcharVector(input.([]string), nsp), len(input.([]string))
 	case types.T_date:
 		return testutil.MakeDateVector(input.([]string), nsp), len(input.([]string))
+	case types.T_time:
+		return testutil.MakeTimeVector(input.([]string), nsp), len(input.([]string))
 	case types.T_datetime:
 		return testutil.MakeDateTimeVector(input.([]string), nsp), len(input.([]string))
 	case types.T_timestamp:
@@ -317,6 +317,8 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		require.Equal(t, expected.([]string), vector.GetStrColumn(vec))
 	case types.T_date:
 		require.Equal(t, expected.([]types.Date), vector.GetColumn[types.Date](vec))
+	case types.T_time:
+		require.Equal(t, expected.([]types.Time), vector.GetColumn[types.Datetime](vec))
 	case types.T_datetime:
 		require.Equal(t, expected.([]types.Datetime), vector.GetColumn[types.Datetime](vec))
 	case types.T_timestamp:

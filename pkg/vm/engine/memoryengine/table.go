@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -103,8 +102,8 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) error {
-
+func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) error {
+	vec := bat.Vecs[0]
 	clusterDetails, err := t.engine.getClusterDetails()
 	if err != nil {
 		return err
@@ -173,6 +172,27 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 	return resp.Attrs, nil
 }
 
+func (t *Table) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
+
+	resps, err := DoTxnRequest[GetTableColumnsResp](
+		ctx,
+		t.txnOperator,
+		true,
+		t.engine.anyShard,
+		OpGetTableColumns,
+		GetTableColumnsReq{
+			TableID: t.id,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := resps[0]
+
+	return resp.Attrs, nil
+}
+
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resps, err := DoTxnRequest[GetTableDefsResp](
@@ -194,31 +214,31 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return resp.Defs, nil
 }
 
-func (t *Table) Truncate(ctx context.Context) (uint64, error) {
-
-	resps, err := DoTxnRequest[TruncateResp](
-		ctx,
-		t.txnOperator,
-		false,
-		t.engine.allShards,
-		OpTruncate,
-		TruncateReq{
-			TableID:      t.id,
-			DatabaseName: t.databaseName,
-			TableName:    t.tableName,
-		},
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	var affectedRows int64
-	for _, resp := range resps {
-		affectedRows += resp.AffectedRows
-	}
-
-	return uint64(affectedRows), nil
-}
+//func (t *Table) Truncate(ctx context.Context) (uint64, error) {
+//
+//	resps, err := DoTxnRequest[TruncateResp](
+//		ctx,
+//		t.txnOperator,
+//		false,
+//		t.engine.allShards,
+//		OpTruncate,
+//		TruncateReq{
+//			TableID:      t.id,
+//			DatabaseName: t.databaseName,
+//			TableName:    t.tableName,
+//		},
+//	)
+//	if err != nil {
+//		return 0, err
+//	}
+//
+//	var affectedRows int64
+//	for _, resp := range resps {
+//		affectedRows += resp.AffectedRows
+//	}
+//
+//	return uint64(affectedRows), nil
+//}
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 

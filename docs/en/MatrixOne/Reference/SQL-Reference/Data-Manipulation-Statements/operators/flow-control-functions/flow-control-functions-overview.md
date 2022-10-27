@@ -2,5 +2,5 @@
 
 | Name | Description|
 |---|-----|
-| [CASE](case.md) | Case operator |
+| [CASE](case-when.md) | Case operator |
 | [IF()](function_if.md) | If/else construct |

@@ -47,6 +47,11 @@ var (
 type Functions struct {
 	Id int
 
+	Flag plan.Function_FuncFlag
+
+	// Layout adapt to plan/function.go, used for `explain SQL`.
+	Layout FuncExplainLayout
+
 	// TypeCheckFn checks if the input parameters can satisfy one of the overloads
 	// and returns its index id.
 	// if type convert should happen, return the target-types at the same time.
@@ -61,9 +66,6 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
-		if len(args) == 0 {
-			return 0, nil
-		}
 		matched := make([]int32, 0, 4)   // function overload which can be matched directly
 		byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
 		convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
@@ -117,11 +119,6 @@ type Function struct {
 	// whether the function needs to append a hidden parameter, such as 'uuid'
 	AppendHideArg bool
 
-	Flag plan.Function_FuncFlag
-
-	// Layout adapt to plan/function.go, used for `explain SQL`.
-	Layout FuncExplainLayout
-
 	Args      []types.T
 	ReturnTyp types.T
 
@@ -134,6 +131,19 @@ type Function struct {
 
 	// Info records information about the function overload used to print
 	Info string
+
+	flag plan.Function_FuncFlag
+
+	// Layout adapt to plan/function.go, used for `explain SQL`.
+	layout FuncExplainLayout
+}
+
+func (f *Function) GetFlag() plan.Function_FuncFlag {
+	return f.flag
+}
+
+func (f *Function) GetLayout() FuncExplainLayout {
+	return f.layout
 }
 
 // ReturnType return result-type of function, and the result is nullable
@@ -150,11 +160,11 @@ func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func (f Function) IsAggregate() bool {
-	return f.Flag == plan.Function_AGG
+	return f.GetFlag() == plan.Function_AGG
 }
 
 func (f Function) isFunction() bool {
-	return f.Layout == STANDARD_FUNCTION || f.Layout >= NOPARAMETER_FUNCTION
+	return f.GetLayout() == STANDARD_FUNCTION || f.GetLayout() >= NOPARAMETER_FUNCTION
 }
 
 // functionRegister records the information about
@@ -213,6 +223,19 @@ func GetFunctionAppendHideArgByID(overloadID int64) bool {
 	return function.AppendHideArg
 }
 
+func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
+	function, err := GetFunctionByID(overloadID)
+	if err != nil {
+		return false, err
+	}
+	// if function cann't be fold, we think that will be not monotonical
+	if function.Volatile {
+		return false, nil
+	}
+	isMonotonical := (function.GetFlag() & plan.Function_MONOTONICAL) != 0
+	return isMonotonical, nil
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return the encoded overload id and the overload's return type
@@ -231,11 +254,11 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	targetTypes := getTypeSlice(targetTs)
 	rewriteTypesIfNecessary(targetTypes, args)
 
-	finalTypes := make([]types.Type, len(args))
+	var finalTypes []types.Type
 	if targetTs != nil {
-		copy(finalTypes, targetTypes)
+		finalTypes = targetTypes
 	} else {
-		copy(finalTypes, args)
+		finalTypes = args
 	}
 
 	// deal the failed situations
@@ -304,6 +327,8 @@ func setDefaultPrecision(typ *types.Type) {
 	} else if typ.Oid == types.T_timestamp {
 		typ.Precision = 6
 	} else if typ.Oid == types.T_datetime {
+		typ.Precision = 6
+	} else if typ.Oid == types.T_time {
 		typ.Precision = 6
 	}
 	typ.Size = int32(typ.Oid.TypeLen())

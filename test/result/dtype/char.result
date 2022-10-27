@@ -37,9 +37,12 @@ QL
 SELECT CONCAT_WS(14,'.3');
 CONCAT_WS(14,'.3') 
 14.3 
-SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));
-(CAST(0x7FFFFFFFFFFFFFFF AS char))
-9223372036854775807
+-- SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));
+-- (CAST(0x7FFFFFFFFFFFFFFF AS char))
+-- ������� 
+SELECT (CAST(0x61616161 AS char));
+(CAST(0x0x61616161 AS char))
+aaaa
 drop table if exists t1;
 create table t1 (a char(10));
 insert into t1 values('abcdef');

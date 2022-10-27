@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -61,7 +63,17 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-	rand.Seed(time.Now().UnixNano())
+	if *httpListenAddr != "" {
+		go func() {
+			http.ListenAndServe(*httpListenAddr, nil)
+		}()
+	}
+
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
@@ -105,21 +117,17 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// TODO: Use real task storage. And Each service initializes the logger with its own UUID
-	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage(),
-		logutil.GetGlobalLogger().With(zap.String("node", cfg.LogService.UUID)))
-
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
 	}
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs, ts)
+		return startCNService(cfg, stopper, fs)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper, fs, ts)
+		return startLogService(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
 	}
@@ -129,15 +137,17 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
-			taskService,
+			cnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -146,6 +156,7 @@ func startCNService(
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
+		// TODO: global client need to refactor
 		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
 		if err != nil {
 			panic(err)
@@ -166,12 +177,15 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
 			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
+			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
 		if err != nil {
 			panic(err)
 		}
@@ -190,10 +204,9 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService, taskService)
+	s, err := logservice.NewService(lscfg, fileService)
 	if err != nil {
 		panic(err)
 	}
@@ -222,8 +235,12 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
-	ServerType := strings.ToUpper(cfg.ServiceType)
-	switch ServerType {
+	ServiceType := strings.ToUpper(cfg.ServiceType)
+	nodeRole := ServiceType
+	if *launchFile != "" {
+		nodeRole = "ALL"
+	}
+	switch ServiceType {
 	case cnServiceType:
 		// validate node_uuid
 		var uuidErr error
@@ -243,20 +260,20 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
+		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		_ = export.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = trace.Init(ctx,
 				trace.WithMOVersion(SV.MoVersion),
-				trace.WithNode(UUID, ServerType),
+				trace.WithNode(UUID, nodeRole),
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)
@@ -272,7 +289,29 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		initWG.Wait()
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, &SV, UUID, nodeRole, metric.WithWriterFactory(writerFactory),
+			metric.WithExportInterval(SV.MetricExportInterval),
+			metric.WithMultiTable(SV.MetricMultiTable))
+	}
+	if SV.MergeCycle > 0 {
+		stopper.RunNamedTask("merge", func(ctx context.Context) {
+			merge, inited := export.NewMergeService(ctx,
+				export.WithTable(metric.SingleMetricTable),
+				export.WithFileService(fs),
+				export.WithMinFilesMerge(1),
+			)
+			if inited {
+				return
+			}
+			if merge == nil {
+				panic(moerr.NewInternalError("MergeService init failed."))
+			}
+			cycle := time.Duration(SV.MergeCycle) * time.Second
+			logutil.Infof("merge cycle: %v", cycle)
+			go merge.Start(cycle)
+			<-ctx.Done()
+			merge.Stop()
+		})
 	}
 	return nil
 }

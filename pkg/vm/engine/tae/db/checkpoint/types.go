@@ -14,17 +14,8 @@
 
 package checkpoint
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-)
-
-type Driver interface {
-	// aware.ChangeAware
-	// aware.DataMutationAware
-	EnqueueCheckpointUnit(unit data.CheckpointUnit)
-	EnqueueCheckpointEntry(wal.LogEntry)
+type Runner interface {
 	Start()
 	Stop()
-	String() string
+	EnqueueWait(any) error
 }

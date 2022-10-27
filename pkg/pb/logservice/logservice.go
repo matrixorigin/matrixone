@@ -75,7 +75,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
+	storeInfo.SQLAddress = hb.SQLAddress
 	storeInfo.Role = hb.Role
+	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -96,6 +98,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
 	storeInfo.ServiceAddress = hb.ServiceAddress
+	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -124,6 +127,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
+	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -155,7 +159,8 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 	}
 }
 
-// LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers"
+// LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers".
+// Donot add CN's StartTaskRunner info to log string, because there has user and password.
 func (m *ScheduleCommand) LogString() string {
 	c := func(s string) string {
 		if len(s) > 6 {
@@ -166,12 +171,16 @@ func (m *ScheduleCommand) LogString() string {
 
 	serviceType := map[ServiceType]string{
 		LogService: "L",
-		DnService:  "D",
+		DNService:  "D",
+		CNService:  "C",
 	}[m.ServiceType]
 
 	target := c(m.UUID)
-	if m.ConfigChange == nil {
+	if m.ShutdownStore != nil {
 		return fmt.Sprintf("%s/shutdown %s", serviceType, target)
+	}
+	if m.CreateTaskService != nil {
+		return fmt.Sprintf("%s/CreateTask %s", serviceType, target)
 	}
 
 	configChangeType := map[ConfigChangeType]string{

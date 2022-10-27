@@ -194,7 +194,11 @@ func (n *Bitmap) Remove(row uint64) {
 
 // Contains returns true if the row is contained in the Bitmap
 func (n *Bitmap) Contains(row uint64) bool {
-	return (n.data[row>>6] & (1 << (row & 0x3F))) != 0
+	idx := row >> 6
+	if idx > uint64(len(n.data)) {
+		return false
+	}
+	return (n.data[idx] & (1 << (row & 0x3F))) != 0
 }
 
 func (n *Bitmap) AddRange(start, end uint64) {
@@ -243,7 +247,7 @@ func (n *Bitmap) IsSame(m *Bitmap) bool {
 
 func (n *Bitmap) Or(m *Bitmap) {
 	n.TryExpand(m)
-	for i := 0; i < len(n.data); i++ {
+	for i := 0; i < len(m.data); i++ {
 		n.data[i] |= m.data[i]
 	}
 }
@@ -310,7 +314,7 @@ func (n *Bitmap) Marshal() []byte {
 	u2 := uint64(len(n.data) * 8)
 	buf.Write(types.EncodeUint64(&u1))
 	buf.Write(types.EncodeUint64(&u2))
-	buf.Write(types.EncodeFixedSlice(n.data, 8))
+	buf.Write(types.EncodeSlice(n.data))
 	return buf.Bytes()
 }
 
@@ -319,7 +323,7 @@ func (n *Bitmap) Unmarshal(data []byte) {
 	data = data[8:]
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
-	n.data = types.DecodeFixedSlice[uint64](data[:size], 8)
+	n.data = types.DecodeSlice[uint64](data[:size])
 }
 
 func (n *Bitmap) String() string {

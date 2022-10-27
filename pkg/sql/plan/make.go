@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
-	_, scale, err := types.ParseStringToDecimal128WithoutTable(v)
+func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
+	_, scale, err := types.ParseStringToDecimal128WithoutTable(v, isBin...)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
 		Precision: 34,
 		Nullable:  false,
 	}
-	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v), typ)
+	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
 func makePlan2NullConstExprWithType() *plan.Expr {
@@ -78,6 +78,8 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	}}
 }
 
+var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Int64ConstExpr(v),
@@ -109,38 +111,46 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
-// func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
-// 	return &plan.Expr_C{C: &plan.Const{
-// 		Isnull: false,
-// 		Value: &plan.Const_Dval{
-// 			Dval: v,
-// 		},
-// 	}}
-// }
-
-// func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
-// 	return &plan.Expr{
-// 		Expr: makePlan2Float64ConstExpr(v),
-// 		Typ: &plan.Type{
-// 			Id:       int32(types.T_float64),
-// 			Nullable: false,
-// 			Size:     8,
-// 		},
-// 	}
-// }
-
-func makePlan2StringConstExpr(v string) *plan.Expr_C {
+func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Dval{
+			Dval: v,
+		},
+	}}
+}
+
+var MakePlan2Float64ConstExprWithType = makePlan2Float64ConstExprWithType
+
+func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Float64ConstExpr(v),
+		Typ: &plan.Type{
+			Id:       int32(types.T_float64),
+			Nullable: false,
+			Size:     8,
+		},
+	}
+}
+
+func makePlan2StringConstExpr(v string, isBin ...bool) *plan.Expr_C {
+	c := &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
 		Value: &plan.Const_Sval{
 			Sval: v,
 		},
 	}}
+	if len(isBin) > 0 {
+		c.C.IsBin = isBin[0]
+	}
+	return c
 }
 
-func makePlan2StringConstExprWithType(v string) *plan.Expr {
+var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
+
+func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	return &plan.Expr{
-		Expr: makePlan2StringConstExpr(v),
+		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: &plan.Type{
 			Id:       int32(types.T_varchar),
 			Nullable: false,
@@ -151,12 +161,12 @@ func makePlan2StringConstExprWithType(v string) *plan.Expr {
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if types.T(expr.Typ.Id) == types.T_any {
-		expr.Typ = copyType(targetType)
+		expr.Typ = targetType
 		return expr, nil
 	}
 	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
@@ -164,7 +174,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		return nil, err
 	}
 	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
-		Typ: copyType(targetType),
+		Typ: targetType,
 	}}}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -175,17 +185,6 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		},
 		Typ: targetType,
 	}, nil
-}
-
-func copyType(t *Type) *Type {
-	return &Type{
-		Id:        t.Id,
-		Nullable:  t.Nullable,
-		Width:     t.Width,
-		Precision: t.Precision,
-		Size:      t.Size,
-		Scale:     t.Scale,
-	}
 }
 
 // if typ is decimal128 and decimal64 without scalar and precision
@@ -203,6 +202,8 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	}
 	return typ
 }
+
+var MakePlan2Type = makePlan2Type
 
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
@@ -223,6 +224,8 @@ func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 		Precision: typ.Precision,
 	}
 }
+
+var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	var size int32 = 0

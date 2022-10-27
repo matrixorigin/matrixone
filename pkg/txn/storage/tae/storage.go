@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
@@ -34,16 +36,20 @@ type taeStorage struct {
 
 func NewTAEStorage(
 	shard metadata.DNShard,
-	logClient logservice.Client,
+	factory logservice.ClientFactory,
 	fs fileservice.FileService,
 	clock clock.Clock,
+	ckpCfg *options.CheckpointCfg,
+	logStore options.LogstoreType,
 ) (*taeStorage, error) {
 
 	opt := &options.Options{
-		Clock: clock,
-		Fs:    fs,
-		Lc:    logClient,
-		Shard: shard,
+		Clock:         clock,
+		Fs:            fs,
+		Lc:            logservicedriver.LogServiceClientFactory(factory),
+		Shard:         shard,
+		CheckpointCfg: ckpCfg,
+		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
 		taeHandler: rpc.NewTAEHandle(opt),
@@ -55,35 +61,35 @@ var _ storage.TxnStorage = new(taeStorage)
 
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
-	return s.taeHandler.HandleClose()
+	return s.taeHandler.HandleClose(ctx)
 }
 
 // Commit implements storage.TxnTAEStorage
 func (s *taeStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.taeHandler.HandleCommit(txnMeta)
+	return s.taeHandler.HandleCommit(ctx, txnMeta)
 }
 
 // Committing implements storage.TxnTAEStorage
 func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.taeHandler.HandleCommitting(txnMeta)
+	return s.taeHandler.HandleCommitting(ctx, txnMeta)
 }
 
 // Destroy implements storage.TxnTAEStorage
 func (s *taeStorage) Destroy(ctx context.Context) error {
-	return s.taeHandler.HandleDestroy()
+	return s.taeHandler.HandleDestroy(ctx)
 }
 
 // Prepare implements storage.TxnTAEStorage
 func (s *taeStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	return s.taeHandler.HandlePrepare(txnMeta)
+	return s.taeHandler.HandlePrepare(ctx, txnMeta)
 }
 
 // Rollback implements storage.TxnTAEStorage
 func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.taeHandler.HandleRollback(txnMeta)
+	return s.taeHandler.HandleRollback(ctx, txnMeta)
 }
 
 // StartRecovery implements storage.TxnTAEStorage
 func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
-	s.taeHandler.HandleStartRecovery(ch)
+	s.taeHandler.HandleStartRecovery(ctx, ch)
 }

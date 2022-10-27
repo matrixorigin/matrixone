@@ -169,6 +169,20 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefsForSet(arg, projects)
+		}
+
+	case *plan.Expr_Col:
+		expr = DeepCopyExpr(projects[exprImpl.Col.ColPos])
+	}
+
+	return expr
+}
+
 func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
@@ -479,6 +493,9 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr) (*plan.Expr, error) {
 	if !isConstant(e) {
 		return e, nil
 	}
+	// XXX MPOOL
+	// This is a bug -- colexec EvalExpr need to eval, therefore, could potentially need
+	// a mpool.  proc is passed in a nil, where do I get a mpool?   Session?
 	vec, err := colexec.EvalExpr(bat, nil, e)
 	if err != nil {
 		return nil, err
@@ -550,4 +567,46 @@ func isConstant(e *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func IsTableFunctionValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
+	// node must be a value scan
+	return node.TableDef != nil && node.TableDef.TblFunc != nil && len(node.TableDef.TblFunc.Param) > 0
+}
+
+func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
+	if idx == len(leftExprs)-1 {
+		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			leftExprs[idx],
+			rightExprs[idx],
+		})
+	}
+
+	expr, err := bindFuncExprImplByPlanExpr(nonEqOp, []*plan.Expr{
+		DeepCopyExpr(leftExprs[idx]),
+		DeepCopyExpr(rightExprs[idx]),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+		leftExprs[idx],
+		rightExprs[idx],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err := unwindTupleComparison(nonEqOp, op, leftExprs, rightExprs, idx+1)
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	if err != nil {
+		return nil, err
+	}
+
+	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
 }

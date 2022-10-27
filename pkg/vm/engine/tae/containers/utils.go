@@ -19,9 +19,11 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 
@@ -56,10 +58,11 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 	return nbs
 }
 
-func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator) (cloned Vector) {
+func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...*mpool.MPool) (cloned Vector) {
 	opts := new(Options)
+	// XXX what does the following test mean?
 	if len(allocator) > 0 {
-		opts.Allocator = DefaultAllocator
+		opts.Allocator = common.DefaultAllocator
 	} else {
 		opts.Allocator = src.GetAllocator()
 	}
@@ -80,7 +83,7 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	if vec.GetType().IsVarlen() {
 		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
 	} else {
-		mov = movec.NewWithData(vec.GetType(), bs.StorageBuf(), nil, &nulls.Nulls{})
+		mov = movec.NewOriginalWithData(vec.GetType(), bs.StorageBuf(), &nulls.Nulls{})
 	}
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
@@ -112,8 +115,11 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 			}
 		}
 	} else {
-		mov = movec.NewOriginal(vec.GetType())
-		movec.AppendFixedRaw(mov, bs.Storage)
+		data := make([]byte, len(bs.Storage))
+		if len(data) > 0 {
+			copy(data, bs.Storage)
+		}
+		mov = movec.NewOriginalWithData(vec.GetType(), data, new(nulls.Nulls))
 	}
 
 	if vec.HasNull() {
@@ -144,7 +150,7 @@ func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 }
 
 func CopyToMoBatch(bat *Batch) *batch.Batch {
-	ret := batch.New(false, bat.Attrs)
+	ret := batch.New(true, bat.Attrs)
 	for i := range bat.Vecs {
 		ret.Vecs[i] = CopyToMoVec(bat.Vecs[i])
 	}
@@ -158,7 +164,7 @@ func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
 			common.OperandField("Col length is 0"))
 	} else {
-		bs.Storage = types.EncodeFixedSlice(movec.MustTCols[T](v), v.GetType().TypeSize())
+		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
 	}
 	return bs
 }
@@ -192,6 +198,8 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[float64](v)
 	case types.T_date:
 		bs = movecToBytes[types.Date](v)
+	case types.T_time:
+		bs = movecToBytes[types.Time](v)
 	case types.T_datetime:
 		bs = movecToBytes[types.Datetime](v)
 	case types.T_timestamp:
@@ -206,7 +214,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[types.TS](v)
 	case types.T_Rowid:
 		bs = movecToBytes[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
 		if v.Col != nil {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
@@ -274,6 +282,8 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	return bats
 }
 
+var mockMp = common.DefaultAllocator
+
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	vec := movec.New(typ)
 	switch typ.Oid {
@@ -286,118 +296,124 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 				data = append(data, false)
 			}
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_int8:
 		data := make([]int8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int8(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_int16:
 		data := make([]int16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int16(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_int32:
 		data := make([]int32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int32(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_int64:
 		data := make([]int64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int64(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_uint8:
 		data := make([]uint8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint8(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_uint16:
 		data := make([]uint16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint16(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_uint32:
 		data := make([]uint32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint32(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_uint64:
 		data := make([]uint64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint64(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_float32:
 		data := make([]float32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float32(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_float64:
 		data := make([]float64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float64(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_decimal64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
 			d, _ := types.InitDecimal64(int64(i+offset), 64, 0)
 			data = append(data, d)
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_decimal128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
 			d, _ := types.InitDecimal128(int64(i+offset), 64, 0)
 			data = append(data, d)
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_timestamp:
 		data := make([]types.Timestamp, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Timestamp(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_date:
 		data := make([]types.Date, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Date(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
+	case types.T_time:
+		data := make([]types.Time, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.Time(i+offset))
+		}
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_datetime:
 		data := make([]types.Datetime, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Datetime(i+offset))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
-	case types.T_char, types.T_varchar, types.T_blob:
+		_ = movec.AppendFixed(vec, data, mockMp)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		data := make([][]byte, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
 		}
-		_ = movec.AppendBytes(vec, data, nil)
+		_ = movec.AppendBytes(vec, data, mockMp)
 	case types.T_TS:
 		data := make([]types.TS, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.BuildTS(int64(i+1), uint32(i%16)))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 
 	case types.T_Rowid:
 		data := make([]types.Rowid, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.BuildRowid(int64(i+1), int64(i%16)))
 		}
-		_ = movec.AppendFixed(vec, data, nil)
+		_ = movec.AppendFixed(vec, data, mockMp)
 
 	default:
 		panic("not support")
@@ -422,7 +438,7 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any) {
 	if isNull {
 		nulls.Add(vec.Nsp, uint64(row))
 	} else {
-		movec.SetBytesAt(vec, int(row), v.([]byte), nil)
+		movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
 		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
 			vec.Nsp.Np.Remove(uint64(row))
 		}
@@ -433,18 +449,18 @@ func AppendFixedValue[T types.FixedSizeT](vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
 		zt := types.DefaultVal[T]()
-		vec.Append(zt, isNull, nil)
+		vec.Append(zt, isNull, mockMp)
 	} else {
-		vec.Append(v.(T), false, nil)
+		vec.Append(v.(T), false, mockMp)
 	}
 }
 
 func AppendBytes(vec *movec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
-		vec.Append(nil, true, nil)
+		vec.Append(nil, true, mockMp)
 	} else {
-		vec.Append(v.([]byte), false, nil)
+		vec.Append(v.([]byte), false, mockMp)
 	}
 }
 
@@ -478,6 +494,8 @@ func AppendValue(vec *movec.Vector, v any) {
 		AppendFixedValue[float64](vec, v)
 	case types.T_date:
 		AppendFixedValue[types.Date](vec, v)
+	case types.T_time:
+		AppendFixedValue[types.Time](vec, v)
 	case types.T_timestamp:
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.T_datetime:
@@ -488,7 +506,7 @@ func AppendValue(vec *movec.Vector, v any) {
 		AppendFixedValue[types.TS](vec, v)
 	case types.T_Rowid:
 		AppendFixedValue[types.Rowid](vec, v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		AppendBytes(vec, v)
 	default:
 		panic(any("not expected"))
@@ -530,6 +548,8 @@ func GetValue(col *movec.Vector, row uint32) any {
 		return movec.GetValueAt[float64](col, int64(row))
 	case types.T_date:
 		return movec.GetValueAt[types.Date](col, int64(row))
+	case types.T_time:
+		return movec.GetValueAt[types.Time](col, int64(row))
 	case types.T_datetime:
 		return movec.GetValueAt[types.Datetime](col, int64(row))
 	case types.T_timestamp:
@@ -538,7 +558,7 @@ func GetValue(col *movec.Vector, row uint32) any {
 		return movec.GetValueAt[types.TS](col, int64(row))
 	case types.T_Rowid:
 		return movec.GetValueAt[types.Rowid](col, int64(row))
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		return col.GetBytes(int64(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -576,6 +596,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[float64](col, row, val)
 	case types.T_date:
 		GenericUpdateFixedValue[types.Date](col, row, val)
+	case types.T_time:
+		GenericUpdateFixedValue[types.Time](col, row, val)
 	case types.T_datetime:
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.T_timestamp:
@@ -587,7 +609,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 	case types.T_Rowid:
 		GenericUpdateFixedValue[types.Rowid](col, row, val)
 
-	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
+	case types.T_varchar, types.T_char, types.T_json, types.T_blob, types.T_text:
 		GenericUpdateBytes(col, row, val)
 	default:
 		panic(moerr.NewInternalError("%v not supported", col.Typ))
@@ -679,4 +701,43 @@ func ApplyUpdateToVector(vec *movec.Vector, mask *roaring.Bitmap, vals map[uint3
 		UpdateValue(vec, row, vals[row])
 	}
 	return vec
+}
+
+func CopyToProtoBatch(bat *Batch) (*api.Batch, error) {
+	rbat := new(api.Batch)
+	rbat.Attrs = bat.Attrs
+	for _, vec := range bat.Vecs {
+		apiVec, err := CopyToProtoVector(vec)
+		if err != nil {
+			return nil, err
+		}
+		rbat.Vecs = append(rbat.Vecs, apiVec)
+	}
+	return rbat, nil
+}
+
+func CopyToProtoVector(vec Vector) (*api.Vector, error) {
+	vecNsp := new(nulls.Nulls)
+	if vec.HasNull() {
+		vecNsp.Np = bitmap.New(vec.Length())
+		vecNsp.Np.AddMany(vec.NullMask().ToArray())
+	}
+	nsp, err := vecNsp.Show()
+	if err != nil {
+		return nil, err
+	}
+	bs := vec.Bytes()
+	data := make([]byte, bs.StorageSize())
+	copy(data, bs.StorageBuf())
+	area := make([]byte, bs.HeaderSize())
+	copy(area, bs.HeaderBuf())
+	return &api.Vector{
+		Nsp:      nsp,
+		Nullable: true,
+		Area:     area,
+		Data:     data,
+		IsConst:  false,
+		Len:      uint32(vec.Length()),
+		Type:     movec.TypeToProtoType(vec.GetType()),
+	}, nil
 }

@@ -27,11 +27,13 @@ type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
 }
 
-func NewEntryMVCCNode() *EntryMVCCNode {
-	return &EntryMVCCNode{}
+// Dropped committed
+func (un *EntryMVCCNode) HasDropCommitted() bool {
+	return !un.DeletedAt.IsEmpty() && un.DeletedAt != txnif.UncommitTS
 }
 
-func (un *EntryMVCCNode) HasDropped() bool {
+// Dropped committed or uncommitted
+func (un *EntryMVCCNode) HasDropIntent() bool {
 	return !un.DeletedAt.IsEmpty()
 }
 
@@ -94,16 +96,6 @@ func (un *EntryMVCCNode) String() string {
 	return fmt.Sprintf("[C@%s,D@%s]", un.CreatedAt.ToString(), un.DeletedAt.ToString())
 }
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
-	if un.CreatedAt == txnif.UncommitTS {
-		un.CreatedAt = ts
-	}
-	if un.DeletedAt == txnif.UncommitTS {
-		un.DeletedAt = ts
-	}
-	return nil
-}
-
-func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
 	if un.CreatedAt == txnif.UncommitTS {
 		un.CreatedAt = ts
 	}

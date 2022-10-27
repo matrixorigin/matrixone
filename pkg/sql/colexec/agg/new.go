@@ -115,10 +115,16 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_blob:
 		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_json:
+		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_text:
+		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_date:
 		return newGenericCount[types.Date](typ, dist, isStar)
 	case types.T_datetime:
 		return newGenericCount[types.Datetime](typ, dist, isStar)
+	case types.T_time:
+		return newGenericCount[types.Time](typ, dist, isStar)
 	case types.T_timestamp:
 		return newGenericCount[types.Timestamp](typ, dist, isStar)
 	case types.T_decimal64:
@@ -161,10 +167,14 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 		return newGenericAnyValue[[]byte](typ, dist)
 	case types.T_blob:
 		return newGenericAnyValue[[]byte](typ, dist)
+	case types.T_text:
+		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_date:
 		return newGenericAnyValue[types.Date](typ, dist)
 	case types.T_datetime:
 		return newGenericAnyValue[types.Datetime](typ, dist)
+	case types.T_time:
+		return newGenericAnyValue[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericAnyValue[types.Timestamp](typ, dist)
 	case types.T_decimal64:
@@ -299,10 +309,18 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_text:
+		aggPriv := NewStrMax()
+		if dist {
+			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
 		return newGenericMax[types.Date](typ, dist)
 	case types.T_datetime:
 		return newGenericMax[types.Datetime](typ, dist)
+	case types.T_time:
+		return newGenericMax[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMax[types.Timestamp](typ, dist)
 	case types.T_decimal64:
@@ -373,10 +391,18 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_text:
+		aggPriv := NewStrMin()
+		if dist {
+			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
 		return newGenericMin[types.Date](typ, dist)
 	case types.T_datetime:
 		return newGenericMin[types.Datetime](typ, dist)
+	case types.T_time:
+		return newGenericMin[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMin[types.Timestamp](typ, dist)
 	case types.T_decimal64:
@@ -431,10 +457,14 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_blob:
 		return newGenericApproxcd[[]byte](typ, dist)
+	case types.T_text:
+		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_date:
 		return newGenericApproxcd[types.Date](typ, dist)
 	case types.T_datetime:
 		return newGenericApproxcd[types.Datetime](typ, dist)
+	case types.T_time:
+		return newGenericApproxcd[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericApproxcd[types.Timestamp](typ, dist)
 	case types.T_decimal64:

@@ -15,7 +15,6 @@
 package trace
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -24,50 +23,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
-
-func TestReportLog(t *testing.T) {
-	type args struct {
-		ctx       context.Context
-		level     zapcore.Level
-		depth     int
-		formatter string
-		args      []any
-	}
-	tests := []struct {
-		name         string
-		enableTracer bool
-		args         args
-	}{
-		{
-			name:         "close",
-			enableTracer: false,
-			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
-				level:     zapcore.InfoLevel,
-				depth:     3,
-				formatter: "info message",
-				args:      []any{},
-			},
-		},
-		{
-			name:         "collect",
-			enableTracer: true,
-			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
-				level:     zapcore.InfoLevel,
-				depth:     3,
-				formatter: "info message",
-				args:      []any{},
-			},
-		},
-	}
-	for _, tt := range tests {
-		GetTracerProvider().SetEnable(tt.enableTracer)
-		t.Run(tt.name, func(t *testing.T) {
-			ReportLog(tt.args.ctx, tt.args.level, tt.args.depth, tt.args.formatter, tt.args.args...)
-		})
-	}
-}
 
 func TestReportZap(t *testing.T) {
 	type args struct {

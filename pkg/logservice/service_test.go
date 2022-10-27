@@ -26,15 +26,13 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -68,7 +66,6 @@ func runServiceTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -112,7 +109,6 @@ func TestNewService(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -238,7 +234,7 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 			},
 		}
 		resp := s.handleCNHeartbeat(ctx, req)
-		assert.Nil(t, resp.CommandBatch)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
@@ -543,7 +539,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -558,7 +553,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -583,7 +577,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	for i := 0; i < 6000; i++ {
 		si1, ok := service1.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
-			logger.Error("shard 1 info missing on service 1")
+			testLogger.Error("shard 1 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -596,7 +590,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok := service1.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
-			logger.Error("shard 2 info missing on service 1")
+			testLogger.Error("shard 2 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -609,7 +603,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si1, ok = service2.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
-			logger.Error("shard 1 info missing on service 2")
+			testLogger.Error("shard 1 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -622,7 +616,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok = service2.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
-			logger.Error("shard 2 info missing on service 2")
+			testLogger.Error("shard 2 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -678,7 +672,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
 			testutil.NewFS(),
-			taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -687,7 +680,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		services = append(services, service)
 	}
 	defer func() {
-		logger.Info("going to close all services")
+		testLogger.Info("going to close all services")
 		var wg sync.WaitGroup
 		for _, s := range services {
 			if s != nil {
@@ -696,7 +689,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				go func() {
 					require.NoError(t, selected.Close())
 					wg.Done()
-					logger.Info("closed a service")
+					testLogger.Info("closed a service")
 				}()
 			}
 		}
@@ -787,7 +780,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

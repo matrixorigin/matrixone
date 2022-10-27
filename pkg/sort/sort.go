@@ -17,6 +17,7 @@ package sort
 import (
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -30,7 +31,42 @@ const (
 type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
 
-func Sort(desc bool, os []int64, vec *vector.Vector) {
+func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol []string) {
+	if hasNull {
+		sz := len(os)
+		if nullsLast { // move null rows to the tail
+			var cursor int
+			for cursor < sz && !nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+				cursor++
+			}
+			if cursor == sz {
+				return
+			}
+			for i := cursor; i < sz; i++ {
+				if !nulls.Contains(vec.Nsp, uint64(os[i])) {
+					os[cursor], os[i] = os[i], os[cursor]
+					cursor++
+				}
+			}
+			os = os[:cursor]
+		} else { // move null rows to the head
+			var cursor int
+			for cursor < sz && nulls.Contains(vec.Nsp, uint64(os[cursor])) {
+				cursor++
+			}
+			if cursor == sz {
+				return
+			}
+			for i := cursor; i < sz; i++ {
+				if nulls.Contains(vec.Nsp, uint64(os[i])) {
+					os[cursor], os[i] = os[i], os[cursor]
+					cursor++
+				}
+			}
+			os = os[cursor:]
+		}
+	}
+	// sort only non-null rows
 	switch vec.Typ.Oid {
 	case types.T_bool:
 		col := vector.GetFixedVectorValues[bool](vec)
@@ -123,6 +159,13 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, genericGreater[types.Datetime])
 		}
+	case types.T_time:
+		col := vector.GetFixedVectorValues[types.Time](vec)
+		if !desc {
+			genericSort(col, os, genericLess[types.Time])
+		} else {
+			genericSort(col, os, genericGreater[types.Time])
+		}
 	case types.T_timestamp:
 		col := vector.GetFixedVectorValues[types.Timestamp](vec)
 		if !desc {
@@ -151,20 +194,16 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, uuidGreater)
 		}
-	case types.T_char, types.T_varchar, types.T_blob:
-		col := vector.GetFixedVectorValues[types.Varlena](vec)
-		varlenaCmp := func(data []types.Varlena, i, j int64) bool {
-			si := vec.GetString(i)
-			sj := vec.GetString(j)
-			if desc {
-				return si > sj
-			} else {
-				return si < sj
-			}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		if strCol == nil {
+			strCol = vector.GetStrVectorValues(vec)
 		}
-		genericSort(col, os, varlenaCmp)
+		if !desc {
+			genericSort(strCol, os, genericLess[string])
+		} else {
+			genericSort(strCol, os, genericGreater[string])
+		}
 	}
-
 }
 
 func boolLess[T bool](data []T, i, j int64) bool {

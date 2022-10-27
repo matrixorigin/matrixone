@@ -31,7 +31,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
-	_ "github.com/go-sql-driver/mysql"
+
+	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,9 +42,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -89,43 +87,41 @@ func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//TODO: fix data race
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
-	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
+	//client connect
+	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	//pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-	//_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//
-	//pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	//pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-	//
-	//ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-	//rm, _ := NewRoutineManager(ctx, pu)
-	//rm.SetSkipCheckUser(true)
-	//
-	//wg := sync.WaitGroup{}
-	//wg.Add(1)
-	//
-	////running server
-	//go func() {
-	//	defer wg.Done()
-	//	echoServer(rm.Handler, rm, NewSqlCodec())
-	//}()
-	//
-	//// to := NewTimeout(1*time.Minute, false)
-	//// for isClosed() && !to.isTimeout() {
-	//// }
-	//
-	//time.Sleep(time.Second * 2)
-	//db := open_db(t, 6001)
-	//close_db(t, db)
-	//
-	//time.Sleep(time.Millisecond * 10)
-	////close server
-	//setServer(1)
-	//wg.Wait()
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, pu)
+	rm.SetSkipCheckUser(true)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	//running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, NewSqlCodec())
+	}()
+
+	// to := NewTimeout(1*time.Minute, false)
+	// for isClosed() && !to.isTimeout() {
+	// }
+
+	time.Sleep(time.Second * 2)
+	db := open_db(t, 6001)
+	close_db(t, db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
 }
 
 func TestReadIntLenEnc(t *testing.T) {
@@ -303,16 +299,12 @@ func TestReadStringLenEnc(t *testing.T) {
 // can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
 // func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
 // 	//before anything using the configuration
-// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+// 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 // 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 // 	if err != nil {
 // 		panic(err)
 // 	}
 // 	pu.SV.EnableTls = true
-
-// 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-// 	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
-
 // 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 // 	rm, _ := NewRoutineManager(ctx, pu)
 // 	rm.SetSkipCheckUser(true)
@@ -786,6 +778,43 @@ func makeMysqlDateResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDateResultSet())
 }
 
+func makeMysqlTimeResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Time"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	t1, _ := types.ParseTime("110:21:15", 0)
+	t2, _ := types.ParseTime("2018-04-28 10:21:15.123", 0)
+	t3, _ := types.ParseTime("-112:12:12", 0)
+	var cases = []types.Time{
+		t1,
+		t2,
+		t3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlTimeResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlTimeResultSet())
+}
+
 func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -823,10 +852,10 @@ func makeMysqlDatetimeResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0, 0, 0, 0, makeMysqlDatetimeResultSet())
 }
 
-func make8ColumnsResultSet() *MysqlResultSet {
+func make9ColumnsResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	var columnTypes = []uint8{
+	var columnTypes = []defines.MysqlType{
 		defines.MYSQL_TYPE_TINY,
 		defines.MYSQL_TYPE_SHORT,
 		defines.MYSQL_TYPE_LONG,
@@ -834,6 +863,7 @@ func make8ColumnsResultSet() *MysqlResultSet {
 		defines.MYSQL_TYPE_VARCHAR,
 		defines.MYSQL_TYPE_FLOAT,
 		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_TIME,
 		defines.MYSQL_TYPE_DATETIME,
 		defines.MYSQL_TYPE_DOUBLE,
 	}
@@ -846,6 +876,7 @@ func make8ColumnsResultSet() *MysqlResultSet {
 		"Varchar",
 		"Float",
 		"Date",
+		"Time",
 		"Datetime",
 		"Double",
 	}
@@ -857,11 +888,15 @@ func make8ColumnsResultSet() *MysqlResultSet {
 	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
 	dt3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
 
+	t1, _ := types.ParseTime("2018-04-28 10:21:15", 0)
+	t2, _ := types.ParseTime("2018-04-28 10:21:15.123", 0)
+	t3, _ := types.ParseTime("2015-03-03 12:12:12", 0)
+
 	var cases = [][]interface{}{
-		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), "abc", float32(math.MaxFloat32), d1, dt1, float64(0.01)},
-		{int8(-127), int16(0), int32(0), int64(0), "abcde", float32(math.SmallestNonzeroFloat32), d2, dt2, float64(0.01)},
-		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), "", float32(-math.MaxFloat32), d1, dt3, float64(0.01)},
-		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), "x-", float32(-math.SmallestNonzeroFloat32), d2, dt1, float64(0.01)},
+		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), "abc", float32(math.MaxFloat32), d1, t1, dt1, float64(0.01)},
+		{int8(-127), int16(0), int32(0), int64(0), "abcde", float32(math.SmallestNonzeroFloat32), d2, t2, dt2, float64(0.01)},
+		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), "", float32(-math.MaxFloat32), d1, t3, dt3, float64(0.01)},
+		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), "x-", float32(-math.SmallestNonzeroFloat32), d2, t1, dt1, float64(0.01)},
 	}
 
 	for i, ct := range columnTypes {
@@ -885,14 +920,14 @@ func make8ColumnsResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysql8ColumnsResult() *MysqlExecutionResult {
-	return NewMysqlExecutionResult(0, 0, 0, 0, make8ColumnsResultSet())
+func makeMysql9ColumnsResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0, 0, 0, 0, make9ColumnsResultSet())
 }
 
 func makeMoreThan16MBResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	var columnTypes = []uint8{
+	var columnTypes = []defines.MysqlType{
 		defines.MYSQL_TYPE_LONGLONG,
 		defines.MYSQL_TYPE_DOUBLE,
 		defines.MYSQL_TYPE_VARCHAR,
@@ -995,12 +1030,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	routine, ok := tRM.clients[rs]
 	tRM.rwlock.RUnlock()
 
-	pro := routine.protocol.(*MysqlProtocolImpl)
+	pro := routine.GetClientProtocol().(*MysqlProtocolImpl)
 	if !ok {
 		return moerr.NewInternalError("routine does not exist")
 	}
 	packet, ok := msg.(*Packet)
-	pro.sequenceId = uint8(packet.SequenceID + 1)
+	pro.SetSequenceID(uint8(packet.SequenceID + 1))
 	if !ok {
 		return moerr.NewInternalError("message is not Packet")
 	}
@@ -1019,7 +1054,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 			return moerr.NewInternalError("message is not Packet")
 		}
 
-		pro.sequenceId = uint8(packet.SequenceID + 1)
+		pro.SetSequenceID(uint8(packet.SequenceID + 1))
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -1161,17 +1196,23 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 				status:   0,
 				data:     makeMysqlDateResult(),
 			}
+		case "time":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlTimeResult(),
+			}
 		case "datetime":
 			resp = &Response{
 				category: ResultResponse,
 				status:   0,
 				data:     makeMysqlDatetimeResult(),
 			}
-		case "8columns":
+		case "9columns":
 			resp = &Response{
 				category: ResultResponse,
 				status:   0,
-				data:     makeMysql8ColumnsResult(),
+				data:     makeMysql9ColumnsResult(),
 			}
 		case "16mb":
 			resp = &Response{
@@ -1229,14 +1270,11 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
 	}
-
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 
 	trm := NewTestRoutineManager(pu)
 
@@ -1273,8 +1311,9 @@ func TestMysqlResultSet(t *testing.T) {
 	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
 	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
 	do_query_resp_resultset(t, db, false, false, "date", makeMysqlDateResultSet())
+	do_query_resp_resultset(t, db, false, false, "time", makeMysqlTimeResultSet())
 	do_query_resp_resultset(t, db, false, false, "datetime", makeMysqlDatetimeResultSet())
-	do_query_resp_resultset(t, db, false, false, "8columns", make8ColumnsResultSet())
+	do_query_resp_resultset(t, db, false, false, "9columns", make9ColumnsResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
 
@@ -1298,7 +1337,7 @@ func TestMysqlResultSet(t *testing.T) {
 // 		log.Fatal("Failed to append PEM.")
 // 	}
 // 	clientCert := make([]tls.Certificate, 0, 1)
-// 	certs, err := tls.LoadX509KeyPair("test/client-cert.pem", "test/client-key.pem")
+// 	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
 // 	if err != nil {
 // 		setServer(1)
 // 		require.NoError(t, err)
@@ -1471,6 +1510,11 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						value, err := mrs.GetValue(rowIdx, i)
 						require.NoError(t, err)
 						x := value.(types.Date).String()
+						data = []byte(x)
+					case defines.MYSQL_TYPE_TIME:
+						value, err := mrs.GetValue(rowIdx, i)
+						require.NoError(t, err)
+						x := value.(types.Time).String()
 						data = []byte(x)
 					case defines.MYSQL_TYPE_DATETIME:
 						value, err := mrs.GetValue(rowIdx, i)
@@ -1707,7 +1751,7 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		for _, c := range kases {
-			proto.setSequenceID(0)
+			proto.SetSequenceID(0)
 
 			err = proto.openRow(nil)
 			convey.So(err, convey.ShouldBeNil)
@@ -1839,10 +1883,10 @@ func FuzzParseExecuteData(f *testing.F) {
 	for i := 0; i < nullBitmapLen; i++ {
 		testData = append(testData, 0)
 	}
-	testData = append(testData, 1)                       // new param bound flag
-	testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-	testData = append(testData, 0)                       //is unsigned
-	testData = append(testData, 10)                      //tiny value
+	testData = append(testData, 1)                              // new param bound flag
+	testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+	testData = append(testData, 0)                              //is unsigned
+	testData = append(testData, 10)                             //tiny value
 
 	f.Add(testData)
 
@@ -1854,10 +1898,10 @@ func FuzzParseExecuteData(f *testing.F) {
 	for i := 0; i < nullBitmapLen; i++ {
 		testData = append(testData, 0)
 	}
-	testData = append(testData, 1)                       // new param bound flag
-	testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-	testData = append(testData, 0)                       //is unsigned
-	testData = append(testData, 4)                       //tiny value
+	testData = append(testData, 1)                              // new param bound flag
+	testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+	testData = append(testData, 0)                              //is unsigned
+	testData = append(testData, 4)                              //tiny value
 	f.Add(testData)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -1904,10 +1948,10 @@ func TestParseExecuteData(t *testing.T) {
 		for i := 0; i < nullBitmapLen; i++ {
 			testData = append(testData, 0)
 		}
-		testData = append(testData, 1)                       // new param bound flag
-		testData = append(testData, defines.MYSQL_TYPE_TINY) // type
-		testData = append(testData, 0)                       //is unsigned
-		testData = append(testData, 10)                      //tiny value
+		testData = append(testData, 1)                              // new param bound flag
+		testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
+		testData = append(testData, 0)                              //is unsigned
+		testData = append(testData, 10)                             //tiny value
 
 		names, vars, err := proto.ParseExecuteData(prepareStmt, testData, 0)
 		convey.So(err, convey.ShouldBeNil)
@@ -1940,14 +1984,13 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
-		res := make8ColumnsResultSet()
+		res := make9ColumnsResultSet()
 
 		err = proto.SendResultSetTextBatchRow(res, uint64(len(res.Data)))
 		convey.So(err, convey.ShouldBeNil)
@@ -1973,14 +2016,13 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
-		res := make8ColumnsResultSet()
+		res := make9ColumnsResultSet()
 
 		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
 		convey.So(err, convey.ShouldBeNil)
@@ -2006,14 +2048,13 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
-		res := make8ColumnsResultSet()
+		res := make9ColumnsResultSet()
 
 		err = proto.sendResultSet(res, int(COM_QUERY), 0, 0)
 		convey.So(err, convey.ShouldBeNil)
@@ -2042,15 +2083,14 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Cmd = int(COM_STMT_EXECUTE)
 		proto.ses = ses
 
-		res := make8ColumnsResultSet()
+		res := make9ColumnsResultSet()
 
 		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
 		convey.So(err, convey.ShouldBeNil)

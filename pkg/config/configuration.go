@@ -16,14 +16,13 @@ package config
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 type ConfigurationKeyType int
@@ -104,6 +103,26 @@ var (
 
 	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
+
+	// defaultMetricExportInterval default: 15 sec.
+	defaultMetricExportInterval = 15
+
+	// defaultLogShardID default: 1
+	defaultLogShardID = 1
+
+	// defaultDNReplicaID default: 1
+	defaultDNReplicaID = 1
+	// defaultMetricGatherInterval default: 15 sec.
+	defaultMetricGatherInterval = 15
+
+	// defaultMergeCycle default: 0 sec, means disable merge as service
+	defaultMergeCycle = 0
+
+	// defaultPathBuilder, val in [DBTable, AccountDate]
+	defaultPathBuilder = "AccountDate"
+
+	// defaultSessionTimeout default: 10 minutes
+	defaultSessionTimeout = 10 * time.Minute
 )
 
 // FrontendParameters of the frontend
@@ -218,6 +237,15 @@ type FrontendParameters struct {
 
 	//default is ''. Path of file that contains X509 key in PEM format for client
 	TlsKeyFile string `toml:"tlsKeyFile"`
+
+	//default is 1
+	LogShardID uint64 `toml:"logshardid"`
+
+	//default is 1
+	DNReplicaID uint64 `toml:"dnreplicalid"`
+
+	//timeout of the session. the default is 10minutes
+	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -304,6 +332,18 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.PortOfRpcServerInComputationEngine == 0 {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
 	}
+
+	if fp.DNReplicaID == 0 {
+		fp.DNReplicaID = uint64(defaultDNReplicaID)
+	}
+
+	if fp.LogShardID == 0 {
+		fp.LogShardID = uint64(defaultLogShardID)
+	}
+
+	if fp.SessionTimeout.Duration == 0 {
+		fp.SessionTimeout.Duration = defaultSessionTimeout
+	}
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
@@ -344,10 +384,24 @@ type ObservabilityParameters struct {
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
 	// TraceExportInterval default is 15s.
-	TraceExportInterval int `toml:"trace_export_interval"`
+	TraceExportInterval int `toml:"traceExportInterval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"long_query_time"`
+	LongQueryTime float64 `toml:"longQueryTime"`
+
+	// MetricMultiTable default is false. With true, save all metric data in one table.
+	MetricMultiTable bool `toml:"metricMultiTable"`
+
+	// MetricExportInterval default is 15 sec.
+	MetricExportInterval int `toml:"metricExportInterval"`
+
+	// MetricGatherInterval default is 15 sec.
+	MetricGatherInterval int `toml:"metricGatherInterval"`
+
+	MergeCycle int `toml:"mergeCycle"`
+
+	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
+	PathBuilder string `toml:"PathBuilder"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -365,19 +419,29 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.BatchProcessor = defaultBatchProcessor
 	}
 
-	if op.TraceExportInterval == 0 {
+	if op.TraceExportInterval <= 0 {
 		op.TraceExportInterval = defaultTraceExportInterval
+	}
+
+	if op.MetricExportInterval <= 0 {
+		op.MetricExportInterval = defaultMetricExportInterval
+	}
+
+	if op.MetricGatherInterval <= 0 {
+		op.MetricGatherInterval = defaultMetricGatherInterval
+	}
+
+	if op.MergeCycle <= 0 {
+		op.MergeCycle = defaultMergeCycle
+	}
+
+	if op.PathBuilder == "" {
+		op.PathBuilder = defaultPathBuilder
 	}
 }
 
 type ParameterUnit struct {
 	SV *FrontendParameters
-
-	//host memory
-	HostMmu *host.Mmu
-
-	//mempool
-	Mempool *mempool.Mempool
 
 	//Storage Engine
 	StorageEngine engine.Engine
@@ -394,16 +458,12 @@ type ParameterUnit struct {
 
 func NewParameterUnit(
 	sv *FrontendParameters,
-	hostMmu *host.Mmu,
-	mempool *mempool.Mempool,
 	storageEngine engine.Engine,
 	txnClient client.TxnClient,
 	clusterNodes engine.Nodes,
 ) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
-		HostMmu:       hostMmu,
-		Mempool:       mempool,
 		StorageEngine: storageEngine,
 		TxnClient:     txnClient,
 		ClusterNodes:  clusterNodes,

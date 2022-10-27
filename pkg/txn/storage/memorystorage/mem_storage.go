@@ -15,13 +15,13 @@
 package memorystorage
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func NewMemoryStorage(
-	mheap *mheap.Mheap,
+	mheap *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,

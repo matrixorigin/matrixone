@@ -20,11 +20,13 @@ import (
 	"reflect"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // XXX Moved vector from types.go to vector.go
@@ -51,6 +53,19 @@ type Vector struct {
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
 	isConst bool
 	length  int
+
+	// tag for distinguish '0x00..' and 0x... and 0x... is binary
+	// TODO: check whether isBin should be changed into array/bitmap
+	// now we assumpt that it can only be true in the case of only one data in vector
+	isBin bool
+}
+
+func (v *Vector) SetIsBin(isBin bool) {
+	v.isBin = isBin
+}
+
+func (v *Vector) GetIsBin() bool {
+	return v.isBin
 }
 
 func (v *Vector) Length() int {
@@ -80,7 +95,7 @@ func (v *Vector) SetOriginal(status bool) {
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
-	return types.DecodeFixedSlice[T](v.data, sz)
+	return types.DecodeSlice[T](v.data)
 }
 
 // GetFixedVector decode data and return decoded []T.
@@ -268,6 +283,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Date](v)
 	case types.T_datetime:
 		fillDefaultValue[types.Datetime](v)
+	case types.T_time:
+		fillDefaultValue[types.Time](v)
 	case types.T_timestamp:
 		fillDefaultValue[types.Timestamp](v)
 	case types.T_decimal64:
@@ -280,67 +297,69 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
 		fillDefaultValue[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		fillDefaultValue[types.Varlena](v)
 	default:
 		panic("unsupported type in FillDefaultValue")
 	}
 }
 
-func (v *Vector) ToConst(row int) *Vector {
+func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 	if v.isConst {
 		return v
 	}
 	switch v.Typ.Oid {
 	case types.T_bool:
-		return toConstVector[bool](v, row)
+		return toConstVector[bool](v, row, mp)
 	case types.T_int8:
-		return toConstVector[int8](v, row)
+		return toConstVector[int8](v, row, mp)
 	case types.T_int16:
-		return toConstVector[int16](v, row)
+		return toConstVector[int16](v, row, mp)
 	case types.T_int32:
-		return toConstVector[int32](v, row)
+		return toConstVector[int32](v, row, mp)
 	case types.T_int64:
-		return toConstVector[int64](v, row)
+		return toConstVector[int64](v, row, mp)
 	case types.T_uint8:
-		return toConstVector[uint8](v, row)
+		return toConstVector[uint8](v, row, mp)
 	case types.T_uint16:
-		return toConstVector[uint16](v, row)
+		return toConstVector[uint16](v, row, mp)
 	case types.T_uint32:
-		return toConstVector[uint32](v, row)
+		return toConstVector[uint32](v, row, mp)
 	case types.T_uint64:
-		return toConstVector[uint64](v, row)
+		return toConstVector[uint64](v, row, mp)
 	case types.T_float32:
-		return toConstVector[float32](v, row)
+		return toConstVector[float32](v, row, mp)
 	case types.T_float64:
-		return toConstVector[float64](v, row)
+		return toConstVector[float64](v, row, mp)
 	case types.T_date:
-		return toConstVector[types.Date](v, row)
+		return toConstVector[types.Date](v, row, mp)
 	case types.T_datetime:
-		return toConstVector[types.Datetime](v, row)
+		return toConstVector[types.Datetime](v, row, mp)
+	case types.T_time:
+		return toConstVector[types.Time](v, row, mp)
 	case types.T_timestamp:
-		return toConstVector[types.Timestamp](v, row)
+		return toConstVector[types.Timestamp](v, row, mp)
 	case types.T_decimal64:
-		return toConstVector[types.Decimal64](v, row)
+		return toConstVector[types.Decimal64](v, row, mp)
 	case types.T_decimal128:
-		return toConstVector[types.Decimal128](v, row)
+		return toConstVector[types.Decimal128](v, row, mp)
 	case types.T_uuid:
-		return toConstVector[types.Uuid](v, row)
+		return toConstVector[types.Uuid](v, row, mp)
 	case types.T_TS:
-		return toConstVector[types.TS](v, row)
+		return toConstVector[types.TS](v, row, mp)
 	case types.T_Rowid:
-		return toConstVector[types.Rowid](v, row)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		return toConstVector[types.Rowid](v, row, mp)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
 		bs := v.GetBytes(int64(row))
-		return NewConstBytes(v.Typ, 1, bs)
+		return NewConstBytes(v.Typ, 1, bs, mp)
 	}
 	return nil
 }
 
-func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
+func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 	if !v.isConst {
 		return v
 	}
@@ -377,6 +396,8 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Date](v, 4, m)
 	case types.T_datetime:
 		expandVector[types.Datetime](v, 8, m)
+	case types.T_time:
+		expandVector[types.Time](v, 8, m)
 	case types.T_timestamp:
 		expandVector[types.Timestamp](v, 8, m)
 	case types.T_decimal64:
@@ -389,7 +410,7 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
 		expandVector[types.Rowid](v, types.RowidSize, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
 	v.isConst = false
@@ -397,6 +418,9 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 }
 
 func (v *Vector) TryExpandNulls(n int) {
+	if v.Nsp == nil {
+		v.Nsp = &nulls.Nulls{Np: bitmap.New(0)}
+	}
 	nulls.TryExpand(v.Nsp, n)
 }
 
@@ -410,22 +434,22 @@ func fillDefaultValue[T types.FixedSizeT](v *Vector) {
 	v.Col = col
 }
 
-func toConstVector[T types.FixedSizeT](v *Vector, row int) *Vector {
+func toConstVector[T types.FixedSizeT](v *Vector, row int, m *mpool.MPool) *Vector {
 	if nulls.Contains(v.Nsp, uint64(row)) {
 		return NewConstNull(v.Typ, 1)
 	} else {
 		val := GetValueAt[T](v, int64(row))
-		return NewConstFixed(v.Typ, 1, val)
+		return NewConstFixed(v.Typ, 1, val, m)
 	}
 }
 
 // expandVector is used only in expand const vector.
-func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
-	data, err := mheap.Alloc(m, int64(v.ScalarLength()*sz))
+func expandVector[T any](v *Vector, sz int, m *mpool.MPool) *Vector {
+	data, err := m.Alloc(v.ScalarLength() * sz)
 	if err != nil {
 		return nil
 	}
-	vs := types.DecodeFixedSlice[T](data, sz)
+	vs := types.DecodeSlice[T](data)
 	if nulls.Any(v.Nsp) {
 		for i := 0; i < v.ScalarLength(); i++ {
 			nulls.Add(v.Nsp, uint64(i))
@@ -437,38 +461,28 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 		}
 	}
 	v.Col = vs
+	if v.data != nil {
+		m.Free(v.data)
+	}
 	v.data = data[:len(vs)*sz]
 	return v
 }
 
-func NewWithData(typ types.Type, data []byte, col interface{}, nsp *nulls.Nulls) *Vector {
-	v := &Vector{
-		Nsp:  nsp,
-		Typ:  typ,
-		Col:  col,
-		data: data,
-	}
-	if col == nil {
-		v.colFromData()
-	}
-	return v
-}
-
-func NewWithStrings(typ types.Type, vals []string, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+func NewWithStrings(typ types.Type, vals []string, nsp *nulls.Nulls, m *mpool.MPool) *Vector {
 	vec := New(typ)
 	nulls.Set(vec.Nsp, nsp)
 	AppendString(vec, vals, m)
 	return vec
 }
 
-func NewWithBytes(typ types.Type, vals [][]byte, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+func NewWithBytes(typ types.Type, vals [][]byte, nsp *nulls.Nulls, m *mpool.MPool) *Vector {
 	vec := New(typ)
 	nulls.Set(vec.Nsp, nsp)
 	AppendBytes(vec, vals, m)
 	return vec
 }
 
-func NewWithFixed[T types.FixedSizeT](typ types.Type, vals []T, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+func NewWithFixed[T any](typ types.Type, vals []T, nsp *nulls.Nulls, m *mpool.MPool) *Vector {
 	vec := New(typ)
 	nulls.Set(vec.Nsp, nsp)
 	AppendFixed(vec, vals, m)
@@ -476,17 +490,47 @@ func NewWithFixed[T types.FixedSizeT](typ types.Type, vals []T, nsp *nulls.Nulls
 }
 
 func New(typ types.Type) *Vector {
-	return NewWithData(typ, []byte{}, nil, &nulls.Nulls{})
+	return &Vector{
+		Nsp:      &nulls.Nulls{},
+		Typ:      typ,
+		original: false,
+	}
 }
 
 func NewOriginal(typ types.Type) *Vector {
-	vec := NewWithData(typ, []byte{}, nil, &nulls.Nulls{})
-	vec.original = true
-	return vec
+	return &Vector{
+		Nsp:      &nulls.Nulls{},
+		Typ:      typ,
+		original: true,
+	}
+}
+
+func NewOriginalWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector {
+	v := &Vector{
+		Nsp:  nsp,
+		Typ:  typ,
+		data: data,
+	}
+	v.SetOriginal(true)
+	v.colFromData()
+	return v
 }
 
 func NewWithNspSize(typ types.Type, n int64) *Vector {
-	return NewWithData(typ, []byte{}, nil, nulls.NewWithSize(int(n)))
+	return &Vector{
+		Nsp:      nulls.NewWithSize(int(n)),
+		Typ:      typ,
+		original: false,
+	}
+}
+
+func NewConstNullWithData(typ types.Type, length int, mp *mpool.MPool) *Vector {
+	v := New(typ)
+	v.isConst = true
+	val := GetInitConstVal(typ)
+	v.Append(val, true, mp)
+	v.length = length
+	return v
 }
 
 func NewConst(typ types.Type, length int) *Vector {
@@ -506,24 +550,30 @@ func NewConstNull(typ types.Type, length int) *Vector {
 	return v
 }
 
-func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T) *Vector {
+func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T, mp *mpool.MPool) *Vector {
+	if mp == nil {
+		panic(moerr.NewInternalError("vector NewConstFixed does not have a mpool"))
+	}
 	v := NewConst(typ, length)
-	// TODO: memory accounting
-	v.Append(val, false, nil)
+	v.Append(val, false, mp)
 	return v
 }
 
-func NewConstString(typ types.Type, length int, val string) *Vector {
+func NewConstString(typ types.Type, length int, val string, mp *mpool.MPool) *Vector {
+	if mp == nil {
+		panic(moerr.NewInternalError("vector NewConstString does not have a mpool"))
+	}
 	v := NewConst(typ, length)
-	// XXX memory accounting?
-	SetStringAt(v, 0, val, nil)
+	SetStringAt(v, 0, val, mp)
 	return v
 }
 
-func NewConstBytes(typ types.Type, length int, val []byte) *Vector {
+func NewConstBytes(typ types.Type, length int, val []byte, mp *mpool.MPool) *Vector {
+	if mp == nil {
+		panic(moerr.NewInternalError("vector NewConstBytes does not have a mpool"))
+	}
 	v := NewConst(typ, length)
-	// XXX memory accounting?
-	SetBytesAt(v, 0, val, nil)
+	SetBytesAt(v, 0, val, mp)
 	return v
 }
 
@@ -555,6 +605,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Date, 1)
 	case types.T_datetime:
 		v.Col = make([]types.Datetime, 1)
+	case types.T_time:
+		v.Col = make([]types.Time, 1)
 	case types.T_timestamp:
 		v.Col = make([]types.Timestamp, 1)
 	case types.T_decimal64:
@@ -567,7 +619,7 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
 		v.Col = make([]types.Rowid, 1)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		v.Col = make([]types.Varlena, 1)
 	}
 }
@@ -609,35 +661,38 @@ func (v *Vector) ConstVectorIsNull() bool {
 	return v.IsScalarNull()
 }
 
-func (v *Vector) Free(m *mheap.Mheap) {
+func (v *Vector) Free(m *mpool.MPool) {
 	if v.original {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
-	if !v.IsConst() {
-		// const vector's data & area allocate with nil mheap
-		// so we can't free it by using mheap.
-		mheap.Free(m, v.data)
-		mheap.Free(m, v.area)
+
+	// const vector's data & area allocate with nil,
+	// so we can't free it by using mpool.
+	if v.data != nil {
+		m.Free(v.data)
 	}
-	v.data = []byte{}
-	v.colFromData()
+	if v.area != nil {
+		m.Free(v.area)
+	}
+	v.data = nil
 	v.area = nil
+	v.colFromData()
 }
 
-func (v *Vector) FreeOriginal(m *mheap.Mheap) {
+func (v *Vector) FreeOriginal(m *mpool.MPool) {
 	if v.original {
-		mheap.Free(m, v.data)
-		v.data = []byte{}
+		m.Free(v.data)
+		v.data = nil
 		v.colFromData()
-		mheap.Free(m, v.area)
+		m.Free(v.area)
 		v.area = nil
 		return
 	}
 	panic("force original tries to free non-orignal vec")
 }
 
-func appendOne[T types.FixedSizeT](v *Vector, w T, isNull bool, m *mheap.Mheap) error {
+func appendOne[T types.FixedSizeT](v *Vector, w T, isNull bool, m *mpool.MPool) error {
 	if err := v.extend(1, m); err != nil {
 		return err
 	}
@@ -651,7 +706,7 @@ func appendOne[T types.FixedSizeT](v *Vector, w T, isNull bool, m *mheap.Mheap) 
 	return nil
 }
 
-func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mheap.Mheap) error {
+func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 	if isNull {
@@ -665,7 +720,10 @@ func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mheap.Mheap) error {
 	}
 }
 
-func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
+func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
+	if m == nil {
+		panic(moerr.NewInternalError("vector append does not have a mpool"))
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		return appendOne(v, w.(bool), isNull, m)
@@ -693,6 +751,8 @@ func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 		return appendOne(v, w.(types.Date), isNull, m)
 	case types.T_datetime:
 		return appendOne(v, w.(types.Datetime), isNull, m)
+	case types.T_time:
+		return appendOne(v, w.(types.Time), isNull, m)
 	case types.T_timestamp:
 		return appendOne(v, w.(types.Timestamp), isNull, m)
 	case types.T_decimal64:
@@ -705,7 +765,7 @@ func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if isNull {
 			return appendOneBytes(v, nil, true, m)
 		}
@@ -715,7 +775,7 @@ func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 	return nil
 }
 
-func Clean(v *Vector, m *mheap.Mheap) {
+func Clean(v *Vector, m *mpool.MPool) {
 	v.Free(m)
 }
 
@@ -737,7 +797,7 @@ func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	return nil
 }
 
-func SetBytesAt(v *Vector, idx int, bs []byte, m *mheap.Mheap) error {
+func SetBytesAt(v *Vector, idx int, bs []byte, m *mpool.MPool) error {
 	var va types.Varlena
 	var err error
 	va, v.area, err = types.BuildVarlena(bs, v.area, m)
@@ -747,19 +807,21 @@ func SetBytesAt(v *Vector, idx int, bs []byte, m *mheap.Mheap) error {
 	return SetTAt(v, idx, va)
 }
 
-func SetStringAt(v *Vector, idx int, bs string, m *mheap.Mheap) error {
+func SetStringAt(v *Vector, idx int, bs string, m *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), m)
 }
 
 // XXX: PreAlloc create a empty v, with enough fixed slots to cap entry.
-func PreAlloc(v *Vector, rows, cap int, m *mheap.Mheap) {
+func PreAlloc(v *Vector, rows, cap int, m *mpool.MPool) {
 	var data []byte
 	var err error
 	sz := int64(cap * v.GetType().TypeSize())
 	if m == nil {
-		data = make([]byte, sz)
+		panic(moerr.NewInternalError("vector alloc must use mpool"))
 	} else {
-		data, err = mheap.Alloc(m, int64(rows*v.GetType().TypeSize()))
+		// XXX was alloc rows, not cap.  This is wrong, at least not
+		// matching the comment.
+		data, err = m.Alloc(int(sz))
 	}
 
 	// XXX: Was just returned and runs defer, which was Huh?   Let me panic.
@@ -770,15 +832,19 @@ func PreAlloc(v *Vector, rows, cap int, m *mheap.Mheap) {
 	v.setupColFromData(0, rows)
 }
 
-func PreAllocType(t types.Type, rows, cap int, m *mheap.Mheap) *Vector {
+func PreAllocType(t types.Type, rows, cap int, m *mpool.MPool) *Vector {
 	vec := New(t)
 	PreAlloc(vec, rows, cap, m)
 	return vec
 }
 
-// XXX Confusing as hell.
 func Length(v *Vector) int {
 	if !v.isConst {
+		if v.Col == nil {
+			return 0
+		}
+		// XXX reflect?
+		// Hard to tell which is faster, len(v.data) / v.typ.TypeLen()
 		return reflect.ValueOf(v.Col).Len()
 	}
 	return v.ScalarLength()
@@ -803,10 +869,10 @@ func SetVectorLength(v *Vector, n int) {
 }
 
 // XXX Original code is really confused by what is dup ...
-func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
+func Dup(v *Vector, m *mpool.MPool) (*Vector, error) {
 	to := Vector{
 		Typ: v.Typ,
-		Nsp: v.Nsp, // XXX: dude, you do not dup this?
+		Nsp: v.Nsp.Clone(),
 	}
 
 	var err error
@@ -815,13 +881,13 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 	// as because we will copy area next and offset len will stay
 	// valid for long varlena.
 	if len(v.data) > 0 {
-		if to.data, err = mheap.Alloc(m, int64(len(v.data))); err != nil {
+		if to.data, err = m.Alloc(int(len(v.data))); err != nil {
 			return nil, err
 		}
 		copy(to.data, v.data)
 	}
 	if len(v.area) > 0 {
-		if to.area, err = mheap.Alloc(m, int64(len(v.area))); err != nil {
+		if to.area, err = m.Alloc(int(len(v.area))); err != nil {
 			return nil, err
 		}
 		copy(to.area, v.area)
@@ -842,37 +908,58 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	return w
 }
 
-func AppendFixed[T types.FixedSizeT](v *Vector, arg []T, m *mheap.Mheap) error {
+func AppendFixed[T any](v *Vector, arg []T, m *mpool.MPool) error {
 	var err error
-	col := MustTCols[T](v)
-	ncol := len(col)
 	narg := len(arg)
 	if narg == 0 {
 		return nil
 	}
 
-	nsz := (ncol + narg) * v.GetType().TypeSize()
-	v.data, err = m.Grow(v.data, int64(nsz))
+	if m == nil {
+		panic(moerr.NewInternalError("vector AppendFixed does not have a valid mpool"))
+	}
+
+	oldSz := len(v.data)
+	argSz := narg * v.GetType().TypeSize()
+	nsz := oldSz + argSz
+	v.data, err = m.Grow(v.data, nsz)
 	if err != nil {
 		return err
 	}
-	v.colFromData()
-	col = MustTCols[T](v)
-	copy(col[ncol:ncol+narg], arg)
-	return nil
-}
-
-func AppendFixedRaw(v *Vector, data []byte) error {
-	v.data = append(v.data, data...)
+	copy(v.data[oldSz:nsz], types.EncodeSlice(arg))
 	v.colFromData()
 	return nil
 }
 
-func AppendBytes(v *Vector, arg [][]byte, m *mheap.Mheap) error {
+func AppendFixedRaw(v *Vector, data []byte, m *mpool.MPool) error {
 	var err error
+	if m == nil {
+		panic(moerr.NewInternalError("vector AppendFixed does not have a valid mpool"))
+	}
+
+	argSz := len(data)
+	if argSz == 0 {
+		return nil
+	}
+
+	oldSz := len(v.data)
+	nsz := oldSz + argSz
+	v.data, err = m.Grow(v.data, nsz)
+	if err != nil {
+		return err
+	}
+	copy(v.data[oldSz:nsz], data)
+	v.colFromData()
+	return nil
+}
+
+func AppendBytes(v *Vector, arg [][]byte, m *mpool.MPool) error {
+	var err error
+	if m == nil {
+		panic(moerr.NewInternalError("vector AppendBytes does not have a pool"))
+	}
 	vas := make([]types.Varlena, len(arg))
 	for idx, bs := range arg {
-		// XXX we do not track memory usage anymore?
 		vas[idx], v.area, err = types.BuildVarlena(bs, v.area, m)
 		if err != nil {
 			return err
@@ -881,11 +968,13 @@ func AppendBytes(v *Vector, arg [][]byte, m *mheap.Mheap) error {
 	return AppendFixed(v, vas, m)
 }
 
-func AppendString(v *Vector, arg []string, m *mheap.Mheap) error {
+func AppendString(v *Vector, arg []string, m *mpool.MPool) error {
 	var err error
+	if m == nil {
+		panic(moerr.NewInternalError("vector AppendBytes does not have a pool"))
+	}
 	vas := make([]types.Varlena, len(arg))
 	for idx, bs := range arg {
-		// XXX we do not track memory usage anymore?
 		vas[idx], v.area, err = types.BuildVarlena([]byte(bs), v.area, m)
 		if err != nil {
 			return err
@@ -940,7 +1029,7 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
 		ShrinkFixed[float64](v, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -949,6 +1038,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[types.Date](v, sels)
 	case types.T_datetime:
 		ShrinkFixed[types.Datetime](v, sels)
+	case types.T_time:
+		ShrinkFixed[types.Time](v, sels)
 	case types.T_timestamp:
 		ShrinkFixed[types.Timestamp](v, sels)
 	case types.T_decimal64:
@@ -974,24 +1065,24 @@ func Shrink(v *Vector, sels []int64) {
 }
 
 // Shuffle assumes we do not have dup in sels.
-func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mheap.Mheap) error {
+func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mpool.MPool) error {
 	olddata := v.data
 	ns := len(sels)
 	vs := MustTCols[T](v)
-	data, err := mheap.Alloc(m, int64(ns*v.GetType().TypeSize()))
+	data, err := m.Alloc(int(ns * v.GetType().TypeSize()))
 	if err != nil {
 		return err
 	}
-	ws := types.DecodeFixedSlice[T](data, v.GetType().TypeSize())
+	ws := types.DecodeSlice[T](data)
 	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
-	v.data = types.EncodeFixedSlice(ws, v.GetType().TypeSize())
+	v.data = types.EncodeSlice(ws)
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 
-	mheap.Free(m, olddata)
+	m.Free(olddata)
 	return nil
 }
 
-func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
+func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 	if v.IsScalar() {
 		v.SetScalarLength(len(sels))
 		return nil
@@ -1019,12 +1110,14 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		ShuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ShuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		ShuffleFixed[types.Date](v, sels, m)
 	case types.T_datetime:
 		ShuffleFixed[types.Datetime](v, sels, m)
+	case types.T_time:
+		ShuffleFixed[types.Time](v, sels, m)
 	case types.T_timestamp:
 		ShuffleFixed[types.Timestamp](v, sels, m)
 	case types.T_decimal64:
@@ -1134,7 +1227,7 @@ func (v *Vector) Read(data []byte) error {
 
 // XXX Old Copy is FUBAR.
 // Copy simply does v[vi] = w[wi]
-func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
+func Copy(v, w *Vector, vi, wi int64, m *mpool.MPool) error {
 	if v.GetType().IsTuple() {
 		// Not sure if Copy ever handle tuple
 		panic("copy tuple vector.")
@@ -1161,7 +1254,7 @@ func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 // XXX Old UnionOne is FUBAR
 // It is simply append.   We do not go through appendOne interface because
 // we don't want to horrible type switch.
-func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
+func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 	if v.original {
 		return moerr.NewInternalError("UnionOne cannot be performed on orig vector")
 	}
@@ -1197,14 +1290,14 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
 }
 
 // XXX Old UnionNull is FUBAR
-// func UnionNull(v, _ *Vector, m *mheap.Mheap) error
+// func UnionNull(v, _ *Vector, m *mpool.MPool) error
 // It seems to do UnionOne(v, v, 0, m), only that if v is empty,
 // append a zero value instead of v[0].   I don't know why this
 // is called UnionNull -- it does not have much to do with Null.
 //
 // XXX Original code alloc or grow typesize * 8 bytes.  It is not
 // clear people want to amortize alloc/grow, or it is a bug.
-func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
+func UnionNull(v, _ *Vector, m *mpool.MPool) error {
 	if v.original {
 		return moerr.NewInternalError("UnionNull cannot be performed on orig vector")
 	}
@@ -1233,7 +1326,7 @@ func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 
 // XXX Old Union is FUBAR
 // Union is just append.
-func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
+func Union(v, w *Vector, sels []int64, m *mpool.MPool) (err error) {
 	if v.original {
 		return moerr.NewInternalError("Union cannot be performed on orig vector")
 	}
@@ -1266,7 +1359,7 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
 }
 
 // XXX Old UnionBatch is FUBAR.
-func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) (err error) {
+func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPool) (err error) {
 	if v.original {
 		return moerr.NewInternalError("UnionBatch cannot be performed on orig vector")
 	}
@@ -1307,7 +1400,18 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		}
 	}
 
+	getUnionCount := func(flags []uint8) int {
+		var numAdd = 0
+		for _, flg := range flags {
+			if flg > 0 {
+				numAdd++
+			}
+		}
+		return numAdd
+	}
+
 	if nulls.Any(w.Nsp) {
+		v.TryExpandNulls(int(oldLen) + getUnionCount(flags))
 		for idx, flg := range flags {
 			if flg > 0 {
 				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
@@ -1316,6 +1420,10 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 				// Advance oldLen regardless if it is null
 				oldLen += 1
 			}
+		}
+	} else {
+		if nulls.Any(v.Nsp) {
+			nulls.TryExpand(v.Nsp, getUnionCount(flags))
 		}
 	}
 
@@ -1387,6 +1495,8 @@ func (v *Vector) String() string {
 		return VecToString[types.Date](v)
 	case types.T_datetime:
 		return VecToString[types.Datetime](v)
+	case types.T_time:
+		return VecToString[types.Time](v)
 	case types.T_timestamp:
 		return VecToString[types.Timestamp](v)
 	case types.T_decimal64:
@@ -1399,7 +1509,7 @@ func (v *Vector) String() string {
 		return VecToString[types.TS](v)
 	case types.T_Rowid:
 		return VecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
@@ -1412,5 +1522,57 @@ func (v *Vector) String() string {
 
 	default:
 		panic("vec to string unknown types.")
+	}
+}
+
+func GetInitConstVal(typ types.Type) any {
+	switch typ.Oid {
+	case types.T_bool:
+		return false
+	case types.T_int8:
+		return int8(0)
+	case types.T_int16:
+		return int16(0)
+	case types.T_int32:
+		return int32(0)
+	case types.T_int64:
+		return int64(0)
+	case types.T_uint8:
+		return uint8(0)
+	case types.T_uint16:
+		return uint16(0)
+	case types.T_uint32:
+		return uint32(0)
+	case types.T_uint64:
+		return uint64(0)
+	case types.T_float32:
+		return float32(0)
+	case types.T_float64:
+		return float64(0)
+	case types.T_date:
+		return types.Date(0)
+	case types.T_datetime:
+		return types.Datetime(0)
+	case types.T_timestamp:
+		return types.Timestamp(0)
+	case types.T_decimal64:
+		return types.Decimal64{}
+	case types.T_decimal128:
+		return types.Decimal128{}
+	case types.T_uuid:
+		var emptyUuid [16]byte
+		return emptyUuid[:]
+	case types.T_TS:
+		var emptyTs [types.TxnTsSize]byte
+		return emptyTs[:]
+	case types.T_Rowid:
+		var emptyRowid [types.RowidSize]byte
+		return emptyRowid[:]
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		var emptyVarlena [types.VarlenaSize]byte
+		return emptyVarlena[:]
+	default:
+		//T_any T_star T_tuple T_interval
+		return int64(0)
 	}
 }

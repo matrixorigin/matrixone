@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -51,7 +50,6 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -180,6 +178,8 @@ func TestHandleAddReplica(t *testing.T) {
 
 	service1 := Service{
 		store: store1,
+
+		logger: testLogger,
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{
@@ -207,7 +207,8 @@ func TestHandleRemoveReplica(t *testing.T) {
 	}()
 
 	service1 := Service{
-		store: store1,
+		store:  store1,
+		logger: testLogger,
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{

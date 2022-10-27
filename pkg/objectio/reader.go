@@ -17,6 +17,8 @@ package objectio
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -33,7 +35,7 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
+func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject, error) {
 	var err error
 	if len(extents) == 0 {
 		return nil, nil
@@ -47,6 +49,11 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 			Offset: int64(extent.offset),
 			Size:   int64(extent.originSize),
 		}
+	}
+	err = r.allocData(metas.Entries, m)
+	defer r.freeData(metas.Entries, m)
+	if err != nil {
+		return nil, err
 	}
 	err = r.object.fs.Read(context.Background(), metas)
 	if err != nil {
@@ -66,11 +73,11 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	return blocks, err
 }
 
-func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector, error) {
+func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
 	extents := make([]Extent, 1)
 	extents[0] = extent
-	blocks, err := r.ReadMeta(extents)
+	blocks, err := r.ReadMeta(extents, m)
 	if err != nil {
 		return nil, err
 	}
@@ -87,18 +94,24 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 		}
 		data.Entries = append(data.Entries, entry)
 	}
+	err = r.allocData(data.Entries, m)
+	if err != nil {
+		r.freeData(data.Entries, m)
+		return nil, err
+	}
 	err = r.object.fs.Read(context.Background(), data)
 	if err != nil {
+		r.freeData(data.Entries, m)
 		return nil, err
 	}
 	return data, nil
 }
 
-func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType) ([]IndexData, error) {
+func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType, m *mpool.MPool) ([]IndexData, error) {
 	var err error
 	extents := make([]Extent, 1)
 	extents[0] = extent
-	blocks, err := r.ReadMeta(extents)
+	blocks, err := r.ReadMeta(extents, m)
 	if err != nil {
 		return nil, err
 	}
@@ -107,11 +120,33 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
 
-		index, err := col.GetIndex(typ)
+		index, err := col.GetIndex(typ, m)
 		if err != nil {
 			return nil, err
 		}
 		indexes = append(indexes, index)
 	}
 	return indexes, nil
+}
+
+func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
+	if m != nil {
+		for i := range Entries {
+			if Entries[i].Data != nil {
+				m.Free(Entries[i].Data)
+			}
+		}
+	}
+}
+
+func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
+	if m != nil {
+		for i := range Entries {
+			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
+			if err != nil {
+				return
+			}
+		}
+	}
+	return nil
 }

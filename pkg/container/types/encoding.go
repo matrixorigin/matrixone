@@ -31,6 +31,7 @@ import (
 const (
 	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
+	TimeSize       int = 8
 	DatetimeSize   int = 8
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
@@ -38,18 +39,27 @@ const (
 	UuidSize       int = 16
 )
 
-func EncodeSlice[T any](v []T, sz int) (ret []byte) {
+func EncodeSlice[T any](v []T) []byte {
+	var t T
+	sz := int(unsafe.Sizeof(t))
 	if len(v) > 0 {
-		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
+		return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*sz)[:len(v)*sz]
 	}
-	return
+	return nil
 }
 
-func DecodeSlice[T any](v []byte, sz int) (ret []T) {
-	if len(v) > 0 {
-		ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
+func DecodeSlice[T any](v []byte) []T {
+	var t T
+	sz := int(unsafe.Sizeof(t))
+
+	if len(v)%sz != 0 {
+		panic(moerr.NewInternalError("decode slice that is not a multiple of element size"))
 	}
-	return
+
+	if len(v) > 0 {
+		return unsafe.Slice((*T)(unsafe.Pointer(&v[0])), len(v)/sz)[:len(v)/sz]
+	}
+	return nil
 }
 
 func Encode(v interface{}) ([]byte, error) {
@@ -190,6 +200,14 @@ func DecodeDate(v []byte) Date {
 	return *(*Date)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeTime(v *Time) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
+}
+
+func DecodeTime(v []byte) Time {
+	return *(*Time)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDatetime(v *Datetime) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
@@ -230,183 +248,6 @@ func DecodeUuid(v []byte) Uuid {
 	return *(*Uuid)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeFixedSlice[T any](v []T, sz int) (ret []byte) {
-	if len(v) > 0 {
-		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
-	}
-	return
-}
-
-func DecodeFixedSlice[T any](v []byte, sz int) (ret []T) {
-	if v == nil {
-		return nil
-	}
-
-	if len(v) == 0 {
-		return make([]T, 0)
-	}
-
-	ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
-	return
-}
-
-func EncodeBoolSlice(v []bool) []byte {
-	return *(*[]byte)(unsafe.Pointer(&v))
-}
-
-func EncodeInt8Slice(v []int8) []byte {
-	return *(*[]byte)(unsafe.Pointer(&v))
-}
-
-func DecodeBoolSlice(v []byte) []bool {
-	return *(*[]bool)(unsafe.Pointer(&v))
-}
-
-func DecodeInt8Slice(v []byte) []int8 {
-	return *(*[]int8)(unsafe.Pointer(&v))
-}
-
-func EncodeUint8Slice(v []uint8) []byte {
-	return v
-}
-
-func DecodeUint8Slice(v []byte) []uint8 {
-	return v
-}
-
-func EncodeInt16Slice(v []int16) []byte {
-	return EncodeFixedSlice(v, 2)
-}
-
-func DecodeInt16Slice(v []byte) []int16 {
-	return DecodeFixedSlice[int16](v, 2)
-}
-
-func EncodeUint16Slice(v []uint16) []byte {
-	return EncodeFixedSlice(v, 2)
-}
-
-func DecodeUint16Slice(v []byte) []uint16 {
-	return DecodeFixedSlice[uint16](v, 2)
-}
-
-func EncodeInt32Slice(v []int32) []byte {
-	return EncodeFixedSlice(v, 4)
-}
-
-func DecodeInt32Slice(v []byte) []int32 {
-	return DecodeFixedSlice[int32](v, 4)
-}
-
-func EncodeUint32Slice(v []uint32) []byte {
-	return EncodeFixedSlice(v, 4)
-}
-
-func DecodeUint32Slice(v []byte) []uint32 {
-	return DecodeFixedSlice[uint32](v, 4)
-}
-
-func EncodeInt64Slice(v []int64) []byte {
-	return EncodeFixedSlice(v, 8)
-}
-
-func DecodeInt64Slice(v []byte) []int64 {
-	return DecodeFixedSlice[int64](v, 8)
-}
-
-func EncodeUint64Slice(v []uint64) []byte {
-	return EncodeFixedSlice(v, 8)
-}
-
-func DecodeUint64Slice(v []byte) []uint64 {
-	return DecodeFixedSlice[uint64](v, 8)
-}
-
-func EncodeFloat32Slice(v []float32) []byte {
-	return EncodeFixedSlice(v, 4)
-}
-
-func DecodeFloat32Slice(v []byte) []float32 {
-	return DecodeFixedSlice[float32](v, 4)
-}
-
-func EncodeFloat64Slice(v []float64) []byte {
-	return EncodeFixedSlice(v, 8)
-}
-
-func DecodeFloat64Slice(v []byte) []float64 {
-	return DecodeFixedSlice[float64](v, 8)
-}
-
-func EncodeFloat64SliceForBenchmark(v []float64) (ret []byte) {
-	if len(v) > 0 {
-		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*8)[:len(v)*8]
-	}
-	return
-}
-
-func DecodeFloat64SliceForBenchmark(v []byte) (ret []float64) {
-	if len(v) > 0 {
-		ret = unsafe.Slice((*float64)(unsafe.Pointer(&v[0])), cap(v)/8)[:len(v)/8]
-	}
-	return
-}
-
-func EncodeDateSlice(v []Date) []byte {
-	return EncodeFixedSlice(v, DateSize)
-}
-
-func DecodeDateSlice(v []byte) []Date {
-	return DecodeFixedSlice[Date](v, DateSize)
-}
-
-func EncodeUuidSlice(v []Uuid) []byte {
-	return EncodeFixedSlice(v, UuidSize)
-}
-
-func DecodeUuidSlice(v []byte) []Uuid {
-	return DecodeFixedSlice[Uuid](v, UuidSize)
-}
-
-func EncodeDatetimeSlice(v []Datetime) []byte {
-	return EncodeFixedSlice(v, DatetimeSize)
-}
-
-func DecodeDatetimeSlice(v []byte) (ret []Datetime) {
-	return DecodeFixedSlice[Datetime](v, DatetimeSize)
-}
-
-func EncodeTimestampSlice(v []Timestamp) []byte {
-	return EncodeFixedSlice(v, TimestampSize)
-}
-
-func DecodeTimestampSlice(v []byte) (ret []Timestamp) {
-	return DecodeFixedSlice[Timestamp](v, TimestampSize)
-}
-
-func EncodeDecimal64Slice(v []Decimal64) []byte {
-	return EncodeFixedSlice(v, Decimal64Size)
-}
-
-func DecodeDecimal64Slice(v []byte) (ret []Decimal64) {
-	return DecodeFixedSlice[Decimal64](v, Decimal64Size)
-}
-
-func EncodeDecimal128Slice(v []Decimal128) []byte {
-	return EncodeFixedSlice(v, Decimal128Size)
-}
-
-func DecodeDecimal128Slice(v []byte) (ret []Decimal128) {
-	return DecodeFixedSlice[Decimal128](v, Decimal128Size)
-}
-
-func EncodeVarlenaSlice(v []Varlena) []byte {
-	return EncodeFixedSlice(v, VarlenaSize)
-}
-func DecodeVarlenaSlice(v []byte) (ret []Varlena) {
-	return DecodeFixedSlice[Varlena](v, VarlenaSize)
-}
-
 func EncodeStringSlice(vs []string) []byte {
 	var o int32
 	var buf bytes.Buffer
@@ -421,7 +262,7 @@ func EncodeStringSlice(vs []string) []byte {
 		os[i] = o
 		o += int32(len(v))
 	}
-	buf.Write(EncodeInt32Slice(os))
+	buf.Write(EncodeSlice(os))
 	for _, v := range vs {
 		buf.WriteString(v)
 	}
@@ -437,7 +278,7 @@ func DecodeStringSlice(data []byte) []string {
 	}
 	data = data[4:]
 	vs := make([]string, cnt)
-	os := DecodeInt32Slice(data)
+	os := DecodeSlice[int32](data[:4*cnt])
 	data = data[4*cnt:]
 	for i := int32(0); i < cnt; i++ {
 		if i == cnt-1 {
@@ -477,6 +318,8 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[float64](val)
 	case T_date:
 		return DecodeFixed[Date](val)
+	case T_time:
+		return DecodeFixed[Time](val)
 	case T_datetime:
 		return DecodeFixed[Datetime](val)
 	case T_timestamp:
@@ -491,7 +334,7 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
@@ -528,6 +371,8 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Decimal128))
 	case T_date:
 		return EncodeFixed(val.(Date))
+	case T_time:
+		return EncodeFixed(val.(Time))
 	case T_timestamp:
 		return EncodeFixed(val.(Timestamp))
 	case T_datetime:
@@ -538,7 +383,7 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(TS))
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val.([]byte)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
@@ -610,6 +455,11 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		case Date:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Time:
 			if nr, err = w.Write(EncodeFixed(v)); err != nil {
 				return
 			}

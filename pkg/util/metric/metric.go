@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -75,6 +76,7 @@ var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
+var multiTable = false // need set before newMetricFSCollector and initTables
 
 var inited uint32
 
@@ -91,14 +93,15 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
-		moCollector = newMetricFSCollector(initOpts.writerFactory)
+		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
 	} else {
-		moCollector = newMetricCollector(ieFactory)
+		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
+	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
 		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
@@ -122,6 +125,8 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		}()
 		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
+
+	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
 }
 
 func StopMetricSync() {
@@ -141,6 +146,8 @@ func StopMetricSync() {
 		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
+	// mark inited = false
+	_ = atomic.CompareAndSwapUint32(&inited, 1, 0)
 }
 
 func mustRegiterToProm(collector prom.Collector) {
@@ -195,23 +202,32 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 		close(descChan)
 	}()
 
-	optFactory := trace.GetOptionFactory(batchProcessMode)
-	buf := new(bytes.Buffer)
-	for desc := range descChan {
-		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
-		mustExec(sql)
+	if !multiTable {
+		mustExec(SingleMetricTable.ToCreateSql(true))
+		for desc := range descChan {
+			view := getView(desc)
+			sql := view.ToCreateSql(true)
+			mustExec(sql)
+		}
+	} else {
+		optFactory := export.GetOptionFactory(export.ExternalTableEngine)
+		buf := new(bytes.Buffer)
+		for desc := range descChan {
+			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
+			mustExec(sql)
+		}
 	}
 
 	createCost = time.Since(instant)
 }
 
-type optionsFactory func(db, tbl string) trace.TableOptions
+type optionsFactory func(db, tbl, account string) export.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
 func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
 	buf.Reset()
 	extra := newDescExtra(desc)
-	opts := optionsFactory(MetricDBConst, extra.fqName)
+	opts := optionsFactory(MetricDBConst, extra.fqName, export.AccountAll)
 	buf.WriteString("create ")
 	buf.WriteString(opts.GetCreateOptions())
 	buf.WriteString(fmt.Sprintf(
@@ -224,8 +240,17 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 		buf.WriteString("` varchar(20)")
 	}
 	buf.WriteRune(')')
-	buf.WriteString(opts.GetTableOptions())
+	buf.WriteString(opts.GetTableOptions(nil))
 	return buf.String()
+}
+
+func getView(desc *prom.Desc) *export.View {
+	extra := newDescExtra(desc)
+	var labelNames = make([]string, 0, len(extra.labels))
+	for _, lbl := range extra.labels {
+		labelNames = append(labelNames, lbl.GetName())
+	}
+	return GetMetricViewWithLabels(extra.fqName, labelNames)
 }
 
 type descExtra struct {
@@ -259,10 +284,32 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 	}
 }
 
+type SubSystem struct {
+	Name              string
+	Comment           string
+	SupportUserAccess bool
+}
+
+var SubSystemSql = &SubSystem{"sql", "base on query action", true}
+var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
+var SubSystemProcess = &SubSystem{"process", "MO process status", false}
+var SubSystemSys = &SubSystem{"sys", "OS status", false}
+
+var allSubSystem = map[string]*SubSystem{
+	SubSystemSql.Name:     SubSystemSql,
+	SubSystemServer.Name:  SubSystemServer,
+	SubSystemProcess.Name: SubSystemProcess,
+	SubSystemSys.Name:     SubSystemSys,
+}
+
 type InitOptions struct {
 	writerFactory export.FSWriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
+	// initSingleTable
+	multiTable bool // see WithMultiTable
+	// exportInterval
+	exportInterval time.Duration // see WithExportInterval
 }
 
 type InitOption func(*InitOptions)
@@ -281,4 +328,129 @@ func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.needInitTable = init
 	})
+}
+
+func WithMultiTable(multi bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.multiTable = multi
+	})
+}
+
+func WithExportInterval(sec int) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.exportInterval = time.Second * time.Duration(sec)
+	})
+}
+
+var (
+	metricNameColumn        = export.Column{Name: `metric_name`, Type: `VARCHAR(128)`, Default: `unknown`, Comment: `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	metricCollectTimeColumn = export.Column{Name: `collecttime`, Type: `DATETIME(6)`, Comment: `metric data collect time`}
+	metricValueColumn       = export.Column{Name: `value`, Type: `DOUBLE`, Default: `0.0`, Comment: `metric value`}
+	metricNodeColumn        = export.Column{Name: `node`, Type: `VARCHAR(36)`, Default: ALL_IN_ONE_MODE, Comment: `mo node uuid`}
+	metricRoleColumn        = export.Column{Name: `role`, Type: `VARCHAR(32)`, Default: ALL_IN_ONE_MODE, Comment: `mo node role, like: CN, DN, LOG`}
+	metricAccountColumn     = export.Column{Name: `account`, Type: `VARCHAR(128)`, Default: `sys`, Comment: `account name`}
+	metricTypeColumn        = export.Column{Name: `type`, Type: `VARCHAR(32)`, Comment: `sql type, like: insert, select, ...`}
+)
+
+var SingleMetricTable = &export.Table{
+	Account:          export.AccountAll,
+	Database:         MetricDBConst,
+	Table:            `metric`,
+	Columns:          []export.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
+	PrimaryKeyColumn: []export.Column{},
+	Engine:           export.ExternalTableEngine,
+	Comment:          `metric data`,
+	PathBuilder:      export.NewAccountDatePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
+	// SupportUserAccess
+	SupportUserAccess: true,
+}
+
+func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
+	view := &export.View{
+		Database:    MetricDBConst,
+		Table:       tbl,
+		OriginTable: SingleMetricTable,
+		Columns:     []export.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
+		Condition:   &export.ViewSingleCondition{Column: metricNameColumn, Table: tbl},
+	}
+	for _, opt := range opts {
+		opt.Apply(view)
+	}
+	return view
+}
+
+func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
+	var options []export.ViewOption
+	// check SubSystem
+	var subSystem *SubSystem = nil
+	for _, ss := range allSubSystem {
+		if strings.Index(tbl, ss.Name) == 0 {
+			subSystem = ss
+			break
+		}
+	}
+	if subSystem == nil {
+		panic(moerr.NewNotSupported("metric unknown SubSystem: %s", tbl))
+	}
+	options = append(options, export.SupportUserAccess(subSystem.SupportUserAccess))
+	// construct columns
+	for _, label := range lbls {
+		for _, col := range SingleMetricTable.Columns {
+			if strings.EqualFold(label, col.Name) {
+				options = append(options, export.WithColumn(col))
+			}
+		}
+	}
+	return NewMetricView(tbl, options...)
+}
+
+var gView struct {
+	content map[string]*export.View
+	mu      sync.Mutex
+}
+
+func GetMetricViewWithLabels(tbl string, lbls []string) *export.View {
+	gView.mu.Lock()
+	defer gView.mu.Unlock()
+	if len(gView.content) == 0 {
+		gView.content = make(map[string]*export.View)
+	}
+	view, exist := gView.content[tbl]
+	if !exist {
+		view = NewMetricViewWithLabels(tbl, lbls)
+		gView.content[tbl] = view
+	}
+	return view
+}
+
+// GetSchemaForAccount return account's table, and view's schema
+func GetSchemaForAccount(account string) []string {
+	var sqls = make([]string, 0, 1)
+	tbl := SingleMetricTable.Clone()
+	tbl.Account = account
+	sqls = append(sqls, tbl.ToCreateSql(true))
+
+	descChan := make(chan *prom.Desc, 10)
+	go func() {
+		for _, c := range initCollectors {
+			c.Describe(descChan)
+		}
+		close(descChan)
+	}()
+
+	for desc := range descChan {
+		view := getView(desc)
+
+		if view.SupportUserAccess && view.OriginTable.SupportUserAccess {
+			sqls = append(sqls, view.ToCreateSql(true))
+		}
+	}
+	return sqls
+}
+
+func init() {
+	if export.RegisterTableDefine(SingleMetricTable) != nil {
+		panic(moerr.NewInternalError("metric table already registered"))
+	}
 }

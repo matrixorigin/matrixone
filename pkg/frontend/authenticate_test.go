@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -144,11 +142,9 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -209,11 +205,9 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -245,11 +239,9 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -278,7 +270,10 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err = InitGeneralTenant(ctx, tenant, &tree.CreateAccount{
+		ses := newSes(nil)
+		ses.tenant = tenant
+
+		err = InitGeneralTenant(ctx, ses, &tree.CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
@@ -294,11 +289,9 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -344,11 +337,9 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -387,11 +378,9 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		sql2result := make(map[string]ExecResult)
 
@@ -452,11 +441,9 @@ func Test_initRole(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
-		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
@@ -594,6 +581,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("create/drop/alter account fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1927,7 +1915,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 
 				rows := [][]interface{}{
-					{ses.tenant.GetDefaultRoleID()},
+					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
 
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
@@ -2037,7 +2025,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					rows = [][]interface{}{}
 				} else {
 					rows = [][]interface{}{
-						{ses.tenant.GetDefaultRoleID()},
+						{ses.GetTenantInfo().GetDefaultRoleID()},
 					}
 				}
 
@@ -2120,7 +2108,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 
 				rows := [][]interface{}{
-					{ses.tenant.GetDefaultRoleID()},
+					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
 
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
@@ -2211,7 +2199,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					rows = [][]interface{}{}
 				} else {
 					rows = [][]interface{}{
-						{ses.tenant.GetDefaultRoleID()},
+						{ses.GetTenantInfo().GetDefaultRoleID()},
 					}
 				}
 
@@ -2273,7 +2261,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				convey.So(err, convey.ShouldBeNil)
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 				rows := [][]interface{}{
-					{ses.tenant.GetDefaultRoleID()},
+					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
 
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
@@ -2344,7 +2332,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					rows = [][]interface{}{}
 				} else {
 					rows = [][]interface{}{
-						{ses.tenant.GetDefaultRoleID()},
+						{ses.GetTenantInfo().GetDefaultRoleID()},
 					}
 				}
 
@@ -3461,7 +3449,7 @@ func Test_determineDML(t *testing.T) {
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			roleIds := []int{
-				int(ses.tenant.GetDefaultRoleID()),
+				int(ses.GetTenantInfo().GetDefaultRoleID()),
 			}
 
 			for _, roleId := range roleIds {
@@ -3474,7 +3462,7 @@ func Test_determineDML(t *testing.T) {
 			}
 
 			var rows [][]interface{}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for i, pl := range pls {
@@ -3489,6 +3477,20 @@ func Test_determineDML(t *testing.T) {
 							rows = [][]interface{}{}
 						}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+			for _, entry := range priv.entries {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
@@ -3534,7 +3536,7 @@ func Test_determineDML(t *testing.T) {
 			//role 0 does not have the select
 			//role 1 has the select
 			roleIds := []int{
-				int(ses.tenant.GetDefaultRoleID()), 1,
+				int(ses.GetTenantInfo().GetDefaultRoleID()), 1,
 			}
 
 			for _, roleId := range roleIds {
@@ -3552,7 +3554,7 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
@@ -3567,6 +3569,21 @@ func Test_determineDML(t *testing.T) {
 							rows = [][]interface{}{}
 						}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			for _, entry := range priv.entries {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
@@ -3616,7 +3633,7 @@ func Test_determineDML(t *testing.T) {
 
 			//role 0,1 does not have the select
 			roleIds := []int{
-				int(ses.tenant.GetDefaultRoleID()), 1,
+				int(ses.GetTenantInfo().GetDefaultRoleID()), 1,
 			}
 
 			for _, roleId := range roleIds {
@@ -3629,7 +3646,7 @@ func Test_determineDML(t *testing.T) {
 
 			var rows [][]interface{}
 			roles := []int{0, 1, 2}
-			for _, entry := range priv.entries {
+			makeSql := func(entry privilegeEntry) {
 				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
 				convey.So(err, convey.ShouldBeNil)
 				for _, pl := range pls {
@@ -3638,6 +3655,21 @@ func Test_determineDML(t *testing.T) {
 						convey.So(err, convey.ShouldBeNil)
 						rows = [][]interface{}{}
 						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			for _, entry := range priv.entries {
+				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
+					makeSql(entry)
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+					for _, mi := range entry.compound.items {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
+						makeSql(tempEntry)
 					}
 				}
 			}
@@ -5589,6 +5621,10 @@ func Test_doDropUser(t *testing.T) {
 				{i, "111", "public"},
 			})
 			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5601,6 +5637,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user succ (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5640,6 +5677,9 @@ func Test_doDropUser(t *testing.T) {
 			}
 
 			bh.sql2result[sql] = mrs
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5652,6 +5692,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5690,6 +5731,10 @@ func Test_doDropUser(t *testing.T) {
 				})
 			}
 
+			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
 
@@ -5985,16 +6030,14 @@ func Test_genRevokeCases(t *testing.T) {
 }
 
 func newSes(priv *privilege) *Session {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
-	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
-	pu.Mempool = mempool.New()
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	proto := NewMysqlClientProtocol(0, nil, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, nil, pu, gSysVariables)
+	ses := NewSession(proto, nil, pu, gSysVariables)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -6050,6 +6093,27 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
+
+func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("user_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("role_id")
+	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
 
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}

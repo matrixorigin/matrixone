@@ -20,10 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -36,9 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var (
@@ -51,6 +49,8 @@ type Cluster interface {
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
+	// Options returns the adjusted options
+	Options() Options
 
 	ClusterOperation
 	ClusterAwareness
@@ -196,6 +196,22 @@ type ClusterWaitState interface {
 	WaitDNStoreReported(ctx context.Context, uuid string)
 	// WaitDNStoreReportedIndexed waits dn store reported by index.
 	WaitDNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitDNStoreTaskServiceCreated waits dn store task service started by uuid.
+	WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitDNStoreTaskServiceCreatedIndexed waits dn store task service started by index.
+	WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+	// WaitCNStoreReported waits cn store reported by uuid.
+	WaitCNStoreReported(ctx context.Context, uuid string)
+	// WaitCNStoreReportedIndexed waits cn store reported by index.
+	WaitCNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitCNStoreTaskServiceCreated waits cn store task service started by uuid.
+	WaitCNStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitCNStoreTaskServiceCreatedIndexed waits cn store task service started by index.
+	WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+	// WaitLogStoreTaskServiceCreated waits log store task service started by uuid
+	WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitLogStoreTaskServiceCreatedIndexed waits log store task service started by index
+	WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 
 	// WaitLogStoreTimeout waits log store timeout by uuid.
 	WaitLogStoreTimeout(ctx context.Context, uuid string)
@@ -263,15 +279,13 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	c := &testCluster{
 		t:       t,
+		logger:  logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}
-	c.logger = logutil.Adjust(c.logger).With(
-		zap.String("tests", "service"),
-	)
 
 	if c.clock == nil {
-		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
 	clock.SetupDefaultClock(c.clock)
 
@@ -285,7 +299,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
 
 	// build dn service configurations
-	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
+	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
 
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 
@@ -304,23 +318,42 @@ func (c *testCluster) Start() error {
 	if err := c.startLogServices(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
 	if err := c.startDNServices(); err != nil {
 		return err
 	}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel1()
+	c.WaitDNShardsReported(ctx1)
 
 	if c.opt.initial.cnServiceNum != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
 	}
 
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.mu.running = true
+
+	log, err := c.GetLogServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := log.CreateInitTasks(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (c *testCluster) Options() Options {
+	return c.opt
 }
 
 func (c *testCluster) Close() error {
@@ -331,17 +364,18 @@ func (c *testCluster) Close() error {
 		return nil
 	}
 
-	// close all dn services first
+	// close all cn services first
+	if err := c.closeCNServices(); err != nil {
+		return err
+	}
+
+	// close all dn services
 	if err := c.closeDNServices(); err != nil {
 		return err
 	}
 
 	// close all log services
 	if err := c.closeLogServices(); err != nil {
-		return err
-	}
-
-	if err := c.closeCNServices(); err != nil {
 		return err
 	}
 
@@ -789,6 +823,125 @@ func (c *testCluster) WaitDNStoreReportedIndexed(ctx context.Context, index int)
 	c.WaitDNStoreReported(ctx, ds.ID())
 }
 
+func (c *testCluster) WaitCNStoreReported(ctx context.Context, uuid string) {
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting cn store reported",
+				"cn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			time.Sleep(defaultWaitInterval)
+
+			expired, err := c.CNStoreExpired(uuid)
+			if err != nil {
+				c.logger.Error("fail to check cn store expired or not",
+					zap.Error(err),
+					zap.String("uuid", uuid),
+				)
+				continue
+			}
+
+			if !expired {
+				return
+			}
+		}
+	}
+}
+
+func (c *testCluster) WaitCNStoreReportedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetCNServiceIndexed(index)
+	require.NoError(c.t, err)
+
+	c.WaitCNStoreReported(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitCNStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ds, err := c.GetCNService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on cn store",
+				"cn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ds.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetCNServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitCNStoreTaskServiceCreated(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ds, err := c.GetDNService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on dn store",
+				"dn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ds.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetDNServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitDNStoreTaskServiceCreated(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ls, err := c.GetLogService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on log store",
+				"log store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ls.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetLogServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitLogStoreTaskServiceCreated(ctx, ds.ID())
+}
+
 func (c *testCluster) WaitLogStoreTimeout(ctx context.Context, uuid string) {
 	for {
 		select {
@@ -1110,8 +1263,8 @@ func (c *testCluster) buildFileServices() *fileServices {
 	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
 }
 
-// buildDnConfigs builds configurations for all dn services.
-func (c *testCluster) buildDnConfigs(
+// buildDNConfigs builds configurations for all dn services.
+func (c *testCluster) buildDNConfigs(
 	address serviceAddresses,
 ) ([]*dnservice.Config, []dnOptions) {
 	batch := c.opt.initial.dnServiceNum
@@ -1119,11 +1272,11 @@ func (c *testCluster) buildDnConfigs(
 	cfgs := make([]*dnservice.Config, 0, batch)
 	opts := make([]dnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildDnConfig(i, c.opt, address)
+		cfg := buildDNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
 		localAddr := cfg.ListenAddress
-		opt := buildDnOptions(cfg, c.backendFilterFactory(localAddr))
+		opt := buildDNOptions(cfg, c.backendFilterFactory(localAddr))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1186,6 +1339,8 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 			panic(err)
 		}
 
+		opt = append(opt,
+			dnservice.WithLogger(c.logger))
 		ds, err := newDNService(cfg, fs, opt)
 		require.NoError(c.t, err)
 
@@ -1211,7 +1366,9 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), taskservice.NewTaskService(c.opt.task.taskStorage, nil), opt)
+		opt = append(opt,
+			logservice.WithLogger(c.logger))
+		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1243,7 +1400,9 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			panic(err)
 		}
 
-		cs, err := newCNService(cfg, context.TODO(), fs, c.opt.task.taskStorage, opt)
+		opt = append(opt,
+			cnservice.WithLogger(c.logger))
+		cs, err := newCNService(cfg, context.TODO(), fs, opt)
 		if err != nil {
 			panic(err)
 		}
@@ -1370,6 +1529,9 @@ func (c *testCluster) getClusterState() *logpb.CheckerState {
 			return false
 		}
 		state = s
+		// XXX MPOOL
+		// Too much logging can break CI.
+		// c.logger.Info("current cluster state", zap.Any("state", s))
 		return true
 	}
 	c.rangeHAKeeperService(fn)

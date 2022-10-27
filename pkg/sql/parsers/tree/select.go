@@ -75,8 +75,9 @@ func (node *OrderBy) Format(ctx *FmtCtx) {
 
 // the ordering expression.
 type Order struct {
-	Expr      Expr
-	Direction Direction
+	Expr          Expr
+	Direction     Direction
+	NullsPosition NullsPosition
 	//without order
 	NullOrder bool
 }
@@ -87,13 +88,18 @@ func (node *Order) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Direction.String())
 	}
+	if node.NullsPosition != DefaultNullsPosition {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.NullsPosition.String())
+	}
 }
 
-func NewOrder(e Expr, d Direction, o bool) *Order {
+func NewOrder(e Expr, d Direction, np NullsPosition, o bool) *Order {
 	return &Order{
-		Expr:      e,
-		Direction: d,
-		NullOrder: o,
+		Expr:          e,
+		Direction:     d,
+		NullsPosition: np,
+		NullOrder:     o,
 	}
 }
 
@@ -118,6 +124,27 @@ func (d Direction) String() string {
 		return fmt.Sprintf("Direction(%d)", d)
 	}
 	return directionName[d]
+}
+
+type NullsPosition int8
+
+const (
+	DefaultNullsPosition NullsPosition = iota
+	NullsFirst
+	NullsLast
+)
+
+var nullsPositionName = [...]string{
+	DefaultNullsPosition: "",
+	NullsFirst:           "nulls first",
+	NullsLast:            "nulls last",
+}
+
+func (np NullsPosition) String() string {
+	if np < 0 || np >= NullsPosition(len(nullsPositionName)) {
+		return fmt.Sprintf("NullsPosition(%d)", np)
+	}
+	return nullsPositionName[np]
 }
 
 // the LIMIT clause.
@@ -303,11 +330,11 @@ func (node *JoinTableExpr) Format(ctx *FmtCtx) {
 	if node.Left != nil {
 		node.Left.Format(ctx)
 	}
-	if node.JoinType != "" {
+	if node.JoinType != "" && node.Right != nil {
 		ctx.WriteByte(' ')
 		ctx.WriteString(strings.ToLower(node.JoinType))
 	}
-	if node.JoinType != JOIN_TYPE_STRAIGHT {
+	if node.JoinType != JOIN_TYPE_STRAIGHT && node.Right != nil {
 		ctx.WriteByte(' ')
 		ctx.WriteString("join")
 	}
@@ -417,8 +444,9 @@ func (node *AliasClause) Format(ctx *FmtCtx) {
 // the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr TableExpr
-	As   AliasClause
+	Expr       TableExpr
+	As         AliasClause
+	IndexHints []*IndexHint
 }
 
 func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
@@ -426,6 +454,14 @@ func (node *AliasedTableExpr) Format(ctx *FmtCtx) {
 	if node.As.Alias != "" {
 		ctx.WriteString(" as ")
 		node.As.Format(ctx)
+	}
+	if node.IndexHints != nil {
+		prefix := " "
+		for _, hint := range node.IndexHints {
+			ctx.WriteString(prefix)
+			hint.Format(ctx)
+			prefix = " "
+		}
 	}
 }
 
@@ -472,4 +508,64 @@ func (node *From) Format(ctx *FmtCtx) {
 
 func NewFrom(t TableExprs) *From {
 	return &From{Tables: t}
+}
+
+type IndexHintType int
+
+const (
+	HintUse IndexHintType = iota + 1
+	HintIgnore
+	HintForce
+)
+
+type IndexHintScope int
+
+// Index hint scopes.
+const (
+	HintForScan IndexHintScope = iota + 1
+	HintForJoin
+	HintForOrderBy
+	HintForGroupBy
+)
+
+type IndexHint struct {
+	IndexNames []string
+	HintType   IndexHintType
+	HintScope  IndexHintScope
+}
+
+func (node *IndexHint) Format(ctx *FmtCtx) {
+	indexHintType := ""
+	switch node.HintType {
+	case HintUse:
+		indexHintType = "use index"
+	case HintIgnore:
+		indexHintType = "ignore index"
+	case HintForce:
+		indexHintType = "force index"
+	}
+
+	indexHintScope := ""
+	switch node.HintScope {
+	case HintForScan:
+		indexHintScope = ""
+	case HintForJoin:
+		indexHintScope = " for join"
+	case HintForOrderBy:
+		indexHintScope = " for order by"
+	case HintForGroupBy:
+		indexHintScope = " for group by"
+	}
+	ctx.WriteString(indexHintType)
+	ctx.WriteString(indexHintScope)
+	ctx.WriteString("(")
+	if node.IndexNames != nil {
+		for i, value := range node.IndexNames {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteString(value)
+		}
+	}
+	ctx.WriteString(")")
 }

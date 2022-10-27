@@ -63,6 +63,12 @@ func (d *DatabaseRow) Indexes() []Tuple {
 	}
 }
 
+func (d *DatabaseRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_AccountID_Name, Uint(d.AccountID), Text(d.Name)},
+	}
+}
+
 var _ NamedRow = new(DatabaseRow)
 
 func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
@@ -122,6 +128,12 @@ func (r *RelationRow) Indexes() []Tuple {
 	}
 }
 
+func (r *RelationRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_DatabaseID_Name, r.DatabaseID, Text(r.Name)},
+	}
+}
+
 var _ NamedRow = new(RelationRow)
 
 func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
@@ -158,13 +170,13 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 	case catalog.SystemRelAttr_Persistence:
 		ret.Value = []byte("")
 	case catalog.SystemRelAttr_Kind:
-		ret.Value = []byte("r")
+		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_Kind]) // tae's logic
 	case catalog.SystemRelAttr_Comment:
 		ret.Value = r.Comments
 	case catalog.SystemRelAttr_Partition:
 		ret.Value = r.PartitionDef
 	case catalog.SystemRelAttr_CreateSQL:
-		ret.Value = []byte("")
+		ret.Value = []byte(r.Properties[catalog.SystemRelAttr_CreateSQL]) // tae's logic
 	case catalog.SystemRelAttr_Owner:
 		ret.Value = uint32(0) //TODO
 	case catalog.SystemRelAttr_Creator:
@@ -175,6 +187,8 @@ func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name stri
 		ret.Value = uint32(0)
 	case rowIDColumnName:
 		ret.Value = r.ID.ToRowID()
+	case catalog.SystemRelAttr_ViewDef:
+		ret.Value = []byte(r.ViewDef)
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -203,6 +217,12 @@ func (a *AttributeRow) Indexes() []Tuple {
 		{index_RelationID_Name, a.RelationID, Text(a.Name)},
 		{index_RelationID_IsPrimary, a.RelationID, Bool(a.Primary)},
 		{index_RelationID_IsHidden, a.RelationID, Bool(a.IsHidden)},
+	}
+}
+
+func (a *AttributeRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_RelationID_Name, a.RelationID, Text(a.Name)},
 	}
 }
 
@@ -258,7 +278,11 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 		}
 		ret.Value = rel.Name
 	case catalog.SystemColAttr_Type:
-		ret.Value = int32(a.Type.Oid)
+		data, err := types.Encode(a.Type)
+		if err != nil {
+			return ret, err
+		}
+		ret.Value = data
 	case catalog.SystemColAttr_Num:
 		ret.Value = int32(a.Order)
 	case catalog.SystemColAttr_Length:
@@ -266,10 +290,26 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 	case catalog.SystemColAttr_NullAbility:
 		ret.Value = boolToInt8(a.Nullable)
 	case catalog.SystemColAttr_HasExpr:
-		ret.Value = boolToInt8(a.Default != nil && a.Default.Expr != nil)
+		ret.Value = boolToInt8(a.Default != nil)
 	case catalog.SystemColAttr_DefaultExpr:
-		if a.Default != nil && a.Default.Expr != nil {
-			ret.Value = []byte(a.Default.Expr.String())
+		if a.Default != nil {
+			defaultExpr, err := types.Encode(a.Default)
+			if err != nil {
+				return ret, nil
+			}
+			ret.Value = defaultExpr
+		} else {
+			ret.Value = []byte("")
+		}
+	case catalog.SystemColAttr_HasUpdate:
+		ret.Value = boolToInt8(a.OnUpdate != nil)
+	case catalog.SystemColAttr_Update:
+		if a.OnUpdate != nil {
+			expr, err := types.Encode(a.OnUpdate)
+			if err != nil {
+				return ret, nil
+			}
+			ret.Value = expr
 		} else {
 			ret.Value = []byte("")
 		}
@@ -288,7 +328,7 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 			a.Type.Oid == types.T_uint64 ||
 			a.Type.Oid == types.T_uint128)
 	case catalog.SystemColAttr_IsAutoIncrement:
-		ret.Value = boolToInt8(false)
+		ret.Value = boolToInt8(a.AutoIncrement)
 	case catalog.SystemColAttr_IsHidden:
 		ret.Value = boolToInt8(a.IsHidden)
 	case catalog.SystemColAttr_Comment:
@@ -304,7 +344,10 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 type IndexRow struct {
 	ID         ID
 	RelationID ID
-	engine.IndexTableDef
+	IndexName  string
+	Unique     bool
+	TableName  string
+	Field      []string
 }
 
 func (i *IndexRow) Key() ID {
@@ -318,7 +361,13 @@ func (i *IndexRow) Value() *IndexRow {
 func (i *IndexRow) Indexes() []Tuple {
 	return []Tuple{
 		{index_RelationID, i.RelationID},
-		{index_RelationID_Name, i.RelationID, Text(i.Name)},
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
+	}
+}
+
+func (i *IndexRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
 	}
 }
 

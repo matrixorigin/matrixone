@@ -36,7 +36,10 @@ type UpdateCtx struct {
 	HideKeyIdx  int32
 	UpdateAttrs []string
 	OtherAttrs  []string
+	IndexAttrs  []string
 	OrderAttrs  []string
 	TableSource engine.Relation
 	CPkeyColDef *plan.ColDef
+	IndexTables []engine.Relation
+	IndexInfos  []*plan.IndexInfo
 }

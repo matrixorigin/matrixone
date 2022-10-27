@@ -16,17 +16,16 @@ package multi
 
 import (
 	"context"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestFromUnixTimeInt64(t *testing.T) {
@@ -500,15 +499,13 @@ func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
 }
 
 func newTmpProcess() *process.Process {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	return newProcessWithMheap(mheap.New(gm))
+	return newProcessWithMPool(mpool.MustNewZero())
 }
 
-func newProcessWithMheap(heap *mheap.Mheap) *process.Process {
+func newProcessWithMPool(mp *mpool.MPool) *process.Process {
 	process := process.New(
 		context.Background(),
-		heap,
+		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		testutil.NewFS(),

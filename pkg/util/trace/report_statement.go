@@ -17,13 +17,14 @@ package trace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
 	"github.com/google/uuid"
@@ -35,26 +36,29 @@ var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 var _ CsvFields = (*StatementInfo)(nil)
 
 type StatementInfo struct {
-	StatementID          [16]byte      `json:"statement_id"`
-	TransactionID        [16]byte      `json:"transaction_id"`
-	SessionID            [16]byte      `jons:"session_id"`
-	Account              string        `json:"account"`
-	User                 string        `json:"user"`
-	Host                 string        `json:"host"`
-	Database             string        `json:"database"`
-	Statement            string        `json:"statement"`
-	StatementFingerprint string        `json:"statement_fingerprint"`
-	StatementTag         string        `json:"statement_tag"`
-	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
-	ExecPlan             any           `json:"exec_plan"`
-	// SerializeExecPlan
-	SerializeExecPlan func(plan any, uuid2 uuid.UUID) []byte // see SetExecPlan, ExecPlan2Json
+	StatementID          [16]byte  `json:"statement_id"`
+	TransactionID        [16]byte  `json:"transaction_id"`
+	SessionID            [16]byte  `jons:"session_id"`
+	Account              string    `json:"account"`
+	User                 string    `json:"user"`
+	Host                 string    `json:"host"`
+	Database             string    `json:"database"`
+	Statement            string    `json:"statement"`
+	StatementFingerprint string    `json:"statement_fingerprint"`
+	StatementTag         string    `json:"statement_tag"`
+	RequestAt            time.Time `json:"request_at"` // see WithRequestAt
 
 	// after
 	Status     StatementInfoStatus `json:"status"`
 	Error      error               `json:"error"`
-	ResponseAt util.TimeNano       `json:"response_at"`
-	Duration   uint64              `json:"duration"` // unit: ns
+	ResponseAt time.Time           `json:"response_at"`
+	Duration   time.Duration       `json:"duration"` // unit: ns
+	ExecPlan   any                 `json:"exec_plan"`
+	// RowsRead, BytesScan generated from ExecPlan
+	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
+	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	// SerializeExecPlan
+	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	// flow ctrl
 	end bool
@@ -66,7 +70,7 @@ type StatementInfo struct {
 }
 
 func (s *StatementInfo) GetName() string {
-	return MOStatementType
+	return SingleStatementTable.GetName()
 }
 
 func (s *StatementInfo) Size() int64 {
@@ -76,43 +80,55 @@ func (s *StatementInfo) Size() int64 {
 	)
 }
 
-func (s *StatementInfo) Free() {}
-
-func (s *StatementInfo) CsvOptions() *CsvOptions {
-	return CommonCsvOptions
+func (s *StatementInfo) Free() {
+	s.Statement = ""
+	s.StatementFingerprint = ""
+	s.StatementTag = ""
+	s.ExecPlan = nil
+	s.Error = nil
 }
 
-func (s *StatementInfo) CsvFields() []string {
+func (s *StatementInfo) GetRow() *export.Row { return SingleStatementTable.GetRow() }
+
+func (s *StatementInfo) CsvFields(row *export.Row) []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.exported = true
-	var result []string
-	result = append(result, uuid.UUID(s.StatementID).String())
-	result = append(result, uuid.UUID(s.TransactionID).String())
-	result = append(result, uuid.UUID(s.SessionID).String())
-	result = append(result, s.Account)
-	result = append(result, s.User)
-	result = append(result, s.Host)
-	result = append(result, s.Database)
-	result = append(result, s.Statement)
-	result = append(result, s.StatementTag)
-	result = append(result, s.StatementFingerprint)
-	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType)
-	result = append(result, nanoSec2DatetimeString(s.RequestAt))
-	result = append(result, nanoSec2DatetimeString(s.ResponseAt))
-	result = append(result, fmt.Sprintf("%d", s.Duration))
-	result = append(result, s.Status.String())
-	if s.Error == nil {
-		result = append(result, "")
-	} else {
-		result = append(result, fmt.Sprintf("%s", s.Error))
+	row.Reset()
+	row.SetColumnVal(stmtIDCol, uuid.UUID(s.StatementID).String())
+	row.SetColumnVal(txnIDCol, uuid.UUID(s.TransactionID).String())
+	row.SetColumnVal(sesIDCol, uuid.UUID(s.SessionID).String())
+	row.SetColumnVal(accountCol, s.Account)
+	row.SetColumnVal(userCol, s.User)
+	row.SetColumnVal(hostCol, s.Host)
+	row.SetColumnVal(dbCol, s.Database)
+	row.SetColumnVal(stmtCol, s.Statement)
+	row.SetColumnVal(stmtTagCol, s.StatementTag)
+	row.SetColumnVal(stmtFgCol, s.StatementFingerprint)
+	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
+	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
+	row.SetColumnVal(reqAtCol, time2DatetimeString(s.RequestAt))
+	row.SetColumnVal(respAtCol, time2DatetimeString(s.ResponseAt))
+	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.Duration))
+	row.SetColumnVal(statusCol, s.Status.String())
+	if s.Error != nil {
+		var moError *moerr.Error
+		errCode := moerr.ErrInfo
+		if errors.As(s.Error, &moError) {
+			errCode = moError.ErrorCode()
+		}
+		row.SetColumnVal(errCodeCol, fmt.Sprintf("%d", errCode))
+		row.SetColumnVal(errorCol, fmt.Sprintf("%s", s.Error))
 	}
-	result = append(result, s.ExecPlan2Json())
+	row.SetColumnVal(execPlanCol, s.ExecPlan2Json())
+	row.SetColumnVal(rowsReadCol, fmt.Sprintf("%d", s.RowsRead))
+	row.SetColumnVal(bytesScanCol, fmt.Sprintf("%d", s.BytesScan))
 
-	return result
+	return row.ToStrings()
 }
 
+// ExecPlan2Json return ExecPlan Serialized json-str
+// and set RowsRead, BytesScan from ExecPlan
 func (s *StatementInfo) ExecPlan2Json() string {
 	var jsonByte []byte
 	if s.SerializeExecPlan == nil {
@@ -121,14 +137,15 @@ func (s *StatementInfo) ExecPlan2Json() string {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
 		} else {
-			jsonByte = f(s.ExecPlan, uuid.UUID(s.StatementID))
+			jsonByte, s.RowsRead, s.BytesScan = f(s.ExecPlan, uuid.UUID(s.StatementID))
 		}
 	} else {
 		// use s.SerializeExecPlan
+		// get real ExecPlan json-str
+		jsonByte, s.RowsRead, s.BytesScan = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
 		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-			jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
-		} else {
-			jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+			// get nil ExecPlan json-str
+			jsonByte, _, _ = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 		}
 	}
 	return string(jsonByte)
@@ -136,7 +153,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 
 var defaultSerializeExecPlan atomic.Value
 
-type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) []byte
+type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) (jsonByte []byte, rows int64, bytes int64)
 
 func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
 	defaultSerializeExecPlan.Store(f)
@@ -151,7 +168,7 @@ func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
 }
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
-func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc func(plan any, uuid uuid.UUID) []byte) {
+func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc SerializeExecPlanFunc) {
 	s.ExecPlan = execPlan
 	s.SerializeExecPlan = SerializeFunc
 }
@@ -177,14 +194,13 @@ var EndStatement = func(ctx context.Context, err error) {
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
-	endTime := util.NowNS()
 	if !s.end {
 		// do report
 		s.mux.Lock()
 		defer s.mux.Unlock()
 		s.end = true
-		s.ResponseAt = endTime
-		s.Duration = s.ResponseAt - s.RequestAt
+		s.ResponseAt = time.Now()
+		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

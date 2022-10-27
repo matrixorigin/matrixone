@@ -16,9 +16,6 @@ package db
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -39,6 +36,12 @@ const (
 	defaultTestDB = "db"
 )
 
+func init() {
+	// workaround sca check
+	_ = tryAppendClosure
+	_ = dropDB
+}
+
 type testEngine struct {
 	*DB
 	t        *testing.T
@@ -55,7 +58,8 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 }
 
 func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
-func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
+
+func (e *testEngine) bindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
 	_ = e.DB.Close()
@@ -205,24 +209,26 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	return
+	/*files, err := os.ReadDir(e.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
 	for _, f := range files {
 		name := f.Name()
-		id, err := e.FileFactory.DecodeName(name)
+		id, err := decodeSegName(name)
 		if err != nil {
 			continue
 		}
 		names[id] = name
 	}
-	return
+	return*/
 }
 
 func getBlockFileNames(e *DB) (names []string) {
 	names = make([]string, 0)
-	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	return
+	/*files, err := os.ReadDir(e.Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -232,7 +238,7 @@ func getBlockFileNames(e *DB) (names []string) {
 			names = append(names, name)
 		}
 	}
-	return
+	return*/
 }
 
 func lenOfBats(bats []*containers.Batch) int {

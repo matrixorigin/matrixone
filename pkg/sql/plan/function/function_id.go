@@ -110,6 +110,8 @@ const (
 	DATE_PART         // DATE_PART
 	DATEADD           // DATEADD
 	DATEDIFF          // DATEDIFF
+	TIMEDIFF          // TIMEDIFF
+	TIMESTAMPDIFF     // TIMESTAMPDIFF
 	DENSE_RANK        // DENSE_RANK
 	EMPTY
 	ENDSWITH // ENDSWITH
@@ -162,8 +164,12 @@ const (
 	RANDOM         // RANDOM
 	RANK           // RANK
 	REGEXP         // REGEXP
+	REGEXP_INSTR   // REGEXP_INSTR
+	REGEXP_LIKE    // REGEXP_LIKE
 	REGEXP_REPLACE // REGEXP_REPLACE
 	REGEXP_SUBSTR  // REGEXP_SUBSTR
+	REG_MATCH      // REG_MATHCH
+	NOT_REG_MATCH  // NOT_REG_MATCH
 	REPEAT         // REPEAT
 	REPLACE        // REPLACE
 	REVERSE
@@ -201,6 +207,7 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	TIME      //TIME
 	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
@@ -239,15 +246,20 @@ const (
 	DATE_FORMAT  // DATE_FORMAT
 	JSON_EXTRACT // JSON_EXTRACT
 
+	UUID
+	SERIAL
+	BIN //BIN
+
 	ENABLE_FAULT_INJECTION
 	DISABLE_FAULT_INJECTION
 	ADD_FAULT_POINT     // Add a fault point
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
-	UUID
 
-	SERIAL
-	BIN //BIN
+	MO_MEMORY_USAGE // Dump memory usage
+	MO_ENABLE_MEMORY_USAGE_DETAIL
+	MO_DISABLE_MEMORY_USAGE_DETAIL
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -346,73 +358,86 @@ var functionIdRegister = map[string]int32{
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
+	"left":              LEFT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
-	"abs":                     ABS,
-	"acos":                    ACOS,
-	"bit_length":              BIT_LENGTH,
-	"date":                    DATE,
-	"hour":                    HOUR,
-	"minute":                  MINUTE,
-	"second":                  SECOND,
-	"day":                     DAY,
-	"dayofyear":               DAYOFYEAR,
-	"exp":                     EXP,
-	"empty":                   EMPTY,
-	"length":                  LENGTH,
-	"lengthutf8":              LENGTH_UTF8,
-	"char_length":             LENGTH_UTF8,
-	"ln":                      LN,
-	"log":                     LOG,
-	"ltrim":                   LTRIM,
-	"month":                   MONTH,
-	"oct":                     OCT,
-	"reverse":                 REVERSE,
-	"rtrim":                   RTRIM,
-	"sin":                     SIN,
-	"sinh":                    SINH,
-	"space":                   SPACE,
-	"tan":                     TAN,
-	"week":                    WEEK,
-	"weekday":                 WEEKDAY,
-	"year":                    YEAR,
-	"extract":                 EXTRACT,
-	"if":                      IFF,
-	"iff":                     IFF,
-	"date_add":                DATE_ADD,
-	"date_sub":                DATE_SUB,
-	"atan":                    ATAN,
-	"cos":                     COS,
-	"cot":                     COT,
-	"timestamp":               TIMESTAMP,
-	"database":                DATABASE,
-	"schema":                  DATABASE,
-	"user":                    USER,
-	"system_user":             USER,
-	"session_user":            USER,
-	"current_user":            USER,
-	"connection_id":           CONNECTION_ID,
-	"charset":                 CHARSET,
-	"current_role":            CURRENT_ROLE,
-	"found_rows":              FOUND_ROWS,
-	"icu_version":             ICULIBVERSION,
-	"last_insert_id":          LAST_INSERT_ID,
-	"roles_graphml":           ROLES_GRAPHML,
-	"row_count":               ROW_COUNT,
-	"version":                 VERSION,
-	"collation":               COLLATION,
-	"json_extract":            JSON_EXTRACT,
-	"enable_fault_injection":  ENABLE_FAULT_INJECTION,
-	"disable_fault_injection": DISABLE_FAULT_INJECTION,
-	"add_fault_point":         ADD_FAULT_POINT,
-	"remove_fault_point":      REMOVE_FAULT_POINT,
-	"trigger_fault_point":     TRIGGER_FAULT_POINT,
-	"uuid":                    UUID,
-	"load_file":               LOAD_FILE,
-	"hex":                     HEX,
-	"serial":                  SERIAL,
-	"hash_value":              HASH,
-	"bin":                     BIN,
+	"abs":                            ABS,
+	"acos":                           ACOS,
+	"bit_length":                     BIT_LENGTH,
+	"date":                           DATE,
+	"time":                           TIME,
+	"hour":                           HOUR,
+	"minute":                         MINUTE,
+	"second":                         SECOND,
+	"day":                            DAY,
+	"dayofyear":                      DAYOFYEAR,
+	"exp":                            EXP,
+	"empty":                          EMPTY,
+	"length":                         LENGTH,
+	"lengthutf8":                     LENGTH_UTF8,
+	"char_length":                    LENGTH_UTF8,
+	"ln":                             LN,
+	"log":                            LOG,
+	"ltrim":                          LTRIM,
+	"month":                          MONTH,
+	"oct":                            OCT,
+	"reverse":                        REVERSE,
+	"rtrim":                          RTRIM,
+	"sin":                            SIN,
+	"sinh":                           SINH,
+	"space":                          SPACE,
+	"tan":                            TAN,
+	"week":                           WEEK,
+	"weekday":                        WEEKDAY,
+	"year":                           YEAR,
+	"extract":                        EXTRACT,
+	"if":                             IFF,
+	"iff":                            IFF,
+	"date_add":                       DATE_ADD,
+	"date_sub":                       DATE_SUB,
+	"atan":                           ATAN,
+	"cos":                            COS,
+	"cot":                            COT,
+	"timestamp":                      TIMESTAMP,
+	"database":                       DATABASE,
+	"schema":                         DATABASE,
+	"user":                           USER,
+	"system_user":                    USER,
+	"session_user":                   USER,
+	"current_user":                   USER,
+	"connection_id":                  CONNECTION_ID,
+	"charset":                        CHARSET,
+	"current_role":                   CURRENT_ROLE,
+	"found_rows":                     FOUND_ROWS,
+	"icu_version":                    ICULIBVERSION,
+	"last_insert_id":                 LAST_INSERT_ID,
+	"roles_graphml":                  ROLES_GRAPHML,
+	"row_count":                      ROW_COUNT,
+	"version":                        VERSION,
+	"collation":                      COLLATION,
+	"json_extract":                   JSON_EXTRACT,
+	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
+	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
+	"add_fault_point":                ADD_FAULT_POINT,
+	"remove_fault_point":             REMOVE_FAULT_POINT,
+	"trigger_fault_point":            TRIGGER_FAULT_POINT,
+	"uuid":                           UUID,
+	"load_file":                      LOAD_FILE,
+	"hex":                            HEX,
+	"serial":                         SERIAL,
+	"hash_value":                     HASH,
+	"bin":                            BIN,
+	"datediff":                       DATEDIFF,
+	"timestampdiff":                  TIMESTAMPDIFF,
+	"reg_match":                      REG_MATCH,
+	"not_reg_match":                  NOT_REG_MATCH,
+	"regexp_instr":                   REGEXP_INSTR,
+	"regexp_like":                    REGEXP_LIKE,
+	"regexp_replace":                 REGEXP_REPLACE,
+	"regexp_substr":                  REGEXP_SUBSTR,
+	"mo_memory_usage":                MO_MEMORY_USAGE,
+	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
+	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
@@ -421,5 +446,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].Flag == plan.Function_WIN
+	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
 }

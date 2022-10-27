@@ -26,6 +26,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -40,6 +41,8 @@ const (
 func IsTempError(err error) bool {
 	return isTempError(err)
 }
+
+type ClientFactory func() (Client, error)
 
 // Client is the Log Service Client interface exposed to the DN.
 type Client interface {
@@ -222,7 +225,7 @@ func (c *managedClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			logger.Error("failed to close client", zap.Error(err))
+			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -320,7 +323,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					logger.Error("failed to close the client", zap.Error(err))
+					logutil.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
@@ -331,7 +334,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					logger.Error("failed to close the client", zap.Error(err))
+					logutil.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
@@ -504,6 +507,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
+		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
 	}
 	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
 
@@ -511,6 +515,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	clientOpts := []morpc.ClientOption{
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1),
+		morpc.WithClientLogger(logutil.GetGlobalLogger().Named("hakeeper-client")),
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 

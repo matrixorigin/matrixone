@@ -34,7 +34,7 @@ func Warn(msg string, fields ...zap.Field) {
 }
 
 func Error(msg string, fields ...zap.Field) {
-	GetSkip1Logger().Error(msg, fields...)
+	GetErrorLogger().Error(msg, fields...)
 }
 
 func Panic(msg string, fields ...zap.Field) {
@@ -132,7 +132,6 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 		cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 	}
 
-	GetLevelChangeFunc()(level)
 	return zap.New(zapcore.NewTee(cores...), options...)
 }
 

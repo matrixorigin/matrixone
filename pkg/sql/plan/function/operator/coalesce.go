@@ -70,6 +70,10 @@ var (
 		return coalesceGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
 	}
 
+	CoalesceTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+	}
+
 	CoalesceDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
 	}
@@ -92,6 +96,10 @@ var (
 
 	CoalesceTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+	}
+
+	CoalesceUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceGeneral[types.Uuid](vs, proc, types.Type{Oid: types.T_uuid})
 	}
 )
 
@@ -206,7 +214,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsScalar() {
 			if !input.IsScalarNull() {
 				cols := vector.MustStrCols(input)
-				return vector.NewConstString(typ, input.Length(), cols[0]), nil
+				return vector.NewConstString(typ, input.Length(), cols[0], proc.Mp()), nil
 			}
 		} else {
 			startIdx = i

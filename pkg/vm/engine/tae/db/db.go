@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -56,13 +57,12 @@ type DB struct {
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
-	CKPDriver checkpoint.Driver
-
 	Scheduler tasks.TaskScheduler
 
-	TimedScanner wb.IHeartbeater
+	BGScanner          wb.IHeartbeater
+	BGCheckpointRunner checkpoint.Runner
 
-	FileFactory file.SegmentFactory
+	Fs *objectio.ObjectFS
 
 	DBLocker io.Closer
 
@@ -134,10 +134,9 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.TimedScanner.Stop()
-	db.CKPDriver.Stop()
+	db.BGScanner.Stop()
+	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.Wal.Close()

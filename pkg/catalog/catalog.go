@@ -15,6 +15,10 @@
 package catalog
 
 import (
+	"encoding/binary"
+	"regexp"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +40,10 @@ func init() {
 	MoColumnsTableDefs = make([]engine.TableDef, len(MoColumnsSchema))
 	for i, name := range MoColumnsSchema {
 		MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
+	}
+	MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
+	for i, name := range MoTableMetaSchema {
+		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
 }
 
@@ -68,34 +76,71 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.EntryType == api.Entry_Insert {
 			return genCreateDatabases(GenRows(bat)), es[1:], nil
 		}
-		return genDropDatabases(GenRows(bat)), es[:1], nil
+		return genDropDatabases(GenRows(bat)), es[1:], nil
 	case MO_TABLES_ID:
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
 		if err != nil {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropTables(GenRows(bat)), es[:1], nil
+			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
 		for i := range cmds {
-			cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
-				Comment: cmds[i].Comment,
+			// tae's logic
+			if len(cmds[i].Comment) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+					Comment: cmds[i].Comment,
+				})
+			}
+			if len(cmds[i].Viewdef) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+					View: cmds[i].Viewdef,
+				})
+			}
+			if len(cmds[i].Partition) > 0 {
+				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+					Partition: cmds[i].Partition,
+				})
+			}
+			pro := new(engine.PropertiesDef)
+			pro.Properties = append(pro.Properties, engine.Property{
+				Key:   SystemRelAttr_Kind,
+				Value: string(cmds[i].RelKind),
 			})
+			pro.Properties = append(pro.Properties, engine.Property{
+				Key:   SystemRelAttr_CreateSQL,
+				Value: cmds[i].CreateSql,
+			})
+			cmds[i].Defs = append(cmds[i].Defs, pro)
 			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
 				return nil, nil, err
 			}
 		}
-		return cmds, es[:idx], nil
+		return cmds, es[idx+1:], nil
 	default:
 		return e, es[1:], nil
 	}
 }
 
+func GenBlockInfo(rows [][]any) []BlockInfo {
+	infos := make([]BlockInfo, len(rows))
+	for i, row := range rows {
+		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
+		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
+		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
+		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
+		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
+		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
+	}
+	return infos
+}
+
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {
+		cmds[i].DatabaseId = row[MO_DATABASE_DAT_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
 		cmds[i].Owner = row[MO_DATABASE_OWNER_IDX].(uint32)
 		cmds[i].Creator = row[MO_DATABASE_CREATOR_IDX].(uint32)
@@ -118,6 +163,7 @@ func genDropDatabases(rows [][]any) []DropDatabase {
 func genCreateTables(rows [][]any) []CreateTable {
 	cmds := make([]CreateTable, len(rows))
 	for i, row := range rows {
+		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		cmds[i].CreateSql = string(row[MO_TABLES_REL_CREATESQL_IDX].([]byte))
 		cmds[i].Owner = row[MO_TABLES_OWNER_IDX].(uint32)
@@ -127,17 +173,29 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
 		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
+		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))
+		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
 	return cmds
 }
 
-func genDropTables(rows [][]any) []DropTable {
-	cmds := make([]DropTable, len(rows))
+func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
+	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		if id, tblName, ok := isTruncate(name); ok {
+			cmds[i].Id = id
+			cmds[i].Name = tblName
+			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		} else {
+			cmds[i].IsDrop = true
+			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].Name = name
+			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		}
 	}
 	return cmds
 }
@@ -154,7 +212,7 @@ func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
 		}
 		rows := GenRows(bat)
 		for _, row := range rows {
-			if string(row[MO_COLUMNS_ATT_RELNAME_IDX].([]byte)) == cmd.Name {
+			if row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64) == cmd.TableId {
 				def, err := genTableDefs(row)
 				if err != nil {
 					return err
@@ -180,6 +238,12 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	if row[MO_COLUMNS_ATTHASDEF_IDX].(int8) == 1 {
 		attr.Default = new(plan.Default)
 		if err := types.Decode(row[MO_COLUMNS_ATT_DEFAULT_IDX].([]byte), attr.Default); err != nil {
+			return nil, err
+		}
+	}
+	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
+		attr.OnUpdate = new(plan.Expr)
+		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
 			return nil, err
 		}
 	}
@@ -258,6 +322,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_time:
+			col := vector.GetFixedVectorValues[types.Time](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_datetime:
 			col := vector.GetFixedVectorValues[types.Datetime](vec)
 			for j := 0; j < vec.Length(); j++ {
@@ -293,7 +362,7 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 			col := vector.GetBytesVectorValues(vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
@@ -301,4 +370,23 @@ func GenRows(bat *batch.Batch) [][]any {
 		}
 	}
 	return rows
+}
+
+func isTruncate(name string) (uint64, string, bool) {
+	ok, _ := regexp.MatchString(`\_\d+\_meta`, name)
+	if !ok {
+		return 0, "", false
+	}
+	reg, _ := regexp.Compile(`\d+`)
+	str := reg.FindString(name)
+	id, _ := strconv.ParseUint(str, 10, 64)
+	return id, name[len(str)+Meta_Length:], true
+}
+
+func DecodeRowid(rowid types.Rowid) (blockId uint64, offset uint32) {
+	tempBuf := make([]byte, 8)
+	copy(tempBuf[2:], rowid[6:12])
+	blockId = binary.BigEndian.Uint64(tempBuf)
+	offset = binary.BigEndian.Uint32(rowid[12:])
+	return
 }

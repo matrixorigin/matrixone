@@ -38,9 +38,14 @@ type CNService interface {
 
 	// ID returns uuid of store
 	ID() string
-
+	// SQLAddress returns the sql listen address
+	SQLAddress() string
 	//GetTaskRunner returns the taskRunner.
 	GetTaskRunner() taskservice.TaskRunner
+	// GetTaskService returns the taskservice
+	GetTaskService() (taskservice.TaskService, bool)
+	// WaitSystemInitCompleted wait system init task completed
+	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 // cnService wraps cnservice.Service.
@@ -49,8 +54,8 @@ type CNService interface {
 type cnService struct {
 	sync.Mutex
 	status ServiceStatus
-	uuid   string
 	svc    cnservice.Service
+	cfg    *cnservice.Config
 }
 
 func (c *cnService) Start() error {
@@ -94,33 +99,44 @@ func (c *cnService) ID() string {
 	c.Lock()
 	defer c.Unlock()
 
-	return c.uuid
+	return c.cfg.UUID
+}
+
+func (c *cnService) SQLAddress() string {
+	return fmt.Sprintf("127.0.0.1:%d", c.cfg.Frontend.Port)
 }
 
 func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
 	return c.svc.GetTaskRunner()
 }
 
+func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
+	return c.svc.GetTaskService()
+}
+
+func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
+	return c.svc.WaitSystemInitCompleted(ctx)
+}
+
 // cnOptions is options for a cn service.
-type cnOptions []cnservice.Options
+type cnOptions []cnservice.Option
 
 // newCNService initializes an instance of `CNService`.
 func newCNService(
 	cfg *cnservice.Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
-	taskStorage taskservice.TaskStorage,
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, taskservice.NewTaskService(taskStorage, nil), options...)
+	srv, err := cnservice.NewService(cfg, ctx, fileService, options...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &cnService{
 		status: ServiceInitialized,
-		uuid:   cfg.UUID,
 		svc:    srv,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -135,7 +151,8 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 	cfg := &cnservice.Config{
 		UUID:          uuid.New().String(),
-		ListenAddress: address.getCnListenAddress(index),
+		ListenAddress: address.getCNListenAddress(index),
+		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
 		Frontend: config.FrontendParameters{
 			Port: int64(p),
 		},
@@ -144,9 +161,8 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 
-	cfg.TaskRunner.FetchInterval.Duration = opt.task.FetchInterval
-
 	cfg.Engine.Type = cnservice.EngineMemory
+	cfg.TaskRunner.Parallelism = 4
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.

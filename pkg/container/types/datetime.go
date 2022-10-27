@@ -32,12 +32,17 @@ const (
 	NanoSecsPerSec  = 1000000000 // 10^9
 	microSecsPerSec = 1000000    // 10^6
 	MillisecsPerSec = 1000       // 10^3
+	microSecsPerDay = secsPerDay * microSecsPerSec
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
+)
+
+var (
+	precisionVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
@@ -88,7 +93,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' {
+	if s[4] == '-' || s[4] == '/' {
 		var num int64
 		var unum uint64
 		strArr := strings.Split(s, " ")
@@ -96,7 +101,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		// solve year/month/day
-		front := strings.Split(strArr[0], "-")
+		front := strings.Split(strArr[0], s[4:5])
 		if len(front) != 3 {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
@@ -228,6 +233,24 @@ func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
 }
 
+// We need to truncate the part after precision position when cast
+// between different precision.
+func (dt Datetime) ToTime(precision int32) Time {
+	if precision == 6 {
+		return Time(dt % microSecsPerDay)
+	}
+
+	// truncate the date part
+	ms := dt % microSecsPerDay
+
+	base := ms / precisionVal[precision]
+	if ms%precisionVal[precision]/precisionVal[precision+1] >= 5 { // check carry
+		base += 1
+	}
+
+	return Time(base * precisionVal[precision])
+}
+
 func (dt Datetime) Clock() (hour, minute, sec int8) {
 	t := (dt.sec()) % secsPerDay
 	hour = int8(t / secsPerHour)
@@ -293,7 +316,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 		if !validDate(y, m, d) {
 			return 0, false
 		}
-	case DateTimeType:
+	case DateTimeType, TimeStampType:
 		if !validDatetime(y, m, d) {
 			return 0, false
 		}
@@ -336,6 +359,46 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return 0, false
 	}
 	return newDate, true
+}
+
+func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, error) {
+	switch its {
+	case "microsecond":
+		return int64(dt - secondDt), nil
+	case "second":
+		return (dt - secondDt).sec(), nil
+	case "minute":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerMinute), nil
+	case "hour":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerHour), nil
+	case "day":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerDay), nil
+	case "week":
+		return int64(dt-secondDt) / (microSecsPerSec * secsPerWeek), nil
+	case "month":
+		return dt.ConvertToMonth(secondDt), nil
+	case "quarter":
+		return dt.ConvertToMonth(secondDt) / 3, nil
+	case "year":
+		return dt.ConvertToMonth(secondDt) / 12, nil
+	}
+	return 0, moerr.NewInvalidInput("invalid time_stamp_unit input")
+}
+
+func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
+	return int64((dt - secondDt) / microSecsPerSec)
+}
+
+func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
+
+	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
+	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
+
+	if dayDiff >= 0 {
+		return monthDiff
+	} else {
+		return monthDiff - 1
+	}
 }
 
 func (dt Datetime) MicroSec() int64 {

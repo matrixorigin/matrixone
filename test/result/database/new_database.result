@@ -9,9 +9,11 @@ create database `测试数据库`;
 show databases;
 Database
 mo_catalog
-information_schema
+mo_task
 system
 system_metrics
+mysql
+information_schema
 new_database
 test01
 测试数据库
@@ -29,9 +31,11 @@ create database db_with_no_tables_and_an_unrelated_file_in_data_directory;
 show databases;
 Database
 mo_catalog
-information_schema
+mo_task
 system
 system_metrics
+mysql
+information_schema
 new_database
 ABCDE
 abcde

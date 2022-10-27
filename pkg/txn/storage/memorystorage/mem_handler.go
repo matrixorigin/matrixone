@@ -24,7 +24,9 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MemHandler struct {
@@ -65,7 +66,7 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap                  *mheap.Mheap
+	mheap                  *mpool.MPool
 	defaultIsolationPolicy IsolationPolicy
 	clock                  clock.Clock
 	idGenerator            memoryengine.IDGenerator
@@ -85,7 +86,7 @@ type Iter[
 }
 
 func NewMemHandler(
-	mheap *mheap.Mheap,
+	mp *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
@@ -96,7 +97,7 @@ func NewMemHandler(
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
 		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mheap:                  mheap,
+		mheap:                  mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 		idGenerator:            idGenerator,
@@ -191,31 +192,38 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 		}
 
 	case *engine.IndexTableDef:
+		// tea & mem do not use this def now.
+	case *engine.ComputeIndexDef:
 		// add index
 		// check existence
-		entries, err := m.indexes.Index(tx, Tuple{
-			index_RelationID_Name,
-			req.TableID,
-			Text(def.Name),
-		})
-		if err != nil {
-			return err
-		}
-		if len(entries) > 0 {
-			return moerr.NewDuplicate()
-		}
-		// insert
-		id, err := m.idGenerator.NewID(ctx)
-		if err != nil {
-			return err
-		}
-		idxRow := &IndexRow{
-			ID:            id,
-			RelationID:    req.TableID,
-			IndexTableDef: *def,
-		}
-		if err := m.indexes.Insert(tx, idxRow); err != nil {
-			return err
+		for i := 0; i < len(def.IndexNames); i++ {
+			entries, err := m.indexes.Index(tx, Tuple{
+				index_RelationID_Name,
+				req.TableID,
+				Text(def.IndexNames[i]),
+			})
+			if err != nil {
+				return err
+			}
+			if len(entries) > 0 {
+				return moerr.NewDuplicate()
+			}
+			// insert
+			id, err := m.idGenerator.NewID(ctx)
+			if err != nil {
+				return err
+			}
+			idxRow := &IndexRow{
+				ID:         id,
+				RelationID: req.TableID,
+				IndexName:  def.IndexNames[i],
+				Unique:     def.Uniques[i],
+				TableName:  def.TableNames[i],
+				Field:      def.Fields[i],
+			}
+			if err := m.indexes.Insert(tx, idxRow); err != nil {
+				return err
+			}
 		}
 
 	case *engine.PropertiesDef:
@@ -352,7 +360,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// handle defs
 	var relAttrs []engine.Attribute
-	var relIndexes []engine.IndexTableDef
+	var relIndexes *engine.ComputeIndexDef
 	var primaryColumnNames []string
 	for _, def := range req.Defs {
 		switch def := def.(type) {
@@ -370,7 +378,10 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			relAttrs = append(relAttrs, def.Attr)
 
 		case *engine.IndexTableDef:
-			relIndexes = append(relIndexes, *def)
+			// do nothing
+
+		case *engine.ComputeIndexDef:
+			relIndexes = def
 
 		case *engine.PropertiesDef:
 			for _, prop := range def.Properties {
@@ -434,18 +445,23 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	// insert relation indexes
-	for _, idx := range relIndexes {
-		id, err := m.idGenerator.NewID(ctx)
-		if err != nil {
-			return err
-		}
-		idxRow := &IndexRow{
-			ID:            id,
-			RelationID:    row.ID,
-			IndexTableDef: idx,
-		}
-		if err := m.indexes.Insert(tx, idxRow); err != nil {
-			return err
+	if relIndexes != nil {
+		for i := 0; i < len(relIndexes.IndexNames); i++ {
+			id, err := m.idGenerator.NewID(ctx)
+			if err != nil {
+				return err
+			}
+			idxRow := &IndexRow{
+				ID:         id,
+				RelationID: row.ID,
+				IndexName:  relIndexes.IndexNames[i],
+				Unique:     relIndexes.Uniques[i],
+				TableName:  relIndexes.TableNames[i],
+				Field:      relIndexes.Fields[i],
+			}
+			if err := m.indexes.Insert(tx, idxRow); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -458,7 +474,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	return nil
 }
 
-const rowIDColumnName = "__rowid"
+const rowIDColumnName = catalog.Row_ID
 
 func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
@@ -539,10 +555,19 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	tx := m.getTx(meta)
 	reqVecLen := req.Vector.Length()
 
+	// check table existence
+	_, err := m.relations.Get(tx, ID(req.TableID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			panic(fmt.Sprintf("no such table: %v, %v", req.TableID, req.TableName))
+		}
+		return err
+	}
+
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
 			entries, err := m.data.Index(tx, Tuple{
 				index_RowID, memtable.ToOrdered(rowID),
@@ -572,19 +597,25 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if err != nil {
 		return err
 	}
-	if len(entries) == 1 && entries[0].Value.Name == req.ColumnName {
-		// by primary key
-		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
-			key := DataKey{
-				tableID:    req.TableID,
-				primaryKey: Tuple{memtable.ToOrdered(value.Value)},
-			}
-			if err := m.data.Delete(tx, key); err != nil {
-				return err
-			}
+	if len(entries) == 1 {
+		attr, err := m.attributes.Get(tx, entries[0].Key)
+		if err != nil {
+			return err
 		}
-		return nil
+		if attr.Name == req.ColumnName {
+			// by primary key
+			for i := 0; i < reqVecLen; i++ {
+				value := memtable.VectorAt(req.Vector, i)
+				key := DataKey{
+					tableID:    req.TableID,
+					primaryKey: Tuple{memtable.ToOrdered(value.Value)},
+				}
+				if err := m.data.Delete(tx, key); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 	}
 
 	// by non-primary key, slow but works
@@ -596,10 +627,17 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if err != nil {
 		return err
 	}
-	if len(entries) != 1 {
-		return moerr.NewInternalError("wrong column name: %s", req.ColumnName)
+	if len(entries) == 0 {
+		return moerr.NewInternalError("no such column: %s", req.ColumnName)
 	}
-	attrIndex := entries[0].Value.Order
+	if len(entries) != 1 {
+		panic("impossible")
+	}
+	attr, err := m.attributes.Get(tx, entries[0].Key)
+	if err != nil {
+		return err
+	}
+	attrIndex := attr.Order
 	iter := m.data.NewIter(tx)
 	defer iter.Close()
 	tableKey := DataKey{
@@ -614,7 +652,7 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 			break
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value := vectorAt(req.Vector, i)
+			value := memtable.VectorAt(req.Vector, i)
 			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
@@ -647,13 +685,17 @@ func (m *MemHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for _, entry := range entries {
+		db, err := m.databases.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
 		if err := m.databases.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteRelationsByDBID(tx, entry.Value.ID); err != nil {
+		if err := m.deleteRelationsByDBID(tx, db.ID); err != nil {
 			return err
 		}
-		resp.ID = entry.Value.ID
+		resp.ID = db.ID
 	}
 
 	return nil
@@ -668,13 +710,17 @@ func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID ID) error {
 		return err
 	}
 	for _, entry := range entries {
+		rel, err := m.relations.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
 		if err := m.relations.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
+		if err := m.deleteAttributesByRelationID(tx, rel.ID); err != nil {
 			return err
 		}
-		if err := m.deleteRelationData(tx, entry.Value.ID); err != nil {
+		if err := m.deleteRelationData(tx, rel.ID); err != nil {
 			return err
 		}
 	}
@@ -737,14 +783,27 @@ func (m *MemHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnMeta,
 		panic("impossible")
 	}
 	entry := entries[0]
+	rel, err := m.relations.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
 	if err := m.relations.Delete(tx, entry.Key); err != nil {
 		return err
 	}
-	if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
+	if err := m.deleteAttributesByRelationID(tx, rel.ID); err != nil {
 		return err
 	}
-	resp.ID = entry.Value.ID
+	resp.ID = rel.ID
 	return nil
+}
+
+func (m *MemHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateRelationReq, resp *memoryengine.TruncateRelationResp) error {
+	tx := m.getTx(meta)
+	_, err := m.relations.Get(tx, req.OldTableID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+	}
+	return m.deleteRelationData(tx, req.OldTableID)
 }
 
 func (m *MemHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetDatabasesReq, resp *memoryengine.GetDatabasesResp) error {
@@ -759,7 +818,11 @@ func (m *MemHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, string(entry.Value.Name))
+		db, err := m.databases.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Names = append(resp.Names, string(db.Name))
 	}
 
 	return nil
@@ -776,7 +839,11 @@ func (m *MemHandler) HandleGetPrimaryKeys(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	for _, entry := range entries {
-		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Attrs = append(resp.Attrs, &attr.Attribute)
 	}
 	return nil
 }
@@ -791,7 +858,43 @@ func (m *MemHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, string(entry.Value.Name))
+		rel, err := m.relations.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Names = append(resp.Names, string(rel.Name))
+	}
+	return nil
+}
+
+func (m *MemHandler) HandleGetTableColumns(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableColumnsReq, resp *memoryengine.GetTableColumnsResp) error {
+	tx := m.getTx(meta)
+
+	_, err := m.relations.Get(tx, req.TableID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// the caller expects no error if table not exist
+		//resp.ErrTableNotFound.ID = req.TableID
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var attrRows []*AttributeRow
+	if err := m.iterRelationAttributes(
+		tx, req.TableID,
+		func(_ ID, row *AttributeRow) error {
+			attrRows = append(attrRows, row)
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+	sort.Slice(attrRows, func(i, j int) bool {
+		return attrRows[i].Order < attrRows[j].Order
+	})
+	for _, row := range attrRows {
+		resp.Attrs = append(resp.Attrs, &row.Attribute)
 	}
 	return nil
 }
@@ -874,8 +977,25 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		if err != nil {
 			return err
 		}
-		for _, entry := range entries {
-			resp.Defs = append(resp.Defs, &entry.Value.IndexTableDef)
+		indexLen := len(entries)
+		if indexLen > 0 {
+			computeIndexDef := &engine.ComputeIndexDef{
+				IndexNames: make([]string, indexLen),
+				Uniques:    make([]bool, indexLen),
+				TableNames: make([]string, indexLen),
+				Fields:     make([][]string, indexLen),
+			}
+			for i, entry := range entries {
+				index, err := m.indexes.Get(tx, entry.Key)
+				if err != nil {
+					return err
+				}
+				computeIndexDef.IndexNames[i] = index.IndexName
+				computeIndexDef.Uniques[i] = index.Unique
+				computeIndexDef.TableNames[i] = index.TableName
+				computeIndexDef.Fields[i] = index.Field
+			}
+			resp.Defs = append(resp.Defs, computeIndexDef)
 		}
 	}
 
@@ -905,7 +1025,11 @@ func (m *MemHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, 
 		return err
 	}
 	for _, entry := range entries {
-		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Attrs = append(resp.Attrs, &attr.Attribute)
 	}
 	return nil
 }
@@ -964,13 +1088,19 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 
-	for _, entry := range entries {
-		resp.ID = entry.Value.ID
-		resp.Name = string(entry.Value.Name)
-		return nil
+	if len(entries) == 0 {
+		return moerr.NewNoDB()
 	}
 
-	return moerr.NewNoDB()
+	entry := entries[0]
+	db, err := m.databases.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
+	resp.ID = db.ID
+	resp.Name = string(db.Name)
+
+	return nil
 }
 
 func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.OpenRelationReq, resp *memoryengine.OpenRelationResp) error {
@@ -987,10 +1117,14 @@ func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, r
 		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
 	}
 	entry := entries[0]
-	resp.ID = entry.Value.ID
-	resp.Type = entry.Value.Type
-	resp.RelationName = string(entry.Value.Name)
-	db, err := m.databases.Get(tx, entry.Value.DatabaseID)
+	rel, err := m.relations.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
+	resp.ID = rel.ID
+	resp.Type = rel.Type
+	resp.RelationName = string(rel.Name)
+	db, err := m.databases.Get(tx, rel.DatabaseID)
 	if err != nil {
 		return err
 	}
@@ -1065,7 +1199,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m, 0, b, namedRow); err != nil {
+		if err := appendNamedRowToBatch(tx, m, 0, b, namedRow); err != nil {
 			return err
 		}
 	}
@@ -1079,15 +1213,6 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 	}
 
 	return nil
-}
-
-func (m *MemHandler) HandleTruncate(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) error {
-	tx := m.getTx(meta)
-	_, err := m.relations.Get(tx, req.TableID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-	}
-	return m.deleteRelationData(tx, req.TableID)
 }
 
 func (m *MemHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) error {
@@ -1174,7 +1299,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	// iter
-	batchIter := NewBatchIter(b)
+	batchIter := memtable.NewBatchIter(b)
 	for {
 		row := batchIter()
 		if len(row) == 0 {
@@ -1260,7 +1385,13 @@ func (*MemHandler) HandleClose(ctx context.Context) error {
 
 func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(memtable.Now(m.clock)); err != nil {
+	commitTS := meta.CommitTS
+	if commitTS.IsEmpty() {
+		commitTS = tx.Time.Timestamp
+	}
+	if err := tx.Commit(Time{
+		Timestamp: commitTS,
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -1304,7 +1435,11 @@ func (m *MemHandler) iterRelationAttributes(
 		return err
 	}
 	for _, entry := range entries {
-		if err := fn(entry.Key, entry.Value); err != nil {
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		if err := fn(entry.Key, attr); err != nil {
 			return err
 		}
 	}

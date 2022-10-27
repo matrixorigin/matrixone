@@ -51,6 +51,9 @@ type TableDef_DefType_Partition = plan.TableDef_DefType_Partition
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
 type PartitionInfo = plan.PartitionInfo
+type TableDef_DefType_Idx = plan.TableDef_DefType_Idx
+type IndexDef = plan.IndexDef
+type IndexInfo = plan.IndexInfo
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -69,6 +72,9 @@ type CompilerContext interface {
 	Cost(obj *ObjectRef, e *Expr) *Cost
 	// get origin sql string of the root
 	GetRootSql() string
+	// get username of current session
+	GetUserName() string
+	GetAccountId() uint32
 }
 
 type Optimizer interface {
@@ -202,7 +208,8 @@ type baseBinder struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ *Type
+	typ  *Type
+	cols []string
 }
 
 type TableBinder struct {

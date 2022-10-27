@@ -15,13 +15,14 @@
 package containers
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 type Options struct {
 	Capacity  int
-	Allocator stl.MemAllocator
+	Allocator *mpool.MPool
 	Data      *stl.Bytes
 }
 
@@ -34,8 +35,8 @@ func (opts *Options) DataSize() int {
 }
 
 type StdVector[T any] struct {
-	alloc    stl.MemAllocator
-	node     stl.MemNode
+	alloc    *mpool.MPool
+	node     []byte
 	buf      []byte
 	slice    []T
 	capacity int

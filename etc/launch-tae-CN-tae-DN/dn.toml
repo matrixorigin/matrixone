@@ -1,0 +1,42 @@
+service-type = "DN"
+
+[log]
+level = "info"
+format = "json"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32000",
+]
+
+
+[[fileservice]]
+name = "LOCAL"
+backend = "MEM"
+
+[[fileservice]]
+name = "S3"
+backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "mo-data/local/etl"
+
+[dn]
+uuid = "42"
+
+[dn.Txn.Storage]
+backend = "TAE"
+
+[dn.Ckp]
+scanner-interval = "10000s"
+execution-levels = 20000
+execution-interval = "10000s"
+catalog-ckp-interval = "10000s"
+catalog-unckp-limit = 10000
+flush-interval = "10000s"
+
+[dn.LogStore]
+logstore = "logservice"

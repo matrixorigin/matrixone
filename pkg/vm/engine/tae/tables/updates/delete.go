@@ -51,6 +51,7 @@ type DeleteNode struct {
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
+	viewNodes  map[uint32]*common.GenericDLNode[txnif.MVCCNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -59,6 +60,7 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Merge,
 		logIndexes:  make([]*wal.Index, 0),
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
@@ -67,6 +69,7 @@ func NewEmptyDeleteNode() txnif.MVCCNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
@@ -76,6 +79,7 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[txnif.MVCCNode]),
 	}
 	return n
 }
@@ -86,9 +90,7 @@ func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) OnReplayCommit(ts types.TS) {
-	node.TxnMVCCNode.OnReplayCommit(ts)
-}
+
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -151,6 +153,9 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 
 func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	node.mask.AddRange(uint64(start), uint64(end+1))
+	for i := start; i < end+1; i++ {
+		node.chain.InsertInDeleteView(i, node)
+	}
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
@@ -167,24 +172,20 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
-	var ts types.TS
-	ts, err = node.TxnMVCCNode.ApplyCommit(index)
+	defer node.chain.mvcc.Unlock()
+	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
 	}
-	if node.chain.mvcc != nil {
-		node.chain.mvcc.SetMaxVisible(ts)
-	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	node.chain.mvcc.Unlock()
 	return node.OnApply()
 }
 
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	err = node.TxnMVCCNode.ApplyRollback(index)
+	_, err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 
@@ -286,6 +287,7 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
+	node.chain.DeleteInDeleteView(node)
 	return
 }
 

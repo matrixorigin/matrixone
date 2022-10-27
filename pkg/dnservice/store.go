@@ -28,10 +28,12 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
@@ -82,6 +84,13 @@ func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Clie
 	}
 }
 
+// WithTaskStorageFactory setup the special task strorage factory
+func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
+	return func(s *store) {
+		s.task.storageFactory = factory
+	}
+}
+
 type store struct {
 	cfg                 *Config
 	logger              *zap.Logger
@@ -105,6 +114,13 @@ type store struct {
 		sync.RWMutex
 		metadata metadata.DNStore
 	}
+
+	task struct {
+		sync.RWMutex
+		serviceCreated bool
+		serviceHolder  taskservice.TaskServiceHolder
+		storageFactory taskservice.TaskStorageFactory
+	}
 }
 
 // NewService create DN Service
@@ -114,6 +130,9 @@ func NewService(cfg *Config,
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	// start common stuff
+	common.InitTAEMPool()
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)
@@ -152,6 +171,7 @@ func NewService(cfg *Config,
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
+	s.initTaskHolder()
 	return s, nil
 }
 
@@ -184,6 +204,12 @@ func (s *store) Close() error {
 		}
 		return true
 	})
+	s.task.RLock()
+	ts := s.task.serviceHolder
+	s.task.RUnlock()
+	if ts != nil {
+		err = ts.Close()
+	}
 	return err
 }
 
@@ -233,9 +259,10 @@ func (s *store) heartbeatTask(ctx context.Context) {
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 			commands, err := s.hakeeperClient.SendDNHeartbeat(ctx, logservicepb.DNStoreHeartbeat{
-				UUID:           s.cfg.UUID,
-				ServiceAddress: s.cfg.ServiceAddress,
-				Shards:         s.getDNShardInfo(),
+				UUID:               s.cfg.UUID,
+				ServiceAddress:     s.cfg.ServiceAddress,
+				Shards:             s.getDNShardInfo(),
+				TaskServiceCreated: s.taskServiceCreated(),
 			})
 			cancel()
 
@@ -249,7 +276,7 @@ func (s *store) heartbeatTask(ctx context.Context) {
 				s.logger.Debug("received hakeeper command",
 					zap.String("cmd", cmd.LogString()))
 
-				if cmd.ServiceType != logservicepb.DnService {
+				if cmd.ServiceType != logservicepb.DNService {
 					s.logger.Fatal("receive invalid schedule command",
 						zap.String("type", cmd.ServiceType.String()))
 				}
@@ -273,6 +300,9 @@ func (s *store) heartbeatTask(ctx context.Context) {
 							zap.String("command", cmd.String()),
 							zap.Error(err))
 					}
+				}
+				if cmd.CreateTaskService != nil {
+					s.createTaskService(cmd.CreateTaskService)
 				}
 			}
 		}

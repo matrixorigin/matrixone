@@ -31,7 +31,7 @@ func TestEncodeInt8(t *testing.T) {
 
 func TestEncodeInt8Slice(t *testing.T) {
 	nums := []int8{math.MinInt8, math.MaxInt8, 0}
-	numsDecode := DecodeInt8Slice(EncodeInt8Slice(nums))
+	numsDecode := DecodeSlice[int8](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("Int8Slice Encoding Error\n")
@@ -50,7 +50,7 @@ func TestEncodeUint8(t *testing.T) {
 
 func TestEncodeUint8Slice(t *testing.T) {
 	nums := []uint8{math.MaxUint8, 0}
-	numsDecode := DecodeUint8Slice(EncodeUint8Slice(nums))
+	numsDecode := DecodeSlice[uint8](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("Uint8Slice Encoding Error\n")
@@ -69,7 +69,7 @@ func TestEncodeInt16(t *testing.T) {
 
 func TestEncodeInt16Slice(t *testing.T) {
 	nums := []int16{math.MaxInt16, math.MaxInt16, 0}
-	numsDecode := DecodeInt16Slice(EncodeInt16Slice(nums))
+	numsDecode := DecodeSlice[int16](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("int16Slice Encoding Error\n")
@@ -88,7 +88,7 @@ func TestEncodeUint16(t *testing.T) {
 
 func TestEncodeUint16Slice(t *testing.T) {
 	nums := []uint16{math.MaxUint16, math.MaxUint16, 0}
-	numsDecode := DecodeUint16Slice(EncodeUint16Slice(nums))
+	numsDecode := DecodeSlice[uint16](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("int16Slice Encoding Error\n")
@@ -107,7 +107,7 @@ func TestEncodeInt32(t *testing.T) {
 
 func TestEncodeInt32Slice(t *testing.T) {
 	nums := []int32{math.MaxInt32, math.MaxInt32, 0}
-	numsDecode := DecodeInt32Slice(EncodeInt32Slice(nums))
+	numsDecode := DecodeSlice[int32](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("int32Slice Encoding Error\n")
@@ -126,7 +126,7 @@ func TestEncodeUint32(t *testing.T) {
 
 func TestEncodeUint32Slice(t *testing.T) {
 	nums := []uint32{math.MaxUint32, math.MaxUint32, 0}
-	numsDecode := DecodeUint32Slice(EncodeUint32Slice(nums))
+	numsDecode := DecodeSlice[uint32](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("uint32Slice Encoding Error\n")
@@ -145,7 +145,7 @@ func TestEncodeInt64(t *testing.T) {
 
 func TestEncodeInt64Slice(t *testing.T) {
 	nums := []int64{math.MaxInt64, math.MaxInt64, 0}
-	numsDecode := DecodeInt64Slice(EncodeInt64Slice(nums))
+	numsDecode := DecodeSlice[int64](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("int64Slice Encoding Error\n")
@@ -164,7 +164,7 @@ func TestEncodeUint64(t *testing.T) {
 
 func TestEncodeUint64Slice(t *testing.T) {
 	nums := []uint64{math.MaxUint64, math.MaxUint64, 0}
-	numsDecode := DecodeUint64Slice(EncodeUint64Slice(nums))
+	numsDecode := DecodeSlice[uint64](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("uint64Slice Encoding Error\n")
@@ -183,7 +183,7 @@ func TestEncodeFloat32(t *testing.T) {
 
 func TestEncodeFloat32Slice(t *testing.T) {
 	nums := []float32{math.MaxFloat32, math.SmallestNonzeroFloat32, -math.MaxFloat32, -math.SmallestNonzeroFloat32}
-	numsDecode := DecodeFloat32Slice(EncodeFloat32Slice(nums))
+	numsDecode := DecodeSlice[float32](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("Float32Slice Encoding Error\n")
@@ -202,7 +202,7 @@ func TestEncodeFloat64(t *testing.T) {
 
 func TestEncodeFloat64Slice(t *testing.T) {
 	nums := []float64{math.MaxFloat64, math.SmallestNonzeroFloat64, -math.MaxFloat64, -math.SmallestNonzeroFloat64}
-	numsDecode := DecodeFloat64Slice(EncodeFloat64Slice(nums))
+	numsDecode := DecodeSlice[float64](EncodeSlice(nums))
 	for i, num := range nums {
 		if numsDecode[i] != num {
 			t.Fatalf("Float64Slice Encoding Error\n")
@@ -221,7 +221,7 @@ func TestEncodeDate(t *testing.T) {
 
 func TestEncodeDateSlice(t *testing.T) {
 	dates := []Date{0, math.MaxInt32}
-	datesDecode := DecodeDateSlice(EncodeDateSlice(dates))
+	datesDecode := DecodeSlice[Date](EncodeSlice(dates))
 	for i, date := range dates {
 		if datesDecode[i] != date {
 			t.Fatalf("Date Encoding Error\n")
@@ -240,7 +240,7 @@ func TestEncodeDatetime(t *testing.T) {
 
 func TestEncodeDatetimeSlice(t *testing.T) {
 	dateTimes := []Datetime{0, math.MaxInt64}
-	dateTimesDecode := DecodeDatetimeSlice(EncodeDatetimeSlice(dateTimes))
+	dateTimesDecode := DecodeSlice[Datetime](EncodeSlice(dateTimes))
 	for i, date := range dateTimes {
 		if dateTimesDecode[i] != date {
 			t.Fatalf("Date Encoding Error\n")
@@ -258,19 +258,8 @@ func TestStringSliceEncoding(t *testing.T) {
 func BenchmarkEncodeSliceFloat64(b *testing.B) {
 	v := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	for i := 0; i < b.N; i++ {
-		x := EncodeFloat64Slice(v)
-		y := DecodeFloat64Slice(x)
-		if len(y) != len(v) {
-			panic("Encode decode error")
-		}
-	}
-}
-
-func BenchmarkEncodeSliceFloat64_Old(b *testing.B) {
-	v := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	for i := 0; i < b.N; i++ {
-		x := EncodeFloat64SliceForBenchmark(v)
-		y := DecodeFloat64SliceForBenchmark(x)
+		x := EncodeSlice(v)
+		y := DecodeSlice[float64](x)
 		if len(y) != len(v) {
 			panic("Encode decode error")
 		}

@@ -17,45 +17,49 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math/rand"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// CNHAKeeperClient is the HAKeeper client used by a CN store.
-type CNHAKeeperClient interface {
+type basicHAKeeperClient interface {
 	// Close closes the hakeeper client.
 	Close() error
+	// AllocateID allocate a globally unique ID
+	AllocateID(ctx context.Context) (uint64, error)
 	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
+	// GetClusterState queries the cluster state
+	GetClusterState(ctx context.Context) (pb.CheckerState, error)
+}
+
+// CNHAKeeperClient is the HAKeeper client used by a CN store.
+type CNHAKeeperClient interface {
+	basicHAKeeperClient
 	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
-	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error
-	// AllocateID allocate a globally unique ID
-	AllocateID(ctx context.Context) (uint64, error)
+	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
 // DNHAKeeperClient is the HAKeeper client used by a DN store.
 type DNHAKeeperClient interface {
-	// Close closes the hakeeper client.
-	Close() error
+	basicHAKeeperClient
 	// SendDNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// DN store.
 	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
-	// AllocateID allocate a globally unique ID
-	AllocateID(ctx context.Context) (uint64, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
 type LogHAKeeperClient interface {
-	// Close closes the hakeeper client.
-	Close() error
+	basicHAKeeperClient
 	// SendLogHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// Log store.
@@ -108,17 +112,17 @@ func newManagedHAKeeperClient(ctx context.Context,
 		return nil, err
 	}
 
-	return &managedHAKeeperClient{
-		client:         c,
+	mc := &managedHAKeeperClient{
 		cfg:            cfg,
 		backendOptions: GetBackendOptions(ctx),
 		clientOptions:  GetClientOptions(ctx),
-	}, nil
+	}
+	mc.mu.client = c
+	return mc, nil
 }
 
 type managedHAKeeperClient struct {
-	cfg    HAKeeperClientConfig
-	client *hakeeperClient
+	cfg HAKeeperClientConfig
 
 	// Method `prepareClient` may update moprc.Client.
 	// So we need to keep options for morpc.Client.
@@ -129,14 +133,17 @@ type managedHAKeeperClient struct {
 		sync.RWMutex
 		nextID uint64
 		lastID uint64
+		client *hakeeperClient
 	}
 }
 
 func (c *managedHAKeeperClient) Close() error {
-	if c.client == nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.client == nil {
 		return nil
 	}
-	return c.client.close()
+	return c.mu.client.close()
 }
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -144,7 +151,7 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.ClusterDetails{}, err
 		}
-		cd, err := c.client.getClusterDetails(ctx)
+		cd, err := c.getClient().getClusterDetails(ctx)
 		if err != nil {
 			c.resetClient()
 		}
@@ -152,6 +159,22 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 			continue
 		}
 		return cd, err
+	}
+}
+
+func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return pb.CheckerState{}, err
+		}
+		s, err := c.getClient().getClusterState(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
 	}
 }
 
@@ -165,12 +188,12 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 	}
 
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
 		if err != nil {
-			c.resetClient()
+			c.resetClientLocked()
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -184,19 +207,19 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 }
 
 func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
-	hb pb.CNStoreHeartbeat) error {
+	hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
-			return err
+			return pb.CommandBatch{}, err
 		}
-		err := c.client.sendCNHeartbeat(ctx, hb)
+		result, err := c.getClient().sendCNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
 		if c.isRetryableError(err) {
 			continue
 		}
-		return err
+		return result, err
 	}
 }
 
@@ -206,7 +229,7 @@ func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.client.sendDNHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendDNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -223,7 +246,7 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.client.sendLogHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendLogHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -239,17 +262,29 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 }
 
 func (c *managedHAKeeperClient) resetClient() {
-	if c.client != nil {
-		cc := c.client
-		c.client = nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resetClientLocked()
+}
+
+func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.prepareClientLocked(ctx)
+}
+
+func (c *managedHAKeeperClient) resetClientLocked() {
+	if c.mu.client != nil {
+		cc := c.mu.client
+		c.mu.client = nil
 		if err := cc.close(); err != nil {
-			logger.Error("failed to close client", zap.Error(err))
+			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
 
-func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
-	if c.client != nil {
+func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
+	if c.mu.client != nil {
 		return nil
 	}
 
@@ -261,7 +296,7 @@ func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.client = cc
+	c.mu.client = cc
 	return nil
 }
 
@@ -343,14 +378,14 @@ func connectToHAKeeper(ctx context.Context,
 		c.addr = addr
 		c.client = cc
 		isHAKeeper, err := c.checkIsHAKeeper(ctx)
-		logger.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
+		logutil.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
 		if err == nil && isHAKeeper {
 			return c, nil
 		} else if err != nil {
 			e = err
 		}
 		if err := cc.Close(); err != nil {
-			logger.Error("failed to close the client", zap.Error(err))
+			logutil.Error("failed to close the client", zap.Error(err))
 		}
 	}
 	if e == nil {
@@ -382,13 +417,23 @@ func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetai
 	return *resp.ClusterDetails, nil
 }
 
-func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error {
+func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, error) {
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_STATE,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return pb.CheckerState{}, err
+	}
+	return *resp.CheckerState, nil
+}
+
+func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
 		CNHeartbeat: &hb,
 	}
-	_, err := c.sendHeartbeat(ctx, req)
-	return err
+	return c.sendHeartbeat(ctx, req)
 }
 
 func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, batch uint64) (uint64, error) {
@@ -423,7 +468,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for _, cmd := range cb.Commands {
-		logger.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
+		logutil.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
 	}
 	return cb, nil
 }
@@ -474,4 +519,10 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 		return pb.Response{}, err
 	}
 	return resp, nil
+}
+
+func (c *managedHAKeeperClient) getClient() *hakeeperClient {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.client
 }

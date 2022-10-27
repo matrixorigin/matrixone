@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 // DNService describes expected behavior for dn service.
@@ -45,6 +46,9 @@ type DNService interface {
 	StartDNReplica(shard metadata.DNShard) error
 	// CloseDNReplica close the DNShard replica.
 	CloseDNReplica(shard metadata.DNShard) error
+
+	// GetTaskService returns the taskservice
+	GetTaskService() (taskservice.TaskService, bool)
 }
 
 // dnService wraps dnservice.Service.
@@ -121,6 +125,10 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	return ds.svc.CloseDNReplica(shard)
 }
 
+func (ds *dnService) GetTaskService() (taskservice.TaskService, bool) {
+	return ds.svc.GetTaskService()
+}
+
 // dnOptions is options for a dn service.
 type dnOptions []dnservice.Option
 
@@ -141,8 +149,8 @@ func newDNService(
 	}, nil
 }
 
-// buildDnConfig builds configuration for a dn service.
-func buildDnConfig(
+// buildDNConfig builds configuration for a dn service.
+func buildDNConfig(
 	index int, opt Options, address serviceAddresses,
 ) *dnservice.Config {
 	cfg := &dnservice.Config{
@@ -163,10 +171,10 @@ func buildDnConfig(
 	return cfg
 }
 
-// buildDnOptions builds options for a dn service.
+// buildDNOptions builds options for a dn service.
 //
 // NB: We need the filled version of dnservice.Config.
-func buildDnOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
+func buildDNOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
 	// factory to construct client for hakeeper
 	hakeeperClientFactory := func() (logservice.DNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeout(

@@ -17,21 +17,211 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-func newDB(cli client.TxnClient, dnList []DNStore) *DB {
+func newDB(dnList []DNStore) *DB {
 	dnMap := make(map[string]int)
 	for i := range dnList {
 		dnMap[dnList[i].UUID] = i
 	}
 	db := &DB{
-		cli:    cli,
-		dnMap:  dnMap,
-		tables: make(map[[2]uint64]Partitions),
+		dnMap:      dnMap,
+		metaTables: make(map[string]Partitions),
+		tables:     make(map[[2]uint64]Partitions),
 	}
 	return db
+}
+
+// init is used to insert some data that will not be synchronized by logtail.
+func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
+	}
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
+	}
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
+	}
+	{ // mo_catalog
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
+		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF, ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+	}
+	{ // mo_database
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_DATABASE, catalog.MO_CATALOG, catalog.MO_DATABASE_ID,
+			catalog.MO_CATALOG_ID, catalog.MoDatabaseTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0,
+			catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+				ibat, false); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	{ // mo_tables
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG_ID, catalog.MoTablesTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+				ibat, false); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	{ // mo_columns
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_COLUMNS, catalog.MO_CATALOG, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG_ID, catalog.MoColumnsTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple(new(table), "", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, catalog.SystemOrdinaryRel, m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, ibat, false); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+				ibat, false); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	return nil
+}
+
+func (db *DB) delMetaTable(name string) {
+	db.Lock()
+	delete(db.metaTables, name)
+	db.Unlock()
+}
+
+func (db *DB) getMetaPartitions(name string) Partitions {
+	db.Lock()
+	parts, ok := db.metaTables[name]
+	if !ok { // create a new table
+		parts = make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.metaTables[name] = parts
+	}
+	db.Unlock()
+	return parts
+
 }
 
 func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
@@ -48,12 +238,8 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	return parts
 }
 
-func (db *DB) Update(ctx context.Context, dnList []DNStore,
-	databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	op, err := db.cli.New()
-	if err != nil {
-		return err
-	}
+func (db *DB) Update(ctx context.Context, dnList []DNStore, tbl *table, op client.TxnOperator,
+	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	db.Lock()
 	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
@@ -64,11 +250,11 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore,
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
 	db.Unlock()
-	for _, dn := range dnList {
+	for i, dn := range dnList {
 		part := parts[db.dnMap[dn.UUID]]
 		part.Lock()
 		if part.ts.Less(ts) {
-			if err := updatePartition(ctx, op, part, dn,
+			if err := updatePartition(i, primaryIdx, tbl, ts, ctx, op, db, part, dn,
 				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
 				part.Unlock()
 				return err

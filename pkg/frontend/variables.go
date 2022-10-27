@@ -84,7 +84,7 @@ type SystemVariableType interface {
 	Type() types.T
 
 	// MysqlType gets the mysql type
-	MysqlType() uint8
+	MysqlType() defines.MysqlType
 
 	// Zero gets the zero value for the type
 	Zero() interface{}
@@ -117,7 +117,7 @@ func (svnt SystemVariableNullType) Type() types.T {
 	return types.T_any
 }
 
-func (svnt SystemVariableNullType) MysqlType() uint8 {
+func (svnt SystemVariableNullType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_NULL
 }
 
@@ -213,7 +213,7 @@ func (svbt SystemVariableBoolType) Type() types.T {
 	return types.T_bool
 }
 
-func (svbt SystemVariableBoolType) MysqlType() uint8 {
+func (svbt SystemVariableBoolType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_BOOL
 }
 
@@ -293,7 +293,7 @@ func (svit SystemVariableIntType) Type() types.T {
 	return types.T_int64
 }
 
-func (svit SystemVariableIntType) MysqlType() uint8 {
+func (svit SystemVariableIntType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_LONGLONG
 }
 
@@ -368,7 +368,7 @@ func (svut SystemVariableUintType) Type() types.T {
 	return types.T_uint64
 }
 
-func (svut SystemVariableUintType) MysqlType() uint8 {
+func (svut SystemVariableUintType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_LONGLONG
 }
 
@@ -428,7 +428,7 @@ func (svdt SystemVariableDoubleType) Type() types.T {
 	return types.T_float64
 }
 
-func (svdt SystemVariableDoubleType) MysqlType() uint8 {
+func (svdt SystemVariableDoubleType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_DOUBLE
 }
 
@@ -521,7 +521,7 @@ func (svet SystemVariableEnumType) Type() types.T {
 	return types.T_varchar
 }
 
-func (svet SystemVariableEnumType) MysqlType() uint8 {
+func (svet SystemVariableEnumType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_VARCHAR
 }
 
@@ -678,7 +678,7 @@ func (svst SystemVariableSetType) Type() types.T {
 	return types.T_any
 }
 
-func (svst SystemVariableSetType) MysqlType() uint8 {
+func (svst SystemVariableSetType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_SET
 }
 
@@ -746,7 +746,7 @@ func (svst SystemVariableStringType) Type() types.T {
 	return types.T_varchar
 }
 
-func (svst SystemVariableStringType) MysqlType() uint8 {
+func (svst SystemVariableStringType) MysqlType() defines.MysqlType {
 	return defines.MYSQL_TYPE_VARCHAR
 }
 
@@ -1009,6 +1009,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_client"),
 		Default:           "utf8mb4",
 	},
+	"character_set_server": {
+		Name:              "character_set_server",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_server"),
+		Default:           "utf8mb4",
+	},
+	"character_set_database": {
+		Name:              "character_set_database",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("character_set_database"),
+		Default:           "utf8mb4",
+	},
 	"character_set_connection": {
 		Name:              "character_set_connection",
 		Scope:             ScopeBoth,
@@ -1065,6 +1081,94 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("time_zone"),
 		Default:           "SYSTEM",
 		UpdateSessVar:     updateTimeZone,
+	},
+	"auto_increment_increment": {
+		Name:              "auto_increment_increment",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableIntType("auto_increment_increment", 1, 65535, false),
+		Default:           int64(1),
+	},
+	"auto_increment_offset": {
+		Name:              "auto_increment_offset",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableIntType("auto_increment_offset", 1, 65535, false),
+		Default:           int64(1),
+	},
+	"init_connect": {
+		Name:              "init_connect",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("init_connect"),
+		Default:           "",
+	},
+	"interactive_timeout": {
+		Name:              "interactive_timeout",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableIntType("interactive_timeout", 1, 31536000, false),
+		Default:           int64(28800),
+	},
+	"lower_case_table_names": {
+		Name:              "lower_case_table_names",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("lower_case_table_names", 0, 2, false),
+		Default:           int64(0),
+	},
+	"net_write_timeout": {
+		Name:              "net_write_timeout",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("net_write_timeout", 1, 31536000, false),
+		Default:           int64(60),
+	},
+	"system_time_zone": {
+		Name:              "system_time_zone",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("system_time_zone"),
+		Default:           "",
+	},
+	"transaction_isolation": {
+		Name:              "transaction_isolation",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("SNAPSHOT-ISOLATION"),
+		Default:           "SNAPSHOT-ISOLATION",
+	},
+	"wait_timeout": {
+		Name:              "wait_timeout",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
+		Default:           int64(28800),
+	},
+	"sql_safe_updates": {
+		Name:              "sql_safe_updates",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("sql_safe_updates", 0, 1, false),
+		Default:           int64(0),
+	},
+	"profiling": {
+		Name:              "profiling",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling", 0, 1, false),
+		Default:           int64(0),
 	},
 }
 

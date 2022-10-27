@@ -14,7 +14,9 @@
 
 package containers
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 	switch typ.Oid {
@@ -54,11 +56,13 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 		vec = NewVector[types.Timestamp](typ, nullable, opts...)
 	case types.T_datetime:
 		vec = NewVector[types.Datetime](typ, nullable, opts...)
+	case types.T_time:
+		vec = NewVector[types.Time](typ, nullable, opts...)
 	case types.T_TS:
 		vec = NewVector[types.TS](typ, nullable, opts...)
 	case types.T_Rowid:
 		vec = NewVector[types.Rowid](typ, nullable, opts...)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		vec = NewVector[[]byte](typ, nullable, opts...)
 	default:
 		panic("not support")
@@ -70,9 +74,7 @@ func BuildBatch(
 	attrs []string,
 	colTypes []types.Type,
 	nullables []bool,
-	capacity int) *Batch {
-	opts := new(Options)
-	opts.Capacity = capacity
+	opts *Options) *Batch {
 	bat := NewBatch()
 	for i, attr := range attrs {
 		vec := MakeVector(colTypes[i], nullables[i], opts)

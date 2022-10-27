@@ -16,8 +16,9 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,13 +58,13 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 		meta:      meta,
 		scheduler: scheduler,
 	}
-	dbName := meta.GetSegment().GetTable().GetDB().GetName()
-	database, err := txn.GetDatabase(dbName)
+	dbId := meta.GetSegment().GetTable().GetDB().GetID()
+	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	relName := meta.GetSchema().Name
-	rel, err := database.GetRelationByName(relName)
+	tableId := meta.GetSegment().GetTable().GetID()
+	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return
 	}
@@ -128,6 +129,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
+	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, err := task.PrepareData(newMeta.MakeKey())
 	if err != nil {
@@ -138,52 +140,79 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newBlkData := newMeta.GetBlockData()
-	blockFile := newBlkData.GetBlockFile()
-
+	oldBlkData := oldBMeta.GetBlockData()
+	var deletes *containers.Batch
+	var deltaLoc string
+	if !oldBMeta.IsAppendable() {
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
+		if err != nil {
+			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
+		}
+	}
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
-		blockFile,
+		newBlkData.GetFs(),
 		task.txn.GetStartTS(),
 		newMeta,
-		preparer.Columns)
+		preparer.Columns,
+		deletes)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
-		ioTask.file.GetMeta().GetExtent(),
-		uint32(preparer.Columns.Length()))
-	logutil.Infof("node: %v", metaLoc)
+	metaLoc, err := blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+		ioTask.blocks[0].GetExtent(),
+		uint32(preparer.Columns.Length()),
+		ioTask.blocks)
+	if err != nil {
+		return err
+	}
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
+	if deletes != nil {
+		deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+			ioTask.blocks[1].GetExtent(),
+			0,
+			ioTask.blocks)
+		if err != nil {
+			return
+		}
+		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+			return err
+		}
+	}
+
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
 	// write ablock
-	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	if aBlkMeta.IsAppendable() {
+	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
-		var deletes *containers.Batch
-		aBlkData := aBlkMeta.GetBlockData()
-		aBlockFile := aBlkData.GetBlockFile()
-		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
+		data, err = oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
 			return
 		}
-		deletes, err = aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+		defer data.Close()
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
 			return
 		}
-		ablockTask := NewFlushABlkTask(
+		if deletes != nil {
+			defer deletes.Close()
+		}
+		ablockTask := NewFlushBlkTask(
 			tasks.WaitableCtx,
-			aBlockFile,
+			oldBlkData.GetFs(),
 			task.txn.GetStartTS(),
-			aBlkMeta,
+			oldBMeta,
 			data,
 			deletes,
 		)
@@ -193,23 +222,32 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
-			ablockTask.file.GetMeta().GetExtent(),
-			uint32(data.Length()))
+		var metaLocABlk string
+		metaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+			ablockTask.blocks[0].GetExtent(),
+			uint32(data.Length()),
+			ablockTask.blocks)
+		if err != nil {
+			return
+		}
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
 		if deletes != nil {
-			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
-				ablockTask.file.GetDelta().GetExtent())
-			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+			deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+				ablockTask.blocks[1].GetExtent(),
+				0,
+				ablockTask.blocks)
+			if err != nil {
+				return
+			}
+			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 				return err
 			}
 		}
-		if err = aBlkData.ReplayIndex(); err != nil {
+		if err = oldBlkData.ReplayIndex(); err != nil {
 			return err
 		}
-		aBlkData.FreeData()
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {

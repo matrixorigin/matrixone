@@ -222,7 +222,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 	}
 	buf[31] |= constZMInited
 	switch zm.typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		minv, maxv := zm.min.([]byte), zm.max.([]byte)
 		// write 31-byte prefix of minv
 		copy(buf[0:31], minv)
@@ -324,6 +324,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Date](buf[:4])
 		return nil
+	case types.T_time:
+		zm.min = types.DecodeFixed[types.Time](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Time](buf[:8])
+		return nil
 	case types.T_datetime:
 		zm.min = types.DecodeFixed[types.Datetime](buf[:8])
 		buf = buf[32:]
@@ -359,7 +364,7 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = buf[:types.RowidSize]
 		return nil
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		minBuf := make([]byte, buf[31]&0x7f)
 		copy(minBuf, buf[0:32])
 		maxBuf := make([]byte, 32)

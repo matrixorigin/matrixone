@@ -16,10 +16,11 @@ package logservice
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/zap"
 )
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
@@ -36,7 +37,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		// running as a result of store.startReplicas(), we just ignore the
 		// dragonboat.ErrShardAlreadyExist error below.
 		if err != dragonboat.ErrShardAlreadyExist {
-			logger.Error("failed to start hakeeper replica", zap.Error(err))
+			s.logger.Error("failed to start hakeeper replica", zap.Error(err))
 			return err
 		}
 	}
@@ -51,15 +52,38 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
-			logger.Error("failed to set initial cluster info", zap.Error(err))
+			s.logger.Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		logger.Info("initial cluster info set")
+		s.logger.Info("initial cluster info set")
 		break
 	}
+	for i := 0; i < checkBootstrapCycles; i++ {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if err := s.createInitTasks(ctx); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	return nil
+}
+
+func (s *Service) createInitTasks(ctx context.Context) error {
+	if err := s.store.taskScheduler.Create(ctx, []task.TaskMetadata{{
+		ID:       task.TaskCode_SystemInit.String(),
+		Executor: uint32(task.TaskCode_SystemInit),
+	}}); err != nil {
+		s.logger.Error("failed to create init tasks", zap.Error(err))
+		return err
+	}
+	s.logger.Info("init tasks created")
 	return nil
 }

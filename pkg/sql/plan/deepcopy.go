@@ -87,20 +87,23 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			TblName:      deleteTablesCtx.TblName,
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
+			IsHideKey:    deleteTablesCtx.IsHideKey,
+			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
 
 	for i, updateCtx := range node.UpdateCtxs {
 		newNode.UpdateCtxs[i] = &plan.UpdateCtx{
-			DbName:     updateCtx.DbName,
-			TblName:    updateCtx.TblName,
-			PriKey:     updateCtx.PriKey,
-			PriKeyIdx:  updateCtx.PriKeyIdx,
-			HideKey:    updateCtx.HideKey,
-			HideKeyIdx: updateCtx.HideKeyIdx,
-			OrderAttrs: make([]string, len(updateCtx.OrderAttrs)),
-			UpdateCols: make([]*ColDef, len(updateCtx.UpdateCols)),
-			OtherAttrs: make([]string, len(updateCtx.OtherAttrs)),
+			DbName:        updateCtx.DbName,
+			TblName:       updateCtx.TblName,
+			PriKey:        updateCtx.PriKey,
+			PriKeyIdx:     updateCtx.PriKeyIdx,
+			HideKey:       updateCtx.HideKey,
+			HideKeyIdx:    updateCtx.HideKeyIdx,
+			UpdateCols:    make([]*ColDef, len(updateCtx.UpdateCols)),
+			OtherAttrs:    make([]string, len(updateCtx.OtherAttrs)),
+			OrderAttrs:    make([]string, len(updateCtx.OrderAttrs)),
+			CompositePkey: DeepCopyColDef(updateCtx.GetCompositePkey()),
 		}
 		for j, col := range updateCtx.UpdateCols {
 			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
@@ -195,6 +198,7 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Precision: typ.Precision,
 		Size:      typ.Size,
 		Scale:     typ.Scale,
+		AutoIncr:  typ.AutoIncr,
 	}
 }
 
@@ -203,39 +207,62 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		Name:          col.Name,
-		Alg:           col.Alg,
-		Typ:           DeepCopyTyp(col.Typ),
-		Default:       DeepCopyDefault(col.Default),
-		AutoIncrement: col.AutoIncrement,
-		Primary:       col.Primary,
-		Pkidx:         col.Pkidx,
-		Comment:       col.Comment,
-		IsCPkey:       col.IsCPkey,
-		OnUpdate:      DeepCopyExpr(col.OnUpdate),
+		Name:     col.Name,
+		Alg:      col.Alg,
+		Typ:      DeepCopyTyp(col.Typ),
+		Default:  DeepCopyDefault(col.Default),
+		Primary:  col.Primary,
+		Pkidx:    col.Pkidx,
+		Comment:  col.Comment,
+		IsCPkey:  col.IsCPkey,
+		OnUpdate: DeepCopyExpr(col.OnUpdate),
 	}
 }
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name:               table.Name,
-		Cols:               make([]*plan.ColDef, len(table.Cols)),
-		Defs:               make([]*plan.TableDef_DefType, len(table.Defs)),
-		TableType:          table.TableType,
-		Createsql:          table.Createsql,
-		Name2ColIndex:      table.Name2ColIndex,
-		CompositePkey:      table.CompositePkey,
-		TableFunctionParam: make([]byte, len(table.TableFunctionParam)),
+		Name:          table.Name,
+		Cols:          make([]*plan.ColDef, len(table.Cols)),
+		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:     table.TableType,
+		Createsql:     table.Createsql,
+		Name2ColIndex: table.Name2ColIndex,
+		CompositePkey: nil,
+		IndexInfos:    make([]*IndexInfo, len(table.IndexInfos)),
 	}
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
-	copy(newTable.TableFunctionParam, table.TableFunctionParam)
+	if table.TblFunc != nil {
+		newTable.TblFunc = &plan.TableFunction{
+			Name:  table.TblFunc.Name,
+			Param: make([]byte, len(table.TblFunc.Param)),
+		}
+		copy(newTable.TblFunc.Param, table.TblFunc.Param)
+	}
+
 	// FIX ME: don't support now
 	// for idx, def := range table.Defs {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
 	// }
+
+	for table.CompositePkey != nil {
+		table.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	}
+	for idx, indexInfo := range table.IndexInfos {
+		newTable.IndexInfos[idx] = &IndexInfo{
+			TableName: indexInfo.TableName,
+			ColNames:  indexInfo.ColNames,
+			Cols:      make([]*plan.ColDef, len(indexInfo.Cols)),
+			Field: &plan.Field{
+				ColNames: indexInfo.Field.ColNames,
+			},
+		}
+		for i, col := range table.IndexInfos[idx].Cols {
+			newTable.IndexInfos[idx].Cols[i] = DeepCopyColDef(col)
+		}
+	}
 
 	for idx, def := range table.Defs {
 		switch defImpl := def.Def.(type) {
@@ -250,15 +277,18 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 				},
 			}
 		case *plan.TableDef_DefType_Idx:
-			idxDef := &plan.IndexDef{
-				Typ:      defImpl.Idx.GetTyp(),
-				Name:     defImpl.Idx.GetName(),
-				ColNames: make([]string, len(defImpl.Idx.ColNames)),
+			indexDef := &plan.IndexDef{
+				Fields: make([]*plan.Field, len(defImpl.Idx.Fields)),
 			}
-			copy(idxDef.ColNames, defImpl.Idx.ColNames)
+			copy(indexDef.IndexNames, defImpl.Idx.IndexNames)
+			copy(indexDef.TableNames, defImpl.Idx.TableNames)
+			copy(indexDef.Uniques, defImpl.Idx.Uniques)
+			for i := range indexDef.Fields {
+				copy(indexDef.Fields[i].ColNames, defImpl.Idx.Fields[i].ColNames)
+			}
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Idx{
-					Idx: idxDef,
+					Idx: indexDef,
 				},
 			}
 		case *plan.TableDef_DefType_View:
@@ -404,16 +434,133 @@ func DeepCopyPlan(pl *Plan) *Plan {
 				Query: DeepCopyQuery(pl.Query),
 			},
 		}
+
 	case *plan.Plan_Ins:
 		return &Plan{
 			Plan: &plan.Plan_Ins{
 				Ins: DeepCopyInsertValues(pl.Ins),
 			},
 		}
+
+	case *plan.Plan_Ddl:
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: DeepCopyDataDefinition(pl.Ddl),
+			},
+		}
+
 	default:
 		// only support query/insert plan now
 		return nil
 	}
+}
+
+func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
+	newDf := &plan.DataDefinition{
+		DdlType: old.DdlType,
+	}
+	if old.Query != nil {
+		newDf.Query = DeepCopyQuery(old.Query)
+	}
+
+	switch df := old.Definition.(type) {
+	case *plan.DataDefinition_CreateDatabase:
+		newDf.Definition = &plan.DataDefinition_CreateDatabase{
+			CreateDatabase: &plan.CreateDatabase{
+				IfNotExists: df.CreateDatabase.IfNotExists,
+				Database:    df.CreateDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_AlterDatabase:
+		newDf.Definition = &plan.DataDefinition_AlterDatabase{
+			AlterDatabase: &plan.AlterDatabase{
+				IfExists: df.AlterDatabase.IfExists,
+				Database: df.AlterDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_DropDatabase:
+		newDf.Definition = &plan.DataDefinition_DropDatabase{
+			DropDatabase: &plan.DropDatabase{
+				IfExists: df.DropDatabase.IfExists,
+				Database: df.DropDatabase.Database,
+			},
+		}
+
+	case *plan.DataDefinition_CreateTable:
+		newDf.Definition = &plan.DataDefinition_CreateTable{
+			CreateTable: &plan.CreateTable{
+				IfNotExists: df.CreateTable.IfNotExists,
+				Temporary:   df.CreateTable.Temporary,
+				Database:    df.CreateTable.Database,
+				TableDef:    DeepCopyTableDef(df.CreateTable.TableDef),
+			},
+		}
+
+	case *plan.DataDefinition_AlterTable:
+		newDf.Definition = &plan.DataDefinition_AlterTable{
+			AlterTable: &plan.AlterTable{
+				Table:    df.AlterTable.Table,
+				TableDef: DeepCopyTableDef(df.AlterTable.TableDef),
+			},
+		}
+
+	case *plan.DataDefinition_DropTable:
+		newDf.Definition = &plan.DataDefinition_DropTable{
+			DropTable: &plan.DropTable{
+				IfExists: df.DropTable.IfExists,
+				Database: df.DropTable.Database,
+				Table:    df.DropTable.Table,
+			},
+		}
+
+	case *plan.DataDefinition_CreateIndex:
+		newDf.Definition = &plan.DataDefinition_CreateIndex{
+			CreateIndex: &plan.CreateIndex{
+				IfNotExists: df.CreateIndex.IfNotExists,
+				Index:       df.CreateIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_AlterIndex:
+		newDf.Definition = &plan.DataDefinition_AlterIndex{
+			AlterIndex: &plan.AlterIndex{
+				Index: df.AlterIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_DropIndex:
+		newDf.Definition = &plan.DataDefinition_DropIndex{
+			DropIndex: &plan.DropIndex{
+				IfExists: df.DropIndex.IfExists,
+				Index:    df.DropIndex.Index,
+			},
+		}
+
+	case *plan.DataDefinition_TruncateTable:
+		newDf.Definition = &plan.DataDefinition_TruncateTable{
+			TruncateTable: &plan.TruncateTable{
+				Table: df.TruncateTable.Table,
+			},
+		}
+
+	case *plan.DataDefinition_ShowVariables:
+		showVariables := &plan.ShowVariables{
+			Global: df.ShowVariables.Global,
+			Where:  make([]*plan.Expr, len(df.ShowVariables.Where)),
+		}
+		for i, e := range df.ShowVariables.Where {
+			showVariables.Where[i] = DeepCopyExpr(e)
+		}
+
+		newDf.Definition = &plan.DataDefinition_ShowVariables{
+			ShowVariables: showVariables,
+		}
+
+	}
+
+	return newDf
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
@@ -452,6 +599,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			pc.Value = &plan.Const_Fval{Fval: c.Fval}
 		case *plan.Const_Dateval:
 			pc.Value = &plan.Const_Dateval{Dateval: c.Dateval}
+		case *plan.Const_Timeval:
+			pc.Value = &plan.Const_Timeval{Timeval: c.Timeval}
 		case *plan.Const_Datetimeval:
 			pc.Value = &plan.Const_Datetimeval{Datetimeval: c.Datetimeval}
 		case *plan.Const_Decimal64Val:

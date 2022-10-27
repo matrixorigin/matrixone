@@ -26,7 +26,7 @@ type Transaction struct {
 
 type TxCommitter interface {
 	CommitTx(*Transaction) error
-	AbortTx(*Transaction)
+	AbortTx(*Transaction) error
 }
 
 func NewTransaction(
@@ -63,9 +63,21 @@ func (t *Transaction) Commit(commitTime Time) error {
 	return nil
 }
 
-func (t *Transaction) Abort() {
+func (t *Transaction) Abort() error {
+	var e error
 	for committer := range t.committers {
-		committer.AbortTx(t)
+		if err := committer.AbortTx(t); err != nil {
+			e = err
+		}
 	}
 	t.State.Store(Aborted)
+	return e
+}
+
+func (t *Transaction) Copy() *Transaction {
+	newTx := *t
+	newTx.State = new(Atomic[TransactionState])
+	newTx.State.Store(t.State.Load())
+	newTx.committers = make(map[TxCommitter]struct{})
+	return &newTx
 }

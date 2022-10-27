@@ -52,7 +52,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.createEntry = e
 	return nil
 }
@@ -62,7 +62,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
-	db.store.dirtyMemo.recordCatalogChange()
+	db.store.txn.GetMemo().AddCatalogChange()
 	db.dropEntry = e
 	return nil
 }
@@ -156,17 +156,6 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 	return table.GetValue(id, row, colIdx)
 }
 
-func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	table, err := db.getOrSetTable(id.TableID)
-	if err != nil {
-		return err
-	}
-	if table.IsDeleted() {
-		return moerr.NewNotFound()
-	}
-	return table.Update(id, row, colIdx, v)
-}
-
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
@@ -174,6 +163,25 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 		factory = db.store.dataFactory.MakeTableFactory()
 	}
 	meta, err := db.entry.CreateTableEntry(schema, db.store.txn, factory)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
+	table.SetCreateEntry(meta)
+	return
+}
+
+func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation handle.Relation, err error) {
+	schema := def.(*catalog.Schema)
+	var factory catalog.TableDataFactory
+	if db.store.dataFactory != nil {
+		factory = db.store.dataFactory.MakeTableFactory()
+	}
+	meta, err := db.entry.CreateTableEntryWithTableId(schema, db.store.txn, factory, tableId)
 	if err != nil {
 		return
 	}
@@ -202,8 +210,50 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 	return
 }
 
+func (db *txnDB) DropRelationByID(id uint64) (relation handle.Relation, err error) {
+	hasNewTxnEntry, meta, err := db.entry.DropTableEntryByID(id, db.store.txn)
+	if err != nil {
+		return nil, err
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return nil, err
+	}
+	relation = newRelation(table)
+	if hasNewTxnEntry {
+		err = table.SetDropEntry(meta)
+	}
+	return
+}
+
+func (db *txnDB) UnsafeGetRelation(id uint64) (relation handle.Relation, err error) {
+	meta, err := db.entry.GetTableEntryByID(id)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
+	return
+}
+
 func (db *txnDB) GetRelationByName(name string) (relation handle.Relation, err error) {
-	meta, err := db.entry.GetTableEntry(name, db.store.txn)
+	meta, err := db.entry.TxnGetTableEntryByName(name, db.store.txn)
+	if err != nil {
+		return
+	}
+	table, err := db.getOrSetTable(meta.GetID())
+	if err != nil {
+		return
+	}
+	relation = newRelation(table)
+	return
+}
+
+func (db *txnDB) GetRelationByID(id uint64) (relation handle.Relation, err error) {
+	meta, err := db.entry.TxnGetTableEntryByID(id, db.store.txn)
 	if err != nil {
 		return
 	}
@@ -380,7 +430,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%s ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -424,7 +474,7 @@ func (db *txnDB) PrepareCommit() (err error) {
 		}
 	}
 
-	logutil.Debugf("Txn-%s PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
 	return
 }

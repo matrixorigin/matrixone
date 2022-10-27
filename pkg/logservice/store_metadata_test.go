@@ -59,7 +59,7 @@ func TestAddMetadataRejectDupl(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	cfg.Fill()
-	s := store{cfg: cfg}
+	s := store{cfg: cfg, logger: testLogger}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
 	s.addMetadata(10, 1)
 	s.addMetadata(10, 1)
