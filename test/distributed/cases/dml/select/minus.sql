@@ -51,20 +51,16 @@ select * from t2;
 (select col1 from t2) minus (select col3 from t2);
 
 (select col1 from t2) minus (select col1 from t2 limit 0);
--- @bvt:issue#5406
 (select col1 from t2) minus (select col2 from t2 limit 0);
--- @bvt:issue
 (select col1 from t2) minus (select col3 from t2 limit 0);
 
 (select col2 from t2) minus (select col1 from t2 limit 0);
 (select col2 from t2) minus (select col2 from t2 limit 0);
 (select col2 from t2) minus (select col3 from t2 limit 0);
 
--- @bvt:issue#5406
 (select col3 from t2) minus (select col1 from t2 limit 0);
 (select col3 from t2) minus (select col2 from t2 limit 0);
 (select col3 from t2) minus (select col3 from t2 limit 0);
--- @bvt:issue
 
 drop table t2;
 
@@ -180,16 +176,10 @@ set @a=1;
 prepare s1 from '(select a from t8 where a>?) minus (select b from t8 where b>?)';
 prepare s2 from '(select a from t8 where a>?)';
 
--- @bvt:issue#5403
 execute s1 using @a;
--- @bvt:issue
-
 execute s1 using @a, @a;
 execute s2 using @a;
-
--- @bvt:issue#5407
 execute s2 using @a, @a;
--- @bvt:issue
 
 deallocate prepare s1;
 deallocate prepare s2;

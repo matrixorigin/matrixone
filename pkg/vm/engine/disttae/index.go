@@ -12,23 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unixtimestamp
+package disttae
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
+
+const (
+	index_PrimaryKey      = memtable.Text("primary key")
+	index_BlockID_Time_OP = memtable.Text("block id, time, op")
+	index_Table           = memtable.Text("table")
+	index_Column          = memtable.Text("column")
+	index_Database        = memtable.Text("database")
 )
 
-var (
-	UnixTimestamp func([]types.Timestamp, []int64) []int64
-)
-
-func init() {
-	UnixTimestamp = unixTimestamp
+type ColumnsIndexDef struct {
+	Name    memtable.Text
+	Columns []int
 }
 
-func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
-	for i := range xs {
-		rs[i] = xs[i].Unix()
+func NewColumnsIndexDef(name memtable.Text, cols ...int) ColumnsIndexDef {
+	return ColumnsIndexDef{
+		Name:    name,
+		Columns: cols,
 	}
-	return rs
 }

@@ -1,4 +1,5 @@
 service-type = "CN"
+data-dir = "./mo-data"
 
 [log]
 level = "info"
@@ -13,7 +14,6 @@ service-addresses = [
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK"
-data-dir = "mo-data/local/cn"
 
 [[fileservice]]
 name = "S3"
@@ -22,7 +22,6 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
 
 [observability]
 disableTrace = true

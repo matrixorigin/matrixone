@@ -1,14 +1,34 @@
 # service node type, [DN|CN|LOG]
 service-type = "LOG"
+data-dir = "./mo-data"
 
 [log]
 level = "debug"
 format = "console"
 max-size = 512
 
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK"
+
+[[fileservice]]
+name = "S3"
+backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+
+[observability]
+statusPort = 7001
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32001",
+]
+
 [logservice]
 deployment-id = 1
-data-dir = "node-1-data"
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 raft-address = "127.0.0.1:32000"
 logservice-address = "127.0.0.1:32001"
@@ -25,30 +45,4 @@ num-of-dn-shards = 1
 num-of-log-shard-replicas = 1
 init-hakeeper-members = [
   "131072:7c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-]
-
-[logservice.HAKeeperConfig]
-tick-per-second = 1
-log-store-timeout = "20s"
-dn-store-timeout = "10s"
-
-[[fileservice]]
-name = "LOCAL"
-backend = "MEM"
-
-[[fileservice]]
-name = "S3"
-backend = "MEM"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
-
-[observability]
-statusPort = 7001
-
-[hakeeper-client]
-service-addresses = [
-  "127.0.0.1:32001",
 ]
