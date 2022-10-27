@@ -3466,10 +3466,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								if operateCatalog {
 									yes = false
 								}
-							}
-
-							if yes {
-								cache.add(dbName, entry.tableName, entry.privilegeId)
+								if yes {
+									cache.add(dbName, entry.tableName, entry.privilegeId)
+								}
 							}
 						}
 						if !yes {
