@@ -654,6 +654,10 @@ func (d Date) ToDatetime() Datetime {
 	return Datetime(int64(d) * secsPerDay * microSecsPerSec)
 }
 
+func (d Date) ToTime() Time {
+	return Time(0)
+}
+
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)

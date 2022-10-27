@@ -38,9 +38,10 @@ enum NodeState {
 message CNStore {
   string          UUID           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
-  uint64          Tick           = 4;
-  NodeState       State          = 5;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
+  uint64          Tick           = 5;
+  NodeState       State          = 6;
 }
 
 message DNStore {
@@ -91,7 +92,9 @@ message LogReplicaInfo {
 message CNStoreHeartbeat {
   string          UUID           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
+  bool            TaskServiceCreated    = 5;
 }
 
 
@@ -114,6 +117,8 @@ message LogStoreHeartbeat {
   // replica running on the current LogStore, it may not be accurate or
   // update to date due to various reasons. 
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+  // TaskServiceCreated task service is created at the current log node
+  bool            TaskServiceCreated    = 6;
 };
 
 // DNShardInfo contains information of a launched DN shard. 
@@ -137,6 +142,7 @@ message DNStoreHeartbeat {
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+  bool            TaskServiceCreated = 4;
 };
 
 message RSMState {
@@ -241,22 +247,66 @@ message TsoResponse {
 //
 
 enum HAKeeperUpdateType {
-  TickUpdate            = 0;
-  CNHeartbeatUpdate     = 1;
-  DNHeartbeatUpdate     = 2;
-  LogHeartbeatUpdate    = 3;
-  GetIDUpdate           = 4;
-  ScheduleCommandUpdate = 5;
-  SetStateUpdate        = 6;
-  InitialClusterUpdate  = 7;
+  TickUpdate              = 0;
+  CNHeartbeatUpdate       = 1;
+  DNHeartbeatUpdate       = 2;
+  LogHeartbeatUpdate      = 3;
+  GetIDUpdate             = 4;
+  ScheduleCommandUpdate   = 5;
+  SetStateUpdate          = 6;
+  InitialClusterUpdate    = 7;
+  SetInitTaskStateUpdate  = 8;
+  TaskTableUserUpdate     = 9;
 }
 
+// HAKeeperState state transition diagram
+//               HAKeeperCreated
+//                     │
+//                     │ cluster init info set
+//                     ▼
+//           HAKeeperBootstrapping
+//                     │
+//                     │ init schedule commands received
+//                     ▼
+//     HAKeeperBootstrapCommandsReceived
+//                     │
+//                     │
+//         ┌───────────┴───────────┐
+//         │ time out              │ bootstrap successfully
+//         ▼                       ▼
+// HAKeeperBootstrapFailed     HAKeeperRunning
+//
 enum HAKeeperState {
   HAKeeperCreated                    = 0;
   HAKeeperBootstrapping              = 1;
   HAKeeperBootstrapCommandsReceived  = 2;
   HAKeeperBootstrapFailed            = 3;
   HAKeeperRunning                    = 4;
+}
+
+// TaskInitState state transition diagram
+//        TaskInitNotStart
+//               │
+//               │ setTaskTableUser()
+//               ▼
+//        TaskInitStarted
+//               │
+//          ┌────┴────┐
+//          ▼         ▼
+// TaskInitFailed     TaskInitCompleted
+//
+enum TaskInitState {
+  TaskInitNotStart  = 0;
+  TaskInitStarted   = 1;
+  TaskInitFailed    = 2;
+  TaskInitCompleted = 3;
+}
+
+message TaskTableUser {
+  // Username for task table user
+  string Username = 1;
+  // Password for task table user
+  string Password = 2;
 }
 
 // Replica of the shard
@@ -298,18 +348,27 @@ message ShutdownStore {
 // ServiceType specifies type of service
 enum ServiceType {
   LogService = 0;
-  DnService  = 1;
+  DNService  = 1;
+  CNService  = 2;
 }
 
 // ScheduleCommand contains a shard schedule command.
 message ScheduleCommand {
   // UUID which store the ScheduleCommand is sent to
-  string UUID = 1;
-  bool Bootstrapping          = 2;
+  string            UUID            = 1;
+  bool              Bootstrapping   = 2;
+  ServiceType       ServiceType     = 3;
+  ConfigChange      ConfigChange    = 4;
+  ShutdownStore     ShutdownStore   = 5;
+  CreateTaskService CreateTaskService = 6;
+}
 
-  ConfigChange ConfigChange   = 3;
-  ServiceType ServiceType     = 4;
-  ShutdownStore ShutdownStore = 5;
+// CreateTaskService start task service at current node
+message CreateTaskService {
+  // User used to connect to the task database.
+  TaskTableUser User         = 1 [(gogoproto.nullable) = false];
+  // TaskDatabase task framework database.
+  string        TaskDatabase = 2;
 }
 
 message CommandBatch {
@@ -321,7 +380,10 @@ message CommandBatch {
 message CNStoreInfo {
   uint64          Tick           = 1;
   string          ServiceAddress = 2;
-  metadata.CNRole Role           = 3;
+  string          SQLAddress     = 3;
+  metadata.CNRole Role           = 4;
+
+  bool TaskServiceCreated = 5;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -336,6 +398,8 @@ message DNStoreInfo {
   uint64 Tick                 = 1;
   string ServiceAddress       = 2;
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+
+  bool TaskServiceCreated = 4;
 }
 
 // DNState contains all DN details known to the HAKeeper.
@@ -371,6 +435,8 @@ message LogStoreInfo {
   string ServiceAddress                       = 3;
   string GossipAddress                        = 4;
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+
+  bool TaskServiceCreated = 6;
 }
 
 message LogState {
@@ -394,6 +460,8 @@ message CheckerState {
   LogState LogState       = 4 [(gogoproto.nullable) = false];
   CNState CNState         = 5 [(gogoproto.nullable) = false];
   HAKeeperState State     = 6;
+  TaskInitState TaskState = 7;
+  TaskTableUser TaskTableUser = 8 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -402,12 +470,14 @@ message HAKeeperRSMState {
   uint64 NextID                              = 2;
   uint64 Term                                = 3;
   HAKeeperState State                        = 4;
-  map<string, CommandBatch> ScheduleCommands = 5 [(gogoproto.nullable) = false];
-  map<string, uint64> LogShards = 6;
-  CNState CNState               = 7  [(gogoproto.nullable) = false];
-  DNState DNState               = 8  [(gogoproto.nullable) = false];
-  LogState LogState             = 9  [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 10 [(gogoproto.nullable) = false];
+  TaskInitState TaskInitState                = 5;
+  map<string, CommandBatch> ScheduleCommands = 6 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 7;
+  CNState CNState               = 8  [(gogoproto.nullable) = false];
+  DNState DNState               = 9  [(gogoproto.nullable) = false];
+  LogState LogState             = 10  [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 11 [(gogoproto.nullable) = false];
+  TaskTableUser TaskTableUser   = 12 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

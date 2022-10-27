@@ -49,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -195,7 +194,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            fmtCtx.String(),
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            util.NowNS(),
+		RequestAt:            time.Now(),
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
@@ -392,7 +391,22 @@ func handleShowColumns(ses *Session) error {
 					row[2] = "NO"
 				}
 			}
-			row[4] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[4].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			switch originString {
+			case "uuid()":
+				row[4] = "UUID"
+			case "current_timestamp()":
+				row[4] = "CURRENT_TIMESTAMP"
+			case "":
+				row[4] = "NULL"
+			default:
+				row[4] = originString
+			}
 			row[5] = ""
 			row[6] = d[6]
 			mrs.AddRow(row)
@@ -417,7 +431,22 @@ func handleShowColumns(ses *Session) error {
 					row[3] = "NO"
 				}
 			}
-			row[5] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[5].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			switch originString {
+			case "uuid()":
+				row[5] = "UUID"
+			case "current_timestamp()":
+				row[5] = "CURRENT_TIMESTAMP"
+			case "":
+				row[5] = "NULL"
+			default:
+				row[5] = originString
+			}
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
@@ -807,6 +836,19 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]types.Datetime)
+				row[i] = vs[rowIndex].String2(precision)
+			}
+		}
+	case types.T_time:
+		precision := vec.Typ.Precision
+		if !nulls.Any(vec.Nsp) { //all data in this column are not null
+			vs := vec.Col.([]types.Time)
+			row[i] = vs[rowIndex].String2(precision)
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Time)
 				row[i] = vs[rowIndex].String2(precision)
 			}
 		}
@@ -1297,13 +1339,15 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		}
 		row[1] = value
 		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
-			if value == 1 {
-				row[1] = "on"
-			} else {
-				row[1] = "off"
+			v, ok := value.(int8)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
 			}
 		}
-
 		rows = append(rows, row)
 	}
 
@@ -1838,7 +1882,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	txnHandler := cwft.ses.GetTxnHandler()
 	if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
-	} else {
+	} else if cwft.plan.NeedImplicitTxn() {
 		cwft.proc.TxnOperator = txnHandler.GetTxn()
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
@@ -1994,6 +2038,10 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticatePrivilegeOfStatement checks the user can execute the statement
 func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	var havePrivilege bool
 	var err error
 	if ses.GetTenantInfo() != nil {
@@ -2023,6 +2071,10 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 
 // authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
 func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
@@ -3055,6 +3107,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_time:
+		col.SetColumnType(defines.MYSQL_TYPE_TIME)
 	case types.T_timestamp:
 		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
 	case types.T_decimal64:

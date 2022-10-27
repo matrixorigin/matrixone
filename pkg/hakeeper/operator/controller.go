@@ -92,10 +92,10 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(logState, dnState)
+			op.Check(logState, dnState, cnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -105,10 +105,10 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	dnState pb.DNState) (commands []pb.ScheduleCommand) {
+	dnState pb.DNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		step := op.Check(logState, dnState)
+		step := op.Check(logState, dnState, cnState)
 		var cmd pb.ScheduleCommand
 		switch st := step.(type) {
 		case AddLogService:
@@ -191,7 +191,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 					},
 					ChangeType: pb.StartReplica,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case RemoveDnReplica:
 			cmd = pb.ScheduleCommand{
@@ -205,7 +205,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 					},
 					ChangeType: pb.StopReplica,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case StopDnStore:
 			cmd = pb.ScheduleCommand{
@@ -213,7 +213,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 				ShutdownStore: &pb.ShutdownStore{
 					StoreID: st.StoreID,
 				},
-				ServiceType: pb.DnService,
+				ServiceType: pb.DNService,
 			}
 		case StopLogStore:
 			cmd = pb.ScheduleCommand{
@@ -222,6 +222,15 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 					StoreID: st.StoreID,
 				},
 				ServiceType: pb.LogService,
+			}
+		case CreateTaskService:
+			cmd = pb.ScheduleCommand{
+				UUID:        st.StoreID,
+				ServiceType: st.StoreType,
+				CreateTaskService: &pb.CreateTaskService{
+					User:         st.TaskUser,
+					TaskDatabase: "mo_task",
+				},
 			}
 		}
 
