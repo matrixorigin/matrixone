@@ -144,7 +144,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	var deletes *containers.Batch
 	var deltaLoc string
 	if !oldBMeta.IsAppendable() {
-		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS())
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
 			return
 		}
@@ -196,12 +196,12 @@ func (task *compactBlockTask) Execute() (err error) {
 	// write ablock
 	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
-		data, err = oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
+		data, err = oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
 			return
 		}
 		defer data.Close()
-		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS())
+		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
 			return
 		}
