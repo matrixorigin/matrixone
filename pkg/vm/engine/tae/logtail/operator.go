@@ -49,7 +49,7 @@ func (op *BoundOperator) Run() (err error) {
 		seg *catalog.SegmentEntry
 		blk *catalog.BlockEntry
 	)
-	dirty := op.reader.GetDirty()
+	dirty, _ := op.reader.GetDirty()
 	for _, tblDirty := range dirty.Tables {
 		if db, err = op.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
 			return

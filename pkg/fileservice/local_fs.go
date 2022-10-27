@@ -41,13 +41,15 @@ type LocalFS struct {
 
 var _ FileService = new(LocalFS)
 
+const (
+	localFSSentinelFileName = ".thisisalocalfileservicedir"
+)
+
 func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
 ) (*LocalFS, error) {
-
-	const sentinelFileName = "thisisalocalfileservicedir"
 
 	// ensure dir
 	f, err := os.Open(rootPath)
@@ -57,7 +59,7 @@ func NewLocalFS(
 		if err != nil {
 			return nil, err
 		}
-		err = os.WriteFile(filepath.Join(rootPath, sentinelFileName), nil, 0644)
+		err = os.WriteFile(filepath.Join(rootPath, localFSSentinelFileName), nil, 0644)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +81,7 @@ func NewLocalFS(
 			}
 		} else {
 			// not empty, check sentinel file
-			_, err := os.Stat(filepath.Join(rootPath, sentinelFileName))
+			_, err := os.Stat(filepath.Join(rootPath, localFSSentinelFileName))
 			if os.IsNotExist(err) {
 				return nil, moerr.NewInternalError("%s is not a file service dir", rootPath)
 			} else if err != nil {
@@ -391,8 +393,9 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 			return nil, err
 		}
 		fileSize := info.Size()
-		nBlock := ceilingDiv(fileSize, _BlockContentSize)
+		nBlock := ceilingDiv(fileSize, _BlockSize)
 		contentSize := fileSize - _ChecksumSize*nBlock
+
 		ret = append(ret, DirEntry{
 			Name:  name,
 			IsDir: entry.IsDir(),
