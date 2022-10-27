@@ -79,7 +79,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
 		for j := range tmpBat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
@@ -92,21 +91,19 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 
 		if updateCtx.CPkeyColDef != nil {
-			err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
-			if err != nil {
-				names := util.SplitCompositePrimaryKeyColumnName(updateCtx.CPkeyColDef.Name)
-				for _, name := range names {
-					for i := range tmpBat.Vecs {
-						if tmpBat.Attrs[i] == name {
-							if nulls.Any(tmpBat.Vecs[i].Nsp) {
-								tmpBat.Clean(proc.Mp())
-								return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
-							}
+			names := util.SplitCompositePrimaryKeyColumnName(updateCtx.CPkeyColDef.Name)
+			for _, name := range names {
+				for i := range tmpBat.Vecs {
+					if tmpBat.Attrs[i] == name {
+						if nulls.Any(tmpBat.Vecs[i].Nsp) {
+							tmpBat.Clean(proc.Mp())
+							return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
 						}
 					}
 				}
 			}
 		}
+
 		tmpBat.Clean(proc.Mp())
 	}
 
@@ -130,7 +127,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 		tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 		batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
 		// in update, we can get a batch[b(update), b(old)]
 		// we should use old b as delete info
@@ -176,6 +172,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 			b.Clean(proc.Mp())
 		}
+
+		//fill cpkey column
+		if updateCtx.CPkeyColDef != nil {
+			err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
+			if err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+		}
+		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
 		err = updateCtx.TableSource.Write(ctx, tmpBat)
 		if err != nil {
