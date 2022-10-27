@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -910,7 +910,12 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 	vs := vector.MustTCols[types.Rowid](vec)
 	for i, v := range vs {
 		for j, part := range tbl.parts {
-			if part.Get(v, txn.meta.SnapshotTS) {
+			var blks []BlockMeta
+
+			if tbl.meta != nil {
+				blks = tbl.meta.blocks[j]
+			}
+			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
 				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
@@ -956,9 +961,10 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok &&
-				blk.CommitTs.Less(blockInfos[i].CommitTs) {
-				mp[blk.BlockID] = blockInfos[i]
+			if blk, ok := mp[blockInfos[i].BlockID]; ok {
+				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
+					mp[blk.BlockID] = blockInfos[i]
+				}
 			} else {
 				mp[blk.BlockID] = blockInfos[i]
 			}
@@ -968,6 +974,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 			blockInfos = append(blockInfos, blk)
 		}
 	}
+
 	metas := make([]BlockMeta, len(rows))
 
 	idxs := make([]uint16, columnLength)
@@ -1050,65 +1057,24 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func appendBytes(v any, buf *bytes.Buffer) {
-	if v == nil {
-		panic("should not be nil")
+func inParttion(v types.Rowid, part *Partition,
+	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+	if part.Get(v, ts) {
+		return true
 	}
-	switch v := v.(type) {
-	case bool:
-		if v {
-			buf.WriteByte(byte(1))
-		} else {
-			buf.WriteByte(byte(0))
+	if len(blocks) == 0 {
+		return false
+	}
+	blkId := rowIDToBlockID(RowID(v))
+	for _, blk := range blocks {
+		if blk.Info.BlockID == blkId {
+			return true
 		}
-	case int8:
-		buf.Write(types.EncodeInt8(&v))
-	case int16:
-		buf.Write(types.EncodeInt16(&v))
-	case int32:
-		buf.Write(types.EncodeInt32(&v))
-	case int64:
-		buf.Write(types.EncodeInt64(&v))
-	case uint8:
-		buf.Write(types.EncodeUint8(&v))
-	case uint16:
-		buf.Write(types.EncodeUint16(&v))
-	case uint32:
-		buf.Write(types.EncodeUint32(&v))
-	case uint64:
-		buf.Write(types.EncodeUint64(&v))
-	case float32:
-		buf.Write(types.EncodeFloat32(&v))
-	case float64:
-		buf.Write(types.EncodeFloat64(&v))
-	case []byte:
-		buf.Write(v)
-	case types.Date:
-		buf.Write(types.EncodeDate(&v))
-	case types.Datetime:
-		buf.Write(types.EncodeDatetime(&v))
-	case types.Timestamp:
-		buf.Write(types.EncodeTimestamp(&v))
-	case types.Decimal64:
-		buf.Write(types.EncodeDecimal64(&v))
-	case types.Decimal128:
-		buf.Write(types.EncodeDecimal128(&v))
-	case types.TS:
-		buf.Write(v[:])
-	case types.Rowid:
-		buf.Write(v[:])
-	case types.Uuid:
-		buf.Write(v[:])
-	case memtable.ID:
-		var id uint64
-
-		id = uint64(v)
-		buf.Write(types.EncodeUint64(&id))
-	default:
-		panic(fmt.Sprintf("unknown type: %T", v))
 	}
+	return false
 }
 
+// transfer DataValue to rows
 func genRow(val *DataValue, cols []string) []any {
 	row := make([]any, len(cols))
 	for i, col := range cols {
@@ -1160,30 +1126,27 @@ func genRow(val *DataValue, cols []string) []any {
 	return row
 }
 
-func genDatabaseIndexKey(databaseName string, accountId uint32) string {
-	var buf bytes.Buffer
+func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Database,
+		memtable.ToOrdered([]byte(databaseName)),
+		memtable.ToOrdered(accountId),
+	}
 
-	buf.WriteByte(1) // not null
-	buf.WriteString(databaseName)
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint32(&accountId))
-	return buf.String()
 }
 
-func genTableIndexKey(tableName string, databaseId uint64) string {
-	var buf bytes.Buffer
-
-	buf.WriteByte(1) // not null
-	buf.WriteString(tableName)
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint64(&databaseId))
-	return buf.String()
+func genTableIndexKey(tableName string, databaseId uint64, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Table,
+		memtable.ToOrdered([]byte(tableName)),
+		memtable.ToOrdered(databaseId),
+		memtable.ToOrdered(accountId),
+	}
 }
 
-func genColumnIndexKey(id uint64) string {
-	var buf bytes.Buffer
-
-	buf.WriteByte(1) // not null
-	buf.Write(types.EncodeUint64(&id))
-	return buf.String()
+func genColumnIndexKey(id uint64) memtable.Tuple {
+	return memtable.Tuple{
+		index_Column,
+		memtable.ToOrdered(id),
+	}
 }

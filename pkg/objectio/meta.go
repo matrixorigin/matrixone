@@ -14,6 +14,12 @@
 
 package objectio
 
+import (
+	"bytes"
+	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
 // +-------------+---------------+--------------+---------------+---------------+----------------+
@@ -124,4 +130,45 @@ type Header struct {
 	magic   uint64
 	version uint16
 	dummy   [22]byte
+}
+
+type Footer struct {
+	magic      uint64
+	blockCount uint32
+	extents    []Extent
+}
+
+func (f *Footer) UnMarshalFooter(data []byte) error {
+	var err error
+	footer := data[len(data)-FooterSize:]
+	FooterCache := bytes.NewBuffer(footer)
+	if err = binary.Read(FooterCache, endian, &f.blockCount); err != nil {
+		return err
+	}
+	if err = binary.Read(FooterCache, endian, &f.magic); err != nil {
+		return err
+	}
+	if f.magic != uint64(Magic) {
+		return moerr.NewInternalError("object io: invalid footer")
+	}
+	if f.blockCount*ExtentTypeSize+FooterSize > uint32(len(data)) {
+		return nil
+	} else {
+		f.extents = make([]Extent, f.blockCount)
+	}
+	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
+	ExtentsCache := bytes.NewBuffer(extents)
+	for i := 0; i < int(f.blockCount); i++ {
+		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
+			return err
+		}
+		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
+			return err
+		}
+		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
+			return err
+		}
+	}
+
+	return err
 }

@@ -91,7 +91,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	PrintScope(nil, []*Scope{c.scope})
+	// XXX PrintScope has a none-trivial amount of logging
+	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()

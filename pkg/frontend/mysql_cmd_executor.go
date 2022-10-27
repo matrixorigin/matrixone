@@ -391,7 +391,22 @@ func handleShowColumns(ses *Session) error {
 					row[2] = "NO"
 				}
 			}
-			row[4] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[4].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			switch originString {
+			case "uuid()":
+				row[4] = "UUID"
+			case "current_timestamp()":
+				row[4] = "CURRENT_TIMESTAMP"
+			case "":
+				row[4] = "NULL"
+			default:
+				row[4] = originString
+			}
 			row[5] = ""
 			row[6] = d[6]
 			mrs.AddRow(row)
@@ -416,7 +431,22 @@ func handleShowColumns(ses *Session) error {
 					row[3] = "NO"
 				}
 			}
-			row[5] = "NULL"
+			def := &plan.Default{}
+			defaultData := d[5].([]uint8)
+			if err := types.Decode(defaultData, def); err != nil {
+				return err
+			}
+			originString := def.GetOriginString()
+			switch originString {
+			case "uuid()":
+				row[5] = "UUID"
+			case "current_timestamp()":
+				row[5] = "CURRENT_TIMESTAMP"
+			case "":
+				row[5] = "NULL"
+			default:
+				row[5] = originString
+			}
 			row[6] = ""
 			row[7] = d[7]
 			row[8] = d[8]
@@ -470,7 +500,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	goID := GetRoutineId()
 
-	logutil.Infof("goid %d \n", goID)
+	logutil.Debugf("goid %d \n", goID)
 	enableProfile := ses.GetParameterUnit().SV.EnableProfileGetDataFromPipeline
 
 	var cpuf *os.File = nil
@@ -542,7 +572,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	//logutil.Infof("row group -+> %v ", oq.getData())
+	//logutil.Debugf("row group -+> %v ", oq.getData())
 
 	err := oq.flush()
 	if err != nil {
@@ -1309,13 +1339,15 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		}
 		row[1] = value
 		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
-			if value == 1 {
-				row[1] = "on"
-			} else {
-				row[1] = "off"
+			v, ok := value.(int8)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
 			}
 		}
-
 		rows = append(rows, row)
 	}
 
@@ -2006,6 +2038,10 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 
 // authenticatePrivilegeOfStatement checks the user can execute the statement
 func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	var havePrivilege bool
 	var err error
 	if ses.GetTenantInfo() != nil {
@@ -2035,6 +2071,10 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 
 // authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
 func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.skipAuthForSpecialUser() {
+		return nil
+	}
+
 	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
@@ -2707,7 +2747,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		}
 	}()
 
-	logutil.Infof("cmd %v", req.GetCmd())
+	logutil.Debugf("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
 	ses.SetCmd(req.GetCmd())
@@ -2890,7 +2930,7 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
-	logutil.Info("----close mce")
+	logutil.Debug("----close mce")
 	ses := mce.GetSession()
 	if ses != nil {
 		err := ses.TxnRollback()

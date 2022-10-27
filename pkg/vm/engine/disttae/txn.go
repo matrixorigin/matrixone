@@ -16,8 +16,6 @@ package disttae
 
 import (
 	"context"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -55,22 +54,25 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	name string) (*table, []engine.TableDef, error) {
 	accountId := getAccountId(ctx)
-	/*
-		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
-			genTableInfoExpr(accountId, databaseId, name))
-	*/
-	key := genTableIndexKey(name, databaseId)
-	rows, err := txn.getRowsByIndex(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], key, catalog.MoTablesSchema,
+	key := genTableIndexKey(name, databaseId, accountId)
+	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, "",
+		txn.dnStores[:1], catalog.MoTablesSchema, key,
 		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(rows) != 1 {
-		return nil, nil, moerr.NewInvalidInput("table is not unique")
+		return nil, nil, moerr.NewDuplicate()
 	}
 	row := rows[0]
+	/*
+		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			txn.dnStores[:1], catalog.MoTablesTableDefs, catalog.MoTablesSchema,
+			genTableInfoExpr(accountId, databaseId, name))
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
 	tbl := new(table)
 	tbl.primaryIdx = -1
 	tbl.tableId = row[catalog.MO_TABLES_REL_ID_IDX].(uint64)
@@ -83,9 +85,12 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 		rows, err := txn.getRows(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			txn.dnStores[:1], catalog.MoColumnsTableDefs, catalog.MoColumnsSchema,
 			genColumnInfoExpr(accountId, databaseId, tbl.tableId))
+		if err != nil {
+			return nil, nil, err
+		}
 	*/
-	rows, err = txn.getRowsByIndex(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-		txn.dnStores[:1], genColumnIndexKey(tbl.tableId), catalog.MoColumnsSchema,
+	rows, err = txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, "",
+		txn.dnStores[:1], catalog.MoColumnsSchema, genColumnIndexKey(tbl.tableId),
 		genColumnInfoExpr(accountId, databaseId, tbl.tableId))
 	if err != nil {
 		return nil, nil, err
@@ -141,20 +146,19 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
 	key := genDatabaseIndexKey(name, accountId)
-	rows, err := txn.getRowsByIndex(ctx, "", catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], key, []string{
+	rows, err := txn.getRowsByIndex(catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, "",
+		txn.dnStores[:1], []string{
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
 			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		}, genDatabaseIdExpr(accountId, name))
+		}, key, genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
 	}
 	if len(rows) != 1 {
-		return 0, moerr.NewInvalidInput("table is not unique")
+		return 0, moerr.NewDuplicate()
 	}
 	/*
-		accountId := getAccountId(ctx)
 		row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
 			catalog.MoDatabaseTableDefs, []string{
 				catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
@@ -165,7 +169,6 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 		if err != nil {
 			return 0, err
 		}
-		return row[0].(uint64), nil
 	*/
 	return rows[0][0].(uint64), nil
 }
@@ -177,7 +180,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 		for i, dnStore := range txn.dnStores {
 			rows, err := txn.getRows(ctx, name, databaseId, 0,
 				[]DNStore{dnStore}, catalog.MoTableMetaDefs, catalog.MoTableMetaSchema, nil)
-			if err != nil && strings.Contains(err.Error(), "empty table") {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
 			}
 			if err != nil {
@@ -266,7 +269,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
@@ -276,7 +279,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		bat.Clean(txn.proc.Mp())
 	}
 	if len(rows) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
@@ -292,7 +295,7 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.NewInternalError("empty table: %v.%v", databaseId, tableId)
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
@@ -304,9 +307,8 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 	return rows, nil
 }
 
-func (txn *Transaction) getRowsByIndex(ctx context.Context, name string,
-	databaseId uint64, tableId uint64, dnList []DNStore, key string,
-	columns []string, expr *plan.Expr) ([][]any, error) {
+func (txn *Transaction) getRowsByIndex(databaseId, tableId uint64, name string,
+	dnList []DNStore, columns []string, index memtable.Tuple, expr *plan.Expr) ([][]any, error) {
 	var rows [][]any
 
 	deletes := make(map[types.Rowid]uint8)
@@ -387,13 +389,13 @@ func (txn *Transaction) getRowsByIndex(ctx context.Context, name string,
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		tuples, ok := parts[i].GetRowsByIndex(key, columns, deletes, txn.meta.SnapshotTS)
-		if ok {
+		tuples, err := parts[i].GetRowsByIndex(txn.meta.SnapshotTS, index, columns, deletes)
+		if err == nil {
 			rows = append(rows, tuples...)
 		}
 	}
 	if len(rows) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return rows, nil
 }
@@ -562,13 +564,15 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		return true
 	}
 	// return true anyway
-	if expr != nil {
-		return true
-	}
-	columns := getColumnsByExpr(expr)
+	// if expr != nil {
+	// 	return true
+	// }
+
+	// key = expr's ColPos,  value = tableDef's ColPos
+	columnMap := getColumnsByExpr(expr, tableDef)
 
 	// if expr match no columns, just eval expr
-	if len(columns) == 0 {
+	if len(columnMap) == 0 {
 		bat := batch.NewWithSize(0)
 		ifNeed, err := evalFilterExpr(expr, bat, proc)
 		if err != nil {
@@ -576,7 +580,18 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		}
 		return ifNeed
 	}
-	sort.Ints(columns)
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
 
 	// get min max data from Meta
 	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
@@ -585,16 +600,14 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	}
 
 	// use all min/max data to build []vectors.
-	maxCol := columns[len(columns)-1] + 1
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
-	bat := batch.NewWithSize(maxCol)
-	cols := columns
-	j := int32(0)
-	for i := 0; i < maxCol; i++ {
-		if i == cols[0] {
-			bat.SetVector(j, buildVectors[j])
-			j++
-			cols = cols[1:]
+	bat := batch.NewWithSize(maxCol + 1)
+	for k, v := range columnMap {
+		for i, realIdx := range columns {
+			if realIdx == v {
+				bat.SetVector(int32(k), buildVectors[i])
+				break
+			}
 		}
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
