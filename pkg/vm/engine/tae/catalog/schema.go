@@ -506,7 +506,9 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 				panic(err)
 			}
 			def.Default = Default{
-				Expr: expr,
+				Expr:         expr,
+				OriginString: pDefault.OriginString,
+				NullAbility:  pDefault.NullAbility,
 			}
 		}
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
@@ -518,13 +520,18 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
-			pupdate := &plan.Expr{}
-			types.Decode(data, pupdate)
-			update, err := pupdate.Marshal()
+			pUpdate := &plan.OnUpdate{
+				Expr: &plan.Expr{},
+			}
+			types.Decode(data, pUpdate)
+			expr, err := pUpdate.Expr.Marshal()
 			if err != nil {
 				panic(err)
 			}
-			def.OnUpdate = update
+			def.OnUpdate = OnUpdate{
+				Expr:         expr,
+				OriginString: pUpdate.OriginString,
+			}
 		}
 		offset++
 	}
@@ -580,6 +587,17 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		Expr:         bs,
 		OriginString: attr.Default.OriginString,
 	}
+	var attrOnUpdate OnUpdate
+	if attr.OnUpdate != nil && attr.OnUpdate.Expr != nil {
+		ps, err := attr.OnUpdate.Expr.Marshal()
+		if err != nil {
+			return err
+		}
+		attrOnUpdate = OnUpdate{
+			Expr:         ps,
+			OriginString: attr.OnUpdate.OriginString,
+		}
+	}
 	def := &ColDef{
 		Name:          attr.Name,
 		Type:          attr.Type,
@@ -591,6 +609,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		NullAbility:   attrDefault.NullAbility,
 		Default:       attrDefault,
 		AutoIncrement: attr.AutoIncrement,
+		OnUpdate:      attrOnUpdate,
 	}
 	return s.AppendColDef(def)
 }
