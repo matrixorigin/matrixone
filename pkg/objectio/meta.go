@@ -159,13 +159,13 @@ func (f *Footer) UnMarshalFooter(data []byte) error {
 	extents := data[len(data)-int(FooterSize+f.blockCount*ExtentTypeSize):]
 	ExtentsCache := bytes.NewBuffer(extents)
 	for i := 0; i < int(f.blockCount); i++ {
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
+		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
 			return err
 		}
 		if err = binary.Read(ExtentsCache, endian, &f.extents[i].length); err != nil {
 			return err
 		}
-		if err = binary.Read(ExtentsCache, endian, &f.extents[i].offset); err != nil {
+		if err = binary.Read(ExtentsCache, endian, &f.extents[i].originSize); err != nil {
 			return err
 		}
 	}
