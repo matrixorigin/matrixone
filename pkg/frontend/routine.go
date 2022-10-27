@@ -122,7 +122,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		quit := false
 		select {
 		case <-routineCtx.Done():
-			logutil.Infof("-----cancel routine")
+			logutil.Debugf("-----cancel routine")
 			quit = true
 			if counted {
 				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
@@ -167,7 +167,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		}
 
 		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
+			logutil.Debugf("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 
 		cancelRequestFunc()
