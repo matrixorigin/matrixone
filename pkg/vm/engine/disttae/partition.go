@@ -86,7 +86,14 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	p.IterDeletedRowIDs(ctx, []uint64{ /*TODO*/ }, ts, func(rowID RowID) bool {
+	if len(blks) == 0 {
+		return blks, deletes
+	}
+	ids := make([]uint64, len(blocks))
+	for i := range blocks {
+		ids[i] = blocks[i].Info.BlockID
+	}
+	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
 		deletes[id] = append(deletes[id], int(offset))
 		return true
@@ -354,7 +361,7 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(tx.Time)
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
