@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -1578,13 +1577,13 @@ func (pc *privilegeCache) invalidate() {
 	pc.storeForTable2.Clear()
 	pc.storeForTable3.Clear()
 	pc.storeForDatabase2.Clear()
-	ratio := float64(0)
-	if total == 0 {
-		ratio = 0
-	} else {
-		ratio = float64(hit) / float64(total)
-	}
-	logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
+	//ratio := float64(0)
+	//if total == 0 {
+	//	ratio = 0
+	//} else {
+	//	ratio = float64(hit) / float64(total)
+	//}
+	//logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
 }
 
 // verifiedRole holds the role info that has been checked
