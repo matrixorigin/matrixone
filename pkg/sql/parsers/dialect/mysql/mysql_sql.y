@@ -569,7 +569,7 @@ import (
 %type <indexHintScope> index_hint_scope
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
-
+%type <updateList> on_duplicate_key_update_opt
 %start start_command
 
 %%
