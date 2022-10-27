@@ -195,9 +195,6 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 func (be *MVCCChain) HasCommittedNode() bool {
 	var found bool
 	be.LoopChain(func(n txnif.MVCCNode) bool {
-		if found {
-			return false
-		}
 		if n.IsCommitted() {
 			found = true
 			return false
