@@ -15,20 +15,7 @@ docker run -d -p 6001:6001 -v ~/tmp/docker_loaddata_demo:/ssb-dbgen-path:rw --na
 
 This typical installation maps its local path *~/tmp/docker_loaddata_demo* to a inner-container path */ssb-dbgen-path*.
 
-## Method 1: Using the `Source` command in MySQL Client
-
-You can execute an SQL script file using the `source` command or `\.` command in MySQL client.
-
-```
-mysql> source file_name
-mysql> \. file_name
-```
-
-Usually `source` is used to execute many SQL statements, you can write your database&table creation, insert data in one SQL file and execute this file with `source` in MySQL Client. Each statement is a separate line, the lines starting with `--` or wrapped with `/*`  are considered as comments and will be ignored.
-
-If your SQL is from `mysqldump`, please refer to this [tutorial](../../../Migrate/migrate-from-mysql-to-matrixone.md) about how to modify the SQL file to adapt to MatrixOne format.
-
-## Method 2: Using the `Load data` command in MySQL Client
+## Using the `Load data` command in MySQL Client
 
 You can use `Load Data` to import data from big data files. Currently, MatrixOne only supports `csv` files.
 
