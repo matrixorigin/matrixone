@@ -72,7 +72,7 @@ func (d *Database) Truncate(ctx context.Context, relName string) error {
 	if err != nil {
 		return err
 	}
-	oldId, _ := strconv.ParseInt(rel.GetTableID(ctx), 10, 64)
+	oldId, _ := strconv.ParseUint(rel.GetTableID(ctx), 10, 64)
 
 	_, err = DoTxnRequest[TruncateRelationResp](
 		ctx,
