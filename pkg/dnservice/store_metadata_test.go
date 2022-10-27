@@ -30,6 +30,7 @@ func TestInitMetadata(t *testing.T) {
 	assert.NoError(t, err)
 
 	s := &store{logger: logutil.GetPanicLogger(), metadataFileService: fs}
+	s.cfg = &Config{UUID: "1"}
 	s.mu.metadata.UUID = "1"
 	s.mu.metadata.Shards = append(s.mu.metadata.Shards, metadata.DNShard{ReplicaID: 1})
 	assert.NoError(t, s.initMetadata())
@@ -55,7 +56,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 		},
 	}
 	assert.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
-		FilePath: metadataFile,
+		FilePath: getMetadataFile(value.UUID),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -66,6 +67,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 	}))
 
 	s := &store{logger: logutil.GetPanicLogger(), metadataFileService: fs}
+	s.cfg = &Config{UUID: "dn1"}
 	s.mu.metadata.UUID = "dn1"
 	assert.NoError(t, s.initMetadata())
 	assert.Equal(t, value, s.mu.metadata)
@@ -85,7 +87,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		UUID: "dn1",
 	}
 	assert.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
-		FilePath: metadataFile,
+		FilePath: getMetadataFile(value.UUID),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,

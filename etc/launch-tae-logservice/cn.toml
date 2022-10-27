@@ -1,5 +1,6 @@
 # service node type, [DN|CN|LOG]
 service-type = "CN"
+data-dir = "./mo-data"
 
 [log]
 level = "debug"
@@ -10,13 +11,11 @@ max-size = 512
 [hakeeper-client]
 service-addresses = [
     "127.0.0.1:32001",
-    "127.0.0.1:32011",
-    "127.0.0.1:32021",
 ]
 
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
 
 [[fileservice]]
 name = "S3"
@@ -25,18 +24,15 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "store"
 
 [cn]
-uuid = "dd1dccb4-4d3c-41f8-b483-5351dc7a41bf"
-listen-address = "127.0.0.1:6002"
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+listen-address = "127.0.0.1:3307"
 role = "TP"
 
 [cn.Engine]
-type = "memory"
-
-[cn.frontend]
-port = 6002
+type = "tae"
+logstore = "logservice"
 
 [observability]
-statusPort = 9002
+statusPort = 9001
