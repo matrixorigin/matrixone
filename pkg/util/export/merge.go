@@ -148,10 +148,10 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 // valid check missing init elems. Panic with has missing elems.
 func (m *Merge) valid() {
 	if m.Table == nil {
-		panic(moerr.NewInternalError("Merge Task missing input 'Table'"))
+		panic(moerr.NewInternalError("merge task missing input 'Table'"))
 	}
 	if m.FS == nil {
-		panic(moerr.NewInternalError("Merge Task missing input 'FileService'"))
+		panic(moerr.NewInternalError("merge task missing input 'FileService'"))
 	}
 }
 
@@ -188,10 +188,13 @@ func (m *Merge) Main(ts time.Time) error {
 	if m.datetime.IsZero() {
 		return moerr.NewInternalError("Merge Task missing input 'datetime'")
 	}
-	logutil.Debugf("Merge start on %s, %v", m.Table.GetIdentify(), m.datetime)
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
+	}
+	if len(accounts) == 0 {
+		logutil.Info("merge find empty data")
+		return nil
 	}
 	for _, account := range accounts {
 		if !account.IsDir {
@@ -521,7 +524,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 		args := task.Metadata.Context
 		ts := time.Now()
-		logutil.Infof("try to merge '%s' at %v", args, ts)
+		logutil.Infof("start merge '%s' at %v", args, ts)
 
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]
