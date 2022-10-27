@@ -212,6 +212,18 @@ func testFileService(
 				assert.Equal(t, parts2[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
 			}
 
+			// list
+			entries, err := fs.List(ctx, "/")
+			assert.Nil(t, err)
+			for _, entry := range entries {
+				if entry.Name != filePath {
+					continue
+				}
+				assert.Equal(t, filePath, entry.Name)
+				assert.Equal(t, false, entry.IsDir)
+				assert.Equal(t, int64(len(content)), entry.Size)
+			}
+
 		}
 	})
 
