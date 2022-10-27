@@ -4050,19 +4050,19 @@ view_recursive_opt:
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.CreateAccount{
-        IfNotExists:$3,
-                Name:$4,
-                AuthOption:$5,
-                 StatusOption:$6,
-                Comment:$7,
-    }
+   		$$ = &tree.CreateAccount{
+        	IfNotExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+    	}
     }
 
 account_name:
-    ID
+    ident
     {
-    $$ = $1
+    	$$ = $1
     }
 
 account_auth_option:
@@ -7872,7 +7872,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
-|    PROFILES
+|   PROFILES
 |   ROLE
 |   RANGE
 |   READ
@@ -7927,23 +7927,24 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
-|    TYPE
+|   TYPE
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
-|    UNKNOWN
-|    ANY
-|    SOME
+|   UNKNOWN
+|   ANY
+|   SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
-|    HASH
-|    ENGINES
-|    TRIGGERS
+|   HASH
+|   ENGINES
+|   TRIGGERS
+|	HISTORY
 
 func_not_keyword:
     DATE_ADD
