@@ -122,7 +122,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		quit := false
 		select {
 		case <-routineCtx.Done():
-			logutil.Infof("-----cancel routine")
+			logutil.Debugf("-----cancel routine")
 			quit = true
 			if counted {
 				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
@@ -141,11 +141,11 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		reqBegin := time.Now()
 
 		mgr := routine.GetRoutineMgr()
-
+		pu := mgr.getParameterUnit()
 		mpi := routine.GetClientProtocol().(*MysqlProtocolImpl)
 		mpi.SetSequenceID(req.seq)
 
-		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
+		cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, pu.SV.SessionTimeout.Duration)
 		executor := routine.GetCmdExecutor()
 		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
@@ -166,8 +166,8 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			}
 		}
 
-		if !mgr.getParameterUnit().SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
+		if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+			logutil.Debugf("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 
 		cancelRequestFunc()

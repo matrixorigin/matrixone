@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/google/uuid"
@@ -59,6 +61,7 @@ type TxnHandler struct {
 	ses       *Session
 	txn       TxnOperator
 	mu        sync.Mutex
+	entryMu   sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -70,6 +73,9 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 }
 
 type Session struct {
+	// account id
+	accountId uint32
+
 	//protocol layer
 	protocol Protocol
 
@@ -885,6 +891,14 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 	ses.outputCallback = callback
 }
 
+func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.GetTenantInfo() != nil {
+		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+		return ok
+	}
+	return false
+}
+
 // AuthenticateUser verifies the password of the user.
 func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var defaultRoleID int64
@@ -1080,6 +1094,9 @@ func (th *TxnHandler) TxnClientNew() error {
 	if err != nil {
 		return err
 	}
+	if th.txn == nil {
+		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+	}
 	return err
 }
 
@@ -1137,6 +1154,8 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1150,16 +1169,35 @@ func (th *TxnHandler) CommitTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Commit(ctx, txnOp); err != nil {
+	if txnOp == nil {
+		logutil.Errorf("CommitTxn: txn operator is null")
+	}
+	if err = storage.Commit(ctx, txnOp); err != nil {
+		th.SetInvalid()
+		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Commit(ctx)
+	if txnOp != nil {
+		err = txnOp.Commit(ctx)
+		if err != nil {
+			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1173,11 +1211,28 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Rollback(ctx, txnOp); err != nil {
+	if txnOp == nil {
+		logutil.Errorf("RollbackTxn: txn operator is null")
+	}
+	if err = storage.Rollback(ctx, txnOp); err != nil {
+		th.SetInvalid()
+		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Rollback(ctx)
+	if txnOp != nil {
+		err = txnOp.Rollback(ctx)
+		if err != nil {
+			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
@@ -1197,6 +1252,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 }
 
 func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn
 }
 
@@ -1246,6 +1303,12 @@ func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	return tcc.txnHandler
 }
 
+func (tcc *TxnCompilerContext) GetUserName() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.GetUserName()
+}
+
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
@@ -1266,6 +1329,10 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
+}
+
+func (tcc *TxnCompilerContext) GetAccountId() uint32 {
+	return tcc.ses.accountId
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
@@ -1298,7 +1365,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	if err != nil {
 		return nil, err
 	}
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+	logutil.Debugf("dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -1350,12 +1417,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
+					AutoIncr:  attr.Attr.AutoIncrement,
+					Table:     tableName,
 				},
-				Primary:       attr.Attr.Primary,
-				Default:       attr.Attr.Default,
-				OnUpdate:      attr.Attr.OnUpdate,
-				Comment:       attr.Attr.Comment,
-				AutoIncrement: attr.Attr.AutoIncrement,
+				Primary:  attr.Attr.Primary,
+				Default:  attr.Attr.Default,
+				OnUpdate: attr.Attr.OnUpdate,
+				Comment:  attr.Attr.Comment,
 			}
 			if isCPkey {
 				col.IsCPkey = isCPkey
@@ -1402,12 +1470,19 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 			})
 		} else if indexDef, ok := def.(*engine.ComputeIndexDef); ok {
+			fields := make([]*plan.Field, len(indexDef.Fields))
+			for i := range indexDef.Fields {
+				fields[i] = &plan.Field{
+					ColNames: indexDef.Fields[i],
+				}
+			}
 			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_ComputeIndex{
-					ComputeIndex: &plan2.ComputeIndexDef{
-						Names:      indexDef.Names,
+				Def: &plan2.TableDef_DefType_Idx{
+					Idx: &plan2.IndexDef{
+						IndexNames: indexDef.IndexNames,
 						TableNames: indexDef.TableNames,
 						Uniques:    indexDef.Uniques,
+						Fields:     fields,
 					},
 				},
 			})

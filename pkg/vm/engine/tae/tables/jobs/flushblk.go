@@ -27,6 +27,7 @@ import (
 type flushBlkTask struct {
 	*tasks.BaseTask
 	data   *containers.Batch
+	delta  *containers.Batch
 	meta   *catalog.BlockEntry
 	fs     *objectio.ObjectFS
 	ts     types.TS
@@ -39,12 +40,14 @@ func NewFlushBlkTask(
 	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
+	delta *containers.Batch,
 ) *flushBlkTask {
 	task := &flushBlkTask{
-		ts:   ts,
-		data: data,
-		meta: meta,
-		fs:   fs,
+		ts:    ts,
+		data:  data,
+		meta:  meta,
+		fs:    fs,
+		delta: delta,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -61,6 +64,12 @@ func (task *flushBlkTask) Execute() error {
 	}
 	if err = BuildBlockIndex(writer.GetWriter(), block, task.meta, task.data, true); err != nil {
 		return err
+	}
+	if task.delta != nil {
+		_, err := writer.WriteBlock(task.delta)
+		if err != nil {
+			return err
+		}
 	}
 	task.blocks, err = writer.Sync()
 	return err

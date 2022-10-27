@@ -26,6 +26,10 @@ type ObjectReader struct {
 	name   string
 }
 
+const ExtentTypeSize = 4 * 3
+const ExtentsLength = 20
+const FooterSize = 8 + 4
+
 func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	reader := &ObjectReader{
 		name:   name,
@@ -50,12 +54,12 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 		}
 	}
 	err = r.allocData(metas.Entries, m)
+	defer r.freeData(metas.Entries, m)
 	if err != nil {
-		r.freeData(metas.Entries, m)
+		return nil, err
 	}
 	err = r.object.fs.Read(context.Background(), metas)
 	if err != nil {
-		r.freeData(metas.Entries, m)
 		return nil, err
 	}
 	blocks := make([]BlockObject, len(extents))
@@ -66,7 +70,6 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 		}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
-			r.freeData(metas.Entries, m)
 			return nil, err
 		}
 	}
@@ -97,6 +100,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*file
 	err = r.allocData(data.Entries, m)
 	if err != nil {
 		r.freeData(data.Entries, m)
+		return nil, err
 	}
 	err = r.object.fs.Read(context.Background(), data)
 	if err != nil {
@@ -128,11 +132,71 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType
 	return indexes, nil
 }
 
+func (r *ObjectReader) ReadAllMeta(fileSize int64, m *mpool.MPool) ([]BlockObject, error) {
+	footer, err := r.readFooter(fileSize, m)
+	if err != nil {
+		return nil, err
+	}
+	return r.ReadMeta(footer.extents, m)
+}
+
+func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, error) {
+	var err error
+	var footer *Footer
+
+	// I don't know how many blocks there are in the object,
+	// read "ExtentsLength" blocks by default
+	size := int64(FooterSize + ExtentsLength*ExtentTypeSize)
+	if size > fileSize {
+		size = fileSize
+	}
+	footer, err = r.readFooterAndUnMarshal(fileSize, size, m)
+	if err != nil {
+		return nil, err
+	}
+	if len(footer.extents) == 0 {
+		size = int64(FooterSize + footer.blockCount*ExtentTypeSize)
+		footer, err = r.readFooterAndUnMarshal(fileSize, size, m)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return footer, nil
+}
+
+func (r *ObjectReader) readFooterAndUnMarshal(fileSize, size int64, m *mpool.MPool) (*Footer, error) {
+	var err error
+	data := &fileservice.IOVector{
+		FilePath: r.name,
+		Entries:  make([]fileservice.IOEntry, 1),
+	}
+	data.Entries[0] = fileservice.IOEntry{
+		Offset: fileSize - size,
+		Size:   size,
+	}
+	err = r.allocData(data.Entries, m)
+	if err != nil {
+		return nil, err
+	}
+	defer r.freeData(data.Entries, m)
+	err = r.object.fs.Read(context.Background(), data)
+	if err != nil {
+		return nil, err
+	}
+	footer := &Footer{}
+	err = footer.UnMarshalFooter(data.Entries[0].Data)
+	if err != nil {
+		return nil, err
+	}
+	return footer, err
+}
+
 func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
-		for _, entry := range Entries {
-			if entry.Data != nil {
-				m.Free(entry.Data)
+		for i := range Entries {
+			if Entries[i].Data != nil {
+				m.Free(Entries[i].Data)
 			}
 		}
 	}
@@ -140,8 +204,8 @@ func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 
 func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
-		for _, entry := range Entries {
-			entry.Data, err = m.Alloc(int(entry.Size))
+		for i := range Entries {
+			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
 			if err != nil {
 				return
 			}

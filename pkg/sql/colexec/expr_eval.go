@@ -34,6 +34,7 @@ var (
 	constDType          = types.Type{Oid: types.T_float64}
 	constSType          = types.Type{Oid: types.T_varchar}
 	constDateType       = types.Type{Oid: types.T_date}
+	constTimeType       = types.Type{Oid: types.T_time}
 	constDatetimeType   = types.Type{Oid: types.T_datetime}
 	constDecimal64Type  = types.Type{Oid: types.T_decimal64}
 	constDecimal128Type = types.Type{Oid: types.T_decimal128}
@@ -52,7 +53,11 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			if types.T(expr.Typ.GetId()) == types.T_any {
+				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			} else {
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+			}
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -67,6 +72,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -75,7 +82,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
-				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
 				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
@@ -86,6 +93,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
 		}
+		vec.SetIsBin(t.C.IsBin)
 		return vec, nil
 	case *plan.Expr_T:
 		// return a vector recorded type information but without real data
@@ -159,7 +167,11 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 	case *plan.Expr_C:
 		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			if types.T(expr.Typ.GetId()) == types.T_any {
+				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			} else {
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+			}
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -174,6 +186,8 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -182,7 +196,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
-				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
 				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
@@ -266,7 +280,11 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			if types.T(expr.Typ.GetId()) == types.T_any {
+				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			} else {
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+			}
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -281,6 +299,8 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -289,7 +309,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
-				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
 				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
@@ -323,7 +343,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExpr(bat, proc, t.F.Args[i])
+			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i])
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)
@@ -433,7 +453,11 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 	case *plan.Expr_C:
 		length := 1
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			if types.T(expr.Typ.GetId()) == types.T_any {
+				vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}, length)
+			} else {
+				vec = vector.NewConstNullWithData(types.Type{Oid: types.T(expr.Typ.GetId())}, length, proc.Mp())
+			}
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -448,6 +472,8 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -456,7 +482,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
-				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
 				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())

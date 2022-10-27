@@ -63,6 +63,12 @@ func (d *DatabaseRow) Indexes() []Tuple {
 	}
 }
 
+func (d *DatabaseRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_AccountID_Name, Uint(d.AccountID), Text(d.Name)},
+	}
+}
+
 var _ NamedRow = new(DatabaseRow)
 
 func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
@@ -118,6 +124,12 @@ func (r *RelationRow) Value() *RelationRow {
 func (r *RelationRow) Indexes() []Tuple {
 	return []Tuple{
 		{index_DatabaseID, r.DatabaseID},
+		{index_DatabaseID_Name, r.DatabaseID, Text(r.Name)},
+	}
+}
+
+func (r *RelationRow) UniqueIndexes() []Tuple {
+	return []Tuple{
 		{index_DatabaseID_Name, r.DatabaseID, Text(r.Name)},
 	}
 }
@@ -205,6 +217,12 @@ func (a *AttributeRow) Indexes() []Tuple {
 		{index_RelationID_Name, a.RelationID, Text(a.Name)},
 		{index_RelationID_IsPrimary, a.RelationID, Bool(a.Primary)},
 		{index_RelationID_IsHidden, a.RelationID, Bool(a.IsHidden)},
+	}
+}
+
+func (a *AttributeRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_RelationID_Name, a.RelationID, Text(a.Name)},
 	}
 }
 
@@ -326,9 +344,10 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 type IndexRow struct {
 	ID         ID
 	RelationID ID
-	Name       string
+	IndexName  string
 	Unique     bool
 	TableName  string
+	Field      []string
 }
 
 func (i *IndexRow) Key() ID {
@@ -342,7 +361,13 @@ func (i *IndexRow) Value() *IndexRow {
 func (i *IndexRow) Indexes() []Tuple {
 	return []Tuple{
 		{index_RelationID, i.RelationID},
-		{index_RelationID_Name, i.RelationID, Text(i.Name)},
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
+	}
+}
+
+func (i *IndexRow) UniqueIndexes() []Tuple {
+	return []Tuple{
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
 	}
 }
 

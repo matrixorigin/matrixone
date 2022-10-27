@@ -237,7 +237,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow - n.deletes.cnt.Load()
 }
 
-func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
+func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
@@ -246,11 +246,12 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	}
 	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
 	if node == nil || startOffset > endOffset {
-		return 0, 0, nil, nil
+		return
 	}
 	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
 	maxRow = node.(*AppendNode).maxRow
 
+	abortedBitmap = roaring.NewBitmap()
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
 	n.appends.LoopOffsetRange(
@@ -264,6 +265,9 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 				txn.GetTxnState(true)
 				n.RLock()
 			}
+			if node.IsAborted() {
+				abortedBitmap.AddRange(uint64(node.startRow), uint64(node.maxRow))
+			}
 			for i := 0; i < int(node.maxRow-node.startRow); i++ {
 				commitTSVec.Append(node.GetCommitTS())
 				abortVec.Append(node.IsAborted())
@@ -273,7 +277,7 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector) {
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -286,6 +290,7 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), false)
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	abortedBitmap = roaring.NewBitmap()
 	prefix := n.meta.MakeKey()
 
 	n.deletes.LoopChain(
@@ -300,6 +305,9 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 			in, before := node.PreparedIn(start, end)
 			if in {
 				it := node.mask.Iterator()
+				if node.IsAborted() {
+					abortedBitmap.AddMany(node.mask.ToArray())
+				}
 				for it.HasNext() {
 					row := it.Next()
 					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row))

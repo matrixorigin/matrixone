@@ -1,0 +1,94 @@
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat','Cat', 'Tiger') 'Result';
+Result 
+Tiger Dog Tiger Dog Tiger
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', 'Tiger') 'Result';
+Result
+Cat Dog Cat Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 2) 'Result';
+Result
+Cat Dog Tiger Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 1) 'Result';
+Result 
+Cat Dog Tiger Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 2) 'Result';
+Result
+Cat Dog Cat Dog Tiger
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 0) 'Result';
+Result
+Tiger Dog Tiger Dog Tiger
+SELECT REGEXP_REPLACE(NULL, 'Cow', 'Tiger');
+regexp_replace(null, Cow, Tiger)
+NULL
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', NULL, 'Tiger');
+regexp_replace(Cat Dog Cat Dog Cat, null, Tiger)
+NULL
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', NULL);
+regexp_replace(Cat Dog Cat Dog Cat, Cow, null) 
+NULL
+create table t1(a int, b varchar(100));
+insert into t1 values(1 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(2 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(3 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(4 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(5 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(6 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+SELECT a, REGEXP_REPLACE(b, 'Cat', 'tiger') from t1;
+a    regexp_replace(b, Cat, tiger)
+1    tiger Dog tiger Dog tiger tiger Dog tiger Dog tiger
+2    tiger Dog tiger Dog tiger tiger Dog tiger Dog tiger
+3    tiger Dog tiger Dog tiger tiger Dog tiger Dog tiger
+4    tiger Dog tiger Dog tiger tiger Dog tiger Dog tiger
+5    Dog tiger Dog tiger tiger Dog tiger Dog tiger tiger
+6    Dog tiger Dog tiger tiger Dog tiger Dog tiger tiger
+7    Dog tiger Dog tiger tiger Dog tiger Dog tiger tiger
+8    Dog tiger Dog tiger tiger Dog tiger Dog tiger tiger
+drop table t1;
+create table t1(a int, b varchar(100));
+insert into t1 values(1 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(2 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(3 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(4 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(5 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(6 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+SELECT a, REGEXP_REPLACE(b, 'Cat', 'pig', 3) from t1;
+a    regexp_replace(b, Cat, pig, 3)
+1    pig Dog pig Dog pig pig Dog pig Dog pig
+2    pig Dog pig Dog pig pig Dog pig Dog pig
+3    pig Dog pig Dog pig pig Dog pig Dog pig
+4    pig Dog pig Dog pig pig Dog pig Dog pig
+5    Dog pig Dog pig pig Dog pig Dog pig pig
+6    Dog pig Dog pig pig Dog pig Dog pig pig
+7    Dog pig Dog pig pig Dog pig Dog pig pig
+8    Dog pig Dog pig pig Dog pig Dog pig pig
+drop table t1;
+create table t1(a int, b varchar(100));
+insert into t1 values(1 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(2 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(3 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(4 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
+insert into t1 values(5 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(6 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
+SELECT a, REGEXP_REPLACE(b, 'Cat', 'taC', 3, 2) from t1;
+a    regexp_replace(b, Cat, taC, 3, 2)
+1    Cat Dog Cat Dog taC Cat Dog Cat Dog Cat
+2    Cat Dog Cat Dog taC Cat Dog Cat Dog Cat
+3    Cat Dog Cat Dog taC Cat Dog Cat Dog Cat
+4    Cat Dog Cat Dog taC Cat Dog Cat Dog Cat
+5    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
+6    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
+7    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
+8    Dog Cat Dog taC Cat Dog Cat Dog Cat Cat
+drop table t1;
+DROP TABLE IF EXISTS t;
+CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
+INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
+INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
+SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
+invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
+drop table t;

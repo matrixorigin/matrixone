@@ -225,7 +225,7 @@ select * from testdb4.table_1;
 delete from testdb5.table_2;
 show tables;
 create database ttt;
-create account test@123456 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop table testdb4.table_1;
 -- @session
 

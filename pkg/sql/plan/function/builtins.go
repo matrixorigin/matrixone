@@ -36,36 +36,30 @@ func initBuiltIns() {
 // builtins contains the builtin function indexed by function id.
 var builtins = map[int]Functions{
 	ABS: {
-		Id: ABS,
+		Id:     ABS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.AbsInt64,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.AbsUInt64,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.AbsFloat64,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.AbsDecimal128,
@@ -73,12 +67,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	ACOS: {
-		Id: ACOS,
+		Id:     ACOS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Acos,
@@ -86,12 +80,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	BIT_LENGTH: {
-		Id: BIT_LENGTH,
+		Id:     BIT_LENGTH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char}, // todo? check if there is implicit upcast for char/varchar, it not, register another type or add upcast
 				ReturnTyp: types.T_int64,
 				Fn:        unary.BitLengthFunc,
@@ -99,13 +93,15 @@ var builtins = map[int]Functions{
 		},
 	},
 	CONCAT_WS: {
-		Id: CONCAT_WS,
+		Id:     CONCAT_WS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) > 1 {
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -125,8 +121,6 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Concat_ws,
@@ -134,13 +128,15 @@ var builtins = map[int]Functions{
 		},
 	},
 	CONCAT: {
-		Id: CONCAT,
+		Id:     CONCAT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) > 1 {
 				ret := make([]types.T, len(inputs))
 				convert := false
 				for i, t := range inputs {
-					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob {
+					if t != types.T_char && t != types.T_varchar && t != types.T_any && t != types.T_blob && t != types.T_text {
 						if castTable[t][types.T_varchar] {
 							ret[i] = types.T_varchar
 							convert = true
@@ -160,8 +156,6 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Concat,
@@ -169,7 +163,9 @@ var builtins = map[int]Functions{
 		},
 	},
 	CURRENT_TIMESTAMP: {
-		Id: CURRENT_TIMESTAMP,
+		Id:     CURRENT_TIMESTAMP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) == 0 {
 				return int32(0), nil
@@ -183,8 +179,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_timestamp,
 				Fn:        multi.CurrentTimestamp,
@@ -193,7 +187,9 @@ var builtins = map[int]Functions{
 	},
 	UUID: {
 		// uuid function contains a hidden placeholder parameter
-		Id: UUID,
+		Id:     UUID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) == 0 {
 				return int32(0), nil
@@ -203,8 +199,6 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:         0,
-				Flag:          plan.Function_STRICT,
-				Layout:        STANDARD_FUNCTION,
 				Volatile:      true,
 				AppendHideArg: true,
 				ReturnTyp:     types.T_varchar,
@@ -213,57 +207,104 @@ var builtins = map[int]Functions{
 		},
 	},
 	DATE: {
-		Id: DATE,
+		Id:     DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_date,
 				Fn:        unary.DateToDate,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_time},
+				ReturnTyp: types.T_date,
+				Fn:        unary.TimeToDate,
+			},
+			{
+				Index:     2,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_date,
 				Fn:        unary.DatetimeToDate,
 			},
 			{
-				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
+				Index:     3,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_date,
 				Fn:        unary.DateStringToDate,
 			},
 			{
-				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
+				Index:     4,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_date,
 				Fn:        unary.DateStringToDate,
 			},
 		},
 	},
-	HOUR: {
-		Id: HOUR,
+	TIME: {
+		Id:     TIME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        unary.TimeToTime,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_date},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DateToTime,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DatetimeToTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DateStringToTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DateStringToTime,
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_text},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DateStringToTime,
+			},
+			{
+				Index:     6,
+				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_time,
+				Fn:        unary.DateStringToTime,
+			},
+		},
+	},
+	HOUR: {
+		Id:     HOUR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
 				Args:      []types.T{types.T_timestamp},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.TimestampToHour,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToHour,
@@ -271,20 +312,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	MINUTE: {
-		Id: MINUTE,
+		Id:     MINUTE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.TimestampToMinute,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToMinute,
@@ -292,20 +331,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	SECOND: {
-		Id: SECOND,
+		Id:     SECOND,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.TimestampToSecond,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToSecond,
@@ -313,20 +350,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	DAY: {
-		Id: DAY,
+		Id:     DAY,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DateToDay,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToDay,
@@ -334,12 +369,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	DAYOFYEAR: {
-		Id: DAYOFYEAR,
+		Id:     DAYOFYEAR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_uint16,
 				Fn:        unary.DayOfYear,
@@ -347,12 +382,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	EMPTY: {
-		Id: EMPTY,
+		Id:     EMPTY,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.Empty,
@@ -360,12 +395,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	EXP: {
-		Id: EXP,
+		Id:     EXP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Exp,
@@ -373,20 +408,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	EXTRACT: {
-		Id: EXTRACT,
+		Id:     EXTRACT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_datetime},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.ExtractFromDatetime,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_date},
 				ReturnTyp: types.T_uint32,
 				Fn:        binary.ExtractFromDate,
@@ -394,40 +427,42 @@ var builtins = map[int]Functions{
 		},
 	},
 	LENGTH: {
-		Id: LENGTH,
+		Id:     LENGTH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.Length,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_text},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.Length,
 			},
 		},
 	},
 	LENGTH_UTF8: {
-		Id: LENGTH_UTF8,
+		Id:     LENGTH_UTF8,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_uint64, Fn: unary.LengthUTF8,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.LengthUTF8,
@@ -435,12 +470,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	LN: {
-		Id: LN,
+		Id:     LN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Ln,
@@ -448,20 +483,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	LOG: {
-		Id: LOG,
+		Id:     LOG,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Log,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Log,
@@ -469,12 +502,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	LTRIM: {
-		Id: LTRIM,
+		Id:     LTRIM,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Ltrim,
@@ -482,28 +515,24 @@ var builtins = map[int]Functions{
 		},
 	},
 	MONTH: {
-		Id: MONTH,
+		Id:     MONTH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DateToMonth,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToMonth,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DateStringToMonth,
@@ -511,84 +540,66 @@ var builtins = map[int]Functions{
 		},
 	},
 	OCT: {
-		Id: OCT,
+		Id:     OCT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint8],
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint16],
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint32],
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[uint64],
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int8],
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int16],
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int32],
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.Oct[int64],
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.OctFloat[float32],
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_decimal128,
 				Fn:        unary.OctFloat[float64],
@@ -596,12 +607,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	REVERSE: {
-		Id: REVERSE,
+		Id:     REVERSE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Reverse,
@@ -609,12 +620,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	RTRIM: {
-		Id: RTRIM,
+		Id:     RTRIM,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Rtrim,
@@ -622,20 +633,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	LEFT: {
-		Id: LEFT,
+		Id:     LEFT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.Left,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        binary.Left,
@@ -643,12 +652,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	SIN: {
-		Id: SIN,
+		Id:     SIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Sin,
@@ -656,20 +665,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	SPACE: {
-		Id: SPACE,
+		Id:     SPACE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.SpaceNumber[uint64],
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.SpaceNumber[int64],
@@ -677,20 +684,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	WEEK: {
-		Id: WEEK,
+		Id:     WEEK,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DateToWeek,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_uint8,
 				Fn:        unary.DatetimeToWeek,
@@ -698,20 +703,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	WEEKDAY: {
-		Id: WEEKDAY,
+		Id:     WEEKDAY,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.DateToWeekday,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.DatetimeToWeekday,
@@ -719,28 +722,24 @@ var builtins = map[int]Functions{
 		},
 	},
 	YEAR: {
-		Id: YEAR,
+		Id:     YEAR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.DateToYear,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.DatetimeToYear,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        unary.DateStringToYear,
@@ -749,12 +748,12 @@ var builtins = map[int]Functions{
 	},
 	// binary functions
 	ENDSWITH: {
-		Id: ENDSWITH,
+		Id:     ENDSWITH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_uint8,
 				Fn:        binary.Endswith,
@@ -762,12 +761,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	FINDINSET: {
-		Id: FINDINSET,
+		Id:     FINDINSET,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_uint64,
 				Fn:        binary.FindInSet,
@@ -775,12 +774,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	POW: {
-		Id: POW,
+		Id:     POW,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        binary.Power,
@@ -788,12 +787,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	STARTSWITH: {
-		Id: STARTSWITH,
+		Id:     STARTSWITH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_uint8,
 				Fn:        binary.Startswith,
@@ -801,20 +800,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	DATE_FORMAT: {
-		Id: DATE_FORMAT,
+		Id:     DATE_FORMAT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.DateFormat,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.DateFormat,
@@ -823,60 +820,48 @@ var builtins = map[int]Functions{
 	},
 	// variadic functions
 	CEIL: {
-		Id: CEIL,
+		Id:     CEIL,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.CeilUint64,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.CeilUint64,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.CeilInt64,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.CeilInt64,
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.CeilFloat64,
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.CeilFloat64,
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.CeilDecimal128,
@@ -884,60 +869,48 @@ var builtins = map[int]Functions{
 		},
 	},
 	FLOOR: {
-		Id: FLOOR,
+		Id:     FLOOR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.FloorUInt64,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.FloorUInt64,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.FloorInt64,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.FloorInt64,
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.FloorFloat64,
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.FloorFloat64,
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn:        multi.FloorDecimal128,
@@ -945,39 +918,35 @@ var builtins = map[int]Functions{
 		},
 	},
 	LPAD: {
-		Id: LPAD,
+		Id:     LPAD,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Lpad,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_varchar},
 				ReturnTyp: types.T_varchar, Fn: multi.Lpad,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_varchar, Fn: multi.Lpad,
 			},
 		},
 	},
 	PI: {
-		Id: PI,
+		Id:     PI,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.Pi,
@@ -985,52 +954,42 @@ var builtins = map[int]Functions{
 		},
 	},
 	ROUND: {
-		Id: ROUND,
+		Id:     ROUND,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.RoundUint64,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_uint64,
 				Fn:        multi.RoundUint64,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RoundInt64,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RoundInt64,
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.RoundFloat64,
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_int64},
 				ReturnTyp: types.T_float64,
 				Fn:        multi.RoundFloat64,
@@ -1038,404 +997,306 @@ var builtins = map[int]Functions{
 		},
 	},
 	RPAD: {
-		Id: RPAD,
+		Id:     RPAD,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     12,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     13,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     14,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     15,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     16,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     17,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     18,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     19,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     20,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_char, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     21,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_char, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     22,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_char, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     23,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_char, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     24,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_char, types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     25,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     26,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     27,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     28,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     29,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_char},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     30,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     31,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     32,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     33,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     34,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_char},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     35,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     36,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     37,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     38,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64, types.T_varchar},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     39,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64, types.T_char},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     40,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     41,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_varchar, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     42,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_varchar, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     43,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     44,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_varchar, types.T_char},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     45,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_char, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     46,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_char, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     47,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_char, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     48,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_char, types.T_varchar},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
 			},
 			{
 				Index:     49,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_char, types.T_char},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Rpad,
@@ -1443,194 +1304,177 @@ var builtins = map[int]Functions{
 		},
 	},
 	SUBSTRING: {
-		Id: SUBSTRING,
+		Id:     SUBSTRING,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_float64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_float64, types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     10,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     11,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     12,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     13,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     14,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     15,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     16,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     17,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     18,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     19,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob, types.T_int64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     20,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_int64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 			{
 				Index:     21,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_blob, types.T_uint64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+
+			{
+				Index:     22,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     23,
+				Args:      []types.T{types.T_text, types.T_int64, types.T_uint64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     24,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        multi.Substring,
+			},
+			{
+				Index:     25,
+				Args:      []types.T{types.T_text, types.T_uint64, types.T_uint64},
 				ReturnTyp: types.T_char,
 				Fn:        multi.Substring,
 			},
 		},
 	},
 	FROM_UNIXTIME: {
-		Id: FROM_UNIXTIME,
+		Id:     FROM_UNIXTIME,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.FromUnixTimeInt64,
@@ -1638,8 +1482,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.FromUnixTimeUint64,
@@ -1647,8 +1489,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.FromUnixTimeFloat64,
@@ -1656,8 +1496,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     3,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeInt64Format,
@@ -1665,8 +1503,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     4,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeUint64Format,
@@ -1674,8 +1510,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     5,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.FromUnixTimeFloat64Format,
@@ -1683,13 +1517,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	UNIX_TIMESTAMP: {
-		Id: UNIX_TIMESTAMP,
+		Id:     UNIX_TIMESTAMP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.UnixTimestamp,
@@ -1697,8 +1531,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.UnixTimestamp,
@@ -1706,8 +1538,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.UnixTimestampVarchar,
@@ -1715,12 +1545,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	UTC_TIMESTAMP: {
-		Id: UTC_TIMESTAMP,
+		Id:     UTC_TIMESTAMP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.UTCTimestamp,
@@ -1728,13 +1558,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	DATE_ADD: {
-		Id: DATE_ADD,
+		Id:     DATE_ADD,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_date,
 				Fn:        multi.DateAdd,
@@ -1742,8 +1572,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DatetimeAdd,
@@ -1751,8 +1579,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringAdd,
@@ -1760,8 +1586,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     3,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringAdd,
@@ -1769,22 +1593,27 @@ var builtins = map[int]Functions{
 			{
 				Index:     4,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_timestamp,
 				Fn:        multi.TimeStampAdd,
 			},
+			{
+				Index:     5,
+				Volatile:  true,
+				Args:      []types.T{types.T_time, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_time,
+				Fn:        multi.TimeAdd,
+			},
 		},
 	},
 	DATE_SUB: {
-		Id: DATE_SUB,
+		Id:     DATE_SUB,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_date,
 				Fn:        multi.DateSub,
@@ -1792,8 +1621,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DatetimeSub,
@@ -1801,8 +1628,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringSub,
@@ -1810,8 +1635,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     3,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringSub,
@@ -1819,8 +1642,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     4,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_timestamp,
 				Fn:        multi.TimeStampSub,
@@ -1828,12 +1649,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	TAN: {
-		Id: TAN,
+		Id:     TAN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Tan,
@@ -1841,12 +1662,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	SINH: {
-		Id: SINH,
+		Id:     SINH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Sinh,
@@ -1854,7 +1675,9 @@ var builtins = map[int]Functions{
 		},
 	},
 	TO_DATE: {
-		Id: TO_DATE,
+		Id:     TO_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 2 {
 				if inputs[0] == types.T_char || inputs[0] == types.T_varchar {
@@ -1868,8 +1691,6 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.ToDate,
@@ -1877,20 +1698,18 @@ var builtins = map[int]Functions{
 		},
 	},
 	ATAN: {
-		Id: ATAN,
+		Id:     ATAN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Atan,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64, types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Atan,
@@ -1898,12 +1717,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	COS: {
-		Id: COS,
+		Id:     COS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Cos,
@@ -1911,12 +1730,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	COT: {
-		Id: COT,
+		Id:     COT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Cot,
@@ -1924,13 +1743,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	TIMESTAMP: {
-		Id: TIMESTAMP,
+		Id:     TIMESTAMP,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.DateToTimestamp,
@@ -1938,16 +1757,12 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.DatetimeToTimestamp,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_timestamp},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.TimestampToTimestamp,
@@ -1955,8 +1770,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     3,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.DateStringToTimestamp,
@@ -1964,8 +1777,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     4,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_timestamp,
 				Fn:        unary.DateStringToTimestamp,
@@ -1973,13 +1784,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	DATABASE: {
-		Id: DATABASE,
+		Id:     DATABASE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Database,
@@ -1987,13 +1798,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	USER: {
-		Id: USER,
+		Id:     USER,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.User,
@@ -2001,13 +1812,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	CONNECTION_ID: {
-		Id: CONNECTION_ID,
+		Id:     CONNECTION_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.ConnectionID,
@@ -2015,13 +1826,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	CHARSET: {
-		Id: CHARSET,
+		Id:     CHARSET,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Charset,
@@ -2029,13 +1840,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	CURRENT_ROLE: {
-		Id: CURRENT_ROLE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Id:     CURRENT_ROLE,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.CurrentRole,
@@ -2043,13 +1854,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	FOUND_ROWS: {
-		Id: FOUND_ROWS,
+		Id:     FOUND_ROWS,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.FoundRows,
@@ -2057,13 +1868,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	ICULIBVERSION: {
-		Id: ICULIBVERSION,
+		Id:     ICULIBVERSION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.ICULIBVersion,
@@ -2071,13 +1882,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	LAST_INSERT_ID: {
-		Id: LAST_INSERT_ID,
+		Id:     LAST_INSERT_ID,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.LastInsertID,
@@ -2085,13 +1896,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	ROLES_GRAPHML: {
-		Id: ROLES_GRAPHML,
+		Id:     ROLES_GRAPHML,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.RolesGraphml,
@@ -2099,13 +1910,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	ROW_COUNT: {
-		Id: ROW_COUNT,
+		Id:     ROW_COUNT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_uint64,
 				Fn:        unary.RowCount,
@@ -2113,13 +1924,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	VERSION: {
-		Id: VERSION,
+		Id:     VERSION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Version,
@@ -2127,13 +1938,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	COLLATION: {
-		Id: COLLATION,
+		Id:     COLLATION,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Collation,
@@ -2141,13 +1952,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	JSON_EXTRACT: {
-		Id: JSON_EXTRACT,
+		Id:     JSON_EXTRACT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.JsonExtractByString,
@@ -2155,8 +1966,6 @@ var builtins = map[int]Functions{
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_json, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.JsonExtractByJson,
@@ -2165,13 +1974,13 @@ var builtins = map[int]Functions{
 	},
 
 	ENABLE_FAULT_INJECTION: {
-		Id: ENABLE_FAULT_INJECTION,
+		Id:     ENABLE_FAULT_INJECTION,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.EnableFaultInjection,
@@ -2179,13 +1988,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	DISABLE_FAULT_INJECTION: {
-		Id: DISABLE_FAULT_INJECTION,
+		Id:     DISABLE_FAULT_INJECTION,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.DisableFaultInjection,
@@ -2193,13 +2002,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	ADD_FAULT_POINT: {
-		Id: ADD_FAULT_POINT,
+		Id:     ADD_FAULT_POINT,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_varchar},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.AddFaultPoint,
@@ -2207,13 +2016,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	REMOVE_FAULT_POINT: {
-		Id: REMOVE_FAULT_POINT,
+		Id:     REMOVE_FAULT_POINT,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.RemoveFaultPoint,
@@ -2221,13 +2030,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	TRIGGER_FAULT_POINT: {
-		Id: REMOVE_FAULT_POINT,
+		Id:     REMOVE_FAULT_POINT,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.TriggerFaultPoint,
@@ -2235,30 +2044,26 @@ var builtins = map[int]Functions{
 		},
 	},
 	LOAD_FILE: {
-		Id: LOAD_FILE,
+		Id:     LOAD_FILE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			{
 				Index:     1,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
-				ReturnTyp: types.T_blob,
+				ReturnTyp: types.T_text,
 				Fn:        unary.LoadFile,
 			},
 			// {
 			// 	Index:     2,
-			// 	Flag:      plan.Function_STRICT,
-			// 	Layout:    STANDARD_FUNCTION,
 			// 	Args:      []types.T{types.T_text},
 			// 	ReturnTyp: types.T_blob,
 			// 	Fn:        unary.LoadFile,
@@ -2266,28 +2071,24 @@ var builtins = map[int]Functions{
 		},
 	},
 	HEX: {
-		Id: HEX,
+		Id:     HEX,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.HexString,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.HexString,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.HexInt64,
@@ -2295,15 +2096,15 @@ var builtins = map[int]Functions{
 		},
 	},
 	SERIAL: {
-		Id: SERIAL,
+		Id:     SERIAL,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			return int32(0), nil
 		},
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Serial,
@@ -2311,15 +2112,15 @@ var builtins = map[int]Functions{
 		},
 	},
 	HASH: {
-		Id: HASH,
+		Id:     HASH,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(_ []Function, typs []types.T) (int32, []types.T) {
 			return 0, typs
 		},
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.Hash,
@@ -2327,84 +2128,66 @@ var builtins = map[int]Functions{
 		},
 	},
 	BIN: {
-		Id: BIN,
+		Id:     BIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[uint8],
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[uint16],
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[uint32],
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[uint64],
 			},
 			{
 				Index:     4,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[int8],
 			},
 			{
 				Index:     5,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[int16],
 			},
 			{
 				Index:     6,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[int32],
 			},
 			{
 				Index:     7,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[int64],
 			},
 			{
 				Index:     8,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.BinFloat[float32],
 			},
 			{
 				Index:     9,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.BinFloat[float64],
@@ -2412,36 +2195,30 @@ var builtins = map[int]Functions{
 		},
 	},
 	REGEXP_INSTR: {
-		Id: REGEXP_INSTR,
+		Id:     REGEXP_INSTR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     3,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_uint8},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.RegularInstr,
@@ -2449,28 +2226,24 @@ var builtins = map[int]Functions{
 		},
 	},
 	REGEXP_REPLACE: {
-		Id: REGEXP_REPLACE,
+		Id:     REGEXP_REPLACE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
@@ -2478,12 +2251,12 @@ var builtins = map[int]Functions{
 		},
 	},
 	REGEXP_LIKE: {
-		Id: REGEXP_LIKE,
+		Id:     REGEXP_LIKE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_bool,
 				Fn:        multi.RegularLike,
@@ -2491,28 +2264,24 @@ var builtins = map[int]Functions{
 		},
 	},
 	REGEXP_SUBSTR: {
-		Id: REGEXP_SUBSTR,
+		Id:     REGEXP_SUBSTR,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularSubstr,
 			},
 			{
 				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularSubstr,
 			},
 			{
 				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularSubstr,
@@ -2521,13 +2290,13 @@ var builtins = map[int]Functions{
 	},
 
 	MO_MEMORY_USAGE: {
-		Id: MO_MEMORY_USAGE,
+		Id:     MO_MEMORY_USAGE,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.MoMemUsage,
@@ -2536,13 +2305,13 @@ var builtins = map[int]Functions{
 	},
 
 	MO_ENABLE_MEMORY_USAGE_DETAIL: {
-		Id: MO_ENABLE_MEMORY_USAGE_DETAIL,
+		Id:     MO_ENABLE_MEMORY_USAGE_DETAIL,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.MoEnableMemUsageDetail,
@@ -2550,13 +2319,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	MO_DISABLE_MEMORY_USAGE_DETAIL: {
-		Id: MO_DISABLE_MEMORY_USAGE_DETAIL,
+		Id:     MO_DISABLE_MEMORY_USAGE_DETAIL,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_INTERNAL,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.MoDisableMemUsageDetail,
@@ -2564,13 +2333,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	DATEDIFF: {
-		Id: DATEDIFF,
+		Id:     DATEDIFF,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_date, types.T_date},
 				ReturnTyp: types.T_int64,
 				Fn:        binary.DateDiff,
@@ -2578,13 +2347,13 @@ var builtins = map[int]Functions{
 		},
 	},
 	TIMESTAMPDIFF: {
-		Id: TIMESTAMPDIFF,
+		Id:     TIMESTAMPDIFF,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
 			{
 				Index:     0,
 				Volatile:  true,
-				Flag:      plan.Function_STRICT,
-				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.TimeStampDiff,

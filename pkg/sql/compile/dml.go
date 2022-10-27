@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,7 +45,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		for _, info := range arg.DeleteCtxs[0].ComputeIndexInfos {
+		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
 				return 0, err
@@ -123,7 +124,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	*/
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
-		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
@@ -149,18 +150,18 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
-	for _, computeIndexInfo := range p.ComputeIndexInfos {
-		computeRelation, err := dbSource.Relation(c.ctx, computeIndexInfo.TableName)
+	for _, indexInfo := range p.IndexInfos {
+		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
 		if err != nil {
 			return 0, err
 		}
-		computeBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, computeIndexInfo.Cols, c.proc)
+		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
 		if rowNum != 0 {
-			if err := computeRelation.Write(c.ctx, computeBatch); err != nil {
+			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
 				return 0, err
 			}
 		}
-		computeBatch.Clean(c.proc.Mp())
+		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {
@@ -395,7 +396,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
@@ -425,6 +426,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
 						vs[j] = vector.GetValueAt[types.Date](vec, 0)
+					}
+				}
+			}
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+				return err
+			}
+		case types.T_time:
+			vs := make([]types.Time, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vector.GetValueAt[types.Time](vec, 0)
 					}
 				}
 			}

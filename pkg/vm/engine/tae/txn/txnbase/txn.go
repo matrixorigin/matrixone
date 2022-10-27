@@ -387,7 +387,15 @@ func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
 	return
 }
 
+func (txn *Txn) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
+	return
+}
+
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) DropDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 
@@ -400,6 +408,10 @@ func (txn *Txn) UnsafeGetRelation(dbId, id uint64) (db handle.Relation, err erro
 }
 
 func (txn *Txn) GetDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) GetDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 

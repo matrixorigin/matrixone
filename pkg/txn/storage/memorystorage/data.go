@@ -44,9 +44,10 @@ func (d DataKey) Less(than DataKey) bool {
 type DataValue = []Nullable
 
 type DataRow struct {
-	key     DataKey
-	value   DataValue
-	indexes []Tuple
+	key           DataKey
+	value         DataValue
+	indexes       []Tuple
+	uniqueIndexes []Tuple
 }
 
 func (a DataRow) Key() DataKey {
@@ -59,6 +60,10 @@ func (a DataRow) Value() DataValue {
 
 func (a DataRow) Indexes() []Tuple {
 	return a.indexes
+}
+
+func (a DataRow) UniqueIndexes() []Tuple {
+	return a.uniqueIndexes
 }
 
 func (a *DataRow) String() string {

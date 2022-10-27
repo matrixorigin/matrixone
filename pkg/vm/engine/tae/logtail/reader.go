@@ -28,13 +28,14 @@ type LogtailReader struct {
 	activeView []txnif.AsyncTxn         // read only active page
 }
 
-func (v *LogtailReader) GetDirty() (tree *common.Tree) {
+func (v *LogtailReader) GetDirty() (tree *common.Tree, count int) {
 	tree = common.NewTree()
 
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
 		if memo := txn.GetMemo(); memo.HasAnyTableDataChanges() {
 			tree.Merge(memo.GetDirty())
 		}
+		count++
 		return true
 	}
 	v.readTxnInBetween(v.start, v.end, readOp)
@@ -54,9 +55,6 @@ func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree
 }
 
 func (v *LogtailReader) HasCatalogChanges() bool {
-	if v.start.IsEmpty() {
-		return true
-	}
 	changed := false
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
 		if txn.GetMemo().HasCatalogChanges() {

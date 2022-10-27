@@ -73,7 +73,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	accountId, userId, roleId := getAccessInfo(ctx)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
 	defer cancel()
-	databaseId, err := txn.idGen.AllocateID(ctx)
+	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
@@ -104,6 +104,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		db := &database{
 			txn:          txn,
 			db:           e.db,
+			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -117,6 +118,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}
@@ -133,17 +135,39 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+	var db *database
+
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	txn.databaseMap.Delete(key)
-	id, err := txn.getDatabaseId(ctx, name)
+	if v, ok := txn.databaseMap.Load(key); ok {
+		db = v.(*database)
+		txn.databaseMap.Delete(key)
+	} else {
+		id, err := txn.getDatabaseId(ctx, name)
+		if err != nil {
+			return err
+		}
+		db = &database{
+			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
+			databaseId:   id,
+			databaseName: name,
+		}
+	}
+	rels, err := db.Relations(ctx)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.mp)
+	for _, relName := range rels {
+		if err := db.Delete(ctx, relName); err != nil {
+			return err
+		}
+	}
+	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
 	if err != nil {
 		return err
 	}
@@ -158,6 +182,33 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 // hasConflict used to detect if a transaction on a cn is in conflict,
 // currently an empty implementation, assuming all transactions on a cn are conflict free
 func (e *Engine) hasConflict(txn *Transaction) bool {
+	return false
+}
+
+// hasDuplicate used to detect if a transaction on a cn has duplicate.
+func (e *Engine) hasDuplicate(ctx context.Context, txn *Transaction) bool {
+	for i := range txn.writes {
+		for _, e := range txn.writes[i] {
+			if e.typ == DELETE {
+				continue
+			}
+			if e.bat.Length() == 0 {
+				continue
+			}
+			key := genTableKey(ctx, e.tableName, e.databaseId)
+			v, ok := txn.tableMap.Load(key)
+			if !ok {
+				continue
+			}
+			tbl := v.(*table)
+			if tbl.meta == nil {
+				continue
+			}
+			if tbl.primaryIdx == -1 {
+				continue
+			}
+		}
+	}
 	return false
 }
 
@@ -190,16 +241,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
-		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
-		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], op, catalog.MO_CATALOG_ID,
-		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 		return err
 	}
 	return nil
@@ -216,6 +267,9 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	}
 	if e.hasConflict(txn) {
 		return moerr.NewTxnWriteConflict("write conflict")
+	}
+	if e.hasDuplicate(ctx, txn) {
+		return moerr.NewDuplicate()
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {

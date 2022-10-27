@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -119,11 +120,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		return err
 	}
+	id := rel.GetTableID(c.ctx)
 	err = dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
-	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, id)
 	if err != nil {
 		return err
 	}
@@ -169,10 +171,15 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 				Names: defVal.Pk.GetNames(),
 			}
 		case *plan.TableDef_DefType_Idx:
-			exeDefs[i] = &engine.IndexTableDef{
-				ColNames: defVal.Idx.GetColNames(),
-				Name:     defVal.Idx.GetName(),
+			indexDef := &engine.ComputeIndexDef{}
+			indexDef.IndexNames = defVal.Idx.IndexNames
+			indexDef.TableNames = defVal.Idx.TableNames
+			indexDef.Uniques = defVal.Idx.Uniques
+			indexDef.Fields = make([][]string, 0)
+			for _, field := range defVal.Idx.Fields {
+				indexDef.Fields = append(indexDef.Fields, field.ColNames)
 			}
+			exeDefs[i] = indexDef
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -196,12 +203,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
-		case *plan.TableDef_DefType_ComputeIndex:
-			computeIndexDef := &engine.ComputeIndexDef{}
-			computeIndexDef.Names = defVal.ComputeIndex.Names
-			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
-			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
-			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil
@@ -233,7 +234,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
-				AutoIncrement: col.GetAutoIncrement(),
+				AutoIncrement: col.Typ.GetAutoIncr(),
 			},
 		}
 	}

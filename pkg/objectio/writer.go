@@ -129,9 +129,6 @@ func (w *ObjectWriter) WriteEnd() ([]BlockObject, error) {
 			return nil, err
 		}
 	}
-	if err = binary.Write(&buf, endian, uint8(0)); err != nil {
-		return nil, err
-	}
 	if err = binary.Write(&buf, endian, uint32(len(w.blocks))); err != nil {
 		return nil, err
 	}

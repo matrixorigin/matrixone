@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +53,19 @@ type Vector struct {
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
 	isConst bool
 	length  int
+
+	// tag for distinguish '0x00..' and 0x... and 0x... is binary
+	// TODO: check whether isBin should be changed into array/bitmap
+	// now we assumpt that it can only be true in the case of only one data in vector
+	isBin bool
+}
+
+func (v *Vector) SetIsBin(isBin bool) {
+	v.isBin = isBin
+}
+
+func (v *Vector) GetIsBin() bool {
+	return v.isBin
 }
 
 func (v *Vector) Length() int {
@@ -269,6 +283,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Date](v)
 	case types.T_datetime:
 		fillDefaultValue[types.Datetime](v)
+	case types.T_time:
+		fillDefaultValue[types.Time](v)
 	case types.T_timestamp:
 		fillDefaultValue[types.Timestamp](v)
 	case types.T_decimal64:
@@ -281,7 +297,7 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
 		fillDefaultValue[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		fillDefaultValue[types.Varlena](v)
 	default:
 		panic("unsupported type in FillDefaultValue")
@@ -319,6 +335,8 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.Date](v, row, mp)
 	case types.T_datetime:
 		return toConstVector[types.Datetime](v, row, mp)
+	case types.T_time:
+		return toConstVector[types.Time](v, row, mp)
 	case types.T_timestamp:
 		return toConstVector[types.Timestamp](v, row, mp)
 	case types.T_decimal64:
@@ -331,7 +349,7 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.TS](v, row, mp)
 	case types.T_Rowid:
 		return toConstVector[types.Rowid](v, row, mp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
@@ -378,6 +396,8 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 		expandVector[types.Date](v, 4, m)
 	case types.T_datetime:
 		expandVector[types.Datetime](v, 8, m)
+	case types.T_time:
+		expandVector[types.Time](v, 8, m)
 	case types.T_timestamp:
 		expandVector[types.Timestamp](v, 8, m)
 	case types.T_decimal64:
@@ -390,7 +410,7 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
 		expandVector[types.Rowid](v, types.RowidSize, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
 	v.isConst = false
@@ -504,6 +524,15 @@ func NewWithNspSize(typ types.Type, n int64) *Vector {
 	}
 }
 
+func NewConstNullWithData(typ types.Type, length int, mp *mpool.MPool) *Vector {
+	v := New(typ)
+	v.isConst = true
+	val := GetInitConstVal(typ)
+	v.Append(val, true, mp)
+	v.length = length
+	return v
+}
+
 func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
 	v.isConst = true
@@ -576,6 +605,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Date, 1)
 	case types.T_datetime:
 		v.Col = make([]types.Datetime, 1)
+	case types.T_time:
+		v.Col = make([]types.Time, 1)
 	case types.T_timestamp:
 		v.Col = make([]types.Timestamp, 1)
 	case types.T_decimal64:
@@ -588,7 +619,7 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
 		v.Col = make([]types.Rowid, 1)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		v.Col = make([]types.Varlena, 1)
 	}
 }
@@ -635,6 +666,7 @@ func (v *Vector) Free(m *mpool.MPool) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
+
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
 	if v.data != nil {
@@ -719,6 +751,8 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.Date), isNull, m)
 	case types.T_datetime:
 		return appendOne(v, w.(types.Datetime), isNull, m)
+	case types.T_time:
+		return appendOne(v, w.(types.Time), isNull, m)
 	case types.T_timestamp:
 		return appendOne(v, w.(types.Timestamp), isNull, m)
 	case types.T_decimal64:
@@ -731,7 +765,7 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
 		return appendOne(v, w.(types.Rowid), isNull, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if isNull {
 			return appendOneBytes(v, nil, true, m)
 		}
@@ -995,7 +1029,7 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
 		ShrinkFixed[float64](v, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1004,6 +1038,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[types.Date](v, sels)
 	case types.T_datetime:
 		ShrinkFixed[types.Datetime](v, sels)
+	case types.T_time:
+		ShrinkFixed[types.Time](v, sels)
 	case types.T_timestamp:
 		ShrinkFixed[types.Timestamp](v, sels)
 	case types.T_decimal64:
@@ -1074,12 +1110,14 @@ func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
 		ShuffleFixed[float64](v, sels, m)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		ShuffleFixed[types.Varlena](v, sels, m)
 	case types.T_date:
 		ShuffleFixed[types.Date](v, sels, m)
 	case types.T_datetime:
 		ShuffleFixed[types.Datetime](v, sels, m)
+	case types.T_time:
+		ShuffleFixed[types.Time](v, sels, m)
 	case types.T_timestamp:
 		ShuffleFixed[types.Timestamp](v, sels, m)
 	case types.T_decimal64:
@@ -1457,6 +1495,8 @@ func (v *Vector) String() string {
 		return VecToString[types.Date](v)
 	case types.T_datetime:
 		return VecToString[types.Datetime](v)
+	case types.T_time:
+		return VecToString[types.Time](v)
 	case types.T_timestamp:
 		return VecToString[types.Timestamp](v)
 	case types.T_decimal64:
@@ -1469,7 +1509,7 @@ func (v *Vector) String() string {
 		return VecToString[types.TS](v)
 	case types.T_Rowid:
 		return VecToString[types.Rowid](v)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
@@ -1482,5 +1522,57 @@ func (v *Vector) String() string {
 
 	default:
 		panic("vec to string unknown types.")
+	}
+}
+
+func GetInitConstVal(typ types.Type) any {
+	switch typ.Oid {
+	case types.T_bool:
+		return false
+	case types.T_int8:
+		return int8(0)
+	case types.T_int16:
+		return int16(0)
+	case types.T_int32:
+		return int32(0)
+	case types.T_int64:
+		return int64(0)
+	case types.T_uint8:
+		return uint8(0)
+	case types.T_uint16:
+		return uint16(0)
+	case types.T_uint32:
+		return uint32(0)
+	case types.T_uint64:
+		return uint64(0)
+	case types.T_float32:
+		return float32(0)
+	case types.T_float64:
+		return float64(0)
+	case types.T_date:
+		return types.Date(0)
+	case types.T_datetime:
+		return types.Datetime(0)
+	case types.T_timestamp:
+		return types.Timestamp(0)
+	case types.T_decimal64:
+		return types.Decimal64{}
+	case types.T_decimal128:
+		return types.Decimal128{}
+	case types.T_uuid:
+		var emptyUuid [16]byte
+		return emptyUuid[:]
+	case types.T_TS:
+		var emptyTs [types.TxnTsSize]byte
+		return emptyTs[:]
+	case types.T_Rowid:
+		var emptyRowid [types.RowidSize]byte
+		return emptyRowid[:]
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		var emptyVarlena [types.VarlenaSize]byte
+		return emptyVarlena[:]
+	default:
+		//T_any T_star T_tuple T_interval
+		return int64(0)
 	}
 }

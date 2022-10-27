@@ -43,9 +43,10 @@ func (h *Handle) GetTxnEngine() moengine.TxnEngine {
 	return h.eng
 }
 
-func NewTAEHandle(opt *options.Options) *Handle {
-	//just for test
-	path := "./store"
+func NewTAEHandle(path string, opt *options.Options) *Handle {
+	if path == "" {
+		path = "./store"
+	}
 	tae, err := openTAE(path, opt)
 	if err != nil {
 		panic(err)
@@ -166,8 +167,8 @@ func (h *Handle) HandlePreCommit(
 					Name:       cmd.Name,
 					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
-						UserID:    cmd.Owner,
-						RoleID:    cmd.Creator,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
 						AccountID: cmd.AccountId,
 					},
 				}
@@ -180,9 +181,9 @@ func (h *Handle) HandlePreCommit(
 			for _, cmd := range cmds {
 				req := db.CreateRelationReq{
 					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
+						UserID:    cmd.Creator,
+						RoleID:    cmd.Owner,
+						AccountID: cmd.AccountId,
 					},
 					Name:         cmd.Name,
 					RelationId:   cmd.TableId,
@@ -200,11 +201,6 @@ func (h *Handle) HandlePreCommit(
 				req := db.DropDatabaseReq{
 					Name: cmd.Name,
 					ID:   cmd.Id,
-					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
-					},
 				}
 				if err = h.HandleDropDatabase(ctx, meta, req,
 					new(db.DropDatabaseResp)); err != nil {
@@ -214,11 +210,6 @@ func (h *Handle) HandlePreCommit(
 		case []catalog.DropOrTruncateTable:
 			for _, cmd := range cmds {
 				req := db.DropOrTruncateRelationReq{
-					AccessInfo: db.AccessInfo{
-						UserID:    req.UserId,
-						RoleID:    req.RoleId,
-						AccountID: req.AccountId,
-					},
 					IsDrop:       cmd.IsDrop,
 					Name:         cmd.Name,
 					ID:           cmd.Id,
@@ -239,12 +230,8 @@ func (h *Handle) HandlePreCommit(
 				panic(err)
 			}
 			req := db.WriteReq{
-				AccessInfo: db.AccessInfo{
-					UserID:    req.UserId,
-					RoleID:    req.RoleId,
-					AccountID: req.AccountId,
-				},
 				Type:         db.EntryType(pe.EntryType),
+				DatabaseId:   pe.GetDatabaseId(),
 				TableID:      pe.GetTableId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
@@ -275,19 +262,14 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabase(ctx, req.Name, txn)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
-	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
-	if err != nil {
-		return
-	}
-	resp.ID = db.GetDatabaseID(ctx)
+	resp.ID = req.DatabaseId
 	return
 }
 
@@ -302,20 +284,10 @@ func (h *Handle) HandleDropDatabase(
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.DropDatabase(ctx, req.Name, txn)
-	if err != nil {
+	if err = h.eng.DropDatabaseByID(ctx, req.ID, txn); err != nil {
 		return
 	}
-
-	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
-	if err != nil {
-		return
-	}
-	resp.ID = db.GetDatabaseID(ctx)
+	resp.ID = req.ID
 	return
 }
 
@@ -330,7 +302,7 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	//ctx := context.Background()
+
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
@@ -338,16 +310,13 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	err = db.CreateRelation(context.TODO(), req.Name, req.Defs)
+
+	err = db.CreateRelationWithID(ctx, req.Name, req.RelationId, req.Defs)
 	if err != nil {
 		return
 	}
 
-	tb, err := db.GetRelation(context.TODO(), req.Name)
-	if err != nil {
-		return
-	}
-	resp.ID = tb.GetRelationID(context.TODO())
+	resp.ID = req.RelationId
 	return
 }
 
@@ -362,23 +331,20 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	if err != nil {
 		return
 	}
-	//ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	db, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
+
+	db, err := h.eng.GetDatabaseByID(ctx, req.DatabaseID, txn)
 	if err != nil {
 		return
 	}
 
 	if req.IsDrop {
-		err = db.DropRelation(context.TODO(), req.Name)
+		err = db.DropRelationByID(ctx, req.ID)
 		if err != nil {
 			return
 		}
 		return
 	}
-	err = db.TruncateRelation(context.TODO(), req.Name)
+	err = db.TruncateRelationByID(ctx, req.ID, req.NewId)
 	return err
 }
 
@@ -395,16 +361,12 @@ func (h *Handle) HandleWrite(
 		return err
 	}
 
-	//ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	dbase, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
+	dbase, err := h.eng.GetDatabaseByID(ctx, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
 
-	tb, err := dbase.GetRelation(context.TODO(), req.TableName)
+	tb, err := dbase.GetRelationByID(ctx, req.TableID)
 	if err != nil {
 		return
 	}
@@ -418,7 +380,7 @@ func (h *Handle) HandleWrite(
 		}
 		//Add a batch into table
 		//TODO::add a parameter to Append for PreCommit-Append?
-		err = tb.Write(context.TODO(), req.Batch)
+		err = tb.Write(ctx, req.Batch)
 		return
 	}
 
@@ -426,7 +388,7 @@ func (h *Handle) HandleWrite(
 
 	//Vecs[0]--> rowid
 	//Vecs[1]--> PrimaryKey
-	err = tb.DeleteByPhyAddrKeys(context.TODO(), req.Batch.GetVector(0))
+	err = tb.DeleteByPhyAddrKeys(ctx, req.Batch.GetVector(0))
 	return
 
 }

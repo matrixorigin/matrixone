@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"encoding/hex"
 	"math"
 	"strconv"
 	"strings"
@@ -165,7 +166,12 @@ var (
 	BoolToBytes         = boolToBytes
 	DateToBytes         = dateToBytes
 	DateToDatetime      = dateToDateTime
+	DateToTime          = dateToTime
 	DatetimeToBytes     = datetimeToBytes
+	DatetimeToTime      = datetimeToTime
+	TimeToBytes         = timeToBytes
+	TimeToDate          = timeToDate
+	TimeToDatetime      = timeToDatetime
 	DatetimeToDate      = datetimeToDate
 	UuidToBytes         = uuidToBytes
 )
@@ -563,10 +569,28 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
+func BytesToInt[T constraints.Signed](xs []string, rs []T, isBin ...bool) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
+	var err error
+	var val int64
 	for i, s := range xs {
-		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
+		if len(isBin) > 0 && isBin[0] {
+			val, err = strconv.ParseInt(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))), 16, 64)
+			if err != nil {
+				if strings.Contains(err.Error(), "value out of range") {
+					return nil, moerr.NewOutOfRange("int", "") // the string maybe non-visibile,don't print it
+				}
+				return nil, moerr.NewInvalidArg("cast to int", s)
+			}
+		} else {
+			val, err = strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
+			if err != nil {
+				if strings.Contains(err.Error(), "value out of range") {
+					return nil, moerr.NewOutOfRange("int", "value '%v'", s)
+				}
+				return nil, moerr.NewInvalidArg("cast to int", s)
+			}
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
 				return nil, moerr.NewOutOfRange("int", "value '%v'", s)
@@ -578,11 +602,16 @@ func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
 	return rs, nil
 }
 
-func BytesToUint[T constraints.Unsigned](xs []string, rs []T) ([]T, error) {
+func BytesToUint[T constraints.Unsigned](xs []string, rs []T, isBin ...bool) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-
+	var err error
+	var val uint64
 	for i, s := range xs {
-		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		if len(isBin) > 0 && isBin[0] {
+			val, err = strconv.ParseUint(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))), 16, 64)
+		} else {
+			val, err = strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
 				return nil, moerr.NewOutOfRange("uint", "value '%v'", s)
@@ -594,8 +623,25 @@ func BytesToUint[T constraints.Unsigned](xs []string, rs []T) ([]T, error) {
 	return rs, nil
 }
 
+// func UtilIntToBytes[T constraints.Integer](n T) []byte {
+// 	x := uint64(n)
+// 	bytesBuffer := bytes.NewBuffer([]byte{})
+// 	binary.Write(bytesBuffer, binary.BigEndian, x)
+// 	bytes := bytesBuffer.Bytes()
+// 	var res []byte
+// 	for i := range bytes {
+// 		if bytes[i] != 0 {
+// 			res = append(res, bytes[i])
+// 		}
+// 	}
+// 	if len(res) == 0 {
+// 		res = append(res, 0)
+// 	}
+// 	return res
+// }
+
 // XXX Potentially we can do much better with types.Varlena
-func IntToBytes[T constraints.Integer](xs []T, rs []string) ([]string, error) {
+func IntToBytes[T constraints.Integer](xs []T, rs []string, ZeroAndBin ...int64) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = strconv.FormatInt(int64(x), 10)
 	}
@@ -624,11 +670,25 @@ func Decimal128ToBytes(xs []types.Decimal128, rs []string, scale int32) ([]strin
 	return rs, nil
 }
 
-func BytesToFloat[T constraints.Float](xs []string, rs []T, isEmptyStringOrNull ...[]int) ([]T, error) {
+func BytesToFloat[T constraints.Float](xs []string, rs []T, isBin bool, isEmptyStringOrNull ...[]int) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
 	for i, s := range xs {
-		val, err := strconv.ParseFloat(s, bitSize)
+		var err error
+		var val float64
+		if isBin {
+			// is there a better way to cast a 0xXXX to a float? let me do like below first
+			Uval, err := strconv.ParseUint(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&s))), 16, 64)
+			if err != nil {
+				if strings.Contains(err.Error(), "value out of range") {
+					return nil, moerr.NewOutOfRange("float", "value '%v'", s)
+				}
+				return nil, moerr.NewInvalidArg("cast to float", s)
+			}
+			val, _ = strconv.ParseFloat(strconv.FormatUint(Uval, 10), bitSize)
+		} else {
+			val, err = strconv.ParseFloat(s, bitSize)
+		}
 		if err != nil {
 			if usedEmptyStringOrNull {
 				if !strings.Contains(err.Error(), "value out of range") {
@@ -718,6 +778,13 @@ func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, err
 	return rs, nil
 }
 
+func dateToTime(xs []types.Date, rs []types.Time) ([]types.Time, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToTime()
+	}
+	return rs, nil
+}
+
 func dateToBytes(xs []types.Date, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String()
@@ -735,6 +802,33 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
+	}
+	return rs, nil
+}
+func datetimeToTime(xs []types.Datetime, rs []types.Time, precision int32) ([]types.Time, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTime(precision)
+	}
+	return rs, nil
+}
+
+func timeToBytes(xs []types.Time, rs []string, precision int32) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.String2(precision)
+	}
+	return rs, nil
+}
+
+func timeToDatetime(xs []types.Time, rs []types.Datetime, precision int32) ([]types.Datetime, error) {
+	for i, x := range xs {
+		rs[i] = x.ToDatetime(precision)
+	}
+	return rs, nil
+}
+
+func timeToDate(xs []types.Time, rs []types.Date) ([]types.Date, error) {
+	for i, x := range xs {
+		rs[i] = x.ToDate()
 	}
 	return rs, nil
 }
@@ -902,6 +996,17 @@ func Decimal128ToDecimal128(xs []types.Decimal128, width, scale int32, rs []type
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		rs[i], err = types.Decimal128_FromString(xStr)
+		if err != nil {
+			return []types.Decimal128{}, moerr.NewOutOfRange("dec128", "value '%v'", x)
+		}
+	}
+	return rs, nil
+}
+
+func BinaryByteToDecimal128(xs []string, rs []types.Decimal128) ([]types.Decimal128, error) {
+	var err error
+	for i, x := range xs {
+		rs[i], err = types.Decimal128_FromString(hex.EncodeToString(*(*[]byte)(unsafe.Pointer(&x))))
 		if err != nil {
 			return []types.Decimal128{}, moerr.NewOutOfRange("dec128", "value '%v'", x)
 		}

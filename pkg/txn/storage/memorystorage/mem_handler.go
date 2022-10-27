@@ -196,11 +196,11 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 	case *engine.ComputeIndexDef:
 		// add index
 		// check existence
-		for i := 0; i < len(def.Names); i++ {
+		for i := 0; i < len(def.IndexNames); i++ {
 			entries, err := m.indexes.Index(tx, Tuple{
 				index_RelationID_Name,
 				req.TableID,
-				Text(def.Names[i]),
+				Text(def.IndexNames[i]),
 			})
 			if err != nil {
 				return err
@@ -216,9 +216,10 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			idxRow := &IndexRow{
 				ID:         id,
 				RelationID: req.TableID,
-				Name:       def.Names[i],
+				IndexName:  def.IndexNames[i],
 				Unique:     def.Uniques[i],
 				TableName:  def.TableNames[i],
+				Field:      def.Fields[i],
 			}
 			if err := m.indexes.Insert(tx, idxRow); err != nil {
 				return err
@@ -445,7 +446,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// insert relation indexes
 	if relIndexes != nil {
-		for i := 0; i < len(relIndexes.Names); i++ {
+		for i := 0; i < len(relIndexes.IndexNames); i++ {
 			id, err := m.idGenerator.NewID(ctx)
 			if err != nil {
 				return err
@@ -453,9 +454,10 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			idxRow := &IndexRow{
 				ID:         id,
 				RelationID: row.ID,
-				Name:       relIndexes.Names[i],
+				IndexName:  relIndexes.IndexNames[i],
 				Unique:     relIndexes.Uniques[i],
 				TableName:  relIndexes.TableNames[i],
+				Field:      relIndexes.Fields[i],
 			}
 			if err := m.indexes.Insert(tx, idxRow); err != nil {
 				return err
@@ -595,19 +597,25 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if err != nil {
 		return err
 	}
-	if len(entries) == 1 && entries[0].Value.Name == req.ColumnName {
-		// by primary key
-		for i := 0; i < reqVecLen; i++ {
-			value := memtable.VectorAt(req.Vector, i)
-			key := DataKey{
-				tableID:    req.TableID,
-				primaryKey: Tuple{memtable.ToOrdered(value.Value)},
-			}
-			if err := m.data.Delete(tx, key); err != nil {
-				return err
-			}
+	if len(entries) == 1 {
+		attr, err := m.attributes.Get(tx, entries[0].Key)
+		if err != nil {
+			return err
 		}
-		return nil
+		if attr.Name == req.ColumnName {
+			// by primary key
+			for i := 0; i < reqVecLen; i++ {
+				value := memtable.VectorAt(req.Vector, i)
+				key := DataKey{
+					tableID:    req.TableID,
+					primaryKey: Tuple{memtable.ToOrdered(value.Value)},
+				}
+				if err := m.data.Delete(tx, key); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 	}
 
 	// by non-primary key, slow but works
@@ -625,7 +633,11 @@ func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req mem
 	if len(entries) != 1 {
 		panic("impossible")
 	}
-	attrIndex := entries[0].Value.Order
+	attr, err := m.attributes.Get(tx, entries[0].Key)
+	if err != nil {
+		return err
+	}
+	attrIndex := attr.Order
 	iter := m.data.NewIter(tx)
 	defer iter.Close()
 	tableKey := DataKey{
@@ -673,13 +685,17 @@ func (m *MemHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for _, entry := range entries {
+		db, err := m.databases.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
 		if err := m.databases.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteRelationsByDBID(tx, entry.Value.ID); err != nil {
+		if err := m.deleteRelationsByDBID(tx, db.ID); err != nil {
 			return err
 		}
-		resp.ID = entry.Value.ID
+		resp.ID = db.ID
 	}
 
 	return nil
@@ -694,13 +710,17 @@ func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID ID) error {
 		return err
 	}
 	for _, entry := range entries {
+		rel, err := m.relations.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
 		if err := m.relations.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
+		if err := m.deleteAttributesByRelationID(tx, rel.ID); err != nil {
 			return err
 		}
-		if err := m.deleteRelationData(tx, entry.Value.ID); err != nil {
+		if err := m.deleteRelationData(tx, rel.ID); err != nil {
 			return err
 		}
 	}
@@ -763,13 +783,17 @@ func (m *MemHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnMeta,
 		panic("impossible")
 	}
 	entry := entries[0]
+	rel, err := m.relations.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
 	if err := m.relations.Delete(tx, entry.Key); err != nil {
 		return err
 	}
-	if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
+	if err := m.deleteAttributesByRelationID(tx, rel.ID); err != nil {
 		return err
 	}
-	resp.ID = entry.Value.ID
+	resp.ID = rel.ID
 	return nil
 }
 
@@ -794,7 +818,11 @@ func (m *MemHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, r
 	}
 
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, string(entry.Value.Name))
+		db, err := m.databases.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Names = append(resp.Names, string(db.Name))
 	}
 
 	return nil
@@ -811,7 +839,11 @@ func (m *MemHandler) HandleGetPrimaryKeys(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 	for _, entry := range entries {
-		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Attrs = append(resp.Attrs, &attr.Attribute)
 	}
 	return nil
 }
@@ -826,7 +858,11 @@ func (m *MemHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, string(entry.Value.Name))
+		rel, err := m.relations.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Names = append(resp.Names, string(rel.Name))
 	}
 	return nil
 }
@@ -944,14 +980,20 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		indexLen := len(entries)
 		if indexLen > 0 {
 			computeIndexDef := &engine.ComputeIndexDef{
-				Names:      make([]string, indexLen),
+				IndexNames: make([]string, indexLen),
 				Uniques:    make([]bool, indexLen),
 				TableNames: make([]string, indexLen),
+				Fields:     make([][]string, indexLen),
 			}
 			for i, entry := range entries {
-				computeIndexDef.Names[i] = entry.Value.Name
-				computeIndexDef.Uniques[i] = entry.Value.Unique
-				computeIndexDef.TableNames[i] = entry.Value.TableName
+				index, err := m.indexes.Get(tx, entry.Key)
+				if err != nil {
+					return err
+				}
+				computeIndexDef.IndexNames[i] = index.IndexName
+				computeIndexDef.Uniques[i] = index.Unique
+				computeIndexDef.TableNames[i] = index.TableName
+				computeIndexDef.Fields[i] = index.Field
 			}
 			resp.Defs = append(resp.Defs, computeIndexDef)
 		}
@@ -983,7 +1025,11 @@ func (m *MemHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, 
 		return err
 	}
 	for _, entry := range entries {
-		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		resp.Attrs = append(resp.Attrs, &attr.Attribute)
 	}
 	return nil
 }
@@ -1042,13 +1088,19 @@ func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, r
 		return err
 	}
 
-	for _, entry := range entries {
-		resp.ID = entry.Value.ID
-		resp.Name = string(entry.Value.Name)
-		return nil
+	if len(entries) == 0 {
+		return moerr.NewNoDB()
 	}
 
-	return moerr.NewNoDB()
+	entry := entries[0]
+	db, err := m.databases.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
+	resp.ID = db.ID
+	resp.Name = string(db.Name)
+
+	return nil
 }
 
 func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.OpenRelationReq, resp *memoryengine.OpenRelationResp) error {
@@ -1065,10 +1117,14 @@ func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, r
 		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
 	}
 	entry := entries[0]
-	resp.ID = entry.Value.ID
-	resp.Type = entry.Value.Type
-	resp.RelationName = string(entry.Value.Name)
-	db, err := m.databases.Get(tx, entry.Value.DatabaseID)
+	rel, err := m.relations.Get(tx, entry.Key)
+	if err != nil {
+		return err
+	}
+	resp.ID = rel.ID
+	resp.Type = rel.Type
+	resp.RelationName = string(rel.Name)
+	db, err := m.databases.Get(tx, rel.DatabaseID)
 	if err != nil {
 		return err
 	}
@@ -1379,7 +1435,11 @@ func (m *MemHandler) iterRelationAttributes(
 		return err
 	}
 	for _, entry := range entries {
-		if err := fn(entry.Key, entry.Value); err != nil {
+		attr, err := m.attributes.Get(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+		if err := fn(entry.Key, attr); err != nil {
 			return err
 		}
 	}

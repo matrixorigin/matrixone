@@ -91,7 +91,11 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(nil)
 	param := arg.(*Argument).Es
 	param.Fileparam.mu.Lock()
 	if param.Fileparam.End {
@@ -115,6 +119,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, err
 	}
 	proc.SetInputBatch(bat)
+	anal.Output(bat)
+	anal.Alloc(int64(bat.Size()))
 	return false, nil
 }
 
@@ -249,6 +255,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
+		vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -356,7 +363,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +489,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 		}
 		vec := bat.Vecs[colIdx]
 		isNullOrEmpty := field == NULL_FLAG
-		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+		if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
@@ -702,7 +709,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -741,6 +748,19 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Date type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_time:
+			//cols := vec.Col.([]types.Time)
+			cols := vector.MustTCols[types.Time](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseTime(field, vec.Typ.Precision)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not Datetime type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}
@@ -799,6 +819,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
+		case types.T_uuid:
+			cols := vector.MustTCols[types.Uuid](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseUuid(field)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not uuid type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}

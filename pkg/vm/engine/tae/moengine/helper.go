@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -100,10 +101,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 
 	if len(schema.IndexInfos) != 0 {
 		indexDef := new(engine.ComputeIndexDef)
+		indexDef.Fields = make([][]string, 0)
 		for _, indexInfo := range schema.IndexInfos {
-			indexDef.Names = append(indexDef.Names, indexInfo.Name)
+			indexDef.IndexNames = append(indexDef.IndexNames, indexInfo.Name)
 			indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
 			indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
+			indexDef.Fields = append(indexDef.Fields, indexInfo.Field)
 		}
 		defs = append(defs, indexDef)
 	}
@@ -215,13 +218,70 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			schema.View = defVal.View
 
 		case *engine.ComputeIndexDef:
-			for i := range defVal.Names {
+			for i := range defVal.IndexNames {
 				schema.IndexInfos = append(schema.IndexInfos, &catalog.ComputeIndexInfo{
-					Name:      defVal.Names[i],
+					Name:      defVal.IndexNames[i],
 					TableName: defVal.TableNames[i],
 					Unique:    defVal.Uniques[i],
+					Field:     defVal.Fields[i],
 				})
 			}
+
+		default:
+			// We will not deal with other cases for the time being
+		}
+	}
+	if err = schema.Finalize(false); err != nil {
+		return
+	}
+	return
+}
+
+// this function used in Precommit. CN won't give PrimaryIndexDef and ComputeIndexDef
+// HandleDefsToSchema assume there is at most one AttributeDef with Primary true. TODO:
+func HandleDefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
+	schema = catalog.NewEmptySchema(name)
+
+	have_one := false
+	for _, def := range defs {
+		switch defVal := def.(type) {
+		case *engine.AttributeDef:
+			if defVal.Attr.Primary {
+				if have_one {
+					panic(moerr.NewInternalError("%s more one pk", name))
+				} else {
+					have_one = true
+				}
+				if err = schema.AppendPKColWithAttribute(defVal.Attr, 0); err != nil {
+					return
+				}
+			} else {
+				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
+					return
+				}
+			}
+
+		case *engine.PropertiesDef:
+			for _, property := range defVal.Properties {
+				switch strings.ToLower(property.Key) {
+				case pkgcatalog.SystemRelAttr_Comment:
+					schema.Comment = property.Value
+				case pkgcatalog.SystemRelAttr_Kind:
+					schema.Relkind = property.Value
+				case pkgcatalog.SystemRelAttr_CreateSQL:
+					schema.Createsql = property.Value
+				default:
+				}
+			}
+
+		case *engine.PartitionDef:
+			schema.Partition = defVal.Partition
+
+		case *engine.ViewDef:
+			schema.View = defVal.View
+
+		case *engine.CommentDef:
+			schema.Comment = defVal.Comment
 
 		default:
 			// We will not deal with other cases for the time being

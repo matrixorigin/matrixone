@@ -72,6 +72,9 @@ func init() {
 		newTestCase(true, mp, types.New(types.T_date, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_date, 0, 0, 0)),
 
+		newTestCase(true, mp, types.New(types.T_time, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_time, 0, 0, 0)),
+
 		newTestCase(true, mp, types.New(types.T_datetime, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_datetime, 0, 0, 0)),
 
@@ -89,6 +92,9 @@ func init() {
 
 		newTestCase(true, mp, types.New(types.T_blob, 0, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_blob, 0, 0, 0)),
+
+		newTestCase(true, mp, types.New(types.T_text, 0, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_text, 0, 0, 0)),
 	}
 }
 

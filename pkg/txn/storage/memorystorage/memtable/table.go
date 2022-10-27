@@ -40,16 +40,22 @@ type tableState[
 	K Ordered[K],
 	V any,
 ] struct {
-	rows    *btree.BTreeG[*PhysicalRow[K, V]]
-	indexes *btree.BTreeG[*IndexEntry[K, V]]
-	writes  *btree.BTreeG[*WriteEntry[K, V]]
+	rows                 *btree.BTreeG[*PhysicalRow[K, V]]
+	indexes              *btree.BTreeG[*IndexEntry[K, V]]
+	reverseIndexes       *btree.BTreeG[*ReverseIndexEntry[K, V]]
+	writes               *btree.BTreeG[*WriteEntry[K, V]]
+	uniqueIndexes        *btree.BTreeG[*IndexEntry[K, V]]
+	reverseUniqueIndexes *btree.BTreeG[*ReverseIndexEntry[K, V]]
 }
 
 func (t *tableState[K, V]) Copy() *tableState[K, V] {
 	return &tableState[K, V]{
-		rows:    t.rows.Copy(),
-		indexes: t.indexes.Copy(),
-		writes:  t.writes.Copy(),
+		rows:                 t.rows.Copy(),
+		indexes:              t.indexes.Copy(),
+		reverseIndexes:       t.reverseIndexes.Copy(),
+		writes:               t.writes.Copy(),
+		uniqueIndexes:        t.uniqueIndexes.Copy(),
+		reverseUniqueIndexes: t.reverseUniqueIndexes.Copy(),
 	}
 }
 
@@ -57,10 +63,7 @@ type Row[K any, V any] interface {
 	Key() K
 	Value() V
 	Indexes() []Tuple
-}
-
-type Ordered[To any] interface {
-	Less(to To) bool
+	UniqueIndexes() []Tuple
 }
 
 type IndexEntry[
@@ -70,7 +73,15 @@ type IndexEntry[
 	Index     Tuple
 	Key       K
 	VersionID int64
-	Value     V
+}
+
+type ReverseIndexEntry[
+	K Ordered[K],
+	V any,
+] struct {
+	Key       K
+	VersionID int64
+	Index     Tuple
 }
 
 type WriteEntry[
@@ -78,8 +89,9 @@ type WriteEntry[
 	V any,
 ] struct {
 	Transaction *Transaction
-	Row         *PhysicalRow[K, V]
-	VersionID   int64
+	Key         *K
+
+	VersionID int64
 }
 
 func NewTable[
@@ -89,9 +101,12 @@ func NewTable[
 ]() *Table[K, V, R] {
 	ret := &Table[K, V, R]{}
 	state := &tableState[K, V]{
-		rows:    btree.NewBTreeG(comparePhysicalRow[K, V]),
-		indexes: btree.NewBTreeG(compareIndexEntry[K, V]),
-		writes:  btree.NewBTreeG(compareWriteEntry[K, V]),
+		rows:                 btree.NewBTreeG(comparePhysicalRow[K, V]),
+		indexes:              btree.NewBTreeG(compareIndexEntry[K, V]),
+		reverseIndexes:       btree.NewBTreeG(compareReverseIndexEntry[K, V]),
+		writes:               btree.NewBTreeG(compareWriteEntry[K, V]),
+		uniqueIndexes:        btree.NewBTreeG(compareIndexEntry[K, V]),
+		reverseUniqueIndexes: btree.NewBTreeG(compareReverseIndexEntry[K, V]),
 	}
 	ret.state.Store(state)
 	return ret
@@ -123,6 +138,25 @@ func compareIndexEntry[
 	return a.VersionID < b.VersionID
 }
 
+func compareReverseIndexEntry[
+	K Ordered[K],
+	V any,
+](a, b *ReverseIndexEntry[K, V]) bool {
+	if a.Key.Less(b.Key) {
+		return true
+	}
+	if b.Key.Less(a.Key) {
+		return false
+	}
+	if a.VersionID < b.VersionID {
+		return true
+	}
+	if b.VersionID < a.VersionID {
+		return false
+	}
+	return a.Index.Less(b.Index)
+}
+
 func compareWriteEntry[
 	K Ordered[K],
 	V any,
@@ -133,15 +167,15 @@ func compareWriteEntry[
 	if a.Transaction.ID > b.Transaction.ID {
 		return false
 	}
-	if a.Row != nil && b.Row != nil {
-		if a.Row.Key.Less(b.Row.Key) {
+	if a.Key != nil && b.Key != nil {
+		if (*a.Key).Less(*b.Key) {
 			return true
 		}
-		if b.Row.Key.Less(a.Row.Key) {
+		if (*b.Key).Less(*a.Key) {
 			return false
 		}
 	}
-	return a.Row == nil && b.Row != nil
+	return a.Key == nil && b.Key != nil
 }
 
 func (t *Table[K, V, R]) Insert(
@@ -173,20 +207,15 @@ func (t *Table[K, V, R]) Insert(
 		}
 
 		// index entry
-		for _, index := range row.Indexes() {
-			state.indexes.Set(&IndexEntry[K, V]{
-				Index:     index,
-				Key:       key,
-				VersionID: version.ID,
-				Value:     value,
-			})
+		if err := setIndexes(tx, t, state, key, version, row); err != nil {
+			return err
 		}
 
 		// write entry
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -217,20 +246,15 @@ func (t *Table[K, V, R]) Update(
 		}
 
 		// index entry
-		for _, index := range row.Indexes() {
-			state.indexes.Set(&IndexEntry[K, V]{
-				Index:     index,
-				Key:       key,
-				VersionID: version.ID,
-				Value:     value,
-			})
+		if err := setIndexes(tx, t, state, key, version, row); err != nil {
+			return err
 		}
 
 		// write entry
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -262,7 +286,7 @@ func (t *Table[K, V, R]) Delete(
 		tx.committers[t] = struct{}{}
 		state.writes.Set(&WriteEntry[K, V]{
 			Transaction: tx,
-			Row:         physicalRow,
+			Key:         &key,
 			VersionID:   version.ID,
 		})
 
@@ -273,6 +297,125 @@ func (t *Table[K, V, R]) Delete(
 		return nil
 	})
 
+}
+
+func (t *Table[K, V, R]) Upsert(
+	tx *Transaction,
+	row R,
+) error {
+	key := row.Key()
+
+	return t.update(func(state *tableState[K, V]) error {
+		physicalRow := getOrSetRowByKey(state.rows, key)
+
+		value := row.Value()
+		updatedPhysicalRow, version, err := physicalRow.Update(
+			tx.Time, tx, value,
+		)
+		if err != nil {
+
+			if errors.Is(err, sql.ErrNoRows) {
+				// insert
+				if err := validate(physicalRow, tx); err != nil {
+					return err
+				}
+
+				for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+					version := physicalRow.Versions[i]
+					if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy.Read) {
+						return moerr.NewDuplicate()
+					}
+				}
+
+				value := row.Value()
+				physicalRow, version, err = physicalRow.Insert(
+					tx.Time, tx, value,
+				)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				return err
+			}
+		} else {
+			physicalRow = updatedPhysicalRow
+		}
+
+		// index entry
+		if err := setIndexes(tx, t, state, key, version, row); err != nil {
+			return err
+		}
+
+		// write entry
+		tx.committers[t] = struct{}{}
+		state.writes.Set(&WriteEntry[K, V]{
+			Transaction: tx,
+			Key:         &key,
+			VersionID:   version.ID,
+		})
+
+		// row entry
+		state.rows.Set(physicalRow)
+
+		tx.Time.Tick()
+		return nil
+	})
+}
+
+func setIndexes[
+	K Ordered[K],
+	V any,
+	R Row[K, V],
+](
+	tx *Transaction,
+	table *Table[K, V, R],
+	state *tableState[K, V],
+	key K,
+	version *Version[V],
+	row R,
+) error {
+
+	// index entries
+	for _, index := range row.Indexes() {
+		state.indexes.Set(&IndexEntry[K, V]{
+			Index:     index,
+			Key:       key,
+			VersionID: version.ID,
+		})
+		state.reverseIndexes.Set(&ReverseIndexEntry[K, V]{
+			Key:       key,
+			VersionID: version.ID,
+			Index:     index,
+		})
+	}
+
+	// unique index entries
+	uniqueIndexes := row.UniqueIndexes()
+	for _, index := range uniqueIndexes {
+		iter := table.newIndexIter(
+			state.uniqueIndexes.Copy().Iter(),
+			state.rows,
+			tx,
+			index,
+			append(index, Min),
+		)
+		for ok := iter.First(); ok; ok = iter.Next() {
+			return moerr.NewDuplicate()
+		}
+		state.uniqueIndexes.Set(&IndexEntry[K, V]{
+			Index:     index,
+			Key:       key,
+			VersionID: version.ID,
+		})
+		state.reverseUniqueIndexes.Set(&ReverseIndexEntry[K, V]{
+			Key:       key,
+			VersionID: version.ID,
+			Index:     index,
+		})
+	}
+
+	return nil
 }
 
 func (t *Table[K, V, R]) Get(
@@ -331,35 +474,15 @@ func getOrSetRowByKey[
 }
 
 func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEntry[K, V], err error) {
-	state := t.state.Load()
-	iter := state.indexes.Copy().Iter()
-	defer iter.Release()
-	pivot := &IndexEntry[K, V]{
-		Index: index,
-	}
-	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+	iter := t.NewIndexIter(
+		tx,
+		index,
+		index,
+	)
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
-		if index.Less(entry.Index) {
-			break
-		}
-		if entry.Index.Less(index) {
-			break
-		}
-
-		physicalRow := getRowByKey(state.rows, entry.Key)
-		if physicalRow == nil {
-			continue
-		}
-		currentVersion, err := physicalRow.readVersion(tx.Time, tx)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return nil, err
-		}
-		if currentVersion.ID == entry.VersionID {
-			entries = append(entries, entry)
-		}
+		entries = append(entries, entry)
 	}
 	return
 }
@@ -377,22 +500,59 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				break
 			}
 
-			if err := validate(entry.Row, tx); err != nil {
+			key := *entry.Key
+			physicalRow := getRowByKey(state.rows, key)
+			if err := validate(physicalRow, tx); err != nil {
 				return err
 			}
 
-			// set born time and lock time to commit time
-			physicalRow := entry.Row.clone()
+			physicalRow = physicalRow.clone()
 			for i, version := range physicalRow.Versions {
-				if version.ID == entry.VersionID {
-					if version.LockTx == tx {
-						version.LockTime = tx.CommitTime
-					}
-					if version.BornTx == tx {
-						version.BornTime = tx.CommitTime
-					}
-					physicalRow.Versions[i] = version
+				if version.ID != entry.VersionID {
+					continue
 				}
+
+				// set born time and lock time to commit time
+				if version.LockTx == tx {
+					version.LockTime = tx.CommitTime
+				}
+				if version.BornTx == tx {
+					version.BornTime = tx.CommitTime
+				}
+
+				// check unique index
+				reverseIter := state.reverseUniqueIndexes.Copy().Iter()
+				pivot := &ReverseIndexEntry[K, V]{
+					Key:       key,
+					VersionID: version.ID,
+					Index:     Tuple{Min},
+				}
+				for ok := reverseIter.Seek(pivot); ok; ok = reverseIter.Next() {
+					entry := reverseIter.Item()
+					if key.Less(entry.Key) {
+						break
+					}
+					if entry.VersionID != version.ID {
+						break
+					}
+					iter := t.newIndexIter(
+						state.uniqueIndexes.Copy().Iter(),
+						state.rows,
+						tx,
+						entry.Index,
+						append(entry.Index, Min),
+					)
+					for ok := iter.First(); ok; ok = iter.Next() {
+						index := iter.Item()
+						if index.Key.Less(entry.Key) ||
+							entry.Key.Less(index.Key) ||
+							index.VersionID != entry.VersionID {
+							return moerr.NewDuplicate()
+						}
+					}
+				}
+
+				physicalRow.Versions[i] = version
 			}
 			state.rows.Set(physicalRow)
 
@@ -405,8 +565,79 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 
 }
 
-func (t *Table[K, V, R]) AbortTx(tx *Transaction) {
-	t.update(func(state *tableState[K, V]) error {
+func (t *Table[K, V, R]) FilterVersions(filterFunc func(K, []Version[V]) ([]Version[V], error), keys ...K) error {
+	return t.update(func(state *tableState[K, V]) error {
+		for _, key := range keys {
+			physicalRow := getRowByKey(state.rows, key)
+			newVersions, err := filterFunc(key, physicalRow.Versions)
+			if err != nil {
+				return err
+			}
+
+			if len(newVersions) == 0 {
+				// delete
+				state.rows.Delete(physicalRow)
+			} else {
+				// update
+				physicalRow = physicalRow.clone()
+				physicalRow.Versions = newVersions
+				state.rows.Set(physicalRow)
+			}
+
+			newVersionIDSet := make(map[int64]bool)
+			for _, v := range newVersions {
+				newVersionIDSet[v.ID] = true
+			}
+
+			// remove indexes
+			iter := state.reverseIndexes.Copy().Iter()
+			for ok := iter.Seek(&ReverseIndexEntry[K, V]{
+				Key:       key,
+				VersionID: 0,
+			}); ok; ok = iter.Next() {
+				entry := iter.Item()
+				if key.Less(entry.Key) {
+					break
+				}
+				if newVersionIDSet[entry.VersionID] {
+					continue
+				}
+				state.indexes.Delete(&IndexEntry[K, V]{
+					Index:     entry.Index,
+					Key:       entry.Key,
+					VersionID: entry.VersionID,
+				})
+				state.reverseIndexes.Delete(entry)
+			}
+
+			// remove unique indexes
+			iter = state.reverseUniqueIndexes.Copy().Iter()
+			for ok := iter.Seek(&ReverseIndexEntry[K, V]{
+				Key:       key,
+				VersionID: 0,
+			}); ok; ok = iter.Next() {
+				entry := iter.Item()
+				if key.Less(entry.Key) {
+					break
+				}
+				if newVersionIDSet[entry.VersionID] {
+					continue
+				}
+				state.uniqueIndexes.Delete(&IndexEntry[K, V]{
+					Index:     entry.Index,
+					Key:       entry.Key,
+					VersionID: entry.VersionID,
+				})
+				state.reverseUniqueIndexes.Delete(entry)
+			}
+
+		}
+		return nil
+	})
+}
+
+func (t *Table[K, V, R]) AbortTx(tx *Transaction) error {
+	return t.update(func(state *tableState[K, V]) error {
 		iter := state.writes.Copy().Iter()
 		defer iter.Release()
 		pivot := &WriteEntry[K, V]{

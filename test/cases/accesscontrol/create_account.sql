@@ -1,5 +1,5 @@
 --env prepare statement
-drop account if exists test@123456;
+drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
 drop account if exists _acc;
@@ -8,7 +8,7 @@ drop account if exists _acc1;
 drop account if exists FaSt;
 drop account if exists `123`;
 drop account if exists a123;
-drop account if exists abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff;
+drop account if exists `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
 drop account if exists abc;
 drop account if exists abcd;
 drop account if exists cm1;
@@ -23,7 +23,7 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 
 --2.account name字符，数字，特殊字符混合 ,admin_name/auth_string数字英文中文特殊符号组合，特殊字符打头，大小写不敏感，auth_string大小写敏感,覆盖"",'',``
-create account test@123456 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='test@123456';
 create account testaccount ADMIN_NAME 'admin@123' IDENTIFIED BY 'yyyy_1234@126.com';
 select account_name from mo_catalog.mo_account where account_name='testaccount';
@@ -51,8 +51,10 @@ create account `非常` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='非常';
 
 --3.account name,admin_name,auth_string长度180字符, "",'',``前后空格清除
-create account abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff admin_name 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd' IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
-select account_name from mo_catalog.mo_account where account_name='abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+-- @bvt:issue#6038
+create account `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
+select account_name from mo_catalog.mo_account where account_name=`abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
+-- @bvt:issue
 create account ` user_strip_01 ` ADMIN_NAME " admin " IDENTIFIED BY " 123456 ";
 select account_name from mo_catalog.mo_account where account_name='user_strip_01';
 

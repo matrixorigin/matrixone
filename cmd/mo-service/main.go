@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -61,7 +63,17 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-	rand.Seed(time.Now().UnixNano())
+	if *httpListenAddr != "" {
+		go func() {
+			http.ListenAndServe(*httpListenAddr, nil)
+		}()
+	}
+
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
+		panic(err)
+	}
+	rand.Seed(seed)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
@@ -105,21 +117,17 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// TODO: Use real task storage. And Each service initializes the logger with its own UUID
-	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage(),
-		logutil.GetGlobalLogger().With(zap.String("node", cfg.LogService.UUID)))
-
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
 	}
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs, ts)
+		return startCNService(cfg, stopper, fs)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper, fs, ts)
+		return startLogService(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
 	}
@@ -129,9 +137,8 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
-	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
@@ -140,7 +147,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
-			taskService,
+			cnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -149,6 +156,7 @@ func startCNService(
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
+		// TODO: global client need to refactor
 		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
 		if err != nil {
 			panic(err)
@@ -169,7 +177,7 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
-	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
@@ -196,10 +204,9 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService, taskService)
+	s, err := logservice.NewService(lscfg, fileService)
 	if err != nil {
 		panic(err)
 	}
@@ -254,6 +261,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetFSWriterFactory(fs, UUID, nodeRole)
+		_ = export.SetPathBuilder(SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
 		initWG.Add(1)
@@ -266,7 +274,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithFSWriterFactory(writerFactory),
 				trace.WithExportInterval(SV.TraceExportInterval),
 				trace.WithLongQueryTime(SV.LongQueryTime),
-				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)
@@ -289,7 +296,6 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	if SV.MergeCycle > 0 {
 		stopper.RunNamedTask("merge", func(ctx context.Context) {
 			merge, inited := export.NewMergeService(ctx,
-				export.WithDB(metric.MetricDBConst),
 				export.WithTable(metric.SingleMetricTable),
 				export.WithFileService(fs),
 				export.WithMinFilesMerge(1),

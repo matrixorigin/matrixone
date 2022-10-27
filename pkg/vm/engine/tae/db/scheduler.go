@@ -117,7 +117,7 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	if err != nil {
 		return err
 	}
-	s.db.CKPDriver.EnqueueCheckpointEntry(entry)
+	s.db.BGCheckpointRunner.EnqueueWait(entry)
 	return
 }
 

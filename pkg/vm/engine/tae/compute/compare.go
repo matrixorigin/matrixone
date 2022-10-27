@@ -84,11 +84,13 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return CompareOrdered[types.Timestamp](a, b)
 	case types.T_date:
 		return CompareOrdered[types.Date](a, b)
+	case types.T_time:
+		return CompareOrdered[types.Time](a, b)
 	case types.T_datetime:
 		return CompareOrdered[types.Datetime](a, b)
 	case types.T_uuid:
 		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return CompareBytes(a, b)
 	default:
 		panic("unsupported type")

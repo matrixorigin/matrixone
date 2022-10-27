@@ -195,7 +195,7 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		if vec.IsScalarNull() {
 			value = Nullable{
 				IsNull: true,
@@ -221,6 +221,21 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 		value = Nullable{
 			IsNull: vec.GetNulls().Contains(uint64(i)),
 			Value:  vec.Col.([]types.Date)[i],
+		}
+		return
+
+	case types.T_time:
+		if vec.IsScalarNull() {
+			var zero types.Time
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Time)[i],
 		}
 		return
 

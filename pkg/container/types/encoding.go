@@ -31,6 +31,7 @@ import (
 const (
 	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
+	TimeSize       int = 8
 	DatetimeSize   int = 8
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
@@ -199,6 +200,14 @@ func DecodeDate(v []byte) Date {
 	return *(*Date)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeTime(v *Time) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
+}
+
+func DecodeTime(v []byte) Time {
+	return *(*Time)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDatetime(v *Datetime) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
@@ -309,6 +318,8 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[float64](val)
 	case T_date:
 		return DecodeFixed[Date](val)
+	case T_time:
+		return DecodeFixed[Time](val)
 	case T_datetime:
 		return DecodeFixed[Datetime](val)
 	case T_timestamp:
@@ -323,7 +334,7 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
@@ -360,6 +371,8 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Decimal128))
 	case T_date:
 		return EncodeFixed(val.(Date))
+	case T_time:
+		return EncodeFixed(val.(Time))
 	case T_timestamp:
 		return EncodeFixed(val.(Timestamp))
 	case T_datetime:
@@ -370,7 +383,7 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(TS))
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
-	case T_char, T_varchar, T_blob, T_json:
+	case T_char, T_varchar, T_blob, T_json, T_text:
 		return val.([]byte)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", typ))
@@ -442,6 +455,11 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		case Date:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Time:
 			if nr, err = w.Write(EncodeFixed(v)); err != nil {
 				return
 			}

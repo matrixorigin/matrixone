@@ -83,8 +83,10 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 			}
 		} else {
 			var v T2
-			a.es = append(a.es, true)
-			a.vs = append(a.vs, v)
+			for i := 0; i < size; i++ {
+				a.es = append(a.es, true)
+				a.vs = append(a.vs, v)
+			}
 		}
 		a.grows(size)
 		return nil
@@ -105,7 +107,6 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		m.Free(a.da)
 		a.da = data
 		a.vs = types.DecodeSlice[T2](a.da)
 	}
