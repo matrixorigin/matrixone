@@ -173,7 +173,6 @@ Using JDBC to develop applications, MatrixOne supports the following classes and
 | update()(String of data types) | Y |
 | updateNull() | Y |
 
-
 ## 4. Method of the ResultSetMetaData
 
 | Method of the ResultSetMetaData| Supported（Y）/Not support（N） |
