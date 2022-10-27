@@ -46,7 +46,11 @@ func testFileService(
 
 		assert.Equal(t, fsName, fs.Name())
 
-		err := fs.Write(ctx, IOVector{
+		entries, err := fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.Equal(t, 0, len(entries))
+
+		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
@@ -67,6 +71,10 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
+		entries, err = fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(entries))
 
 		buf1 := new(bytes.Buffer)
 		var r io.ReadCloser
@@ -158,7 +166,7 @@ func testFileService(
 			filePath := fmt.Sprintf("%d", mrand.Int63())
 
 			// random content
-			content := make([]byte, 512)
+			content := make([]byte, _BlockContentSize*4)
 			_, err := rand.Read(content)
 			assert.Nil(t, err)
 			parts := randomSplit(content, 32)

@@ -184,6 +184,7 @@ func TestS3FSMinioServer(t *testing.T) {
 					ep aws.Endpoint,
 					err error,
 				) {
+					_ = options
 					ep.URL = endpoint
 					ep.Source = aws.EndpointSourceCustom
 					ep.HostnameImmutable = true
