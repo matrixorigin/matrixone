@@ -719,7 +719,7 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
 	if negate == 1 {
 		symbol = '-'
 	}
-	day, pos, _ := mp.io.ReadUint32(data, pos)
+	day, pos, _ := mp.io.ReadUint64(data, pos)
 	hour := data[pos]
 	pos++
 	minute := data[pos]
