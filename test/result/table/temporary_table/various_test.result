@@ -24,27 +24,22 @@ c
 3
 8
 4
--- test join between temporary table and normal table
 select * from t1,t2,t3 where t1.a = t2.c and t1.b > t3.a;
 a   b   c   a
 2   2   2   1
 4   5   4   1
 4   5   4   2
 drop table t2;
-ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
 truncate table t1;
-ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
 insert into t1 values(1,1),(1,2);
-ERROR 20305 (HY000): tae data: duplicate
 drop table if exists t4;
 create temporary table t4(a int auto_increment,b varchar(20));
 insert into t4 values(1,"abc");
-ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
 insert into t4(b) values("def");
-ERROR 20403 (HY000): no such table temp-db.%!%mo_increment_columns
 select * from t4;
-Empty set
--- test subquery
+a   b
+1   abc
+2   def
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -62,8 +57,6 @@ select * from t3 where a in (select b from t2 where b > 7);
 a
 select * from t3 where a not in (select b from t2);
 a
-
--- test load data
 drop table if exists t1;
 create temporary table t1(
 col1 tinyint,
