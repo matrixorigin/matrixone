@@ -390,10 +390,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		if err != nil {
 			return nil, err
 		}
+		fileSize := info.Size()
+		nBlock := ceilingDiv(fileSize, _BlockContentSize)
+		contentSize := fileSize - _ChecksumSize*nBlock
 		ret = append(ret, DirEntry{
 			Name:  name,
 			IsDir: entry.IsDir(),
-			Size:  info.Size(),
+			Size:  contentSize,
 		})
 	}
 
