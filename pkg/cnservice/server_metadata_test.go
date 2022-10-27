@@ -30,10 +30,11 @@ func TestInitMetadata(t *testing.T) {
 	assert.NoError(t, err)
 
 	s := &service{logger: logutil.GetPanicLogger(), metadataFS: fs}
-	s.metadata.UUID = "1"
+	s.cfg = &Config{UUID: "1"}
+	s.metadata.UUID = s.cfg.UUID
 	assert.NoError(t, s.initMetadata())
 
-	v, err := file.ReadFile(s.metadataFS, metadataFile)
+	v, err := file.ReadFile(s.metadataFS, getMetadataFile("1"))
 	assert.NoError(t, err)
 	assert.NotEmpty(t, v)
 }
@@ -44,10 +45,11 @@ func TestInitMetadataWithExistData(t *testing.T) {
 	value := metadata.CNStore{
 		UUID: "cn1",
 	}
-	assert.NoError(t, file.WriteFile(fs, metadataFile, protoc.MustMarshal(&value)))
+	assert.NoError(t, file.WriteFile(fs, getMetadataFile(value.UUID), protoc.MustMarshal(&value)))
 
 	s := &service{logger: logutil.GetPanicLogger(), metadataFS: fs}
-	s.metadata.UUID = "cn1"
+	s.cfg = &Config{UUID: "cn1"}
+	s.metadata.UUID = s.cfg.UUID
 	assert.NoError(t, s.initMetadata())
 	assert.Equal(t, value, s.metadata)
 }
@@ -65,7 +67,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 	value := metadata.CNStore{
 		UUID: "cn1",
 	}
-	assert.NoError(t, file.WriteFile(fs, metadataFile, protoc.MustMarshal(&value)))
+	assert.NoError(t, file.WriteFile(fs, getMetadataFile(value.UUID), protoc.MustMarshal(&value)))
 
 	s := &service{logger: logutil.GetPanicLogger(), metadataFS: fs}
 	assert.NoError(t, s.initMetadata())
