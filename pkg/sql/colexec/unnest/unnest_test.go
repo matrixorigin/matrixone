@@ -163,7 +163,7 @@ func TestCall(t *testing.T) {
 		var inputBat *batch.Batch
 		switch ut.jsonType {
 		case "str":
-			//beforeMem := ut.proc.Mp().CurrNB()
+			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Es.ExprList = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
@@ -171,8 +171,12 @@ func TestCall(t *testing.T) {
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
+			ut.proc.InputBatch().Clean(ut.proc.Mp())
+			inputBat.Clean(ut.proc.Mp())
+			afterMem := ut.proc.Mp().CurrNB()
+			require.Equal(t, beforeMem, afterMem)
 		case "json":
-			//beforeMem := ut.proc.Mp().CurrNB()
+			beforeMem := ut.proc.Mp().CurrNB()
 			inputBat, err = makeTestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Es.ExprList = makeColExprs(ut.jsonType, ut.paths, ut.outers)
@@ -180,6 +184,10 @@ func TestCall(t *testing.T) {
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.False(t, end)
+			ut.proc.InputBatch().Clean(ut.proc.Mp())
+			inputBat.Clean(ut.proc.Mp())
+			afterMem := ut.proc.Mp().CurrNB()
+			require.Equal(t, beforeMem, afterMem)
 		}
 	}
 }

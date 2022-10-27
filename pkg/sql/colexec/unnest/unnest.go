@@ -69,15 +69,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			if rbat != nil {
 				rbat.Clean(proc.Mp())
 			}
-			if jsonVec != nil {
-				jsonVec.Free(proc.Mp())
-			}
-			if pathVec != nil {
-				pathVec.Free(proc.Mp())
-			}
-			if outerVec != nil {
-				outerVec.Free(proc.Mp())
-			}
+		}
+		if jsonVec != nil {
+			jsonVec.Free(proc.Mp())
+		}
+		if pathVec != nil {
+			pathVec.Free(proc.Mp())
+		}
+		if outerVec != nil {
+			outerVec.Free(proc.Mp())
 		}
 	}()
 	param := arg.(*Argument).Es
