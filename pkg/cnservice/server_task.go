@@ -215,9 +215,6 @@ func (s *service) registerExecutors() {
 				panic(moerr.NewInternalError("task Service not ok"))
 			}
 
-			// init metric/log merge task executor
-			s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
-				export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 			// init metric/log merge task cron rule
 			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
 				return err
@@ -225,4 +222,8 @@ func (s *service) registerExecutors() {
 
 			return nil
 		})
+
+	// init metric/log merge task executor
+	s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 }

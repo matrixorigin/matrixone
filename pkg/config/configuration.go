@@ -115,8 +115,8 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
-	// defaultMergeCycle default: 14400 sec
-	defaultMergeCycle = 14400
+	// defaultMergeCycle default: 4 hours
+	defaultMergeCycle = 4 * time.Hour
 
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
@@ -400,7 +400,7 @@ type ObservabilityParameters struct {
 
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
-	MergeCycle int `toml:"mergeCycle"`
+	MergeCycle toml.Duration `toml:"mergeCycle"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
@@ -433,8 +433,8 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
-	if op.MergeCycle <= 0 {
-		op.MergeCycle = defaultMergeCycle
+	if op.MergeCycle.Duration <= 0 {
+		op.MergeCycle.Duration = defaultMergeCycle
 	}
 
 	if op.PathBuilder == "" {

@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -293,8 +292,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if SV.MergeCycle > 0 {
-		err = export.InitCronExpr(time.Duration(SV.MergeCycle) * time.Second)
+	if SV.MergeCycle.Duration > 0 {
+		err = export.InitCronExpr(SV.MergeCycle.Duration)
 		if err != nil {
 			return err
 		}

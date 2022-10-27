@@ -239,7 +239,7 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		<-m.runningJobs
 	}()
 
-	if len(paths) <= m.MinFilesMerge {
+	if len(paths) < m.MinFilesMerge {
 		return moerr.NewInternalError("file cnt(%d) less then threshold(%d)", len(paths), m.MinFilesMerge)
 	}
 
