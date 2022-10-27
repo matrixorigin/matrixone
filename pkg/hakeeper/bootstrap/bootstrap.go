@@ -75,9 +75,7 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 		}
 
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
-			return nil, moerr.NewInternalError("not enough log stores, replicas %d, stores %d",
-				shardRecord.NumberOfReplicas,
-				len(logStores))
+			return nil, moerr.NewInternalError("not enough log stores")
 		}
 
 		initialMembers := make(map[uint64]string)
