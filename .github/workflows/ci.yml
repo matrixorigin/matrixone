@@ -131,7 +131,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -204,7 +204,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -278,7 +278,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
