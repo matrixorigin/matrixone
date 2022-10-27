@@ -1743,6 +1743,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	logutil.Debug(sql)
 	err := bh.mce.doComQuery(ctx, sql)
 	if err != nil {
 		return err

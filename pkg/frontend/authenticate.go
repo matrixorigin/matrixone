@@ -1512,7 +1512,13 @@ func (pc *privilegeCache) invalidate() {
 	total := pc.total.Swap(0)
 	hit := pc.hit.Swap(0)
 	pc.store.Clear()
-	logutil.Debugf("-->hit %d total %d ratio %f", hit, total, float64(hit)/float64(total))
+	ratio := float64(0)
+	if total == 0 {
+		ratio = 0
+	} else {
+		ratio = float64(hit) / float64(total)
+	}
+	logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
 }
 
 // verifiedRole holds the role info that has been checked
