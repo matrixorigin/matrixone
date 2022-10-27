@@ -135,7 +135,9 @@ func (c *Config) validate() error {
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
 		case localFileServiceName, etlFileServiceName:
-			c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
+			if c.FileServices[idx].DataDir == "" {
+				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
+			}
 		}
 	}
 	return nil

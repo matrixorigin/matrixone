@@ -33,14 +33,14 @@ const (
 type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
 	Name string `toml:"name"`
-	// Backend fileservice backend. [MEM|DISK|S3|ETL]
+	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
 	Backend string `toml:"backend"`
 	// CacheMemCapacityBytes cache memory capacity bytes
 	CacheMemCapacityBytes toml.ByteSize `toml:"cache-mem-capacity-bytes"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 S3Config `toml:"s3"`
 	// DataDir used to create fileservice using DISK as the backend
-	DataDir string `toml:"-"`
+	DataDir string `toml:"data-dir"`
 }
 
 // NewFileServicesFunc creates a new *FileServices
