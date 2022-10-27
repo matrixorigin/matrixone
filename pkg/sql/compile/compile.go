@@ -54,7 +54,10 @@ func New(db string, sql string, uid string, ctx context.Context,
 }
 
 // helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine() bool {
+func (c *Compile) NeedInitTempEngine(InitTempEngine bool) bool {
+	if InitTempEngine {
+		return false
+	}
 	ddl := c.scope.Plan.GetDdl()
 	if ddl != nil {
 		qry := ddl.GetCreateTable()

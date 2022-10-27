@@ -146,6 +146,8 @@ type Session struct {
 	cache *privilegeCache
 
 	mu sync.Mutex
+
+	InitTempEngine bool
 }
 
 // Clean up all resources hold by the session.  As of now, the mpool

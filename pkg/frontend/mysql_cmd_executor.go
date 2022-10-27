@@ -2150,7 +2150,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	// check if it is necessary to initialize the temporary engine
-	if cwft.compile.NeedInitTempEngine() {
+	if cwft.compile.NeedInitTempEngine(cwft.ses.InitTempEngine) {
 		// 0. init memory-non-dist engine
 		ck := clock.DefaultClock()
 		if ck == nil {
@@ -2178,7 +2178,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			memoryengine.RandomIDGenerator,
 		)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		mc := memorystorage.NewStorageTxnClient(
 			ck,
@@ -2202,7 +2202,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		)
 		txnOp, err := mc.New()
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		// 1. bind the temporary engine to the session
@@ -2212,15 +2212,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 2. init temp-db to store temporary relations
 		err = e.TempEngine.Create(requestCtx, "temp-db", txnOp)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		// 3. assign for compile, only for the first time needed
 		cwft.compile.SetTempEngine(e.TempEngine)
+		// 4. add auto_IncrementTable fortemp-db
+		colexec.CreateAutoIncrTable(e.TempEngine, requestCtx, cwft.proc, "temp-db")
 
 		txn := cwft.ses.txnCompileCtx.txnHandler
 		txn.SetTempEngine(e.TempEngine)
-
+		cwft.ses.InitTempEngine = true
 		// Note : when TempEngine is inited, the message in cwft.ses.PU.storage will out of date.
 		// Since I did not find that the PU would be used after initialization,
 		// the information here is probably fine without modification.
