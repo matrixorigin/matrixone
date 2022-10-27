@@ -27,6 +27,7 @@ type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
+	location   string
 }
 
 func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
@@ -43,6 +44,18 @@ func (e *CheckpointEntry) GetState() State {
 	e.RLock()
 	defer e.RUnlock()
 	return e.state
+}
+
+func (e *CheckpointEntry) SetLocation(location string) {
+	e.Lock()
+	defer e.Unlock()
+	e.location = location
+}
+
+func (e *CheckpointEntry) GetLocation() string {
+	e.RLock()
+	defer e.RUnlock()
+	return e.location
 }
 
 func (e *CheckpointEntry) SetState(state State) (ok bool) {
