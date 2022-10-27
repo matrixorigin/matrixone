@@ -35,10 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-var (
-	defaultTAEDataDir = ".store"
-)
-
 type Handle struct {
 	eng moengine.TxnEngine
 }
