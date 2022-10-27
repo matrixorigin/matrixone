@@ -43,9 +43,10 @@ func (h *Handle) GetTxnEngine() moengine.TxnEngine {
 	return h.eng
 }
 
-func NewTAEHandle(opt *options.Options) *Handle {
-	//just for test
-	path := "./store"
+func NewTAEHandle(path string, opt *options.Options) *Handle {
+	if path == "" {
+		path = "./store"
+	}
 	tae, err := openTAE(path, opt)
 	if err != nil {
 		panic(err)

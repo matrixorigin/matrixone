@@ -18,6 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -25,11 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"os"
-	"runtime"
-	"strconv"
-	"sync/atomic"
-	"time"
 
 	"github.com/BurntSushi/toml"
 
