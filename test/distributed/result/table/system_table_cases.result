@@ -1,7 +1,7 @@
 USE mo_catalog;
 SELECT COUNT(*) FROM mo_database;
 count(*)
-8
+7
 SELECT COUNT(*) FROM (SELECT * FROM mo_tables LIMIT 10) AS temp;
 count(*)
 10
@@ -40,13 +40,13 @@ count(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(*)
-2
+1
 SELECT COUNT(0) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(0)
-2
+1
 SELECT COUNT('') FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count()
-2
+1
 SELECT COUNT(NULL) FROM (SELECT * FROM mo_account LIMIT 10) AS temp;
 count(null)
 0
