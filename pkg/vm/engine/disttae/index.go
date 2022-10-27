@@ -19,7 +19,9 @@ import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable
 const (
 	index_PrimaryKey      = memtable.Text("primary key")
 	index_BlockID_Time_OP = memtable.Text("block id, time, op")
-	index_TableID         = memtable.Text("table id")
+	index_Table           = memtable.Text("table")
+	index_Column          = memtable.Text("column")
+	index_Database        = memtable.Text("database")
 )
 
 type ColumnsIndexDef struct {
