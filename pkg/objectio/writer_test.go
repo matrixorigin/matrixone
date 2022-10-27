@@ -145,7 +145,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReader(name, service)
 	assert.Nil(t, err)
-	bs, err = objectReader.ReadAllMeta(dirs[0].Size, nil)
+	bs, err = objectReader.ReadAllMeta(dirs[0].Size, pool)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	assert.Nil(t, err)
