@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table t0 (a float(255, 3))",
+		input: "drop table if exists history",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "drop table if exists history",
+	}, {
 		input: "create user daisy@192.168.1.10 identified by '123456'",
 	}, {
 		input: "create table t0 (a float(255, 3))",

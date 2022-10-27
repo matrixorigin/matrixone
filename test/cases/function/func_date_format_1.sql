@@ -50,9 +50,7 @@ drop table t2;
 -- test insert
 drop table if exists t3;
 create table t3 (d date);
--- @bvt:issue#4771
 insert into t3 values (date_format('20221214', '%Y-%m-%d'));
--- @bvt:issue
 drop table t3;
 
 
