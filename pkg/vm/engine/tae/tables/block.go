@@ -842,33 +842,43 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	return
 }
 
-func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+func (blk *dataBlock) CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
 	if blk.meta.IsAppendable() {
-		return blk.collectAblkAppendInRange(start, end)
+		return blk.collectAblkAppendInRange(start, end, withAborted)
 	}
 	return nil, nil
 }
 
-func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
-	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+	minRow, maxRow, commitTSVec, abortVec, abortedMap := blk.mvcc.CollectAppend(start, end)
 	batch, err := blk.node.GetData(minRow, maxRow)
 	if err != nil {
 		return nil, err
 	}
 	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
-	batch.AddVector(catalog.AttrAborted, abortVec)
+	if withAborted {
+		batch.AddVector(catalog.AttrAborted, abortVec)
+	} else {
+		batch.Deletes = abortedMap
+		batch.Compact()
+	}
 	return batch, nil
 }
 
-func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
-	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
+func (blk *dataBlock) CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return nil, nil
 	}
 	batch := containers.NewBatch()
 	batch.AddVector(catalog.PhyAddrColumnName, rowID)
 	batch.AddVector(catalog.AttrCommitTs, ts)
-	batch.AddVector(catalog.AttrAborted, abort)
+	if withAborted {
+		batch.AddVector(catalog.AttrAborted, abort)
+	} else {
+		batch.Deletes = abortedMap
+		batch.Compact()
+	}
 	return batch, nil
 }
 

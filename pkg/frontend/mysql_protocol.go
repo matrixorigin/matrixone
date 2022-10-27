@@ -1047,8 +1047,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	logutil.Infof("server calculated %v\n", hash1)
-	logutil.Infof("client calculated %v\n", auth)
+	logutil.Debugf("server calculated %v\n", hash1)
+	logutil.Debugf("client calculated %v\n", auth)
 
 	return bytes.Equal(hash1, auth)
 }

@@ -123,7 +123,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	rm.rwlock.Unlock()
 
-	logutil.Infof("will close iosession")
+	logutil.Debugf("will close iosession")
 	if rt != nil {
 		rt.Quit()
 	}
@@ -188,7 +188,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
-		logutil.Infof("HANDLE HANDSHAKE")
+		logutil.Debugf("HANDLE HANDSHAKE")
 
 		/*
 			di := MakeDebugInfo(payload,80,8)
@@ -201,19 +201,19 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				return err
 			}
 			if isTlsHeader {
-				logutil.Infof("upgrade to TLS")
+				logutil.Debugf("upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
-				logutil.Infof("get TLS conn ok")
+				logutil.Debugf("get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ses.GetRequestContext(), 20*time.Second)
 				if err := tlsConn.HandshakeContext(newCtx); err != nil {
 					cancelFun()
 					return err
 				}
 				cancelFun()
-				logutil.Infof("TLS handshake ok")
+				logutil.Debugf("TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logutil.Infof("TLS handshake finished")
+				logutil.Debugf("TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()

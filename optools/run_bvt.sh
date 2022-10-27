@@ -17,7 +17,7 @@
 set -o nounset
 
 MO_WORKSPACE=$1
-SYSTEM_INIT_COMPLETED=$MO_WORKSPACE/mo-data/local/cn/system_init_completed
+SYSTEM_INIT_COMPLETED=$MO_WORKSPACE/mo-data/local/system_init_completed
 LAUNCH=$2
 
 function launch_mo() {
@@ -30,7 +30,7 @@ function wait_system_init() {
     for num in {1..300}  
     do  
         if [ -f "$SYSTEM_INIT_COMPLETED" ]; then
-            echo "ok"
+            echo "ok, cost $num seconds"
             return 0
         fi 
         echo "mo init not completed"

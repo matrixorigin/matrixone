@@ -103,9 +103,8 @@ func (r *CSVRequest) Content() string {
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
-	var f = func(b any) {
-		_, span := Start(DefaultContext(), "batchCSVHandler")
-		defer span.End()
+
+	handle := func(b any) {
 		req, ok := b.(*CSVRequest) // see genCsvData
 		if !ok {
 			panic(moerr.NewInternalError("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
@@ -117,6 +116,21 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		if _, err := req.writer.WriteString(req.content); err != nil {
 			logutil.Error(fmt.Sprintf("[Trace] faield to write csv: %s", req.content), logutil.NoReportFiled())
 			logutil.Error(fmt.Sprintf("[Trace] faield to write. err: %v", err), logutil.NoReportFiled())
+		}
+	}
+
+	var f = func(batch any) {
+		_, span := Start(DefaultContext(), "batchCSVHandler")
+		defer span.End()
+		switch b := batch.(type) {
+		case *CSVRequest:
+			handle(b)
+		case CSVRequests:
+			for _, req := range b {
+				handle(req)
+			}
+		default:
+			panic(moerr.NewNotSupported("unknown batch type: %v", reflect.ValueOf(b).Type()))
 		}
 	}
 	return f
@@ -157,35 +171,53 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	if !ok {
 		panic("not MalCsv, dont support output CSV")
 	}
-	opts := export.CommonCsvOptions
 
 	ts := time.Now()
+	buffer := make(map[string]*bytes.Buffer, 2)
+	writeValues := func(item CsvFields, row *export.Row) {
+		fields := item.CsvFields(row)
+		buf, exist := buffer[row.GetAccount()]
+		if !exist {
+			buf = bytes.NewBuffer(nil)
+			buffer[row.GetAccount()] = buf
+		}
+		writeCsvOneLine(buf, fields)
+	}
+
 	row := i.GetRow()
 	for _, i := range in {
 		item, ok := i.(CsvFields)
 		if !ok {
 			panic("not MalCsv, dont support output CSV")
 		}
-		fields := item.CsvFields(row)
-		for idx, field := range fields {
-			if idx > 0 {
-				buf.WriteRune(opts.FieldTerminator)
-			}
-			if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
-				buf.WriteRune(opts.EncloseRune)
-				QuoteFieldFunc(buf, field, opts.EncloseRune)
-				buf.WriteRune(opts.EncloseRune)
-			} else {
-				buf.WriteString(field)
-			}
-		}
-		buf.WriteRune(opts.Terminator)
+		writeValues(item, row)
 	}
 
-	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i,
-		export.WithTimestamp(ts),
-		export.WithPathBuilder(row.Table.PathBuilder))
-	return NewCSVRequest(writer, buf.String())
+	reqs := make(CSVRequests, 0, len(buffer))
+	for account, buf := range buffer {
+		writer := GetTracerProvider().writerFactory(DefaultContext(), row.Table.Database, row.Table,
+			export.WithAccount(account), export.WithTimestamp(ts), export.WithPathBuilder(row.Table.PathBuilder))
+		reqs = append(reqs, NewCSVRequest(writer, buf.String()))
+	}
+
+	return reqs
+}
+
+func writeCsvOneLine(buf *bytes.Buffer, fields []string) {
+	opts := export.CommonCsvOptions
+	for idx, field := range fields {
+		if idx > 0 {
+			buf.WriteRune(opts.FieldTerminator)
+		}
+		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
+			buf.WriteRune(opts.EncloseRune)
+			QuoteFieldFunc(buf, field, opts.EncloseRune)
+			buf.WriteRune(opts.EncloseRune)
+		} else {
+			buf.WriteString(field)
+		}
+	}
+	buf.WriteRune(opts.Terminator)
 }
 
 func filterTraceInsertSql(i IBuffer2SqlItem) {

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -819,13 +820,15 @@ func Test_handleShowColumns(t *testing.T) {
 		data[0][1] = typ
 		data[0][2] = []byte("NULL")
 		data[0][3] = int8(2)
+		defaultV, err := types.Encode(&plan2.Default{NullAbility: true, Expr: nil, OriginString: "", XXX_NoUnkeyedLiteral: struct{}{}, XXX_unrecognized: []byte{}, XXX_sizecache: 0})
+		convey.So(err, convey.ShouldBeNil)
+		data[0][5] = defaultV
 		data[0][primaryKeyPos] = []byte("p")
 		ses.SetData(data)
 		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowColumns(ses)
-		convey.So(err, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

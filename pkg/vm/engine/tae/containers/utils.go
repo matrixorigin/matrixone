@@ -226,7 +226,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	if v.Nsp.Np != nil {
 		np = roaring64.New()
 		np.AddMany(v.Nsp.Np.ToArray())
-		logutil.Infof("sie : %d", np.GetCardinality())
+		logutil.Debugf("sie : %d", np.GetCardinality())
 	}
 	vec.ResetWithData(bs, np)
 	return vec
