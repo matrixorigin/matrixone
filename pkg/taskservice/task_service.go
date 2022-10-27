@@ -16,7 +16,6 @@ package taskservice
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -131,7 +130,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return nil
 	}
 	if len(exists) != 1 {
-		panic(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
+		return moerr.NewInvalidTask(taskRunner, value.ID)
 	}
 
 	old := exists[0]
