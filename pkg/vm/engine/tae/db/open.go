@@ -82,7 +82,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
 		db.Fs, mutBufMgr, db.Scheduler, db.Dir)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory, db.Fs); err != nil {
+	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
@@ -118,6 +118,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.Catalog,
 		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
+		db.Fs,
 		checkpoint.WithFlushInterval(time.Duration(opts.CheckpointCfg.FlushInterval)*time.Millisecond),
 		checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.CatalogUnCkpLimit)),

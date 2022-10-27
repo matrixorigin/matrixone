@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -63,8 +62,7 @@ func rowIDToU64(rowID types.Rowid) uint64 {
 type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
-	store        store.Store
-	checkpointFS *objectio.ObjectFS
+	store store.Store
 
 	scheduler   tasks.TaskScheduler
 	ckpmu       sync.RWMutex
@@ -120,25 +118,24 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory, fs *objectio.ObjectFS) (*Catalog, error) {
+func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
 	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{
-		RWMutex:      new(sync.RWMutex),
-		IDAlloctor:   NewIDAllocator(),
-		store:        driver,
-		checkpointFS: fs,
-		entries:      make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:    make(map[string]*nodeList[*DBEntry]),
-		link:         common.NewGenericSortedDList(compareDBFn),
-		checkpoints:  make([]*Checkpoint, 0),
-		scheduler:    scheduler,
+		RWMutex:     new(sync.RWMutex),
+		IDAlloctor:  NewIDAllocator(),
+		store:       driver,
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList(compareDBFn),
+		checkpoints: make([]*Checkpoint, 0),
+		scheduler:   scheduler,
 	}
 	catalog.InitSystemDB()
 	//scan dir
 	//for filename
-		// newEmpty builder
-		// builder.read
-		// builder.replay
+	// newEmpty builder
+	// builder.read
+	// builder.replay
 	replayer := NewReplayer(dataFactory, catalog)
 	err := catalog.store.Replay(replayer.ReplayerHandle)
 	return catalog, err
@@ -164,8 +161,7 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 
-func (catalog *Catalog) GetStore() store.Store     { return catalog.store }
-func (catalog *Catalog) GetFS() *objectio.ObjectFS { return catalog.checkpointFS }
+func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,

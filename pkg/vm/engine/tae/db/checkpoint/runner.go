@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -77,6 +78,7 @@ type runner struct {
 		sync.RWMutex
 		entries    *btree.BTreeG[*CheckpointEntry]
 		prevGlobal *CheckpointEntry
+		fs         *objectio.ObjectFS
 	}
 
 	incrementalPolicy *timeBasedPolicy
@@ -95,6 +97,7 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
 	source logtail.Collector,
+	fs *objectio.ObjectFS,
 	opts ...Option) *runner {
 	r := &runner{
 		catalog:   catalog,
@@ -107,6 +110,7 @@ func NewRunner(
 	}, btree.Options{
 		NoLocks: true,
 	})
+	r.storage.fs = fs
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -160,8 +164,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	fs := r.catalog.GetFS()
-	builder.WriteToFS(fs)
+	builder.WriteToFS(r.storage.fs)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
@@ -170,9 +173,7 @@ func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	fs := r.catalog.GetFS()
-	builder.WriteToFS(fs)
-	entry.SetState(ST_Finished)
+	builder.WriteToFS(r.storage.fs)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
