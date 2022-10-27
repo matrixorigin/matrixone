@@ -44,6 +44,8 @@ type CNService interface {
 	GetTaskRunner() taskservice.TaskRunner
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
+	// WaitSystemInitCompleted wait system init task completed
+	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 // cnService wraps cnservice.Service.
@@ -110,6 +112,10 @@ func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
 
 func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 	return c.svc.GetTaskService()
+}
+
+func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
+	return c.svc.WaitSystemInitCompleted(ctx)
 }
 
 // cnOptions is options for a cn service.
