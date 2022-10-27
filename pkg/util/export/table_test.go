@@ -58,13 +58,23 @@ var dummyFloat64Column = Column{Name: "float64", Type: "DOUBLE", Default: "0.0",
 var dummyFloat64CreateSql = "`float64` DOUBLE DEFAULT \"0.0\" COMMENT \"float64 column\""
 
 var dummyTable = &Table{
+	Account:          "test",
 	Database:         "db_dummy",
 	Table:            "tbl_dummy",
 	Columns:          []Column{dummyStrColumn, dummyInt64Column, dummyFloat64Column},
 	PrimaryKeyColumn: []Column{dummyStrColumn, dummyInt64Column},
 	Engine:           ExternalTableEngine,
 	Comment:          "dummy table",
+	PathBuilder:      NewAccountDatePathBuilder(),
 	TableOptions:     NoopTableOptions{},
+}
+
+func dummyFillTable(str string, i int64, f float64) *Row {
+	row := dummyTable.GetRow()
+	row.SetVal(dummyStrColumn.Name, str)
+	row.SetInt64(dummyInt64Column.Name, i)
+	row.SetFloat64(dummyFloat64Column.Name, f)
+	return row
 }
 
 var dummyTableCreateExistsSql = "CREATE TABLE IF NOT EXISTS `db_dummy`.`tbl_dummy`(" +

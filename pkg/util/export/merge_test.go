@@ -15,10 +15,14 @@
 package export
 
 import (
+	"context"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/require"
+	"path"
 	"testing"
 	"time"
 )
@@ -81,6 +85,95 @@ func TestInitCronExpr(t *testing.T) {
 					require.Equal(t, tt.args.duration-time.Minute, next.Sub(now))
 				}
 			}
+		})
+	}
+}
+
+func initLogsFile(ctx context.Context, fs fileservice.FileService, table *Table, ts time.Time) error {
+	mux.Lock()
+	defer mux.Unlock()
+
+	var newFilePath = func(ts time.Time) string {
+		filename := table.PathBuilder.NewLogFilename(table.GetName(), "uuid", "node", ts)
+		p := table.PathBuilder.Build(table.Account, MergeLogTypeLogs, ts, table.Database, table.GetName())
+		filepath := path.Join(p, filename)
+		return filepath
+	}
+
+	ts1 := ts
+	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1))
+	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
+	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
+	writer.FlushAndClose()
+
+	ts2 := ts.Add(time.Minute)
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2))
+	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
+	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
+	writer.FlushAndClose()
+
+	ts3 := ts.Add(time.Hour)
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3))
+	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
+	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
+	writer.FlushAndClose()
+
+	return nil
+}
+
+func TestNewMerge(t *testing.T) {
+	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, t.TempDir())
+	require.Nil(t, err)
+	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
+
+	type args struct {
+		ctx  context.Context
+		opts []MergeOption
+	}
+	tests := []struct {
+		name string
+		args args
+		want *Merge
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx: context.Background(),
+				opts: []MergeOption{WithFileServiceName(etlFileServiceName),
+					WithFileService(fs), WithTable(dummyTable),
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(mpool.PB), WithMaxMergeJobs(16)},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			err := initLogsFile(tt.args.ctx, fs, dummyTable, ts)
+			require.Nil(t, err)
+
+			got := NewMerge(tt.args.ctx, tt.args.opts...)
+			require.NotNil(t, got)
+
+			err = got.Main(ts)
+			require.Nilf(t, err, "err: %v", err)
+
+			files := make([]string, 0, 1)
+			dir := []string{"/"}
+			for len(dir) > 0 {
+				entrys, _ := fs.List(tt.args.ctx, dir[0])
+				for _, e := range entrys {
+					p := path.Join(dir[0], e.Name)
+					if e.IsDir {
+						dir = append(dir, p)
+					} else {
+						files = append(files, p)
+					}
+				}
+				dir = dir[1:]
+			}
+			require.Equal(t, 1, len(files))
+			t.Logf("%v", files)
 		})
 	}
 }
