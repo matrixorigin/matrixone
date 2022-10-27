@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -145,7 +144,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 		for i, dnStore := range txn.dnStores {
 			rows, err := txn.getRows(ctx, name, databaseId, 0,
 				[]DNStore{dnStore}, catalog.MoTableMetaDefs, catalog.MoTableMetaSchema, nil)
-			if err != nil && strings.Contains(err.Error(), "empty table") {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
 			}
 			if err != nil {
@@ -234,7 +233,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
@@ -244,7 +243,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		bat.Clean(txn.proc.Mp())
 	}
 	if len(rows) == 0 {
-		return nil, moerr.NewInfo("empty table")
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
@@ -260,7 +259,7 @@ func (txn *Transaction) getRows(ctx context.Context, name string, databaseId uin
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.NewInternalError("empty table: %v.%v", databaseId, tableId)
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
