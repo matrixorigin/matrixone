@@ -59,12 +59,13 @@ func (db *DB) init(ctx context.Context, m *mpool.MPool) error {
 		parts := make(Partitions, len(db.dnMap))
 		for i := range parts {
 			parts[i] = NewPartition(
-				// create index table on mo_tables (relname.reldatabase_id)
+				// create index table on mo_tables (relname.reldatabase_id.account_id)
 				[]ColumnsIndexDef{
 					NewColumnsIndexDef(
 						index_Table,
 						MO_PRIMARY_OFF+catalog.MO_TABLES_REL_NAME_IDX,
 						MO_PRIMARY_OFF+catalog.MO_TABLES_RELDATABASE_ID_IDX,
+						MO_PRIMARY_OFF+catalog.MO_TABLES_ACCOUNT_ID_IDX,
 					),
 				},
 			)

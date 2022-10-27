@@ -1135,11 +1135,12 @@ func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
 
 }
 
-func genTableIndexKey(tableName string, databaseId uint64) memtable.Tuple {
+func genTableIndexKey(tableName string, databaseId uint64, accountId uint32) memtable.Tuple {
 	return memtable.Tuple{
 		index_Table,
 		memtable.ToOrdered([]byte(tableName)),
 		memtable.ToOrdered(databaseId),
+		memtable.ToOrdered(accountId),
 	}
 }
 
