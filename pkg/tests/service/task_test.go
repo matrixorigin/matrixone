@@ -75,6 +75,11 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions().
 		WithCNServiceNum(1).
@@ -100,6 +105,11 @@ func TestTaskServiceCanCreate(t *testing.T) {
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	opt := DefaultOptions()
 	// initialize cluster
 	c, err := NewCluster(t, opt)
@@ -145,6 +155,11 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	cnSvcNum := 2
 	opt := DefaultOptions().
 		WithCNServiceNum(cnSvcNum)
@@ -193,6 +208,11 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 }
 
 func TestTaskRunner(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
@@ -240,6 +260,11 @@ func TestTaskRunner(t *testing.T) {
 }
 
 func TestCronTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)

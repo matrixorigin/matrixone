@@ -31,6 +31,11 @@ const (
 )
 
 func TestClusterStart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
@@ -45,6 +50,11 @@ func TestClusterStart(t *testing.T) {
 }
 
 func TestAllocateID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
@@ -85,6 +95,11 @@ func TestAllocateID(t *testing.T) {
 }
 
 func TestClusterAwareness(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -144,6 +159,11 @@ func TestClusterAwareness(t *testing.T) {
 }
 
 func TestClusterOperation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	dnSvcNum := 3
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -298,6 +318,11 @@ func TestClusterOperation(t *testing.T) {
 }
 
 func TestClusterState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -422,6 +447,11 @@ func TestClusterState(t *testing.T) {
 }
 
 func TestClusterWaitState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -495,6 +525,11 @@ func TestClusterWaitState(t *testing.T) {
 }
 
 func TestNetworkPartition(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// TODO: it's not worked with task service
 	t.Skip("it's not worked with task service")
 	if t.Skipped() {
