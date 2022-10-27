@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -37,9 +38,10 @@ const (
 	index_BlockID_Time_OP = memtable.Text("block id, time, op")
 )
 
-func NewPartition() *Partition {
+func NewPartition(index *indexInfo) *Partition {
 	return &Partition{
-		data: memtable.NewTable[RowID, DataValue, *DataRow](),
+		index: index,
+		data:  memtable.NewTable[RowID, DataValue, *DataRow](),
 	}
 }
 
@@ -88,7 +90,14 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	p.IterDeletedRowIDs(ctx, []uint64{ /*TODO*/ }, ts, func(rowID RowID) bool {
+	if len(blocks) == 0 {
+		return blks, deletes
+	}
+	ids := make([]uint64, len(blocks))
+	for i := range blocks {
+		ids[i] = blocks[i].Info.BlockID
+	}
+	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
 		deletes[id] = append(deletes[id], int(offset))
 		return true
@@ -129,6 +138,42 @@ func (p *Partition) Get(key types.Rowid, ts timestamp.Timestamp) bool {
 	return true
 }
 
+func (p *Partition) GetRowsByIndex(key string, cols []string,
+	deletes map[types.Rowid]uint8, ts timestamp.Timestamp) ([][]any, bool) {
+	var rows [][]any
+
+	if p.index == nil {
+		return nil, false
+	}
+	p.index.RLock()
+	es, ok := p.index.mp[key]
+	if !ok {
+		p.index.RUnlock()
+		return nil, false
+	}
+	p.index.RUnlock()
+	sort.Sort(es)
+	mp := make(map[string]uint8)
+	for i := len(es) - 1; i >= 0; i-- {
+		if es[i].ts.Less(ts) {
+			if es[i].val == nil {
+				if len(es[i].key) == 0 {
+					return rows, true
+				}
+				mp[es[i].key] = 0
+			}
+			if _, ok := mp[es[i].key]; ok {
+				continue
+			}
+			mp[es[i].key] = 0
+			if _, ok := deletes[es[i].rowid]; !ok {
+				rows = append(rows, genRow(es[i].val, cols))
+			}
+		}
+	}
+	return rows, true
+}
+
 func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 	bat, err := batch.ProtoBatchToBatch(b)
 	if err != nil {
@@ -153,6 +198,41 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 			},
 		}
 		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
+		if p.index != nil {
+			var mapBuf bytes.Buffer
+			var keyBuf bytes.Buffer
+
+			v, err := p.data.Get(tx, rowID)
+			if err != nil {
+				return err
+			}
+			if v.op == opInsert {
+				for _, col := range p.index.keyColNames {
+					if v.value[col].IsNull {
+						keyBuf.WriteByte(0)
+						continue
+					}
+					keyBuf.WriteByte(1)
+					appendBytes(v.value[col].Value, &keyBuf)
+				}
+				for _, col := range p.index.mapKeyColNames {
+					if v.value[col].IsNull {
+						mapBuf.WriteByte(0)
+						continue
+					}
+					mapBuf.WriteByte(1)
+					appendBytes(v.value[col].Value, &mapBuf)
+				}
+				key := keyBuf.String()
+				mapKey := mapBuf.String()
+				p.index.Lock()
+				p.index.mp[mapKey] = append(p.index.mp[mapKey], entry{
+					key: key,
+					ts:  t.Timestamp,
+				})
+				p.index.Unlock()
+			}
+		}
 
 		// indexes
 		var indexes []memtable.Tuple
@@ -174,7 +254,6 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 		if err != nil {
 			return err
 		}
-
 		if err := tx.Commit(t); err != nil {
 			return err
 		}
@@ -208,6 +287,45 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			},
 		}
 		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
+		dataValue := DataValue{
+			op:    opInsert,
+			value: make(map[string]memtable.Nullable),
+		}
+		for i := 2; i < len(tuple); i++ {
+			dataValue.value[bat.Attrs[i]] = tuple[i]
+		}
+
+		if p.index != nil {
+			var mapBuf bytes.Buffer
+			var keyBuf bytes.Buffer
+
+			for _, col := range p.index.keyCols {
+				if tuple[col].IsNull {
+					keyBuf.WriteByte(0)
+					continue
+				}
+				keyBuf.WriteByte(1)
+				appendBytes(tuple[col].Value, &keyBuf)
+			}
+			for _, col := range p.index.mapKeyCols {
+				if tuple[col].IsNull {
+					mapBuf.WriteByte(0)
+					continue
+				}
+				mapBuf.WriteByte(1)
+				appendBytes(tuple[col].Value, &mapBuf)
+			}
+			key := keyBuf.String()
+			mapKey := mapBuf.String()
+			p.index.Lock()
+			p.index.mp[mapKey] = append(p.index.mp[mapKey], entry{
+				key:   key,
+				val:   &dataValue,
+				ts:    t.Timestamp,
+				rowid: types.Rowid(rowID),
+			})
+			p.index.Unlock()
+		}
 
 		// check primary key
 		var primaryKey any
@@ -223,14 +341,6 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			if len(entries) > 0 && needCheck {
 				return moerr.NewDuplicate()
 			}
-		}
-
-		dataValue := DataValue{
-			op:    opInsert,
-			value: make(map[string]memtable.Nullable),
-		}
-		for i := 2; i < len(tuple); i++ {
-			dataValue.value[bat.Attrs[i]] = tuple[i]
 		}
 
 		// indexes
