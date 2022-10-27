@@ -343,7 +343,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExpr(bat, proc, t.F.Args[i])
+			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i])
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)

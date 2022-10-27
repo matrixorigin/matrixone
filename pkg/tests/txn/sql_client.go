@@ -189,6 +189,6 @@ func (kop *sqlTxn) insert(key, value string) error {
 }
 
 func (kop *sqlTxn) update(key, value string) error {
-	_, err := kop.txn.Exec(fmt.Sprintf("update txn_test_kv set kv_value = '%s' where kv_key = '%s'", key, value))
+	_, err := kop.txn.Exec(fmt.Sprintf("update txn_test_kv set kv_value = '%s' where kv_key = '%s'", value, key))
 	return err
 }

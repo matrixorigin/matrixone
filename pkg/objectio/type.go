@@ -55,6 +55,9 @@ type Reader interface {
 
 	// ReadIndex is the index data of the read columns
 	ReadIndex(ctx context.Context, extent Extent, idxs []uint16, dataType IndexDataType, m *mpool.MPool) ([]IndexData, error)
+
+	// ReadAllMeta is read the meta of all blocks in an object
+	ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error)
 }
 
 // BlockObject is a batch written to fileservice

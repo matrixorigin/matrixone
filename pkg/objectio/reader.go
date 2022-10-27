@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,6 +25,10 @@ type ObjectReader struct {
 	object *Object
 	name   string
 }
+
+const ExtentTypeSize = 4 * 3
+const ExtentsLength = 20
+const FooterSize = 8 + 4
 
 func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	reader := &ObjectReader{
@@ -127,6 +130,66 @@ func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent, idxs []uint
 		indexes = append(indexes, index)
 	}
 	return indexes, nil
+}
+
+func (r *ObjectReader) ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error) {
+	footer, err := r.readFooter(ctx, fileSize, m)
+	if err != nil {
+		return nil, err
+	}
+	return r.ReadMeta(ctx, footer.extents, m)
+}
+
+func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
+	var err error
+	var footer *Footer
+
+	// I don't know how many blocks there are in the object,
+	// read "ExtentsLength" blocks by default
+	size := int64(FooterSize + ExtentsLength*ExtentTypeSize)
+	if size > fileSize {
+		size = fileSize
+	}
+	footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
+	if err != nil {
+		return nil, err
+	}
+	if len(footer.extents) == 0 {
+		size = int64(FooterSize + footer.blockCount*ExtentTypeSize)
+		footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return footer, nil
+}
+
+func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
+	var err error
+	data := &fileservice.IOVector{
+		FilePath: r.name,
+		Entries:  make([]fileservice.IOEntry, 1),
+	}
+	data.Entries[0] = fileservice.IOEntry{
+		Offset: fileSize - size,
+		Size:   size,
+	}
+	err = r.allocData(data.Entries, m)
+	if err != nil {
+		return nil, err
+	}
+	defer r.freeData(data.Entries, m)
+	err = r.object.fs.Read(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	footer := &Footer{}
+	err = footer.UnMarshalFooter(data.Entries[0].Data)
+	if err != nil {
+		return nil, err
+	}
+	return footer, err
 }
 
 func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
