@@ -6563,7 +6563,7 @@ func Test_cache(t *testing.T) {
 	//set
 	for _, a := range args {
 		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
-			cache1.set(objectTypeTable, privilegeLevelStarStar, a.db, a.table)
+			cache1.set(objectTypeTable, privilegeLevelStar, a.db, a.table)
 		}
 	}
 
@@ -6578,15 +6578,15 @@ func Test_cache(t *testing.T) {
 
 	for _, a := range args {
 		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeExecute; i++ {
-			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
+			cache1.add(objectTypeTable, privilegeLevelStarStar, a.db, a.table, i)
 		}
 	}
 
 	convey.Convey("has4", t, func() {
 		for _, a := range args {
 			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
-			convey.So(ret, convey.ShouldBeTrue)
-			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStarStar, a.db, a.table, PrivilegeTypeCreateObject)
 			convey.So(ret, convey.ShouldBeTrue)
 		}
 	})

@@ -361,6 +361,8 @@ const (
 	privilegeLevelTable
 	//db_name.routine_name
 	privilegeLevelRoutine
+	//
+	privilegeLevelEnd
 )
 
 func (plt privilegeLevelType) String() string {
@@ -1454,15 +1456,22 @@ const (
 	userType
 )
 
+type privilegeLevelStore struct {
+	plt   privilegeLevelType
+	store btree.Set[PrivilegeType]
+}
+
 // privilegeCache cache privileges on table
 type privilegeCache struct {
 	//For objectType table
 	//store map <database,table> -> privileges
-	storeForTable btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+	storeForTable [int(privilegeLevelEnd)]btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+	//For objectType table *.*
 	//For objectType database *
-	storeForDatabase btree.Set[PrivilegeType]
+	storeForDatabase [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
+	//For objectType database *.*
 	//For objectType account *
-	storeForAccount btree.Set[PrivilegeType]
+	storeForAccount [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
 	//dummy
 	dummyStore btree.Set[PrivilegeType]
 	total      atomic.Uint64
@@ -1477,20 +1486,21 @@ func (pc *privilegeCache) isSpecial(objTyp objectType, plt privilegeLevelType) b
 // has checks the cache has privilege on a table
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
 	pc.total.Add(1)
-	if pc.isSpecial(objTyp, plt) {
-		return false
-	}
 	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	return privSet.Contains(priv)
+	if privSet.Contains(priv) {
+		pc.hit.Add(1)
+		return true
+	}
+	return false
 }
 
 func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string) *btree.Set[PrivilegeType] {
 	switch objTyp {
 	case objectTypeTable:
-		tableStore, ok1 := pc.storeForTable.Get(dbName)
+		tableStore, ok1 := pc.storeForTable[plt].Get(dbName)
 		if !ok1 {
 			tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-			pc.storeForTable.Set(dbName, tableStore)
+			pc.storeForTable[plt].Set(dbName, tableStore)
 		}
 		privSet, ok2 := tableStore.Get(tableName)
 		if !ok2 {
@@ -1499,9 +1509,9 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 		}
 		return privSet
 	case objectTypeDatabase:
-		return &pc.storeForDatabase
+		return &pc.storeForDatabase[plt]
 	case objectTypeAccount:
-		return &pc.storeForAccount
+		return &pc.storeForAccount[plt]
 	default:
 		return &pc.dummyStore
 	}
@@ -1510,9 +1520,6 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 
 // set replaces the privileges by new ones
 func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	if pc.isSpecial(objTyp, plt) {
-		return
-	}
 	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
 	privSet.Clear()
 	for _, p := range priv {
@@ -1522,9 +1529,6 @@ func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName,
 
 // add puts the privileges without replacing existed ones
 func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	if pc.isSpecial(objTyp, plt) {
-		return
-	}
 	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
 	for _, p := range priv {
 		privSet.Insert(p)
@@ -1535,9 +1539,12 @@ func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName,
 func (pc *privilegeCache) invalidate() {
 	total := pc.total.Swap(0)
 	hit := pc.hit.Swap(0)
-	pc.storeForTable.Clear()
-	pc.storeForDatabase.Clear()
-	pc.storeForAccount.Clear()
+	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
+		pc.storeForTable[i].Clear()
+		pc.storeForDatabase[i].Clear()
+		pc.storeForAccount[i].Clear()
+	}
+
 	pc.dummyStore.Clear()
 	ratio := float64(0)
 	if total == 0 {
