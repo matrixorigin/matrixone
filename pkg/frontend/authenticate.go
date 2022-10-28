@@ -419,7 +419,6 @@ const (
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
 	PrivilegeTypeInsert
-	PrivilegeTypeReplace
 	PrivilegeTypeUpdate
 	PrivilegeTypeTruncate
 	PrivilegeTypeDelete
@@ -546,8 +545,6 @@ func (pt PrivilegeType) String() string {
 		return "select"
 	case PrivilegeTypeInsert:
 		return "insert"
-	case PrivilegeTypeReplace:
-		return "replace"
 	case PrivilegeTypeUpdate:
 		return "update"
 	case PrivilegeTypeTruncate:
@@ -626,8 +623,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeInsert:
 		return PrivilegeScopeTable
-	case PrivilegeTypeReplace:
-		return PrivilegeScopeRole
 	case PrivilegeTypeUpdate:
 		return PrivilegeScopeTable
 	case PrivilegeTypeTruncate:
@@ -1370,7 +1365,6 @@ var (
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeReplace:           {PrivilegeTypeReplace, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1409,7 +1403,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -1444,7 +1437,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -3127,7 +3119,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDBTableDirect = true
 	case *tree.Replace:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeReplace, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDBTableDirect = true
 	case *tree.Load:
 		objType = objectTypeTable
@@ -4306,8 +4298,6 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
 		privType = PrivilegeTypeInsert
-	case tree.PRIVILEGE_TYPE_STATIC_REPLACE:
-		privType = PrivilegeTypeReplace
 	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
 		privType = PrivilegeTypeUpdate
 	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
