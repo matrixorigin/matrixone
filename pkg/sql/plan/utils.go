@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -613,4 +615,54 @@ func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Exp
 
 func needQuoteType(id types.T) bool {
 	return id == types.T_char || id == types.T_varchar || id == types.T_blob || id == types.T_text || id == types.T_json || id == types.T_timestamp || id == types.T_datetime || id == types.T_date || id == types.T_decimal64 || id == types.T_decimal128 || id == types.T_uuid
+}
+
+// checkNoNeedCast
+// if constant's type higher than column's type
+// and constant's value in range of column's type, then no cast was needed
+func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
+	key := [2]types.T{columnT, constT}
+	if _, ok := intCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_Ival)
+		if !valOk {
+			return false
+		}
+		constVal := val.Ival
+
+		switch columnT {
+		case types.T_int8:
+			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
+		case types.T_int16:
+			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
+		case types.T_int32:
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		}
+	}
+
+	if _, ok := uintCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_Uval)
+		if !valOk {
+			return false
+		}
+		constVal := val.Uval
+
+		switch columnT {
+		case types.T_uint8:
+			return constVal <= uint64(math.MaxUint8)
+		case types.T_uint16:
+			return constVal <= uint64(math.MaxUint16)
+		case types.T_uint32:
+			return constVal <= uint64(math.MaxUint32)
+		}
+	}
+
+	if columnT == types.T_float32 && constT == types.T_float64 {
+		val, valOk := constExpr.C.Value.(*plan.Const_Dval)
+		if !valOk {
+			return false
+		}
+		return val.Dval < float64(math.MaxFloat32) && val.Dval > float64(math.SmallestNonzeroFloat32)
+	}
+
+	return false
 }

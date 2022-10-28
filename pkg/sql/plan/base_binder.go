@@ -902,8 +902,12 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		argsType[idx] = makeTypeByPlan2Expr(expr)
 	}
 
+	var funcID int64
+	var returnType types.Type
+	var argsCastType []types.Type
+
 	// get function definition
-	funcID, returnType, argsCastType, err := function.GetFunctionByName(name, argsType)
+	funcID, returnType, argsCastType, err = function.GetFunctionByName(name, argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -912,6 +916,39 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			args[0].Typ = makePlan2Type(&returnType)
 		}
 	}
+
+	// rewrite some cast rule by arg's value
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+		// if constant's type higher than column's type
+		// and constant's value in range of column's type, then no cast was needed
+		switch leftExpr := args[0].Expr.(type) {
+		case *plan.Expr_C:
+			if _, ok := args[1].Expr.(*plan.Expr_Col); ok {
+				if checkNoNeedCast(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id), leftExpr) {
+					tmpType := types.T(args[1].Typ.Id).ToType() // cast const_expr as column_expr's type
+					argsCastType = []types.Type{tmpType, tmpType}
+					// need to update function id
+					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		case *plan.Expr_Col:
+			if rightExpr, ok := args[1].Expr.(*plan.Expr_C); ok {
+				if checkNoNeedCast(types.T(args[1].Typ.Id), types.T(args[0].Typ.Id), rightExpr) {
+					tmpType := types.T(args[0].Typ.Id).ToType() // cast const_expr as column_expr's type
+					argsCastType = []types.Type{tmpType, tmpType}
+					funcID, _, _, err = function.GetFunctionByName(name, argsCastType)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+
 	if len(argsCastType) != 0 {
 		if len(argsCastType) != argsLength {
 			return nil, moerr.NewInvalidArg("cast types length not match args length", "")
