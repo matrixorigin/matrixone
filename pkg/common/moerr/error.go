@@ -232,7 +232,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
 	ErrBadS3Config:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "bad s3 config: %s"},
-	ErrBadView:                      {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view %s"},
+	ErrBadView:                      {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view '%s.%s'"},
 	ErrInvalidTask:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid task, task runner %s, id %d"},
 	ErrInvalidServiceIndex:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid service idx %d"},
 	ErrDragonboatTimeout:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
