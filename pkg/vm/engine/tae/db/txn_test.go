@@ -325,7 +325,7 @@ func (g *APP1Goods) String() string {
 
 func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	db, err := txn.GetDatabase(dbName)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
 		if db, err = txn.CreateDatabase(dbName); err != nil {
 			return
 		}
@@ -350,7 +350,7 @@ func GetWarehouseRelation(dbName string, txn txnif.AsyncTxn) (rel handle.Relatio
 
 func GetOrCreateDatabase(name string, txn txnif.AsyncTxn) handle.Database {
 	db, err := txn.GetDatabase(name)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
 		if db, err = txn.CreateDatabase(name); err != nil {
 			panic(err)
 		}
