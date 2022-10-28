@@ -22,7 +22,7 @@ Follow the [installation instruction and launch MatrixOne 0.6](../../../Get-Star
 mysql> CREATE DATABASE test;
 ```
 
-### 2. Create a new Spring Boot Project Using IntelliJ IDEA.
+### 2. Create a new Spring Boot Project Using IntelliJ IDEA
 
 Choose **Spring Initializer**, and name the project as you want.
 
