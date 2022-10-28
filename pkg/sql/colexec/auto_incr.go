@@ -37,7 +37,6 @@ var AUTO_INCR_TABLE_COLNAME []string = []string{catalog.Row_ID, "name", "offset"
 
 type AutoIncrParam struct {
 	eg      engine.Engine
-	db      engine.Database
 	rel     engine.Relation
 	ctx     context.Context
 	proc    *process.Process
@@ -46,10 +45,9 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
+func UpdateInsertBatch(e engine.Engine, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID, dbName, tblName string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
-		db:      db,
 		ctx:     ctx,
 		proc:    proc,
 		colDefs: ColDefs,
@@ -79,17 +77,11 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	if err != nil {
 		return err
 	}
-	rel.Ranges(ctx, nil) // TODO
-	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
+	return UpdateInsertBatch(e, ctx, proc, ColDefs, bat, rel.GetTableID(ctx), dbName, tblName)
 }
 
 func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
 	txn, err := NewTxn(param.eg, param.proc, param.ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -100,7 +92,10 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 			continue
 		}
 		var d, s uint64
-		param.rel.Ranges(param.ctx, nil) // TODO
+		param.rel, err = GetNewRelation(param.eg, param.dbName, AUTO_INCR_TABLE, txn, param.ctx)
+		if err != nil {
+			return nil, nil, err
+		}
 		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
 			if err2 := RolllbackTxn(param.eg, txn, param.ctx); err2 != nil {
 				return nil, nil, err2
@@ -245,35 +240,34 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []ui
 }
 
 func getCurrentIndex(param *AutoIncrParam, colName string, mp *mpool.MPool) (uint64, uint64, error) {
-	ctx := context.TODO()
 	var rds []engine.Reader
 
-	ret, err := param.rel.Ranges(ctx, nil)
+	ret, err := param.rel.Ranges(param.ctx, nil)
 	if err != nil {
 		return 0, 0, err
 	}
 	switch {
 	case len(ret) == 0:
-		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
 			return 0, 0, err
 		}
 	case len(ret) == 1 && len(ret[0]) == 0:
-		if rds, err = param.rel.NewReader(ctx, 1, nil, nil); err != nil {
+		if rds, err = param.rel.NewReader(param.ctx, 1, nil, nil); err != nil {
 			return 0, 0, err
 		}
 	case len(ret[0]) == 0:
-		rds0, err := param.rel.NewReader(ctx, 1, nil, nil)
+		rds0, err := param.rel.NewReader(param.ctx, 1, nil, nil)
 		if err != nil {
 			return 0, 0, err
 		}
-		rds1, err := param.rel.NewReader(ctx, 1, nil, ret[1:])
+		rds1, err := param.rel.NewReader(param.ctx, 1, nil, ret[1:])
 		if err != nil {
 			return 0, 0, err
 		}
 		rds = append(rds, rds0...)
 		rds = append(rds, rds1...)
 	default:
-		rds, _ = param.rel.NewReader(ctx, 1, nil, ret)
+		rds, _ = param.rel.NewReader(param.ctx, 1, nil, ret)
 	}
 
 	for len(rds) > 0 {
@@ -403,8 +397,7 @@ func CreateAutoIncrTable(e engine.Engine, ctx context.Context, proc *process.Pro
 }
 
 // for create table operation, add col in mo_increment_columns table
-func CreateAutoIncrCol(eg engine.Engine, db engine.Database, proc *process.Process, cols []*plan.ColDef, dbName, tblName string) error {
-	ctx := context.TODO()
+func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, cols []*plan.ColDef, dbName, tblName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err
@@ -439,8 +432,7 @@ func CreateAutoIncrCol(eg engine.Engine, db engine.Database, proc *process.Proce
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(eg engine.Engine, rel engine.Relation, proc *process.Process, dbName, tableID string) error {
-	ctx := context.TODO()
+func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relation, proc *process.Process, dbName, tableID string) error {
 	txn, err := NewTxn(eg, proc, ctx)
 	if err != nil {
 		return err
@@ -479,8 +471,7 @@ func DeleteAutoIncrCol(eg engine.Engine, rel engine.Relation, proc *process.Proc
 }
 
 // for delete table operation, move old col as new col in mo_increment_columns table
-func MoveAutoIncrCol(eg engine.Engine, tblName string, db engine.Database, proc *process.Process, oldTableID, dbName string) error {
-	ctx := context.TODO()
+func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, oldTableID, dbName string) error {
 	var err error
 	newRel, err := db.Relation(ctx, tblName)
 	if err != nil {
@@ -532,8 +523,7 @@ func MoveAutoIncrCol(eg engine.Engine, tblName string, db engine.Database, proc 
 }
 
 // for truncate table operation, reset col in mo_increment_columns table
-func ResetAutoInsrCol(eg engine.Engine, tblName string, db engine.Database, proc *process.Process, tableID, dbName string) error {
-	ctx := context.TODO()
+func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db engine.Database, proc *process.Process, tableID, dbName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err

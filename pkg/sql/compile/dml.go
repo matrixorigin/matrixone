@@ -61,7 +61,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		err = colexec.MoveAutoIncrCol(c.e, arg.DeleteCtxs[0].TableName, dbSource, c.proc, rel.GetTableID(c.ctx), arg.DeleteCtxs[0].DbName)
+		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, rel.GetTableID(c.ctx), arg.DeleteCtxs[0].DbName)
 		if err != nil {
 			return 0, err
 		}

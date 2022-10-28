@@ -31,9 +31,7 @@ drop table t3;
 -- test default uuid
 drop table if exists t4;
 create table t4(a uuid default uuid());
--- @bvt:issue#5400
 desc t4;
--- @bvt:issue
 show create table t4;
 insert into t4 values ();
 insert into t4 values (uuid());

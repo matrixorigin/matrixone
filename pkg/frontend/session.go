@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -135,6 +136,8 @@ type Session struct {
 	//that the internal or background program executes
 	fromRealUser bool
 
+	cache *privilegeCache
+
 	mu sync.Mutex
 }
 
@@ -209,6 +212,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
+		cache: &privilegeCache{},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -244,6 +248,18 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+
+func (ses *Session) GetPrivilegeCache() *privilegeCache {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.cache
+}
+
+func (ses *Session) InvalidatePrivilegeCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.cache.invalidate()
 }
 
 // GetBackgroundExec generates a background executor
@@ -1364,7 +1380,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	if err != nil {
 		return nil, err
 	}
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+	logutil.Debugf("dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
@@ -1727,6 +1743,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	//logutil.Debugf("-->bh:%s", sql)
 	err := bh.mce.doComQuery(ctx, sql)
 	if err != nil {
 		return err

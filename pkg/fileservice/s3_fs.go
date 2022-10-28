@@ -119,6 +119,7 @@ func NewS3FSOnMinio(
 					ep aws.Endpoint,
 					err error,
 				) {
+					_ = options
 					ep.URL = endpoint
 					ep.Source = aws.EndpointSourceCustom
 					ep.HostnameImmutable = true

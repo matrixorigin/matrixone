@@ -9,7 +9,7 @@ on:
 
 jobs:
   bvt-linux-x86:
-    runs-on: x86-runner
+    runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64
     timeout-minutes: 120
 
@@ -85,9 +85,3 @@ jobs:
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
-
-      - name: clean workspace
-        if: ${{ always() }}
-        continue-on-error: true
-        run: |
-          rm -rf ${{ github.workspace }}

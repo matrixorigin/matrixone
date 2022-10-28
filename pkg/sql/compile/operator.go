@@ -379,8 +379,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:      eg,
 		DB:          db,
 		TableID:     tableID,
-		DBName: 	 dbName,
-		TblName: 	 tblName,	
+		DBName:      dbName,
+		TblName:     tblName,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }
