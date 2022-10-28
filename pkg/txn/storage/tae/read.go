@@ -42,6 +42,7 @@ func (s *taeStorage) Read(
 			s.taeHandler.HandleGetLogTail,
 		)
 	case uint32(apipb.OpCode_OpDebug):
+		panic("Debug is sssssssss ctm")
 		return handleRead(
 			ctx, s,
 			txnMeta, payload,

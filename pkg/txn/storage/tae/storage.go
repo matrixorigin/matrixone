@@ -16,6 +16,8 @@ package taestorage
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -95,6 +97,22 @@ func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.taeHandler.HandleStartRecovery(ctx, ch)
 }
 
-func (s *taeStorage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
+func (s *taeStorage) Debug(ctx context.Context,
+	txnMeta txn.TxnMeta,
+	op uint32,
+	payload []byte) ([]byte, error) {
+	logutil.Infof("Debug is sssssssss")
+	panic("Debug is sssssssss")
+	switch op {
+	case uint32(apipb.OpCode_OpDebug):
+		_, err := handleRead(
+			ctx, s,
+			txnMeta, payload,
+			s.taeHandler.HandleDeBug,
+		)
+		return nil, err
+	default:
+		panic(moerr.NewInfo("op is not supported"))
+	}
 	return nil, moerr.NewNotSupported("TAEStorage not support debug method")
 }

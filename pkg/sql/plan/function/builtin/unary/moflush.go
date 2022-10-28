@@ -5,10 +5,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
@@ -39,13 +39,9 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	if err != nil {
 		return nil, moerr.NewInvalidInput("payload encode err")
 	}
-	if proc.TxnOperator == nil {
-		logutil.Infof("proc.TxnOperator is nilllll")
-	}
+
 	TxnOperator, err := proc.TxnClient.New()
-	if err != nil {
-		logutil.Infof("err is nilllll")
-	}
+
 	reqs := make([]txn.TxnRequest, len(TxnOperator.Txn().DNShards))
 	for i, info := range TxnOperator.Txn().DNShards {
 		reqs[i] = txn.TxnRequest{
@@ -69,6 +65,8 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			},
 		}
 	}
-	TxnOperator.Read(context.Background(), reqs)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	TxnOperator.(client.DebugableTxnOperator).Debug(ctx, reqs)
 	return nil, nil
 }
