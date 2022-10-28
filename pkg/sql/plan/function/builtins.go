@@ -2360,4 +2360,25 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	TIMEDIFF: {
+		Id:     TIMEDIFF,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.TimeDiff[types.Datetime],
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_time, types.T_time},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.TimeDiff[types.Time],
+			},
+		},
+	},
 }
