@@ -7,9 +7,7 @@ show create table t1;
 drop table t1;
 
 drop table if exists t1;
--- @bvt:issue#5414
 create table t1 (a int default uuid());
--- @bvt:issue
 drop table t1
 
 
