@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"testing"
@@ -56,7 +57,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	assert.Nil(t, err)
 	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	blocks, err := objectWriter.WriteEnd()
+	blocks, err := objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	cType := common.Plain
