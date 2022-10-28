@@ -33,10 +33,11 @@ type Runner interface {
 	Start()
 	Stop()
 	EnqueueWait(any) error
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
-	FlushTable(dbID, tableID uint64, ts types.TS) error
+	DebugUpdateOptions(opts ...Option)
 }
 
 type DirtyCtx struct {

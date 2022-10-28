@@ -261,20 +261,34 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByName(name string,
-	txn txnif.AsyncTxn) (*common.GenericDLNode[*TableEntry], error) {
+func (e *DBEntry) txnGetNodeByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (*common.GenericDLNode[*TableEntry], error) {
 	e.RLock()
 	defer e.RUnlock()
-	fullName := genTblFullName(txn.GetTenantID(), name)
+	fullName := genTblFullName(tenantID, name)
 	node := e.nameNodes[fullName]
 	if node == nil {
 		return nil, moerr.NewNotFound()
 	}
-	return node.TxnGetNodeLocked(txn.GetStartTS())
+	return node.TxnGetNodeLocked(ts)
 }
 
 func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
-	n, err := e.txnGetNodeByName(name, txn)
+	n, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
+	if err != nil {
+		return
+	}
+	entry = n.GetPayload()
+	return
+}
+
+func (e *DBEntry) GetTableEntryByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (entry *TableEntry, err error) {
+	n, err := e.txnGetNodeByName(tenantID, name, ts)
 	if err != nil {
 		return
 	}
@@ -305,7 +319,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
 func (e *DBEntry) DropTableEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
-	dn, err := e.txnGetNodeByName(name, txn)
+	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
 	if err != nil {
 		return
 	}
