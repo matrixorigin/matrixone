@@ -256,7 +256,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		}
 		i := rand.Int() % len(tbl.db.txn.dnStores)
 		return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i])
+			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i], tbl.primaryIdx)
 	}
 	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
@@ -267,7 +267,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
 			return err
 		}
 	}
@@ -294,7 +294,7 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
 			return err
 		}
 	}
