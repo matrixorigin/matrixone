@@ -84,6 +84,8 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("r-%d", req.CNRequest.OpCode))}
 		case txn.TxnMethod_Write:
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("w-%d", req.CNRequest.OpCode))}
+		case txn.TxnMethod_DEBUG:
+			resp.CNOpResponse = &txn.CNOpResponse{Payload: req.CNRequest.Payload}
 		case txn.TxnMethod_Rollback:
 			resp.Txn.Status = txn.TxnStatus_Aborted
 		case txn.TxnMethod_Commit:

@@ -322,6 +322,7 @@ func TestCheck(t *testing.T) {
 		// at the tick of `staleTick`, shard 14, 20:
 		//  14 - no command
 		//  20 - add replica after a while
+		bootstrapping = false
 		operators := Check(idAlloc, config, cluster, dnState, pb.TaskTableUser{}, staleTick, logger)
 		require.Equal(t, 0, len(operators))
 
