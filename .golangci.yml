@@ -10,7 +10,7 @@ run:
   tests: true
   skip-files:
     - pkg/sql/parsers/goyacc/goyacc.go
-
+  
 linters:
   # Disable all linters.
   # Default: false
@@ -189,8 +189,3 @@ issues:
     - path: _test\.go
       linters:
         - stylecheck
-    - path: ./cmd/mo-dump/*
-      linters:
-        - stylecheck
-        - gosimple
-        - staticcheck
