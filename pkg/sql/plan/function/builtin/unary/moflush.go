@@ -24,9 +24,9 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	tableName := vector.MustStrCols(inputTableName)
 	entries := make([]*api.Entry, 1)
 	entries[0] = &api.Entry{DatabaseName: dbName[0], TableName: tableName[0]}
-	UserId := uint32(0)
-	RoleId := uint32(0)
-	AccountId := uint32(0)
+	UserId := proc.SessionInfo.UserId
+	RoleId := proc.SessionInfo.RoleId
+	AccountId := proc.SessionInfo.AccountId
 	payload, err := types.Encode(db.FlushTable{
 		DatabaseName: dbName[0],
 		TableName:    tableName[0],

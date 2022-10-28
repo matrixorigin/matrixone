@@ -2346,6 +2346,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:      serverVersion,
 		TimeZone:     ses.GetTimeZone(),
 	}
+	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+	} else {
+		proc.SessionInfo.AccountId = sysAccountID
+		proc.SessionInfo.RoleId = moAdminRoleID
+		proc.SessionInfo.UserId = rootID
+	}
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
