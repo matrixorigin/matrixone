@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
 	"reflect"
@@ -923,6 +924,206 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 
 	logutil.Infof("User %s change database from [%s] to [%s]\n", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleDump(requestCtx context.Context, dump *tree.MoDump) error {
+	var err error
+	dump.OutFile = maybeAppendExtension(dump.OutFile)
+	exists, err := fileExists(dump.OutFile)
+	if exists {
+		return moerr.NewFileAlreadyExists(dump.OutFile)
+	}
+	if err != nil {
+		return err
+	}
+	if dump.MaxFileSize != 0 && dump.MaxFileSize < mpool.MB {
+		return moerr.NewInvalidInput("max file size must be larger than 1MB")
+	}
+	if len(dump.Database) == 0 {
+		return moerr.NewInvalidInput("No database selected")
+	}
+	return mce.dumpData(requestCtx, dump)
+}
+
+func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.MoDump) error {
+	ses := mce.GetSession()
+	txnHandler := ses.GetTxnHandler()
+	bh := ses.GetBackgroundExec(requestCtx)
+	defer bh.Close()
+	dbName := string(dump.Database)
+	var (
+		db        engine.Database
+		err       error
+		showDbDDL = false
+		dbDDL     string
+		tables    []string
+	)
+	if db, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn()); err != nil {
+		return moerr.NewBadDB(dbName)
+	}
+	err = bh.Exec(requestCtx, fmt.Sprintf("use `%s`", dbName))
+	if err != nil {
+		return err
+	}
+	if len(dump.Tables) == 0 {
+		dbDDL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\n", dbName)
+		createSql, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE DATABASE `%s`;", dbName))
+		if err != nil {
+			return err
+		}
+		dbDDL += createSql + "\n\nUSE `" + dbName + "`;\n\n"
+		showDbDDL = true
+		tables, err = db.Relations(requestCtx)
+		if err != nil {
+			return err
+		}
+	} else {
+		tables = make([]string, len(dump.Tables))
+		for i, t := range dump.Tables {
+			tables[i] = string(t.ObjectName)
+		}
+	}
+
+	params := make([]*dumpTable, 0, len(tables))
+	for _, tblName := range tables {
+		if strings.HasPrefix(tblName, "%!%") { //skip hidden table
+			continue
+		}
+		table, err := db.Relation(requestCtx, tblName)
+		if err != nil {
+			return err
+		}
+		tblDDL, err := getDDL(bh, requestCtx, fmt.Sprintf("SHOW CREATE TABLE `%s`;", tblName))
+		if err != nil {
+			return err
+		}
+		tableDefs, err := table.TableDefs(requestCtx)
+		if err != nil {
+			return err
+		}
+		attrs, isView, err := getAttrFromTableDef(tableDefs)
+		if err != nil {
+			return err
+		}
+		if isView {
+			tblDDL = fmt.Sprintf("DROP VIEW IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
+		} else {
+			tblDDL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`;\n", tblName) + tblDDL + "\n\n"
+		}
+		params = append(params, &dumpTable{tblName, tblDDL, table, attrs, isView})
+	}
+	return mce.dumpData2File(requestCtx, dump, dbDDL, params, showDbDDL)
+}
+
+func (mce *MysqlCmdExecutor) dumpData2File(requestCtx context.Context, dump *tree.MoDump, dbDDL string, params []*dumpTable, showDbDDL bool) error {
+	ses := mce.GetSession()
+	var (
+		err         error
+		f           *os.File
+		curFileSize int64 = 0
+		curFileIdx  int64 = 1
+		buf         *bytes.Buffer
+		rbat        *batch.Batch
+	)
+	f, err = createDumpFile(dump.OutFile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			if f != nil {
+				f.Close()
+			}
+			if buf != nil {
+				buf.Reset()
+			}
+			if rbat != nil {
+				rbat.Clean(ses.Mp)
+			}
+			removeFile(dump.OutFile, curFileIdx)
+		}
+	}()
+	buf = new(bytes.Buffer)
+	if showDbDDL {
+		_, err = buf.WriteString(dbDDL)
+		if err != nil {
+			return err
+		}
+	}
+	f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+	if err != nil {
+		return err
+	}
+	for _, param := range params {
+		if param.isView {
+			continue
+		}
+		_, err = buf.WriteString(param.ddl)
+		if err != nil {
+			return err
+		}
+		f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+		if err != nil {
+			return err
+		}
+		rds, err := param.rel.NewReader(requestCtx, 1, nil, nil)
+		if err != nil {
+			return err
+		}
+		for {
+			bat, err := rds[0].Read(param.attrs, nil, ses.Mp)
+			if err != nil {
+				return err
+			}
+			if bat == nil {
+				break
+			}
+
+			buf.WriteString("INSERT INTO ")
+			buf.WriteString(param.name)
+			buf.WriteString(" VALUES ")
+			rbat, err = convertValueBat2Str(bat, ses.Mp, ses.GetTimeZone())
+			if err != nil {
+				return err
+			}
+			for i := 0; i < rbat.Length(); i++ {
+				if i != 0 {
+					buf.WriteString(", ")
+				}
+				buf.WriteString("(")
+				for j := 0; j < rbat.VectorCount(); j++ {
+					if j != 0 {
+						buf.WriteString(", ")
+					}
+					buf.WriteString(rbat.GetVector(int32(j)).GetString(int64(i)))
+				}
+				buf.WriteString(")")
+			}
+			buf.WriteString(";\n")
+			f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+			if err != nil {
+				return err
+			}
+		}
+		buf.WriteString("\n\n\n")
+	}
+	if !showDbDDL {
+		return nil
+	}
+	for _, param := range params {
+		if !param.isView {
+			continue
+		}
+		_, err = buf.WriteString(param.ddl)
+		if err != nil {
+			return err
+		}
+		f, curFileIdx, curFileSize, err = writeDump2File(buf, dump, f, curFileIdx, curFileSize)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2254,6 +2455,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.MoDump:
+			selfHandle = true
+			//dump
+			err = mce.handleDump(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
@@ -2685,7 +2893,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch stmt.(type) {
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-			*tree.CreateView, *tree.DropView, *tree.Load,
+			*tree.CreateView, *tree.DropView, *tree.Load, *tree.MoDump,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
@@ -2968,7 +3176,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true, nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.TableFunction:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
