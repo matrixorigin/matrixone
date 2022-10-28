@@ -39,7 +39,7 @@ import (
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &trace.StatementInfo{}
 	ctx = trace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time) context.Context {
+	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time, string, bool) context.Context {
 		return ctx
 	})
 	return ctx, stubs
