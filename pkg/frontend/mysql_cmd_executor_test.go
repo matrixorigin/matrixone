@@ -17,13 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"testing"
-	"time"
-
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
+	"os"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1046,6 +1048,93 @@ func Test_handleLoadData(t *testing.T) {
 		}
 		err = mce.handleLoadData(ctx, proc, load)
 		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestHandleDump(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call handleDump func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.MoDump{
+			OutFile: "test",
+		}
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+		dump.MaxFileSize = 1024
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDump2File(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call dumpData2File func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		reader := mock_frontend.NewMockReader(ctrl)
+		cnt := 0
+		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(attrs []string, b, c interface{}) (*batch.Batch, error) {
+			cnt += 1
+			if cnt == 1 {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.New(types.T_int64.ToType())
+				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			return nil, nil
+		}).AnyTimes()
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.MoDump{
+			OutFile: "test_dump_" + strconv.Itoa(int(time.Now().Unix())),
+		}
+		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)
+		convey.So(err, convey.ShouldBeNil)
+		os.RemoveAll(dump.OutFile)
 	})
 }
 

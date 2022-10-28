@@ -81,7 +81,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	var pkDefs []string
 
 	for _, col := range tableDef.Cols {
-
 		colName := col.Name
 		if colName == catalog.Row_ID {
 			continue
@@ -89,7 +88,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		if col.Default != nil {
 			if col.Default.Expr != nil {
-				nullOrNot = "DEFAULT " + col.Default.OriginString
+				originStr := col.Default.OriginString
+				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
+					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
+						originStr = fmt.Sprintf("'%s'", originStr)
+					}
+				}
+				nullOrNot = "DEFAULT " + originStr
 			} else if col.Default.NullAbility {
 				nullOrNot = "DEFAULT NULL"
 			}
@@ -110,10 +115,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
+		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
+
+		updateOpt := ""
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
