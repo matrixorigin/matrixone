@@ -745,7 +745,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 		}
 	}
 	if col.hasUpdate == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.updateExpr, attr.OnUpdate); err != nil {
 			panic(err)
 		}
@@ -975,7 +975,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 		}
 	}
 
-	metas := make([]BlockMeta, len(rows))
+	metas := make([]BlockMeta, len(blockInfos))
 
 	idxs := make([]uint16, columnLength)
 	for i := 0; i < columnLength; i++ {
@@ -989,7 +989,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 		}
 		metas[i] = BlockMeta{
 			Rows:    int64(rows),
-			Info:    blockInfo,
+			Info:    blockInfos[i],
 			Zonemap: zm,
 		}
 	}

@@ -514,6 +514,7 @@ func init() {
 		"secondary":                SECONDARY,
 		"unnest":                   UNNEST,
 		"reference":                REFERENCE,
+		"modump":                   MODUMP,
 		"generate_series":          GENERATE_SERIES,
 	}
 }
