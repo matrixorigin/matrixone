@@ -2353,7 +2353,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	} else {
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
-		proc.SessionInfo.UserId = moAdminId
+		proc.SessionInfo.UserId = rootID
 	}
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),

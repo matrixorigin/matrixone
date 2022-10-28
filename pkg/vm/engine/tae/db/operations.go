@@ -102,6 +102,12 @@ type CreateDatabaseReq struct {
 	DatabaseId uint64
 }
 
+type FlushTable struct {
+	AccessInfo AccessInfo
+	DatabaseName string
+	TableName    string
+}
+
 type CreateDatabaseResp struct {
 	ID uint64
 }

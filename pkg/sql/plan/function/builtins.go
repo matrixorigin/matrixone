@@ -2332,6 +2332,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_FLUSH_TABLE: {
+		Id:     MO_FLUSH_TABLE,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        unary.MoFlushTable,
+			},
+		},
+	},
 	DATEDIFF: {
 		Id:     DATEDIFF,
 		Flag:   plan.Function_STRICT,
@@ -2357,20 +2371,6 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.TimeStampDiff,
-			},
-		},
-	},
-	MO_FLUSH_TABLE: {
-		Id:     MO_FLUSH_TABLE,
-		Flag:   plan.Function_INTERNAL,
-		Layout: STANDARD_FUNCTION,
-		Overloads: []Function{
-			{
-				Index:     0,
-				Volatile:  true,
-				Args:      []types.T{types.T_varchar},
-				ReturnTyp: types.T_varchar,
-				Fn:        unary.MoFlushTable,
 			},
 		},
 	},

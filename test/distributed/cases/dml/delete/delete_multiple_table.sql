@@ -10,20 +10,20 @@ DROP TABLE IF EXISTS t3;
 DROP TABLE IF EXISTS t4;
 
 CREATE TABLE t1(
-    id VARCHAR(10) PRIMARY KEY,
-    name VARCHAR(20)
+                   id VARCHAR(10) PRIMARY KEY,
+                   name VARCHAR(20)
 );
 CREATE TABLE t2(
-    id VARCHAR(10),
-    sex VARCHAR(4)
+                   id VARCHAR(10),
+                   sex VARCHAR(4)
 );
 CREATE TABLE t3(
-    name VARCHAR(20),
-    score INT
+                   name VARCHAR(20),
+                   score INT
 );
 CREATE TABLE t4(
-    id VARCHAR(10),
-    class VARCHAR(10)
+                   id VARCHAR(10),
+                   class VARCHAR(10)
 );
 
 INSERT INTO t1 VALUES('1','pet'), ('2','cat'), ('3','dog'), ('4','pig');
@@ -55,9 +55,7 @@ SELECT * FROM t2;
 -- Whether support USING keyword
 DELETE FROM t1 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 SELECT * FROM t1;
--- @bvt:issue#5216
 DELETE FROM t3 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
--- @bvt:issue
 
 -- Alias
 DELETE t1,t2 FROM table_name AS t1 LEFT JOIN table2_name AS t2 ON t1.id = t2.id WHERE table_name.id = 25;
@@ -68,18 +66,18 @@ DROP TABLE IF EXISTS t3;
 DROP TABLE IF EXISTS t4;
 
 CREATE TABLE t1(
-    t1_id INT NOT NULL PRIMARY KEY,
-    t1_o INT
+                   t1_id INT NOT NULL PRIMARY KEY,
+                   t1_o INT
 );
 CREATE TABLE t2(
-    t2_id INT NOT NULL PRIMARY KEY,
-    t1_id INT,
-    t2_o INT
+                   t2_id INT NOT NULL PRIMARY KEY,
+                   t1_id INT,
+                   t2_o INT
 );
 CREATE TABLE t3(
-    t3_id INT NOT NULL PRIMARY KEY,
-    t2_id INT,
-    t3_o INT
+                   t3_id INT NOT NULL PRIMARY KEY,
+                   t2_id INT,
+                   t3_o INT
 );
 
 INSERT INTO t1 VALUES(111,2), (222,3), (333,4);
@@ -107,25 +105,25 @@ DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
 
 CREATE TABLE t1(
-    a INT NOT NULL PRIMARY KEY,
-    b DATE,
-    c DATETIME
+                   a INT NOT NULL PRIMARY KEY,
+                   b DATE,
+                   c DATETIME
 );
 CREATE TABLE t2(
-    a INT NOT NULL PRIMARY KEY,
-    b INT
+                   a INT NOT NULL PRIMARY KEY,
+                   b INT
 );
 CREATE TABLE t3(
-    a VARCHAR(10) NOT NULL PRIMARY KEY,
-    b FLOAT
+                   a VARCHAR(10) NOT NULL PRIMARY KEY,
+                   b FLOAT
 );
 CREATE TABLE t4(
-    a CHAR(10) NOT NULL PRIMARY KEY,
-    b DOUBLE
+                   a CHAR(10) NOT NULL PRIMARY KEY,
+                   b DOUBLE
 );
 CREATE TABLE t5(
-    a DOUBLE NOT NULL PRIMARY KEY,
-    b SMALLINT
+                   a DOUBLE NOT NULL PRIMARY KEY,
+                   b SMALLINT
 );
 
 INSERT INTO t1 VALUES (1,'2020-06-01','2023-04-05 13:16:46'), (2,'2019-04-19','2021-08-04 16:18:32'),(4,'2028-04-19','2021-08-04 16:18:32');
@@ -159,8 +157,8 @@ CREATE TABLE temp(
     id INT NOT NULL PRIMARY KEY
 );
 CREATE TABLE t1(
-    id INT NOT NULL PRIMARY KEY,
-    name VARCHAR(20)
+                   id INT NOT NULL PRIMARY KEY,
+                   name VARCHAR(20)
 );
 INSERT INTO temp VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
 INSERT INTO t1 VALUES(1,'likk'),(2,'fire'),(3,'wikky');

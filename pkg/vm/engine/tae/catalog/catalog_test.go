@@ -177,7 +177,7 @@ func TestTableEntry1(t *testing.T) {
 
 	txn2, _ := txnMgr.StartTxn(nil)
 	_, err = txn2.GetDatabase(schema.Name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 
 	_, err = txn2.CreateDatabase(name)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))

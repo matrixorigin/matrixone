@@ -1,12 +1,15 @@
 package unary
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
 )
@@ -24,17 +27,27 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	UserId := proc.SessionInfo.UserId
 	RoleId := proc.SessionInfo.RoleId
 	AccountId := proc.SessionInfo.AccountId
-	payload, err := types.Encode(api.PrecommitWriteCmd{
-		UserId:    UserId,
-		RoleId:    RoleId,
-		AccountId: AccountId,
-		EntryList: entries})
+	payload, err := types.Encode(db.FlushTable{
+		DatabaseName: dbName[0],
+		TableName:    tableName[0],
+		AccessInfo: db.AccessInfo{
+			AccountID: AccountId,
+			UserID:    UserId,
+			RoleID:    RoleId,
+		},
+	})
 	if err != nil {
 		return nil, moerr.NewInvalidInput("payload encode err")
 	}
-
-	reqs := make([]txn.TxnRequest, len(proc.TxnOperator.Txn().DNShards))
-	for i, info := range proc.TxnOperator.Txn().DNShards {
+	if proc.TxnOperator == nil {
+		logutil.Infof("proc.TxnOperator is nilllll")
+	}
+	TxnOperator, err := proc.TxnClient.New()
+	if err != nil {
+		logutil.Infof("err is nilllll")
+	}
+	reqs := make([]txn.TxnRequest, len(TxnOperator.Txn().DNShards))
+	for i, info := range TxnOperator.Txn().DNShards {
 		reqs[i] = txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  uint32(api.OpCode_OpDebug),
@@ -56,5 +69,6 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			},
 		}
 	}
+	TxnOperator.Read(context.Background(), reqs)
 	return nil, nil
 }
