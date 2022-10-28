@@ -480,17 +480,19 @@ select * from view_t6;
 a	b
 100000	3000
 insert into view_t6 values (200, 300);
+invalid input: cannot insert into view 'view_t6'
 insert into view_t6 values (10, 10);
+invalid input: cannot insert into view 'view_t6'
 select * from view_t6;
 a	b
 100000	3000
 update view_t6 set a=100000 where b=3000;
-missing FROM-clause entry for table "view_t6"
+internal error: view is not support update operation
 select * from view_t6;
 a	b
 100000	3000
 delete from view_t6 where a=10;
-missing FROM-clause entry for table "view_t6"
+invalid input: cannot delete from view
 select * from view_t6;
 a	b
 100000	3000
