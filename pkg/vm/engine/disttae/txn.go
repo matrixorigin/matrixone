@@ -186,7 +186,7 @@ func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 			if err != nil {
 				return nil, err
 			}
-			blocks[i], err = genBlockMetas(rows, columnLength, txn.proc.FileService, txn.proc.GetMPool())
+			blocks[i], err = genBlockMetas(ctx, rows, columnLength, txn.proc.FileService, txn.proc.GetMPool())
 			if err != nil {
 				return nil, err
 			}
@@ -558,7 +558,7 @@ func (h *transactionHeap) Pop() any {
 }
 
 // needRead determine if a block needs to be read
-func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
