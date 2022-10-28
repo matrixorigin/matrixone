@@ -179,7 +179,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -211,8 +211,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error)
 	if err != nil {
 		return nil, err
 	}
-
-	return onUpdateExpr, nil
+	ret := &plan.OnUpdate{
+		Expr:         onUpdateExpr,
+		OriginString: tree.String(expr, dialect.MYSQL),
+	}
+	return ret, nil
 }
 
 func isNullExpr(expr *plan.Expr) bool {
