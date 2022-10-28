@@ -564,9 +564,9 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		return true
 	}
 	// return true anyway
-	// if expr != nil {
-	// 	return true
-	// }
+	if expr != nil {
+		return true
+	}
 
 	// key = expr's ColPos,  value = tableDef's ColPos
 	columnMap := getColumnsByExpr(expr, tableDef)
