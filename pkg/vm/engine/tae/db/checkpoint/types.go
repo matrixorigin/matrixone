@@ -14,12 +14,17 @@
 
 package checkpoint
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+)
 
 type State int8
 
 const (
 	ST_Running State = iota
+	ST_Pending
 	ST_Finished
 )
 
@@ -27,6 +32,9 @@ type Runner interface {
 	Start()
 	Stop()
 	EnqueueWait(any) error
+
+	// for test, delete in next phase
+	TestCheckpoint(entry *CheckpointEntry)
 }
 
 type Observer interface {
@@ -45,4 +53,59 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 	for _, o := range os.os {
 		o.OnNewCheckpoint(ts)
 	}
+}
+
+const (
+	PrefixIncremental = "incremental"
+	PrefixGlobal      = "global"
+	PrefixMetadata    = "meta"
+	CheckpointDir     = "ckp/"
+)
+
+const (
+	CheckpointAttr_StartTS      = "start_ts"
+	CheckpointAttr_EndTS        = "end_ts"
+	CheckpointAttr_MetaLocation = "meta_location"
+)
+
+var (
+	CheckpointSchema *catalog.Schema
+)
+
+var (
+	CheckpointSchemaAttr = []string{
+		CheckpointAttr_StartTS,
+		CheckpointAttr_EndTS,
+		CheckpointAttr_MetaLocation,
+	}
+	CheckpointSchemaTypes = []types.Type{
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_TS, 0, 0, 0),
+		types.New(types.T_varchar, 0, 0, 0),
+	}
+)
+
+func init() {
+	var err error
+	CheckpointSchema = catalog.NewEmptySchema("checkpoint")
+	for i, colname := range CheckpointSchemaAttr {
+		if err = CheckpointSchema.AppendCol(colname, CheckpointSchemaTypes[i]); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
+	bat := containers.NewBatch()
+	// Types() is not used, then empty schema can also be handled here
+	typs := schema.AllTypes()
+	attrs := schema.AllNames()
+	nullables := schema.AllNullables()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
+	}
+	return bat
 }
