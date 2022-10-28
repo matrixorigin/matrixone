@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"testing"
@@ -70,7 +71,7 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	_, err = writer.Finalize()
 	require.NoError(t, err)
-	blocks, err := objectWriter.WriteEnd()
+	blocks, err := objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 
