@@ -676,7 +676,7 @@ func blockWrite(ctx context.Context, bat *batch.Batch, fs fileservice.FileServic
 	}
 
 	// 3. get return
-	return writer.WriteEnd(context.Background())
+	return writer.WriteEnd(ctx)
 }
 
 func needSyncDnStores(expr *plan.Expr, tableDef *plan.TableDef,
