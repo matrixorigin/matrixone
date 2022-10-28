@@ -44,10 +44,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		rbat                                              *batch.Batch
 	)
 	defer func() {
-		if err != nil {
-			if rbat != nil {
-				rbat.Clean(proc.Mp())
-			}
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
 		}
 		if startVec != nil {
 			startVec.Free(proc.Mp())

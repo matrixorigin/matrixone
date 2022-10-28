@@ -78,10 +78,8 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		outer    bool
 	)
 	defer func() {
-		if err != nil {
-			if rbat != nil {
-				rbat.Clean(proc.Mp())
-			}
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
 		}
 		if jsonVec != nil {
 			jsonVec.Free(proc.Mp())
