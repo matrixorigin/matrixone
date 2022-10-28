@@ -91,7 +91,7 @@ DELETE FROM t1 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 SELECT * FROM t1;
 id    name
 DELETE FROM t3 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
-[unknown result because it is related to issue#5216]
+invalid input: Unknown table 't3' in MULTI DELETE
 DELETE t1,t2 FROM table_name AS t1 LEFT JOIN table2_name AS t2 ON t1.id = t2.id WHERE table_name.id = 25;
 invalid input: delete has no table ref
 DROP TABLE IF EXISTS t1;
