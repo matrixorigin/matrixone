@@ -124,7 +124,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 				if c.GetUpdateVal() {
-					lastNode.ProjectList[idx] = col.OnUpdate
+					lastNode.ProjectList[idx] = col.OnUpdate.Expr
 					idx++
 					continue
 				}
@@ -284,7 +284,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 				}
 			}
 			if !isUpdateCol {
-				if col.OnUpdate != nil {
+				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
 				} else {
 					otherAttrs = append(otherAttrs, col.Name)

@@ -44,7 +44,7 @@ create table t1(a tinyint, b smallint, c int, d bigint);
 create database test01;
 use test01;
 show columns from test02.t1;
-Field    Type    Null    Key    Default    Comment
+Field    Type    Null    Key    Default    Extra    Comment
 a    TINYINT    YES        NULL
 b    SMALLINT    YES        NULL
 c    INT    YES        NULL
@@ -209,3 +209,8 @@ set autocommit = 1;
 show variables like 'autocommit';
 Variable_name    Value
 autocommit    on
+drop table if exists t1;
+create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` TINYINT DEFAULT 4,\n`c3` SMALLINT DEFAULT NULL,\n`c4` BIGINT DEFAULT NULL,\n`c5` TINYINT UNSIGNED DEFAULT NULL,\n`c6` SMALLINT UNSIGNED DEFAULT NULL,\n`c7` INT UNSIGNED DEFAULT NULL,\n`c8` BIGINT UNSIGNED DEFAULT NULL,\n`c9` FLOAT DEFAULT NULL,\n`c10` DOUBLE DEFAULT NULL,\n`c11` DATE DEFAULT NULL,\n`c12` DATETIME DEFAULT NULL,\n`c13` TIMESTAMP DEFAULT NULL ON UPDATE current_timestamp(),\n`c14` CHAR(1) DEFAULT NULL,\n`c15` VARCHAR(1) DEFAULT 'q',\n`c16` JSON DEFAULT NULL,\n`c17` DECIMAL(34,0) DEFAULT NULL,\n`c18` TEXT DEFAULT NULL,\n`c19` BLOB DEFAULT NULL,\n`c20` UUID DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
