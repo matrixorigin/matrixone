@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -135,4 +136,8 @@ func (d *DynamicStorage) get(ctx context.Context) (*Storage, error) {
 		d.storages.Map[key] = storage
 	}
 	return storage, nil
+}
+
+func (d *DynamicStorage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
+	return nil, moerr.NewNotSupported("DynamicStorage not support debug method")
 }
