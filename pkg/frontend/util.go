@@ -24,15 +24,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
-	"github.com/BurntSushi/toml"
+	dumpUtils "github.com/matrixorigin/matrixone/pkg/vectorize/dump"
+	"path/filepath"
+	"strings"
 
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -414,7 +417,7 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 		return vector.GetValueAt[float32](vec, 0), nil
 	case types.T_float64:
 		return vector.GetValueAt[float64](vec, 0), nil
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
 		return vec.GetString(0), nil
 	case types.T_decimal64:
 		val := vector.GetValueAt[types.Decimal64](vec, 0)
@@ -422,6 +425,13 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 	case types.T_decimal128:
 		val := vector.GetValueAt[types.Decimal128](vec, 0)
 		return val.String(), nil
+	case types.T_json:
+		val := vec.GetBytes(0)
+		byteJson := types.DecodeJson(val)
+		return byteJson.String(), nil
+	case types.T_uuid:
+		val := vector.GetValueAt[types.Uuid](vec, 0)
+		return val.ToString(), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
@@ -464,5 +474,209 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
 		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+	}
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func getAttrFromTableDef(defs []engine.TableDef) ([]string, bool, error) {
+	attrs := make([]string, 0, len(defs))
+	isView := false
+	for _, tblDef := range defs {
+		switch def := tblDef.(type) {
+		case *engine.AttributeDef:
+			if def.Attr.IsHidden || def.Attr.IsRowId {
+				continue
+			}
+			attrs = append(attrs, def.Attr.Name)
+		case *engine.ViewDef:
+			isView = true
+		}
+	}
+	return attrs, isView, nil
+}
+
+func getDDL(bh BackgroundExec, ctx context.Context, sql string) (string, error) {
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return "", err
+	}
+	ret := string(bh.GetExecResultSet()[0].(*MysqlResultSet).Data[0][1].([]byte))
+	if !strings.HasSuffix(ret, ";") {
+		ret += ";"
+	}
+	return ret, nil
+}
+
+func convertValueBat2Str(bat *batch.Batch, mp *mpool.MPool, loc *time.Location) (*batch.Batch, error) {
+	var err error
+	rbat := batch.NewWithSize(bat.VectorCount())
+	rbat.InitZsOne(bat.Length())
+	for i := 0; i < rbat.VectorCount(); i++ {
+		rbat.Vecs[i] = vector.New(types.Type{Oid: types.T_varchar}) //TODO: check size
+		rs := make([]string, bat.Length())
+		switch bat.Vecs[i].Typ.Oid {
+		case types.T_bool:
+			xs := vector.MustTCols[bool](bat.Vecs[i])
+			rs, err = dumpUtils.ParseBool(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int8:
+			xs := vector.MustTCols[int8](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int16:
+			xs := vector.MustTCols[int16](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int32:
+			xs := vector.MustTCols[int32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_int64:
+			xs := vector.MustTCols[int64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseSigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+
+		case types.T_uint8:
+			xs := vector.MustTCols[uint8](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_uint16:
+			xs := vector.MustTCols[uint16](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_uint32:
+			xs := vector.MustTCols[uint32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+
+		case types.T_uint64:
+			xs := vector.MustTCols[uint64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUnsigned(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		case types.T_float32:
+			xs := vector.MustTCols[float32](bat.Vecs[i])
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 32)
+		case types.T_float64:
+			xs := vector.MustTCols[float64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseFloats(xs, bat.GetVector(int32(i)).GetNulls(), rs, 64)
+		case types.T_decimal64:
+			xs := vector.MustTCols[types.Decimal64](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal64])
+		case types.T_decimal128:
+			xs := vector.MustTCols[types.Decimal128](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Decimal128])
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			xs := vector.MustStrCols(bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[string])
+		case types.T_json:
+			xs := vector.MustBytesCols(bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.JsonParser)
+
+		case types.T_timestamp:
+			xs := vector.MustTCols[types.Timestamp](bat.Vecs[i])
+			rs, err = dumpUtils.ParseTimeStamp(xs, bat.GetVector(int32(i)).GetNulls(), rs, loc, bat.GetVector(int32(i)).Typ.Precision)
+		case types.T_datetime:
+			xs := vector.MustTCols[types.Datetime](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Datetime])
+		case types.T_date:
+			xs := vector.MustTCols[types.Date](bat.Vecs[i])
+			rs, err = dumpUtils.ParseQuoted(xs, bat.GetVector(int32(i)).GetNulls(), rs, dumpUtils.DefaultParser[types.Date])
+		case types.T_uuid:
+			xs := vector.MustTCols[types.Uuid](bat.Vecs[i])
+			rs, err = dumpUtils.ParseUuid(xs, bat.GetVector(int32(i)).GetNulls(), rs)
+		default:
+			err = moerr.NewNotSupported("type %v", bat.Vecs[i].Typ.String())
+		}
+		if err != nil {
+			return nil, err
+		}
+		for j := 0; j < len(rs); j++ {
+			err = rbat.Vecs[i].Append([]byte(rs[j]), false, mp)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	rbat.InitZsOne(bat.Length())
+	return rbat, nil
+}
+
+func genDumpFileName(outfile string, idx int64) string {
+	path := filepath.Dir(outfile)
+	filename := strings.Split(filepath.Base(outfile), ".")
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	return filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, idx, extend))
+}
+
+func createDumpFile(filename string) (*os.File, error) {
+	exists, err := fileExists(filename)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, moerr.NewFileAlreadyExists(filename)
+	}
+
+	ret, err := os.Create(filename)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func writeDump2File(buf *bytes.Buffer, dump *tree.MoDump, f *os.File, curFileIdx, curFileSize int64) (ret *os.File, newFileIdx, newFileSize int64, err error) {
+	if dump.MaxFileSize > 0 && int64(buf.Len()) > dump.MaxFileSize {
+		err = moerr.NewInternalError("dump: data in db is too large,please set a larger max_file_size")
+		return
+	}
+	if dump.MaxFileSize > 0 && curFileSize+int64(buf.Len()) > dump.MaxFileSize {
+		f.Close()
+		if curFileIdx == 1 {
+			os.Rename(dump.OutFile, genDumpFileName(dump.OutFile, curFileIdx))
+		}
+		newFileIdx = curFileIdx + 1
+		newFileSize = int64(buf.Len())
+		ret, err = createDumpFile(genDumpFileName(dump.OutFile, newFileIdx))
+		if err != nil {
+			return
+		}
+		_, err = buf.WriteTo(ret)
+		if err != nil {
+			return
+		}
+		buf.Reset()
+		return
+	}
+	newFileSize = curFileSize + int64(buf.Len())
+	_, err = buf.WriteTo(f)
+	if err != nil {
+		return
+	}
+	buf.Reset()
+	return f, curFileIdx, newFileSize, nil
+}
+
+func maybeAppendExtension(s string) string {
+	path := filepath.Dir(s)
+	filename := strings.Split(filepath.Base(s), ".")
+	if len(filename) == 1 {
+		filename = append(filename, "sql")
+	}
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	return filepath.Join(path, base+"."+extend)
+}
+
+func removeFile(s string, idx int64) {
+	if idx == 1 {
+		os.RemoveAll(s)
+		return
+	}
+	path := filepath.Dir(s)
+	filename := strings.Split(filepath.Base(s), ".")
+	base, extend := strings.Join(filename[:len(filename)-1], ""), filename[len(filename)-1]
+	for i := int64(1); i <= idx; i++ {
+		os.RemoveAll(filepath.Join(path, fmt.Sprintf("%s_%d.%s", base, i, extend)))
 	}
 }

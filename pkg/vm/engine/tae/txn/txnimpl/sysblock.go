@@ -237,22 +237,27 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Comment:
 			colData.Append([]byte(colDef.Comment))
 		case pkgcatalog.SystemColAttr_HasUpdate:
-			colData.Append(bool2i8(colDef.OnUpdate != nil))
+			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
 		case pkgcatalog.SystemColAttr_Update:
-			if colDef.OnUpdate != nil {
-				update := &plan.Expr{}
-				var err error
-				// refer to pkg/vm/engine/tae/moengine/helper.go:89
-				// refer to pkg/txn/storage/memorystorage/catalog.go:288
-				if err = update.Unmarshal(colDef.OnUpdate); err == nil {
-					if val, err := types.Encode(update); err == nil {
-						colData.Append(val)
-						continue
-					}
+			expr := &plan.Expr{}
+			if colDef.OnUpdate.Expr != nil {
+				if err := expr.Unmarshal(colDef.OnUpdate.Expr); err != nil {
+					logutil.Warnf("deserialze onUpdate expr err: %v", err)
+					expr = nil
 				}
-				logutil.Warnf("(de)serialize Update expr err: %v", err)
+			} else {
+				expr = nil
 			}
-			colData.Append([]byte(""))
+			pUpdate := &plan.OnUpdate{
+				OriginString: colDef.OnUpdate.OriginString,
+				Expr:         expr,
+			}
+			if val, err := types.Encode(pUpdate); err == nil {
+				colData.Append(val)
+			} else {
+				logutil.Warnf("encode plan onUpdate expr err: %v", err)
+				colData.Append([]byte(""))
+			}
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
