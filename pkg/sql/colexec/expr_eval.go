@@ -597,7 +597,7 @@ func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 	return &plan.Expr_F{
 		F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID},
+			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
 	}
