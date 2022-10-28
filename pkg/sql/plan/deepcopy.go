@@ -215,7 +215,17 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Pkidx:    col.Pkidx,
 		Comment:  col.Comment,
 		IsCPkey:  col.IsCPkey,
-		OnUpdate: DeepCopyExpr(col.OnUpdate),
+		OnUpdate: DeepCopyOnUpdate(col.OnUpdate),
+	}
+}
+
+func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
+	if old == nil {
+		return nil
+	}
+	return &plan.OnUpdate{
+		Expr:         DeepCopyExpr(old.Expr),
+		OriginString: old.OriginString,
 	}
 }
 
