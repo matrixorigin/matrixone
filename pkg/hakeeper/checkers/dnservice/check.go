@@ -30,6 +30,12 @@ import (
 var (
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
+
+	// bootstrapping indicates the dn is bootstrapping.
+	// When dn checker finds a new dn shard should be added,
+	// it waits for a while if bootstrapping is false to avoid thrashing.
+	// If bootstrapping is true, dn checker will construct create dn shard command immediately.
+	// This flag helps to accelarate cluster bootstrapping.
 	bootstrapping bool
 )
 
