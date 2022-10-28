@@ -303,25 +303,27 @@ func TestCronTask(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	waitChannelFull(t, ctx, ch, 3)
+	waitCronTaskRepeated(t, ch)
 }
 
-func waitChannelFull(t *testing.T, ctx context.Context, ch chan int, expected int) {
+func waitCronTaskRepeated(t *testing.T, ch chan int) {
 	i := 0
-	received := make([]int, 0, expected)
+	received := make([]int, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
-			assert.FailNow(t, "cron task not repeated enough")
+			assert.FailNow(t, "cron task not repeated.")
 		case c := <-ch:
 			received = append(received, c)
-			if len(received) == expected {
-				t.Logf("received %d numbers", expected)
+			if len(received) > 1 {
+				t.Logf("cron task is repeated.")
 				return
 			}
 		default:
 			t.Logf("iteration: %d", i)
-			time.Sleep(time.Second)
+			time.Sleep(3 * time.Second)
 			i++
 		}
 	}
