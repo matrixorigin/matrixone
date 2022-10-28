@@ -2352,7 +2352,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 	} else {
 		proc.SessionInfo.AccountId = sysAccountID
-
+		proc.SessionInfo.RoleId = moAdminRoleID
+		proc.SessionInfo.UserId = moAdminId
 	}
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
