@@ -44,22 +44,22 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 
 func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err error) {
 	for _, col := range colDefs {
-		expr := &plan.Expr{}
+		defaultExpr := &plan.Expr{}
 		if col.Default.Expr != nil {
-			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			expr = nil
+			defaultExpr = nil
 		}
 
-		onUpdate := &plan.Expr{}
-		if col.OnUpdate != nil {
-			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+		onUpdateExpr := &plan.Expr{}
+		if col.OnUpdate.Expr != nil {
+			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			onUpdate = nil
+			onUpdateExpr = nil
 		}
 
 		attr := &engine.Attribute{
@@ -70,9 +70,12 @@ func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err e
 			Default: &plan.Default{
 				NullAbility:  col.Default.NullAbility,
 				OriginString: col.Default.OriginString,
-				Expr:         expr,
+				Expr:         defaultExpr,
 			},
-			OnUpdate:      onUpdate,
+			OnUpdate: &plan.OnUpdate{
+				Expr:         onUpdateExpr,
+				OriginString: col.OnUpdate.OriginString,
+			},
 			AutoIncrement: col.IsAutoIncrement(),
 		}
 		attrs = append(attrs, attr)
@@ -116,22 +119,22 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 			continue
 		}
 
-		expr := &plan.Expr{}
+		defaultExpr := &plan.Expr{}
 		if col.Default.Expr != nil {
-			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			expr = nil
+			defaultExpr = nil
 		}
 
-		onUpdate := &plan.Expr{}
-		if col.OnUpdate != nil {
-			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+		onUpdateExpr := &plan.Expr{}
+		if col.OnUpdate.Expr != nil {
+			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			onUpdate = nil
+			onUpdateExpr = nil
 		}
 
 		def := &engine.AttributeDef{
@@ -143,9 +146,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Default: &plan.Default{
 					NullAbility:  col.Default.NullAbility,
 					OriginString: col.Default.OriginString,
-					Expr:         expr,
+					Expr:         defaultExpr,
 				},
-				OnUpdate:      onUpdate,
+				OnUpdate: &plan.OnUpdate{
+					Expr:         onUpdateExpr,
+					OriginString: col.OnUpdate.OriginString,
+				},
 				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}
