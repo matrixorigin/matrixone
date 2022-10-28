@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -438,7 +437,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, nil,
+		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil,
 			txn.meta.SnapshotTS, nil, writes)
 		if err != nil {
 			return nil, err
@@ -568,10 +567,12 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	if expr != nil {
 		return true
 	}
-	columns := getColumnsByExpr(expr)
+
+	// key = expr's ColPos,  value = tableDef's ColPos
+	columnMap := getColumnsByExpr(expr, tableDef)
 
 	// if expr match no columns, just eval expr
-	if len(columns) == 0 {
+	if len(columnMap) == 0 {
 		bat := batch.NewWithSize(0)
 		ifNeed, err := evalFilterExpr(expr, bat, proc)
 		if err != nil {
@@ -579,7 +580,18 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		}
 		return ifNeed
 	}
-	sort.Ints(columns)
+
+	maxCol := 0
+	useColumn := len(columnMap)
+	columns := make([]int, useColumn)
+	i := 0
+	for k, v := range columnMap {
+		if k > maxCol {
+			maxCol = k
+		}
+		columns[i] = v //tableDef's ColPos
+		i = i + 1
+	}
 
 	// get min max data from Meta
 	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
@@ -588,16 +600,14 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	}
 
 	// use all min/max data to build []vectors.
-	maxCol := columns[len(columns)-1] + 1
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.Mp())
-	bat := batch.NewWithSize(maxCol)
-	cols := columns
-	j := int32(0)
-	for i := 0; i < maxCol; i++ {
-		if i == cols[0] {
-			bat.SetVector(j, buildVectors[j])
-			j++
-			cols = cols[1:]
+	bat := batch.NewWithSize(maxCol + 1)
+	for k, v := range columnMap {
+		for i, realIdx := range columns {
+			if realIdx == v {
+				bat.SetVector(int32(k), buildVectors[i])
+				break
+			}
 		}
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
