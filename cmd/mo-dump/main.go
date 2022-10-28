@@ -69,10 +69,10 @@ func main() {
 			conn.Close()
 		}
 	}()
-	flag.StringVar(&username, "u", _username, "username, default dump")
-	flag.StringVar(&password, "p", _password, "password, default 111")
-	flag.StringVar(&host, "h", _host, "hostname, default 127.0.0.1")
-	flag.IntVar(&port, "P", _port, "port, default 6001")
+	flag.StringVar(&username, "u", _username, "username")
+	flag.StringVar(&password, "p", _password, "password")
+	flag.StringVar(&host, "h", _host, "hostname")
+	flag.IntVar(&port, "P", _port, "portNumber")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.Parse()
@@ -96,7 +96,7 @@ func main() {
 		}
 		fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", database)
 		fmt.Println(createDb, ";")
-		fmt.Printf("USE `%s`;\n", database)
+		fmt.Printf("USE `%s`;\n\n\n", database)
 		tables, err = getTables()
 		if err != nil {
 			return
@@ -114,7 +114,7 @@ func main() {
 		tbl := tables[i]
 		if isView(create) {
 			fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl)
-			fmt.Printf("%s;\n", create)
+			fmt.Printf("%s;\n\n\n", create)
 			continue
 		}
 		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl)
@@ -235,6 +235,7 @@ func showInsert(db string, tbl string) error {
 			return err
 		}
 	}
+	fmt.Printf("\n\n\n")
 	return nil
 }
 
