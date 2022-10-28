@@ -497,10 +497,9 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
-	bool isHideKey = 5;
-	int32 colIndex = 6;
-	repeated IndexInfo index_infos = 7;
-	repeated string index_attrs = 8;
+	int32 colIndex = 5;
+	repeated IndexInfo index_infos = 6;
+	repeated string index_attrs = 7;
 }
 
 message Query {
