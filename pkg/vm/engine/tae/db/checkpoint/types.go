@@ -36,6 +36,7 @@ type Runner interface {
 
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 }
 
 type DirtyCtx struct {

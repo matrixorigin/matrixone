@@ -69,6 +69,10 @@ type DB struct {
 	Closed *atomic.Value
 }
 
+func (db *DB) FlushTableByID(dbID, tableID uint64, ts types.TS) (err error) {
+	return db.BGCheckpointRunner.FlushTable(dbID, tableID, ts)
+}
+
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }

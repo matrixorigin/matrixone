@@ -205,11 +205,16 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	}
 
 	ctx := context.TODO()
-	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
-	timer := time.NewTimer(time.Millisecond * 500)
+
+	ticker := time.NewTicker(time.Millisecond * 100)
+	defer ticker.Stop()
 
 	dirtyCtx := makeCtx()
+	if dirtyCtx == nil {
+		return
+	}
 	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
 		return
 	}
@@ -217,13 +222,14 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	for {
 		select {
 		case <-ctx.Done():
-		case <-timer.C:
-			dirtyCtx = makeCtx()
-			if dirtyCtx == nil {
-				break
+			logutil.Warnf("Flush %d-%d timeout", dbID, tableID)
+			return
+		case <-ticker.C:
+			if dirtyCtx = makeCtx(); dirtyCtx == nil {
+				return
 			}
 			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-				break
+				return
 			}
 		}
 	}
