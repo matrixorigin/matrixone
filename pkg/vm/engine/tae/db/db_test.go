@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -3834,15 +3835,13 @@ func TestSnapshotBatch(t *testing.T) {
 	minTs := types.BuildTS(0, 0)
 	txn, _ := tae.StartTxn(nil)
 	maxTs := txn.GetStartTS()
-	builder, _ := logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
-	builder.WriteToFS(tae.Fs)
-	builder.ReadFromFS(tae.Fs, common.DefaultAllocator)
 
+	runner := tae.DB.BGCheckpointRunner
+	entry := checkpoint.NewCheckpointEntry(minTs, maxTs)
+	runner.TestCheckpoint(entry)
 	ctlg := catalog.NewEmptyCatalog()
-	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
-	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
-	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
-	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
+	r := checkpoint.MockRunner(tae.Fs, ctlg)
+	r.Replay()
 	t.Log(ctlg.SimplePPString(3))
 
 	txn, relation := tae.getRelation()
@@ -3870,13 +3869,12 @@ func TestSnapshotBatch(t *testing.T) {
 	minTs = maxTs.Next()
 	txn, _ = tae.StartTxn(nil)
 	maxTs = txn.GetStartTS()
-	builder, _ = logtail.CollectSnapshot(tae.Catalog, minTs, maxTs)
-	builder.WriteToFS(tae.Fs)
-	builder.ReadFromFS(tae.Fs, common.DefaultAllocator)
-	ctlg.OnReplayDatabaseBatch(builder.GetDBBatchs())
-	ctlg.OnReplayTableBatch(builder.GetTblBatchs())
-	ctlg.OnReplaySegmentBatch(builder.GetSegBatchs())
-	ctlg.OnReplayBlockBatch(builder.GetBlkBatchs())
+	runner = tae.DB.BGCheckpointRunner
+	entry = checkpoint.NewCheckpointEntry(minTs, maxTs)
+	runner.TestCheckpoint(entry)
+	ctlg = catalog.NewEmptyCatalog()
+	r = checkpoint.MockRunner(tae.Fs, ctlg)
+	r.Replay()
 	t.Log(ctlg.SimplePPString(3))
 }
 
