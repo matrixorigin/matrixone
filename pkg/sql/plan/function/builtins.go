@@ -2360,4 +2360,18 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_FLUSH_TABLE: {
+		Id:     MO_FLUSH_TABLE,
+		Flag:   plan.Function_INTERNAL,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.MoFlushTable,
+			},
+		},
+	},
 }
