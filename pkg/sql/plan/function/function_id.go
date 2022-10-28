@@ -191,6 +191,7 @@ const (
 	SUM           // SUM
 	TAN           // TAN
 	TO_DATE
+	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
 	TRANSLATE   // TRANSLATE
 	TRIM        // TRIM
@@ -339,6 +340,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     TO_DATE,
+	"str_to_date": STR_TO_DATE,
 	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
