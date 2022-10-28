@@ -58,10 +58,12 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 
 type runner struct {
 	options struct {
-		collectInterval        time.Duration
-		maxFlushInterval       time.Duration
-		minIncrementalInterval time.Duration
-		minGlobalInterval      time.Duration
+		collectInterval         time.Duration
+		maxFlushInterval        time.Duration
+		minIncrementalInterval  time.Duration
+		minGlobalInterval       time.Duration
+		forceFlushTimeout       time.Duration
+		forceFlushCheckInterval time.Duration
 
 		dirtyEntryQueueSize int
 		waitQueueSize       int
@@ -141,6 +143,13 @@ func NewRunner(
 	return r
 }
 
+// Only used in UT
+func (r *runner) DebugUpdateOptions(opts ...Option) {
+	for _, opt := range opts {
+		opt(r)
+	}
+}
+
 func (r *runner) onCheckpointEntries(items ...any) {
 	entry := r.MaxCheckpoint()
 	if entry.IsFinished() {
@@ -204,11 +213,10 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 		return dirtyCtx
 	}
 
-	ctx := context.TODO()
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), r.options.forceFlushTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(time.Millisecond * 100)
+	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
 	defer ticker.Stop()
 
 	dirtyCtx := makeCtx()
@@ -389,6 +397,12 @@ func (r *runner) tryScheduleCheckpoint() {
 }
 
 func (r *runner) fillDefaults() {
+	if r.options.forceFlushTimeout <= 0 {
+		r.options.forceFlushTimeout = time.Second * 10
+	}
+	if r.options.forceFlushCheckInterval <= 0 {
+		r.options.forceFlushCheckInterval = time.Millisecond * 400
+	}
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
