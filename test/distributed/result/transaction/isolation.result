@@ -529,3 +529,17 @@ c	d
 1	1
 2	2
 drop table if exists test_11;
+drop table if exists t1;
+create table t1 (a int not null, b int);
+insert into t1 values (1, 1);
+begin;
+select * from t1;
+a	b
+1	1
+update t1 set a=null where b=1;
+constraint violation: Column 'a' cannot be null
+select * from t1;
+a	b
+1	1
+commit;
+drop table if exists t1;

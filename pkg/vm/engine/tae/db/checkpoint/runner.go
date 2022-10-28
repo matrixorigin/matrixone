@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -93,6 +95,19 @@ type runner struct {
 	onceStop  sync.Once
 }
 
+func MockRunner(fs *objectio.ObjectFS, c *catalog.Catalog) *runner {
+	r := &runner{
+		fs:      fs,
+		catalog: c,
+	}
+	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
+		return a.end.Less(b.end)
+	}, btree.Options{
+		NoLocks: true,
+	})
+	return r
+}
+
 func NewRunner(
 	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
@@ -152,11 +167,36 @@ func (r *runner) onCheckpointEntries(items ...any) {
 	} else {
 		r.doGlobalCheckpoint(entry)
 	}
+	r.syncCheckpointMetadata(entry.start, entry.end)
 
 	entry.SetState(ST_Finished)
 	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
 
 	r.postCheckpointQueue.Enqueue(entry)
+}
+func (r *runner) collectCheckpointMetadata() *containers.Batch {
+	bat := makeRespBatchFromSchema(CheckpointSchema)
+	r.storage.RLock()
+	entries := r.storage.entries.Items()
+	r.storage.RUnlock()
+	for _, entry := range entries {
+		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
+		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
+		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()))
+	}
+	return bat
+}
+func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
+	r.doIncrementalCheckpoint(entry)
+	r.storage.entries.Set(entry)
+	r.syncCheckpointMetadata(entry.start, entry.end)
+}
+func (r *runner) syncCheckpointMetadata(start, end types.TS) {
+	bat := r.collectCheckpointMetadata()
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
+	writer := blockio.NewWriter(r.fs, name)
+	writer.WriteBlock(bat)
+	writer.Sync()
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
@@ -164,7 +204,9 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	builder.WriteToFS(r.fs)
+	writer := entry.NewCheckpointWriter(r.fs)
+	blks := builder.WriteToFS(writer)
+	entry.EncodeAndSetLocation(blks)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
@@ -173,7 +215,9 @@ func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	builder.WriteToFS(r.fs)
+	writer := entry.NewCheckpointWriter(r.fs)
+	blks := builder.WriteToFS(writer)
+	entry.EncodeAndSetLocation(blks)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
@@ -264,6 +308,10 @@ func (r *runner) tryScheduleCheckpoint() {
 	}
 
 	if entry.IsRunning() {
+		return
+	}
+
+	if entry.IsPendding() {
 		r.checkpointQueue.Enqueue(struct{}{})
 		return
 	}
