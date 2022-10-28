@@ -409,7 +409,7 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
-	expr *plan.Expr,
+	index memtable.Tuple,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
 	blks []ModifyBlockMeta,
@@ -456,12 +456,13 @@ func (p *Partition) NewReader(
 
 	readers[0] = &PartitionReader{
 		typsMap:  mp,
-		iter:     p.data.NewIter(tx),
 		readTime: t,
 		tx:       tx,
-		expr:     expr,
+		index:    index,
 		inserts:  inserts,
 		deletes:  deletes,
+		data:     p.data,
+		iter:     p.data.NewIter(tx),
 	}
 	if readerNumber == 1 {
 		for i := range blks {
