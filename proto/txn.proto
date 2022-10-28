@@ -153,6 +153,8 @@ enum TxnMethod {
     //
     // TODO: needs to work with TAE's log compaction, not currently supported.
     RemoveMedata      = 8;
+    // DEBUG used to send debug request from cn to dn, and received response from dn to cn
+    DEBUG             = 9;
 }
 
 // TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 
@@ -322,4 +324,3 @@ message TxnError {
     // replace these error codes.
     uint32 TxnErrCode = 3;
 }
-

@@ -17,6 +17,7 @@ package taestorage
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -35,6 +36,7 @@ type taeStorage struct {
 }
 
 func NewTAEStorage(
+	dataDir string,
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
@@ -42,7 +44,6 @@ func NewTAEStorage(
 	ckpCfg *options.CheckpointCfg,
 	logStore options.LogstoreType,
 ) (*taeStorage, error) {
-
 	opt := &options.Options{
 		Clock:         clock,
 		Fs:            fs,
@@ -52,7 +53,7 @@ func NewTAEStorage(
 		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
-		taeHandler: rpc.NewTAEHandle(opt),
+		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil
 }
@@ -92,4 +93,8 @@ func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 // StartRecovery implements storage.TxnTAEStorage
 func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.taeHandler.HandleStartRecovery(ctx, ch)
+}
+
+func (s *taeStorage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
+	return nil, moerr.NewNotSupported("TAEStorage not support debug method")
 }

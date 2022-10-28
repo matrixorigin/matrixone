@@ -2,7 +2,7 @@ service-type = "LOG"
 
 [log]
 level = "error"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]
@@ -10,10 +10,9 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
-
 [[fileservice]]
 name = "LOCAL"
-backend = "MEM"
+backend = "DISK"
 
 [[fileservice]]
 name = "S3"
@@ -22,7 +21,6 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
 
 [logservice]
 deployment-id = 1
@@ -30,7 +28,6 @@ uuid = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 gossip-seed-addresses = [
   "127.0.0.1:32002",
 ]
-data-dir = "mo-data/logservice"
 
 [logservice.BootstrapConfig]
 bootstrap-cluster = true

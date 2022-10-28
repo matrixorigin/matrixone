@@ -167,7 +167,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 show create database `1;drop table t1;`;
 invalid database 1;drop table t1;
 show create table `1;drop table t1;`;
-invalid database 1;drop table t1;
+no such table test03.1;drop table t1;
 show columns from `1;drop table t1;`;
 no such table test03.1;drop table t1;
 show table status from `1;drop table t1;`;
@@ -195,3 +195,15 @@ set sql_safe_updates=1;
 show variables like 'sql_safe_updates';
 Variable_name    Value
 sql_safe_updates    1
+set autocommit = on;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+set autocommit = off;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+set autocommit = 1;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on

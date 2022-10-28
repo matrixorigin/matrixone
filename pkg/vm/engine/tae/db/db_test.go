@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -368,7 +369,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
-		writer := blockio.NewWriter(dataBlk.GetFs(), name)
+		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
 		blocks, err := writer.Sync()
@@ -3441,28 +3442,28 @@ func TestCollectInsert(t *testing.T) {
 	blkit := rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
-	batch, err := blkdata.CollectAppendInRange(types.TS{}, p1)
+	batch, err := blkdata.CollectAppendInRange(types.TS{}, p1, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 6, vec.Length())
 	}
-	batch, err = blkdata.CollectAppendInRange(types.TS{}, p2)
+	batch, err = blkdata.CollectAppendInRange(types.TS{}, p2, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 9, vec.Length())
 	}
-	batch, err = blkdata.CollectAppendInRange(p1.Next(), p2)
+	batch, err = blkdata.CollectAppendInRange(p1.Next(), p2, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 3, vec.Length())
 	}
-	batch, err = blkdata.CollectAppendInRange(p1.Next(), p3)
+	batch, err = blkdata.CollectAppendInRange(p1.Next(), p3, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
@@ -3513,28 +3514,28 @@ func TestCollectDelete(t *testing.T) {
 	blkit = rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
-	batch, err := blkdata.CollectDeleteInRange(types.TS{}, p1)
+	batch, err := blkdata.CollectDeleteInRange(types.TS{}, p1, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 1, vec.Length())
 	}
-	batch, err = blkdata.CollectDeleteInRange(types.TS{}, p2)
+	batch, err = blkdata.CollectDeleteInRange(types.TS{}, p2, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 4, vec.Length())
 	}
-	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p2)
+	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p2, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 3, vec.Length())
 	}
-	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p3)
+	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p3, true)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
@@ -3813,4 +3814,151 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
+}
+
+func TestSnapshotBatch(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 30)
+	tae.createRelAndAppend(bat, true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs := types.BuildTS(0, 0)
+	txn, _ := tae.StartTxn(nil)
+	maxTs := txn.GetStartTS()
+
+	runner := tae.DB.BGCheckpointRunner
+	entry := checkpoint.NewCheckpointEntry(minTs, maxTs)
+	runner.TestCheckpoint(entry)
+	ctlg := catalog.NewEmptyCatalog()
+	r := checkpoint.MockRunner(tae.Fs, ctlg)
+	r.Replay()
+	t.Log(ctlg.SimplePPString(3))
+
+	txn, relation := tae.getRelation()
+	blkIt := relation.MakeBlockIt()
+	for blkIt.Valid() {
+		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
+		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
+		blkIt.Next()
+	}
+	segIt := relation.MakeSegmentIt()
+	for segIt.Valid() {
+		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
+		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
+		segIt.Next()
+	}
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName("test")
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	minTs = maxTs.Next()
+	txn, _ = tae.StartTxn(nil)
+	maxTs = txn.GetStartTS()
+	runner = tae.DB.BGCheckpointRunner
+	entry = checkpoint.NewCheckpointEntry(minTs, maxTs)
+	runner.TestCheckpoint(entry)
+	ctlg = catalog.NewEmptyCatalog()
+	r = checkpoint.MockRunner(tae.Fs, ctlg)
+	r.Replay()
+	t.Log(ctlg.SimplePPString(3))
+}
+
+func TestCompactDeltaBlk(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 6
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+
+	tae.createRelAndAppend(bat, true)
+
+	{
+		v := getSingleSortKeyValue(bat, schema, 1)
+		t.Logf("v is %v**********", v)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.getRelation()
+		t.Log("********before delete******************")
+		checkAllColRowsByScan(t, rel, 5, true)
+		_ = rel.DeleteByFilter(filter)
+		assert.Nil(t, txn2.Commit())
+	}
+
+	_, rel := tae.getRelation()
+	checkAllColRowsByScan(t, rel, 4, true)
+
+	{
+		t.Log("************compact************")
+		txn, rel := tae.getRelation()
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+		assert.True(t, meta.GetMetaLoc() != "")
+		assert.True(t, meta.GetDeltaLoc() != "")
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		err = txn.Commit()
+		assert.Nil(t, err)
+		err = meta.GetSegment().RemoveEntry(meta)
+		assert.Nil(t, err)
+	}
+	{
+		v := getSingleSortKeyValue(bat, schema, 2)
+		t.Logf("v is %v**********", v)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.getRelation()
+		t.Log("********before delete******************")
+		checkAllColRowsByScan(t, rel, 4, true)
+		_ = rel.DeleteByFilter(filter)
+		assert.Nil(t, txn2.Commit())
+	}
+	{
+		t.Log("************compact************")
+		txn, rel := tae.getRelation()
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		assert.False(t, meta.IsAppendable())
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+		assert.True(t, meta.GetMetaLoc() != "")
+		assert.True(t, meta.GetDeltaLoc() != "")
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc() != "")
+		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc() == "")
+		err = txn.Commit()
+		assert.Nil(t, err)
+	}
+
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 3, true)
+	assert.Equal(t, int64(3), rel.Rows())
+
+	tae.restart()
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 3, true)
+	assert.Equal(t, int64(3), rel.Rows())
 }

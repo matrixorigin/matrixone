@@ -25,9 +25,19 @@ import (
 )
 
 const (
-	BlockExt   = "blk"
-	SegmentExt = "seg"
+	BlockExt      = "blk"
+	SegmentExt    = "seg"
+	CheckpointExt = "ckp"
 )
+
+func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
+}
+
+func EncodeCheckpointName(prefix string, start, end types.TS) (name string) {
+	name = fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
+	return
+}
 
 func EncodeBlkName(id *common.ID, ts types.TS) (name string) {
 	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, BlockExt)
@@ -83,7 +93,20 @@ func DecodeSegName(name string) (id *common.ID, err error) {
 	}
 	return
 }
-
+func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	start = types.StringToTS(info[1])
+	end = types.StringToTS(info[2])
+	return
+}
+func DecodeCheckpointName(name string) (start, end types.TS) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	start = types.StringToTS(info[1])
+	end = types.StringToTS(info[2])
+	return
+}
 func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows uint32) string {
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
 		EncodeBlkName(id, ts),
@@ -94,7 +117,16 @@ func EncodeBlkMetaLoc(id *common.ID, ts types.TS, extent objectio.Extent, rows u
 	)
 	return metaLoc
 }
-
+func EncodeCkpMetaLoc(name string, extent objectio.Extent, rows uint32) string {
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
+		name,
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+		rows,
+	)
+	return metaLoc
+}
 func EncodeBlkMetaLocWithObject(
 	id *common.ID,
 	extent objectio.Extent,

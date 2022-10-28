@@ -64,9 +64,6 @@ INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
 SELECT * FROM date_test;
 DELETE FROM date_test;
 
--- @bvt:issue#4990
---INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
--- @bvt:issue
 
 
 

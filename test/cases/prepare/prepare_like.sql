@@ -7,11 +7,9 @@ prepare p1 from 'select * from t1 where str1 like "%\%%"';
 execute p1;
 deallocate prepare p1;
 
--- @bvt:issue#5882
 prepare p2 from 'select * from t1 where str1 like "%\%"';
 execute p2;
 deallocate prepare p2;
--- @bvt:issue
 
 prepare p3 from 'select * from t1 where str1 like "\%%"';
 execute p3;
@@ -60,10 +58,8 @@ execute s2 using @b6;
 set @b7='\%str%';
 execute s2 using @b7;
 
--- @bvt:issue#5882
 set @b8='%str1\%';
 execute s2 using @b8;
--- @bvt:issue
 
 set @b9='%\%str%';
 execute s2 using @b9;
