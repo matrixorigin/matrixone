@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package plan;
 
@@ -200,13 +200,18 @@ message ColDef {
 	int32 pkidx 		= 7;
 	string comment		= 8;
 	bool is_cPkey = 9;
-	Expr on_update = 10;
+	OnUpdate on_update = 10;
 }
 
 message Default {
 	bool null_ability = 1;
 	Expr expr = 2;
 	string origin_string = 3;
+}
+
+message OnUpdate {
+	Expr expr = 1;
+	string origin_string = 2;
 }
 
 message PrimaryKeyDef {

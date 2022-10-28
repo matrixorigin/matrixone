@@ -33,7 +33,7 @@ const (
 type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
 	Name string `toml:"name"`
-	// Backend fileservice backend. [MEM|DISK|S3|MINIO]
+	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
 	Backend string `toml:"backend"`
 	// CacheMemCapacityBytes cache memory capacity bytes
 	CacheMemCapacityBytes toml.ByteSize `toml:"cache-mem-capacity-bytes"`

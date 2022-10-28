@@ -90,6 +90,11 @@ func testFileWithChecksum(
 			assert.Nil(t, err)
 			assert.Equal(t, data, content)
 
+			// seek
+			n, err := fileWithChecksum.Seek(0, io.SeekEnd)
+			assert.Nil(t, err)
+			assert.Equal(t, int64(len(data)), n)
+
 			// iotest
 			pos, err = fileWithChecksum.Seek(0, io.SeekStart)
 			assert.Nil(t, err)

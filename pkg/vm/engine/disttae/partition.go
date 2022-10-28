@@ -86,7 +86,14 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	p.IterDeletedRowIDs(ctx, []uint64{ /*TODO*/ }, ts, func(rowID RowID) bool {
+	if len(blks) == 0 {
+		return blks, deletes
+	}
+	ids := make([]uint64, len(blocks))
+	for i := range blocks {
+		ids[i] = blocks[i].Info.BlockID
+	}
+	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
 		deletes[id] = append(deletes[id], int(offset))
 		return true
@@ -275,7 +282,8 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 	return nil
 }
 
-func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple) (rows []DataValue, err error) {
+func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
+	columns []string, deletes map[types.Rowid]uint8) (rows [][]any, err error) {
 	t := memtable.Time{
 		Timestamp: ts,
 	}
@@ -287,11 +295,14 @@ func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple)
 	iter := p.data.NewIndexIter(tx, index, index)
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
+		if _, ok := deletes[types.Rowid(entry.Key)]; ok {
+			continue
+		}
 		data, err := p.data.Get(tx, entry.Key)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, data)
+		rows = append(rows, genRow(&data, columns))
 	}
 	return
 }
@@ -350,7 +361,7 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(tx.Time)
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
