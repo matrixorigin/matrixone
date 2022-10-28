@@ -1567,8 +1567,8 @@ func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName,
 
 // invalidate makes the cache empty
 func (pc *privilegeCache) invalidate() {
-	total := pc.total.Swap(0)
-	hit := pc.hit.Swap(0)
+	//total := pc.total.Swap(0)
+	//hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
 		pc.storeForTable[i].Clear()
 		pc.storeForDatabase[i].Clear()
