@@ -1,8 +1,6 @@
 #SELECT, 嵌套，中文
 SELECT FIND_IN_SET('b','a,b,c,d');
--- @bvt:issue#3657
 select bin(concat_ws(" ",find_in_set('b','a,b,c,d')));
--- @bvt:issue
 select find_in_set("b","a,b,c"),find_in_set("c","a,b,c"),find_in_set("dd","a,bbb,dd"),find_in_set("bbb","a,bbb,dd");
 select find_in_set("d","a,b,c"),find_in_set("dd","a,bbb,d"),find_in_set("bb","a,bbb,dd");
 select find_in_set("","a,b,c"),find_in_set("","a,b,c,"),find_in_set("",",a,b,c");
