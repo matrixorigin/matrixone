@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table t0 (a float(255, 3))",
+		input: "drop table if exists history",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "drop table if exists history",
+	}, {
 		input: "create user daisy@192.168.1.10 identified by '123456'",
 	}, {
 		input: "create table t0 (a float(255, 3))",
@@ -1613,6 +1615,30 @@ var (
 		{
 			input:  `select * from generate_series(1, 10, 1) as g`,
 			output: `select * from generate_series(1, 10, 1) as g`,
+		},
+		{
+			input:  `modump database t into 'a.sql'`,
+			output: `modump database t into a.sql`,
+		},
+		{
+			input:  `modump database t into 'a.sql' max_file_size 1`,
+			output: `modump database t into a.sql max_file_size 1`,
+		},
+		{
+			input:  `modump database t tables t1 into 'a.sql'`,
+			output: `modump database t tables t1 into a.sql`,
+		},
+		{
+			input:  `modump database t tables t1 into 'a.sql' max_file_size 1`,
+			output: `modump database t tables t1 into a.sql max_file_size 1`,
+		},
+		{
+			input:  `modump database t tables t1,t2 into 'a.sql'`,
+			output: `modump database t tables t1, t2 into a.sql`,
+		},
+		{
+			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
+			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
 		},
 	}
 )

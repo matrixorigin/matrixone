@@ -294,6 +294,9 @@ import (
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
 
+// MODump
+%token <str> MODUMP
+
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
 
@@ -371,6 +374,7 @@ import (
 %type <statement> do_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
+%type <statement> mo_dump_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -593,6 +597,7 @@ stmt_list:
 
 stmt:
     create_stmt
+|   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
@@ -624,6 +629,28 @@ stmt:
     {
         $$ = tree.Statement(nil)
     }
+
+
+mo_dump_stmt:
+    MODUMP DATABASE database_id INTO STRING max_file_size_opt
+    {
+	$$ = &tree.MoDump{
+	    Database: tree.Identifier($3),
+	    OutFile: $5,
+	    MaxFileSize: int64($6),
+	}
+    }
+|   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
+    {
+	$$ = &tree.MoDump{
+	    Database: tree.Identifier($3),
+	    Tables: $5,
+	    OutFile: $7,
+	    MaxFileSize: int64($8),
+	}
+    }
+
+
 
 import_data_stmt:
     IMPORT DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
@@ -4023,19 +4050,19 @@ view_recursive_opt:
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.CreateAccount{
-        IfNotExists:$3,
-                Name:$4,
-                AuthOption:$5,
-                 StatusOption:$6,
-                Comment:$7,
-    }
+   		$$ = &tree.CreateAccount{
+        	IfNotExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+    	}
     }
 
 account_name:
-    ID
+    ident
     {
-    $$ = $1
+    	$$ = $1
     }
 
 account_auth_option:
@@ -7740,6 +7767,7 @@ reserved_keyword:
 |   UNBOUNDED
 |   SECONDARY
 |   DECLARE
+|   MODUMP
 
 non_reserved_keyword:
     ACCOUNT
@@ -7844,7 +7872,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
-|    PROFILES
+|   PROFILES
 |   ROLE
 |   RANGE
 |   READ
@@ -7899,23 +7927,24 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
-|    TYPE
+|   TYPE
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
-|    UNKNOWN
-|    ANY
-|    SOME
+|   UNKNOWN
+|   ANY
+|   SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
-|    HASH
-|    ENGINES
-|    TRIGGERS
+|   HASH
+|   ENGINES
+|   TRIGGERS
+|	HISTORY
 
 func_not_keyword:
     DATE_ADD
