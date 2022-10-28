@@ -208,4 +208,11 @@ tae data: duplicate
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
+INSERT INTO t1 VALUES(1);
+truncated type TIMESTAMP value 1 for column curr_ts, 1
+INSERT INTO t1 VALUES('2022-09-28');
+select * from t1;
+curr_ts
+2022-09-28 00:00:00
+drop table t1;
 

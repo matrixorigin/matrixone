@@ -143,3 +143,12 @@ insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
 -- @bvt:issue
+
+drop table t1;
+CREATE TABLE t1(
+curr_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES('2022-09-28');
+select * from t1;
+drop table t1;

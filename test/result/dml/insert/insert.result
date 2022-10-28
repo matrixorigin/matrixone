@@ -208,4 +208,14 @@ tae data: duplicate
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
-
+drop table t1;
+CREATE TABLE t1(
+curr_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+INSERT INTO t1 VALUES(1);
+truncated type TIMESTAMP value 1 for column curr_ts, 1
+INSERT INTO t1 VALUES('2022-09-28');
+select * from t1;
+curr_ts
+2022-09-28 00:00:00
+drop table t1;

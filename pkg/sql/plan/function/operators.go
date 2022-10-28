@@ -2733,6 +2733,10 @@ var operators = map[int]Functions{
 			// cast-operator should check param types strictly
 			if len(inputs) == 2 {
 				for i, o := range overloads {
+					//for issue5300, integer can not cast to timestamp
+					if operator.IsInteger(inputs[0]) && inputs[1] == types.T_timestamp {
+						return wrongFunctionParameters, nil
+					}
 					if o.Args[0] == inputs[0] && o.Args[1] == inputs[1] {
 						return int32(i), nil
 					}
