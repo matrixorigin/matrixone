@@ -18,8 +18,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -86,8 +88,15 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {
-			if err := tbl.parts[idx].DeleteByBlockID(ctx, ts, e.BlockId); err != nil {
+			vec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_ID_IDX+MO_PRIMARY_OFF])
+			if err != nil {
 				return err
+			}
+			vs := vector.MustTCols[uint64](vec)
+			for _, v := range vs {
+				if err := tbl.parts[idx].DeleteByBlockID(ctx, ts, v); err != nil {
+					return err
+				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
 		}

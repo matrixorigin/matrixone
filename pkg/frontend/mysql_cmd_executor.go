@@ -1864,7 +1864,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.plan = newPlan
 
 		//check privilege
-		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
 		if err != nil {
 			return nil, err
 		}
@@ -1934,7 +1934,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -1962,7 +1962,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, ret)
+			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
 			}
@@ -2036,17 +2036,16 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
-// authenticatePrivilegeOfStatement checks the user can execute the statement
-func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
+// authenticateUserCanExecuteStatement checks the user can execute the statement
+func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-
 	var havePrivilege bool
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
-		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
@@ -2056,7 +2055,7 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 			return err
 		}
 
-		havePrivilege, err = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(requestCtx, ses, stmt)
 		if err != nil {
 			return err
 		}
@@ -2069,13 +2068,12 @@ func authenticatePrivilegeOfStatement(requestCtx context.Context, ses *Session, 
 	return err
 }
 
-// authenticatePrivilegeOfStatementAndPlan checks the user can execute the statement and its plan
-func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+// authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
+func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
-
-	yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
+	yes, err := authenticateUserCanExecuteStatementWithObjectTypeTable(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -2086,12 +2084,12 @@ func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Se
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
-	err := authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
 	}
-	err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, p)
+	err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, p)
 	if err != nil {
 		return err
 	}
@@ -2182,7 +2180,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			err = authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 			if err != nil {
 				return err
 			}
@@ -2243,6 +2241,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			selfHandle = true
 		case *tree.SetRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			//switch role
 			err = mce.handleSwitchRole(requestCtx, st)
 			if err != nil {
@@ -2256,6 +2255,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.DropDatabase:
+			ses.InvalidatePrivilegeCache()
 			// if the droped database is the same as the one in use, database must be reseted to empty.
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetDatabaseName("")
@@ -2273,7 +2273,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2283,7 +2283,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2322,7 +2322,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
-			ses.Data = nil
+			ses.SetData(nil)
 			switch st.Statement.(type) {
 			case *tree.Delete:
 				ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
@@ -2333,10 +2333,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.ShowColumns:
 			ses.SetShowStmtType(ShowColumns)
-			ses.Data = nil
+			ses.SetData(nil)
 		case *tree.ShowTableStatus:
 			ses.showStmtType = ShowTableStatus
-			ses.Data = nil
+			ses.SetData(nil)
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
@@ -2348,38 +2348,47 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.CreateAccount:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropAccount:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterAccount: //TODO
+			ses.InvalidatePrivilegeCache()
 		case *tree.CreateUser:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropUser:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.AlterUser: //TODO
+			ses.InvalidatePrivilegeCache()
 		case *tree.CreateRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.DropRole:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			if err = mce.handleDropRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			switch st.Typ {
 			case tree.GrantTypeRole:
 				if err = mce.handleGrantRole(requestCtx, &st.GrantRole); err != nil {
@@ -2392,6 +2401,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.Revoke:
 			selfHandle = true
+			ses.InvalidatePrivilegeCache()
 			switch st.Typ {
 			case tree.RevokeTypeRole:
 				if err = mce.handleRevokeRole(requestCtx, &st.RevokeRole); err != nil {
@@ -2542,6 +2552,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
 			*tree.Delete, *tree.TruncateTable:
+			//change privilege
+			switch cw.GetAst().(type) {
+			case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView,
+				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+				*tree.CreateRole, *tree.DropRole,
+				*tree.Revoke, *tree.Grant,
+				*tree.SetDefaultRole, *tree.SetRole:
+				ses.InvalidatePrivilegeCache()
+			}
 			runBegin := time.Now()
 			/*
 				Step 1: Start

@@ -286,8 +286,9 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	blk.meta.RLock()
 	dropped := blk.meta.HasDropCommittedLocked()
 	inTxn := blk.meta.IsCreating()
+	anyCommitted := blk.meta.HasCommittedNode()
 	blk.meta.RUnlock()
-	if dropped || inTxn {
+	if dropped || inTxn || !anyCommitted {
 		return
 	}
 	// Make sure no appender use this block to compact
