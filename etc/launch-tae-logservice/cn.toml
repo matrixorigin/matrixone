@@ -34,5 +34,8 @@ role = "TP"
 type = "tae"
 logstore = "logservice"
 
+[cn.frontend]
+port = 6001
+
 [observability]
 statusPort = 9001
