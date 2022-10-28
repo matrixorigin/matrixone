@@ -30,10 +30,12 @@ import (
 var (
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
+	bootstrapping bool
 )
 
 func init() {
 	waitingShards = newInitialShards()
+	bootstrapping = true
 }
 
 // Check checks dn state and generate operator for expired dn store.
