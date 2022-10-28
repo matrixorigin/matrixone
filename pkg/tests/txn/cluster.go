@@ -16,7 +16,6 @@ package txn
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -32,9 +31,6 @@ import (
 
 var (
 	defaultTestTimeout = time.Minute
-
-	memKVTxnStorage = "MEMKV"
-	memTxnStorage   = "MEM"
 )
 
 type cluster struct {
@@ -91,17 +87,7 @@ func (c *cluster) Env() service.Cluster {
 }
 
 func (c *cluster) NewClient() Client {
-	backend := c.env.Options().GetTxnStorageBackend()
-	switch backend {
-	case memKVTxnStorage:
-		cli, err := newKVClient(c.env, c.clock, c.logger)
-		require.NoError(c.t, err)
-		return cli
-	case memTxnStorage:
-		cli, err := newSQLClient(c.logger, c.env)
-		require.NoError(c.t, err)
-		return cli
-	default:
-		panic(fmt.Sprintf("%s backend txn storage not support", backend))
-	}
+	cli, err := newSQLClient(c.logger, c.env)
+	require.NoError(c.t, err)
+	return cli
 }
