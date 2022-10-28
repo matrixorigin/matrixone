@@ -1150,3 +1150,159 @@ func genColumnIndexKey(id uint64) memtable.Tuple {
 		memtable.ToOrdered(id),
 	}
 }
+
+func transferIval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferUval(v uint64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferFval(v float32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDval(v float64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferSval(v string, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_json:
+		return true, []byte(v)
+	case types.T_char, types.T_varchar:
+		return true, []byte(v)
+	case types.T_text, types.T_blob:
+		return true, []byte(v)
+	case types.T_uuid:
+		var uv types.Uuid
+		copy(uv[:], []byte(v)[:])
+		return true, uv
+	default:
+		return false, nil
+	}
+}
+
+func transferBval(v bool, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_bool:
+		return true, v
+	default:
+		return false, nil
+	}
+}
+
+func transferDateval(v int32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_date:
+		return true, types.Date(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_time:
+		return true, types.Time(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDatetimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_datetime:
+		return true, types.Datetime(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimestampval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_timestamp:
+		return true, types.Timestamp(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal64val(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal64:
+		return true, types.Decimal64FromInt64Raw(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal128:
+		return true, types.Decimal128FromInt64Raw(a, b)
+	default:
+		return false, nil
+	}
+}
