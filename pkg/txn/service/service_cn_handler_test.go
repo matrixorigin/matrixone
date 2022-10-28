@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReadBasic(t *testing.T) {
@@ -699,6 +700,37 @@ func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.
 	responses := result.Responses
 	assert.Equal(t, len(keys), len(responses))
 	return responses
+}
+
+func TestDebug(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	sender.AddTxnService(s)
+
+	data := []byte("OK")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := sender.Send(ctx, []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_DEBUG,
+			CNRequest: &txn.CNOpRequest{
+				Payload: data,
+				Target:  NewTestDNShard(1),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, data, result.Responses[0].CNOpResponse.Payload)
 }
 
 func commitShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
