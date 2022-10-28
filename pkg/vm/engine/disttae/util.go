@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -64,25 +65,36 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, tableDef, columnMap)
+			err := getColumnMapByExpr(arg, tableDef, columnMap)
+			if expr != nil {
+				return err
+			}
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
 		colName := exprImpl.Col.Name
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
-		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
+		if colIdx, ok := tableDef.Name2ColIndex[colName]; ok {
+			columnMap[int(idx)] = int(colIdx)
+		} else {
+			errMsg := fmt.Sprintf("can not find colName [%s]", colName)
+			logutil.Error(errMsg)
+			return moerr.NewInternalError(errMsg)
+
+		}
 	}
+	return nil
 }
 
-func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, error) {
 	columnMap := make(map[int]int)
-	getColumnMapByExpr(expr, tableDef, columnMap)
-	return columnMap
+	err := getColumnMapByExpr(expr, tableDef, columnMap)
+	return columnMap, err
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {

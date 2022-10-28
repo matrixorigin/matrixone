@@ -569,7 +569,11 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	// }
 
 	// key = expr's ColPos,  value = tableDef's ColPos
-	columnMap := getColumnsByExpr(expr, tableDef)
+	columnMap, err := getColumnsByExpr(expr, tableDef)
+	if err == nil {
+		// xxx need to find out why err. that means we get an illegal expr
+		return true
+	}
 
 	// if expr match no columns, just eval expr
 	if len(columnMap) == 0 {
