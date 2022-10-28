@@ -136,6 +136,9 @@ func (opt *Options) validate() {
 	if opt.storage.dnStorage == "" {
 		opt.storage.dnStorage = defaultDNStorage
 	}
+	if opt.storage.cnEngine == "" {
+		opt.storage.cnEngine = defaultCNEngine
+	}
 
 	// hakeeper configuration
 	if opt.hakeeper.tickPerSecond == 0 {
