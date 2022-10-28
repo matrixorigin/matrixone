@@ -971,7 +971,7 @@ func genBlockMetas(
 					mp[blk.BlockID] = blockInfos[i]
 				}
 			} else {
-				mp[blk.BlockID] = blockInfos[i]
+				mp[blockInfos[i].BlockID] = blockInfos[i]
 			}
 		}
 		blockInfos = blockInfos[:0]
