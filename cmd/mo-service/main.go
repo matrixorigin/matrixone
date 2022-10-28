@@ -147,7 +147,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
-			cnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))),
+			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {

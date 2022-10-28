@@ -29,14 +29,16 @@ import (
 )
 
 type PartitionReader struct {
+	end         bool
 	typsMap     map[string]types.Type
-	iter        *memtable.TableIter[RowID, DataValue]
 	firstCalled bool
 	readTime    memtable.Time
 	tx          *memtable.Transaction
-	expr        *plan.Expr
+	index       memtable.Tuple
 	inserts     []*batch.Batch
 	deletes     map[types.Rowid]uint8
+	iter        *memtable.TableIter[RowID, DataValue]
+	data        *memtable.Table[RowID, DataValue, *DataRow]
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -48,6 +50,9 @@ func (p *PartitionReader) Close() error {
 
 func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPool) (*batch.Batch, error) {
 	if p == nil {
+		return nil, nil
+	}
+	if p.end {
 		return nil, nil
 	}
 	if len(p.inserts) > 0 {
@@ -62,6 +67,54 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		}
 		return b, nil
 	}
+	b := batch.New(false, colNames)
+	for i, name := range colNames {
+		b.Vecs[i] = vector.New(p.typsMap[name])
+	}
+	rows := 0
+	if len(p.index) > 0 {
+		p.iter.Close()
+		itr := p.data.NewIndexIter(p.tx, p.index, p.index)
+		for ok := itr.First(); ok; ok = itr.Next() {
+			entry := itr.Item()
+			if _, ok := p.deletes[types.Rowid(entry.Key)]; ok {
+				continue
+			}
+			dataValue, err := p.data.Get(p.tx, entry.Key)
+			if err != nil {
+				itr.Close()
+				p.end = true
+				return nil, err
+			}
+			if dataValue.op == opDelete {
+				continue
+			}
+			for i, name := range b.Attrs {
+				if name == catalog.Row_ID {
+					b.Vecs[i].Append(types.Rowid(entry.Key), false, mp)
+					continue
+				}
+				value, ok := dataValue.value[name]
+				if !ok {
+					panic(fmt.Sprintf("invalid column name: %v", name))
+				}
+				value.AppendVector(b.Vecs[i], mp)
+			}
+			rows++
+		}
+		if rows > 0 {
+			b.InitZsOne(rows)
+			for _, vec := range b.Vecs {
+				nulls.TryExpand(vec.GetNulls(), rows)
+			}
+		}
+		itr.Close()
+		p.end = true
+		if rows == 0 {
+			return nil, nil
+		}
+		return b, nil
+	}
 
 	fn := p.iter.Next
 	if !p.firstCalled {
@@ -69,13 +122,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		p.firstCalled = true
 	}
 
-	b := batch.New(false, colNames)
-	for i, name := range colNames {
-		b.Vecs[i] = vector.New(p.typsMap[name])
-	}
-
-	maxRows := 4096
-	rows := 0
+	maxRows := 8192 // i think 8192 is better than 4096
 	for ok := fn(); ok; ok = p.iter.Next() {
 		dataKey, dataValue, err := p.iter.Read()
 		if err != nil {
@@ -89,9 +136,6 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 		if dataValue.op == opDelete {
 			continue
 		}
-
-		//TODO handle iter.Expr
-		_ = p.expr
 
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {

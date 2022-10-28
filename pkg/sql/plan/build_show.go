@@ -60,7 +60,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewBadDB(tblName)
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))

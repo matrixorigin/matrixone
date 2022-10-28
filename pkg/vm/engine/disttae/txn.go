@@ -437,7 +437,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].NewReader(ctx, 1, expr, defs, nil, nil,
+		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil,
 			txn.meta.SnapshotTS, nil, writes)
 		if err != nil {
 			return nil, err
@@ -564,9 +564,9 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		return true
 	}
 	// return true anyway
-	// if expr != nil {
-	// 	return true
-	// }
+	if expr != nil {
+		return true
+	}
 
 	// key = expr's ColPos,  value = tableDef's ColPos
 	columnMap := getColumnsByExpr(expr, tableDef)
