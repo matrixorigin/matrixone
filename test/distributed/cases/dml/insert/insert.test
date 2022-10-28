@@ -144,7 +144,7 @@ insert into t1 values(null, '2');
 insert into t1 values(null, '2');
 -- @bvt:issue
 
-drop table t1;
+drop table if exists t1;
 CREATE TABLE t1(
 curr_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
