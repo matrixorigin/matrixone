@@ -1067,7 +1067,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
+func (catalog *Catalog) txnGetNodeByName(name string, txn txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	fullName := genDBFullName(txn.GetTenantID(), name)
@@ -1075,11 +1075,11 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) 
 	if node == nil {
 		return nil, moerr.NewNotFound()
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(txn.GetStartTS())
 }
 
 func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
-	n, err := catalog.txnGetNodeByNameLocked(name, txn)
+	n, err := catalog.txnGetNodeByName(name, txn)
 	if err != nil {
 		return nil, err
 	}
@@ -1103,7 +1103,7 @@ func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry b
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByNameLocked(name, txn)
+	dn, err := catalog.txnGetNodeByName(name, txn)
 	if err != nil {
 		return
 	}
