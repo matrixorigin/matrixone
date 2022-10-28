@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -4685,6 +4687,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 
+		err = createTablesInSystemOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
+		if err != nil {
+			goto handleFailed
+		}
+
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
 		if err != nil {
 			goto handleFailed
@@ -4877,13 +4884,41 @@ handleFailed:
 	return newTenant, err
 }
 
+// createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
+func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	var err error
+	sqls := make([]string, 0)
+	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
+	sqls = append(sqls, "use "+trace.SystemDBConst+";")
+	traceTables := trace.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, traceTables...)
+	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
+	sqls = append(sqls, "use "+metric.MetricDBConst+";")
+	metricTables := metric.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, metricTables...)
+
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
