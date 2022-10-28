@@ -318,3 +318,13 @@ select * from test_11;
 -- @session}
 
 drop table if exists test_11;
+
+drop table if exists t1;
+create table t1 (a int not null, b int);
+insert into t1 values (1, 1);
+begin;
+select * from t1;
+update t1 set a=null where b=1;
+select * from t1;
+commit;
+drop table if exists t1;

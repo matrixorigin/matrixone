@@ -1,0 +1,255 @@
+drop table if exists json_table_1;
+drop table if exists json_table_2;
+drop table if exists json_table_3;
+drop table if exists json_table_3a;
+drop table if exists json_table_3b;
+drop table if exists json_table_4;
+drop table if exists json_table_4a;
+drop table if exists json_table_5;
+drop table if exists json_table_5a;
+drop table if exists json_view_1;
+create table json_table_1(j1 json);
+insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "key123456": 223}'),('{"芝士面包": "12abc", "key_56": 78.90}'),('{"": "", "12_key": "中文mo"}'),('{"a 1": "b 1", "13key4": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
+insert into json_table_1 values('{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"1234567890000000000000000000000000000000000000000000000","uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu":["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}');
+select j1 from json_table_1;
+j1
+{"key10": "value1", "key2": "value2"}
+{"key1": "@#$_%^&*()!@", "key123456": 223}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"": "", "12_key": "中文mo"}
+{"13key4": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"d1": [true, false]}
+{}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
+create table json_table_2(j1 json not null,j2 json null);
+insert into json_table_2 values('{"key1": "value1", "key2": "value2"}','{}');
+select * from json_table_2;
+j1    j2
+{"key1": "value1", "key2": "value2"}    {}
+insert into json_table_2 values('{}','{"key1": "value1", "key2": "value2"}');
+select '{"key1": "value1", "key2": "value2"}','{}','{"芝士面包": "12abc", "123456": "中文mo"}';
+{"key1": "value1", "key2": "value2"}    {}    {"芝士面包": "12abc", "123456": "中文mo"}
+{"key1": "value1", "key2": "value2"}    {}    {"芝士面包": "12abc", "123456": "中文mo"}
+create table json_table_3(id int,j1 json);
+Insert into json_table_3 values (1,'{
+"pages": [
+"pages/news/news",
+"pages/index/index",
+"pages/movie/movie",
+"pages/logs/logs"
+],
+"window": {
+"backgroundTextStyle": "light",
+"navigationBarBackgroundColor": "white",
+"navigationBarTitleText": "哈哈",
+"navigationBarTextStyle": "black",
+"navigationStyle": "custom",
+"backgroundColor": "#ffffff"
+},
+"tabBar": {
+"color": "#000",
+"borderStyle": "black",
+"selectedColor": "#ff6600",
+"position": "bottom",
+"custom": "false",
+"list": [
+{
+"pagePath": "pages/news/news",
+"text": "新闻",
+"iconPath": "pages/images/yuedu.png",
+"selectedIconPath": "pages/images/193.jpg"
+},
+{
+"pagePath": "pages/movie/movie",
+"text": "电影",
+"iconPath": "pages/images/diany.png",
+"selectedIconPath": "pages/images/506.jpg"
+}
+]
+},
+"networkTimeout": {
+"request": 6000,
+"downloadFile": 60000,
+"connectSocket": 60000 ,
+"uploadFile": 60000
+},
+"debug": true,
+"requiredBackgroundModes": [
+"audio",
+"location"
+],
+"permission": {
+"scope.userLocation": {
+"desc": "你的位置信息将用于小程序位置接口的效果展示"
+}
+},
+"style": "v2"
+}
+');
+select * from json_table_3;
+id    j1
+1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
+create table json_table_3a(j1 json);
+insert into json_table_3a values('{"x": 17, "x": "red"}'),('{"x": 17, "x": "red", "x": [3, 5, 7]}');
+select * from json_table_3a;
+j1
+{"x": "red"}
+{"x": [3, 5, 7]}
+create table json_table_4(j1 json);
+insert into json_table_4 values('[1, 2,');
+invalid input: Invalid JSON text: '[1, 2,' for column 'j1' at row '1'
+insert into json_table_4 values('{"key1": NULL, "": "value2"}');
+invalid input: Invalid JSON text: '{"key1": NULL, "": "value2"}' for column 'j1' at row '1'
+insert into json_table_4 values('');
+invalid input: Invalid JSON text: '' for column 'j1' at row '1'
+create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
+not supported: JSON column 'j1' cannot be in primary key
+create table json_table_5(j1 json) partition by hash(j1);
+SQL syntax error: type JSON not allowed in partition clause
+select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
+invalid argument operator >, bad value [JSON VARCHAR]
+create table json_table_61(j1 json,a varchar(25),b int);
+insert into json_table_61 values('{"010": "beijing", "021": "shanghai"}','apple',345),('{"phonenum":"17290839029","age":"45"}','pear',0);
+select * from json_table_61;
+j1    a    b
+{"010": "beijing", "021": "shanghai"}    apple    345
+{"age": "45", "phonenum": "17290839029"}    pear    0
+update json_table_61 set j1='{"010": [56,"beijing","2002-09-09"]}' where a='apple';
+select * from json_table_61;
+j1    a    b
+{"age": "45", "phonenum": "17290839029"}    pear    0
+{"010": [56, "beijing", "2002-09-09"]}    apple    345
+update json_table_61 set j1='{"010": "beijing"}';
+delete from json_table_61 where b=0;
+select * from json_table_61;
+j1    a    b
+{"010": "beijing"}    apple    345
+delete from json_table_61;
+select * from json_table_61;
+j1    a    b
+select count(j1) from json_table_1 ;
+count(j1)
+9
+select max(j1) from json_table_1 ;
+invalid argument aggregate function max, bad value [JSON]
+select min(j1) from json_table_1 ;
+invalid argument aggregate function min, bad value [JSON]
+create table json_table_3b(d1 int,j1 json);
+insert into json_table_3b values(34,'{"key10": "value1", "key2": "value2"}'),(50,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1,'{"芝士面包": "12abc", "123456": "中文mo"}'),(45,'{"": "", "123456": "中文mo"}'),(22,'{"a 1": "b 1", "123456": "中文mo"}'),(88,'{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),(4,'{"key10": "value1", "key2": "value2"}'),(501,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1111,'{"芝士面包": "12abc", "123456": "中文mo"}'),(415,'{"": "", "123456": "中文mo"}');
+select max(d1),j1 from json_table_3b group by j1 order by j1;
+max(d1)    j1
+34    {"key10": "value1", "key2": "value2"}
+501    {"123456": "中文mo", "key1": "@#$_%^&*()!@"}
+1111    {"123456": "中文mo", "芝士面包": "12abc"}
+415    {"": "", "123456": "中文mo"}
+22    {"123456": "中文mo", "a 1": "b 1"}
+88    {"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+select j1 from json_table_3b order by j1;
+j1
+{"key10": "value1", "key2": "value2"}
+{"123456": "中文mo", "key1": "@#$_%^&*()!@"}
+{"123456": "中文mo", "芝士面包": "12abc"}
+{"": "", "123456": "中文mo"}
+{"123456": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"key10": "value1", "key2": "value2"}
+{"123456": "中文mo", "key1": "@#$_%^&*()!@"}
+{"123456": "中文mo", "芝士面包": "12abc"}
+{"": "", "123456": "中文mo"}
+select * from json_table_3 where j1 is not null;
+id    j1
+1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
+select * from json_table_3 where j1 is  null;
+id    j1
+create view json_view_1 as select * from json_table_1;
+select * from json_view_1;
+j1
+{"key10": "value1", "key2": "value2"}
+{"key1": "@#$_%^&*()!@", "key123456": 223}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"": "", "12_key": "中文mo"}
+{"13key4": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"d1": [true, false]}
+{}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
+create table json_table_81(d1 int,j1 json);
+load data infile'/Users/heni/test_data/json_table_3.txt' into table json_table_81 fields terminated by '|' ignore 1 lines;
+create table json_table_82(d2 int,j2 json);
+insert into json_table_82 select * from json_table_81;
+create temporary table json_table_4a(j1 json);
+insert into json_table_4a values('{"key1": "value1", "key2": "value2"}');
+select * from json_table_4a;
+j1
+{"key1": "value1", "key2": "value2"}
+create external table json_table_5a(d1 int,j1 json)infile{"filepath"='/Users/heni/test_data/json_table_3.txt'} fields terminated by '|' lines terminated by '\n' ignore 1 lines;
+select * from json_table_5a;
+d1    j1
+select j1 from  json_table_1 union select j1 from  json_table_3;
+SQL parser error: the 0 column cann't cast to a same type
+select j1 from  json_table_1 intersect select j1 from  json_table_3;
+SQL parser error: the 0 column cann't cast to a same type
+select j1 from  json_table_1 minus select j1 from  json_table_3;
+SQL parser error: the 0 column cann't cast to a same type
+create table json_table_71(j1 json);
+insert into  json_table_71 values('{
+"orderType": "BUY",
+"orderId": 20768330,
+"syncAction": "market_order",
+"itemCode": "DT_GOODS",
+"maxOfPeople": 214748,
+"itemName": "试用规格",
+"payFee": 0,
+"serviceStopTime": 1608825600000,
+"serviceStartTime": 1607481719000,
+"minOfPeople": 0,
+"paidtime": 1607481718000,
+"syncSeq": "0CD53B341284A223363FD8E4ACIHWBU98283"
+}');
+select json_extract(j1,'$.orderType') from json_table_71;
+json_extract(j1, $.orderType)
+"BUY"
+select json_extract(j1,'$.orderType.*') from json_table_71;
+json_extract(j1, $.orderType.*)
+null
+select json_extract(j1,'$.*') from json_table_71;
+json_extract(j1, $.*)
+["DT_GOODS", "试用规格", 214748, 0, 20768330, "BUY", 1607481718000, 0, 1607481719000, 1608825600000, "market_order", "0CD53B341284A223363FD8E4ACIHWBU98283"]
+select  json_extract(j1,'$**.itemName') from json_table_71;
+json_extract(j1, $**.itemName)
+"试用规格"
+select  json_extract(j1,'$[*]') from json_table_71;
+json_extract(j1, $[*])
+null
+select  json_extract(j1,'$[0]') from json_table_71;
+json_extract(j1, $[0])
+{"itemCode": "DT_GOODS", "itemName": "试用规格", "maxOfPeople": 214748, "minOfPeople": 0, "orderId": 20768330, "orderType": "BUY", "paidtime": 1607481718000, "payFee": 0, "serviceStartTime": 1607481719000, "serviceStopTime": 1608825600000, "syncAction": "market_order", "syncSeq": "0CD53B341284A223363FD8E4ACIHWBU98283"}
+select  json_extract(j1,'$') from json_table_71;
+json_extract(j1, $)
+{"itemCode": "DT_GOODS", "itemName": "试用规格", "maxOfPeople": 214748, "minOfPeople": 0, "orderId": 20768330, "orderType": "BUY", "paidtime": 1607481718000, "payFee": 0, "serviceStartTime": 1607481719000, "serviceStopTime": 1608825600000, "syncAction": "market_order", "syncSeq": "0CD53B341284A223363FD8E4ACIHWBU98283"}
+select json_extract(j1,'$.itemName[2]') from json_table_71;
+json_extract(j1, $.itemName[2])
+null
+select json_extract(j1,'$**.minOfPeople') from json_table_71;
+json_extract(j1, $**.minOfPeople)
+0
+select json_extract(' {"a": [1, "2", {"aa": "bb"}]} ','$.a[2].aa');
+json_extract( {"a": [1, "2", {"aa": "bb"}]} , $.a[2].aa)
+"bb"
+select json_extract(' {"a": [1, "2", {"aa": ["yyy",56,89,{"aa2": ["aa3",{"aa4": [1,2,{"aa5": ["aa6", {"aa7": "bb"}]}]}]}]}]} ','$.a[2].aa[3].aa2[1].aa4[2].aa5[1].aa7');
+json_extract( {"a": [1, "2", {"aa": ["yyy",56,89,{"aa2": ["aa3",{"aa4": [1,2,{"aa5": ["aa6", {"aa7": "bb"}]}]}]}]}]} , $.a[2].aa[3].aa2[1].aa4[2].aa5[1].aa7)
+"bb"
+select json_extract('{"a":1,"b":2,"c":3,"d":{"a":"x"}}', '$**.a');
+json_extract({"a":1,"b":2,"c":3,"d":{"a":"x"}}, $**.a)
+[1, "x"]
+select json_extract(' {"a.f": [1, "2", {"aa.f": "bb"}],"e.a.b":"888"} ','$**.f');
+json_extract( {"a.f": [1, "2", {"aa.f": "bb"}],"e.a.b":"888"} , $**.f)
+null
+select  json_extract('{"a":"a1","b":"b1"}','$.**');
+invalid input: invalid json path '$.**'
+select json_extract('bar','$.*');
+invalid input: json text bar
+select  json_extract(j1,'') from json_table_71;
+invalid input: invalid json path ''
+
