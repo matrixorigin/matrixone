@@ -93,38 +93,30 @@ drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
 SELECT id, id >= 20200102 FROM t_timestamp;
-id	id >= 20200102
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	true
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT id, id = 202020101 FROM t_timestamp;
-id	id = 202020101
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	false
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT id, 20200101 = id FROM t_timestamp;
-id	20200101 = id
-2020-01-01 23:59:59.999999000	false
-2022-01-02 00:00:00	false
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT * from t_timestamp WHERE id = 20200102;
-id
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
-id
+invalid argument operator =, bad value [TIMESTAMP DOUBLE]
 SELECT * from t_timestamp WHERE id = '20200102';
 id
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
 id
 2022-01-02 00:00:00
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
-id
+invalid argument operator =, bad value [TIMESTAMP DOUBLE]
 SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
-id
-2022-01-02 00:00:00.000000
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
-Can't cast '2.0200101e7' from VARCHAR type to TIMESTAMP type.
+invalid argument parse timestamp, bad value 2.0200101e7
 SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
-id
+invalid argument operator cast, bad value [BIGINT TIMESTAMP]
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
-id
-2020-01-01 23:59:59.999999
+invalid argument operator >=, bad value [TIMESTAMP DOUBLE]
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 id
 2020-01-01 23:59:59.999999000

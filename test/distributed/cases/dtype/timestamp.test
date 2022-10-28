@@ -65,28 +65,18 @@ drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
--- @bvt:issue#3739
 SELECT id, id >= 20200102 FROM t_timestamp;
--- @bvt:issue
 SELECT id, id = 202020101 FROM t_timestamp;
 SELECT id, 20200101 = id FROM t_timestamp;
 SELECT * from t_timestamp WHERE id = 20200102;
--- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
--- @bvt:issue
 SELECT * from t_timestamp WHERE id = '20200102';
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
--- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
--- @bvt:issue
--- @bvt:issue#3739
 SELECT * from t_timestamp WHERE id IN ('20220101', 20220102);
--- @bvt:issue#3739
 SELECT * from t_timestamp WHERE id IN ('2.0200101e7','2.0200102e7');
 SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
--- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
--- @bvt:issue
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 SELECT * from t_timestamp WHERE id BETWEEN '2022-01-01 00:00:00' AND '2022-01-02 00:00:00.000000';
 drop table if exists t1;
