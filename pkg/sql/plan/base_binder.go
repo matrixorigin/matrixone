@@ -102,10 +102,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("isnotnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsUnknownExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("isunknown", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsNotUnknownExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("isnotunknown", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnotnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsTrueExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("istrue", []tree.Expr{exprImpl.Expr}, depth)
@@ -892,6 +892,17 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+	case "timediff":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
+
+		if isNullExpr(args[0]) || isNullExpr(args[1]) {
+			break
+		}
+		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
+			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
 		}
 	}
 

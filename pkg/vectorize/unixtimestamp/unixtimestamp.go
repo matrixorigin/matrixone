@@ -18,6 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+const int32_MAX int64 = 0x7fffffff
+
 var (
 	UnixTimestamp func([]types.Timestamp, []int64) []int64
 )
@@ -29,8 +31,8 @@ func init() {
 func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
 	for i := range xs {
 		rs[i] = xs[i].Unix()
-		if rs[i] < 0 {
-			rs[i] = 0
+		if rs[i] > int32_MAX {
+			rs[i] = -1
 		}
 	}
 	return rs

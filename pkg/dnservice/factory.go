@@ -33,20 +33,16 @@ import (
 )
 
 const (
-	memStorageBackend   = "MEM"
-	memKVStorageBackend = "MEMKV"
-	taeStorageBackend   = "TAE"
-
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
 	etlFileServiceName   = "ETL"
 )
 
 var (
-	supportTxnStorageBackends = map[string]struct{}{
-		memKVStorageBackend: {},
-		memStorageBackend:   {},
-		taeStorageBackend:   {},
+	supportTxnStorageBackends = map[StorageType]struct{}{
+		StorageMEMKV: {},
+		StorageMEM:   {},
+		StorageTAE:   {},
 	}
 )
 
@@ -60,7 +56,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	}
 
 	switch s.cfg.Txn.Storage.Backend {
-	case memStorageBackend:
+	case StorageMEM:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -72,14 +68,14 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 
-	case memKVStorageBackend:
+	case StorageMEMKV:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
 		}
 		return s.newMemKVStorage(shard, logClient)
 
-	case taeStorageBackend:
+	case StorageTAE:
 		ts, err := s.newTAEStorage(shard, factory)
 		if err != nil {
 			return nil, err
@@ -146,9 +142,16 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		CatalogCkpInterval: int64(s.cfg.Ckp.CatalogCkpInterval.Duration / time.Millisecond),
 		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
 	}
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.Name)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.FileService)
 	if err != nil {
 		return nil, err
 	}
-	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg)
+	return taestorage.NewTAEStorage(
+		s.cfg.Txn.Storage.dataDir,
+		shard,
+		factory,
+		fs,
+		s.clock,
+		ckpcfg,
+		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }

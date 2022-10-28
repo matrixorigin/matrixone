@@ -15,15 +15,15 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -56,11 +57,10 @@ type DB struct {
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
-	CKPDriver checkpoint.Driver
-
 	Scheduler tasks.TaskScheduler
 
-	HeartBeatJobs *stopper.Stopper
+	BGScanner          wb.IHeartbeater
+	BGCheckpointRunner checkpoint.Runner
 
 	Fs *objectio.ObjectFS
 
@@ -134,11 +134,9 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	// XXX PRINT
-	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.HeartBeatJobs.Stop()
-	db.CKPDriver.Stop()
+	db.BGScanner.Stop()
+	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.Wal.Close()

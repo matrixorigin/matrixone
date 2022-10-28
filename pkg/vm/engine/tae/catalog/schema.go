@@ -26,9 +26,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type IndexT uint16
@@ -36,6 +39,10 @@ type IndexT uint16
 const (
 	ZoneMap IndexT = iota
 )
+
+func i82bool(v int8) bool {
+	return v == 1
+}
 
 type IndexInfo struct {
 	Id      uint64
@@ -46,6 +53,11 @@ type IndexInfo struct {
 
 type Default struct {
 	NullAbility  bool
+	Expr         []byte
+	OriginString string
+}
+
+type OnUpdate struct {
 	Expr         []byte
 	OriginString string
 }
@@ -75,7 +87,7 @@ type ColDef struct {
 	SortKey       bool
 	Comment       string
 	Default       Default
-	OnUpdate      []byte
+	OnUpdate      OnUpdate
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -170,39 +182,60 @@ func (s *Schema) HasSortKey() bool { return s.SortKey != nil }
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
 
-func MarshalOnUpdate(w *bytes.Buffer, data []byte) (err error) {
-	if data == nil {
+func MarshalOnUpdate(w *bytes.Buffer, data OnUpdate) (err error) {
+	if err = binary.Write(w, binary.BigEndian, uint16(len([]byte(data.OriginString)))); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, []byte(data.OriginString)); err != nil {
+		return
+	}
+	if data.Expr == nil {
 		err = binary.Write(w, binary.BigEndian, uint16(0))
 		return
 	} else {
-		if err = binary.Write(w, binary.BigEndian, uint16(len(data))); err != nil {
+		if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
 			return
 		}
 	}
-
-	if err = binary.Write(w, binary.BigEndian, data); err != nil {
+	if err = binary.Write(w, binary.BigEndian, data.Expr); err != nil {
 		return
 	}
 	return nil
 }
 
-func UnMarshalOnUpdate(r io.Reader) ([]byte, int64, error) {
-	var valueLen uint16 = 0
-	if err := binary.Read(r, binary.BigEndian, &valueLen); err != nil {
-		return nil, 0, err
-	}
-	n := int64(2)
+func UnMarshalOnUpdate(r io.Reader, data *OnUpdate) (n int64, err error) {
 
-	if valueLen == 0 {
-		return nil, 0, nil
+	var valueLen uint16 = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
 	}
+	n = 2
 
 	buf := make([]byte, valueLen)
-	if _, err := r.Read(buf); err != nil {
-		return nil, 0, err
+	if _, err = r.Read(buf); err != nil {
+		return
 	}
+	data.OriginString = string(buf)
 	n += int64(valueLen)
-	return buf, n, nil
+
+	valueLen = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
+	}
+	n += 2
+
+	if valueLen == 0 {
+		data.Expr = nil
+		return
+	}
+
+	buf = make([]byte, valueLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	data.Expr = buf
+	n += int64(valueLen)
+	return n, nil
 }
 
 func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
@@ -361,7 +394,8 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		if def.OnUpdate, sn, err = UnMarshalOnUpdate(r); err != nil {
+		def.OnUpdate = OnUpdate{}
+		if sn, err = UnMarshalOnUpdate(r, &def.OnUpdate); err != nil {
 			return
 		}
 		n += sn
@@ -447,6 +481,63 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
+func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+	for {
+		nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
+		if offset >= nameVec.Length() {
+			break
+		}
+		name := string(nameVec.Get(offset).([]byte))
+		if name != s.Name {
+			break
+		}
+		def := new(ColDef)
+		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
+		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
+		types.Decode(data, def.Type)
+		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
+		if len(data) != len([]byte("")) {
+			pDefault := &plan.Default{
+				Expr: &plan.Expr{},
+			}
+			types.Decode(data, pDefault)
+			expr, err := pDefault.Expr.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			def.Default = Default{
+				Expr:         expr,
+				OriginString: pDefault.OriginString,
+				NullAbility:  pDefault.NullAbility,
+			}
+		}
+		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
+		def.NullAbility = i82bool(nullable)
+		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
+		def.Hidden = i82bool(isHidden)
+		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
+		def.AutoIncrement = i82bool(isAutoIncrement)
+		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
+		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
+		if len(data) != len([]byte("")) {
+			pUpdate := &plan.OnUpdate{
+				Expr: &plan.Expr{},
+			}
+			types.Decode(data, pUpdate)
+			expr, err := pUpdate.Expr.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			def.OnUpdate = OnUpdate{
+				Expr:         expr,
+				OriginString: pUpdate.OriginString,
+			}
+		}
+		offset++
+	}
+	return offset + 1
+}
+
 func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	def.Idx = len(s.ColDefs)
 	s.ColDefs = append(s.ColDefs, def)
@@ -496,6 +587,17 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		Expr:         bs,
 		OriginString: attr.Default.OriginString,
 	}
+	var attrOnUpdate OnUpdate
+	if attr.OnUpdate != nil && attr.OnUpdate.Expr != nil {
+		ps, err := attr.OnUpdate.Expr.Marshal()
+		if err != nil {
+			return err
+		}
+		attrOnUpdate = OnUpdate{
+			Expr:         ps,
+			OriginString: attr.OnUpdate.OriginString,
+		}
+	}
 	def := &ColDef{
 		Name:          attr.Name,
 		Type:          attr.Type,
@@ -507,6 +609,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		NullAbility:   attrDefault.NullAbility,
 		Default:       attrDefault,
 		AutoIncrement: attr.AutoIncrement,
+		OnUpdate:      attrOnUpdate,
 	}
 	return s.AppendColDef(def)
 }
@@ -534,7 +637,6 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 	var bs []byte = nil
-	var ps []byte = nil
 	var err error
 	if attr.Default.Expr != nil {
 		bs, err = attr.Default.Expr.Marshal()
@@ -547,11 +649,13 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Expr:         bs,
 		OriginString: attr.Default.OriginString,
 	}
-	if attr.OnUpdate != nil {
-		ps, err = attr.OnUpdate.Marshal()
+	var attrOnUpdate OnUpdate
+	if attr.OnUpdate != nil && attr.OnUpdate.Expr != nil {
+		attrOnUpdate.Expr, err = attr.OnUpdate.Expr.Marshal()
 		if err != nil {
 			return err
 		}
+		attrOnUpdate.OriginString = attr.OnUpdate.OriginString
 	}
 	def := &ColDef{
 		Name:          attr.Name,
@@ -562,7 +666,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Default:       attrDefault,
 		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
-		OnUpdate:      ps,
+		OnUpdate:      attrOnUpdate,
 	}
 	return s.AppendColDef(def)
 }
@@ -840,4 +944,5 @@ type ComputeIndexInfo struct {
 	Name      string
 	TableName string
 	Unique    bool
+	Field     []string
 }

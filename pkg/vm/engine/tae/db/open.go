@@ -15,13 +15,12 @@
 package db
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"path"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -101,13 +100,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
-	// Init checkpoint driver
-	policyCfg := new(checkpoint.PolicyCfg)
-	policyCfg.Levels = int(opts.CheckpointCfg.ExecutionLevels)
-	policyCfg.Interval = opts.CheckpointCfg.ExecutionInterval
-	policyCfg.FlushInterval = opts.CheckpointCfg.FlushInterval
-	db.CKPDriver = checkpoint.NewDriver(db.Scheduler, policyCfg)
-
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	calibrationOp := newCalibrationOp(db)
@@ -122,30 +114,22 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	scanner.RegisterOp(gcCollector)
 	scanner.RegisterOp(catalogCheckpointer)
 
-	// Start workers
-	db.CKPDriver.Start()
+	db.BGCheckpointRunner = checkpoint.NewRunner(
+		db.Fs,
+		db.Catalog,
+		db.Scheduler,
+		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
+		checkpoint.WithFlushInterval(time.Duration(opts.CheckpointCfg.FlushInterval)*time.Millisecond),
+		checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond),
+		checkpoint.WithMinCount(int(opts.CheckpointCfg.CatalogUnCkpLimit)),
+		checkpoint.WithMinIncrementalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond),
+		checkpoint.WithMinGlobalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval*1000)*time.Millisecond))
+	db.BGCheckpointRunner.Start()
 
-	db.HeartBeatJobs = stopper.NewStopper("HeartbeatJobs")
-	db.HeartBeatJobs.RunNamedTask("DirtyBlockWatcher", func(ctx context.Context) {
-		forest := newDirtyForest(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor))
-		hb := w.NewHeartBeaterWithFunc(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, func() {
-			forest.Run()
-			dirtyTree := forest.MergeForest()
-			if dirtyTree.IsEmpty() {
-				return
-			}
-			// logutil.Infof(dirtyTree.String())
-		}, nil)
-		hb.Start()
-		<-ctx.Done()
-		hb.Stop()
-	})
-	db.HeartBeatJobs.RunNamedTask("BackgroundScanner", func(ctx context.Context) {
-		hb := w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
-		hb.Start()
-		<-ctx.Done()
-		hb.Stop()
-	})
+	db.BGScanner = w.NewHeartBeater(
+		time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond,
+		scanner)
+	db.BGScanner.Start()
 
 	return
 }

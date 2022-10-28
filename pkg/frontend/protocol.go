@@ -199,7 +199,7 @@ func (cpi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (cpi *ProtocolImpl) SetEstablished() {
-	logutil.Infof("SWITCH ESTABLISHED to true")
+	logutil.Debugf("SWITCH ESTABLISHED to true")
 	cpi.established.Store(true)
 }
 
@@ -208,7 +208,7 @@ func (cpi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (cpi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Infof("SWITCH TLS_ESTABLISHED to true")
+	logutil.Debugf("SWITCH TLS_ESTABLISHED to true")
 	cpi.tlsEstablished.Store(true)
 }
 

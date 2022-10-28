@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -28,10 +29,9 @@ type WrappedService struct {
 func NewWrappedService(
 	c Config,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 	opts ...Option,
 ) (*WrappedService, error) {
-	svc, err := NewService(c, fileService, taskService, opts...)
+	svc, err := NewService(c, fileService, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +67,20 @@ func (w *WrappedService) SetInitialClusterInfo(
 	)
 }
 
+func (w *WrappedService) CreateInitTasks() error {
+	return w.svc.createInitTasks(context.Background())
+}
+
+func (w *WrappedService) GetTaskService() (taskservice.TaskService, bool) {
+	w.svc.task.RLock()
+	defer w.svc.task.RUnlock()
+	if w.svc.task.holder == nil {
+		return nil, false
+	}
+	return w.svc.task.holder.Get()
+}
+
+// StartHAKeeperReplica
 // TODO: start hakeeper with specified log store, specified by caller
 func (w *WrappedService) StartHAKeeperReplica(
 	replicaID uint64, replicas map[uint64]dragonboat.Target, join bool,

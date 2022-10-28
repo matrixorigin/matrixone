@@ -25,7 +25,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -34,25 +33,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-const DefaultReplayCacheSize = 2 * common.M
-
 type Replayer struct {
 	DataFactory  *tables.DataFactory
 	db           *DB
 	maxTs        types.TS
-	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
 	once         sync.Once
-	txns         map[string]txnif.AsyncTxn
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 	return &Replayer{
 		DataFactory:  dataFactory,
 		db:           db,
-		cache:        bytes.NewBuffer(make([]byte, DefaultReplayCacheSize)),
 		staleIndexes: make([]*wal.Index, 0),
-		txns:         make(map[string]txnif.AsyncTxn),
 	}
 }
 

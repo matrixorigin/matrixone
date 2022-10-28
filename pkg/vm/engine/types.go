@@ -50,7 +50,7 @@ type Attribute struct {
 	// DefaultExpr default value of this attribute
 	Default *plan.Default
 	// to update col when define in create table
-	OnUpdate *plan.Expr
+	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
 	// Comment of attribute
@@ -119,9 +119,10 @@ type ViewDef struct {
 }
 
 type ComputeIndexDef struct {
-	Names      []string
+	IndexNames []string
 	TableNames []string
 	Uniques    []bool
+	Fields     [][]string
 }
 
 type TableDef interface {

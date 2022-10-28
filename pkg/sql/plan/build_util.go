@@ -84,6 +84,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date), Size: 4}, nil
+		case defines.MYSQL_TYPE_TIME:
+			return &plan.Type{Id: int32(types.T_time), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
 			return &plan.Type{Id: int32(types.T_datetime), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
@@ -157,6 +159,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+			return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+		}
+	}
+
 	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -177,7 +185,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -209,8 +217,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error)
 	if err != nil {
 		return nil, err
 	}
-
-	return onUpdateExpr, nil
+	ret := &plan.OnUpdate{
+		Expr:         onUpdateExpr,
+		OriginString: tree.String(expr, dialect.MYSQL),
+	}
+	return ret, nil
 }
 
 func isNullExpr(expr *plan.Expr) bool {

@@ -17,9 +17,10 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"reflect"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -46,6 +47,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			}
 		} else if cmd.GetShutdownStore() != nil {
 			s.handleShutdownStore(cmd)
+		} else if cmd.GetCreateTaskService() != nil {
+			s.createTaskService(cmd.CreateTaskService)
 		} else {
 			panic("unknown schedule command type")
 		}
@@ -152,6 +155,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	}
 
 	hb := s.store.getHeartbeatMessage()
+	hb.TaskServiceCreated = s.taskServiceCreated()
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
 		s.logger.Error("failed to send log service heartbeat", zap.Error(err))

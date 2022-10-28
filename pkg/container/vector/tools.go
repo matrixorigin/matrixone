@@ -184,6 +184,8 @@ func (v *Vector) colFromData() {
 			v.Col = DecodeFixedCol[types.Uuid](v, tlen)
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)
+		case types.T_time:
+			v.Col = DecodeFixedCol[types.Time](v, tlen)
 		case types.T_datetime:
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)
 		case types.T_timestamp:
@@ -239,6 +241,8 @@ func (v *Vector) setupColFromData(start, end int) {
 			v.Col = DecodeFixedCol[types.Uuid](v, tlen)[start:end]
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)[start:end]
+		case types.T_time:
+			v.Col = DecodeFixedCol[types.Time](v, tlen)[start:end]
 		case types.T_datetime:
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)[start:end]
 		case types.T_timestamp:
@@ -288,6 +292,8 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeSlice(v.Col.([]types.Uuid))
 	case types.T_date:
 		return types.EncodeSlice(v.Col.([]types.Date))
+	case types.T_time:
+		return types.EncodeSlice(v.Col.([]types.Time))
 	case types.T_datetime:
 		return types.EncodeSlice(v.Col.([]types.Datetime))
 	case types.T_timestamp:
@@ -306,7 +312,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 	}
 }
 
-// XXX extend will extend the vector's Data to accormordate rows more entry.
+// XXX extend will extend the vector's Data to accommodate rows more entry.
 func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	origSz := len(v.data)
 	growSz := rows * v.GetType().TypeSize()
@@ -335,6 +341,11 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
 	// extend the null map
+	v.extendNullBitmap(newRows)
+	return nil
+}
+
+func (v *Vector) extendNullBitmap(target int) {
 	if v.IsScalar() {
 		if v.IsScalarNull() {
 			v.Nsp = nulls.NewWithSize(1)
@@ -343,9 +354,8 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 			v.Nsp = &nulls.Nulls{}
 		}
 	} else {
-		nulls.TryExpand(v.Nsp, newRows)
+		nulls.TryExpand(v.Nsp, target)
 	}
-	return nil
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap
@@ -373,30 +383,32 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		return checkNumberIntersect[float64](v, vec)
 	case types.T_date:
 		return checkNumberIntersect[types.Date](v, vec)
+	case types.T_time:
+		return checkNumberIntersect[types.Time](v, vec)
 	case types.T_datetime:
 		return checkNumberIntersect[types.Datetime](v, vec)
 	case types.T_timestamp:
 		return checkNumberIntersect[types.Timestamp](v, vec)
 	case types.T_decimal64:
-		return checkIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
+		return checkGeneralIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
 			return t1.Ge(t2)
 		}, func(t1, t2 types.Decimal64) bool {
 			return t1.Le(t2)
 		})
 	case types.T_decimal128:
-		return checkIntersect(v, vec, func(t1, t2 types.Decimal128) bool {
+		return checkGeneralIntersect(v, vec, func(t1, t2 types.Decimal128) bool {
 			return t1.Ge(t2)
 		}, func(t1, t2 types.Decimal128) bool {
 			return t1.Le(t2)
 		})
 	case types.T_uuid:
-		return checkIntersect(v, vec, func(t1, t2 types.Uuid) bool {
+		return checkGeneralIntersect(v, vec, func(t1, t2 types.Uuid) bool {
 			return t1.Ge(t2)
 		}, func(t1, t2 types.Uuid) bool {
 			return t1.Le(t2)
 		})
 	case types.T_varchar, types.T_char:
-		return checkIntersect(v, vec, func(t1, t2 string) bool {
+		return checkStrIntersect(v, vec, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) >= 0
 		}, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) <= 0
@@ -406,17 +418,29 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
-	return checkIntersect(v1, v2, func(i1, i2 T) bool {
+	cols1 := MustTCols[T](v1)
+	cols2 := MustTCols[T](v2)
+	return checkIntersect(cols1, cols2, func(i1, i2 T) bool {
 		return i1 >= i2
 	}, func(i1, i2 T) bool {
 		return i1 <= i2
 	})
 }
 
-func checkIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
-	// get v1's min/max
+func checkStrIntersect(v1, v2 *Vector, gtFun compFn[string], ltFun compFn[string]) (bool, error) {
+	cols1 := MustStrCols(v1)
+	cols2 := MustStrCols(v2)
+	return checkIntersect(cols1, cols2, gtFun, ltFun)
+}
+
+func checkGeneralIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
 	cols1 := MustTCols[T](v1)
 	cols2 := MustTCols[T](v2)
+	return checkIntersect(cols1, cols2, gtFun, ltFun)
+}
+
+func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+	// get v1's min/max
 	colLength := len(cols1)
 	min := cols1[0]
 	max := cols1[0]
@@ -482,6 +506,8 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 		return compareNumber[float64](v, vec, funName)
 	case types.T_date:
 		return compareNumber[types.Date](v, vec, funName)
+	case types.T_time:
+		return compareNumber[types.Time](v, vec, funName)
 	case types.T_datetime:
 		return compareNumber[types.Datetime](v, vec, funName)
 	case types.T_timestamp:
@@ -546,19 +572,19 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 	case types.T_varchar, types.T_char:
 		switch funName {
 		case ">":
-			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+			return runStrCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
 				return strings.Compare(t1, t2) == 1
 			}), nil
 		case "<":
-			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+			return runStrCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
 				return strings.Compare(t1, t2) == -1
 			}), nil
 		case ">=":
-			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+			return runStrCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
 				return strings.Compare(t1, t2) >= 0
 			}), nil
 		case "<=":
-			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+			return runStrCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
 				return strings.Compare(t1, t2) <= 0
 			}), nil
 		}
@@ -571,12 +597,12 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 
 type compT interface {
 	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Datetime | types.Timestamp | types.Uuid | string
+		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
 }
 
 type compFn[T compT] func(T, T) bool
 
-func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
+func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
@@ -600,9 +626,20 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 }
 
 func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
+	// column_a operator column_b  -> return true
+	// that means we don't known the return, just readBlock
+	if vec1.IsScalarNull() || vec2.IsScalarNull() {
+		return true
+	}
+	if nulls.Any(vec1.Nsp) || nulls.Any(vec2.Nsp) {
+		return true
+	}
 	cols1 := MustTCols[T](vec1)
 	cols2 := MustTCols[T](vec2)
+	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
+}
 
+func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
 	if vec1.IsScalarNull() || vec2.IsScalarNull() {
@@ -612,6 +649,12 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 		return true
 	}
 
+	cols1 := MustStrCols(vec1)
+	cols2 := MustStrCols(vec2)
+	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
+}
+
+func compareCheckAnyResultIsTrue[T compT](cols1, cols2 []T, fn compFn[T]) bool {
 	for i := 0; i < len(cols1); i++ {
 		for j := 0; j < len(cols2); j++ {
 			if fn(cols1[i], cols2[j]) {
@@ -619,6 +662,5 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 			}
 		}
 	}
-
 	return false
 }

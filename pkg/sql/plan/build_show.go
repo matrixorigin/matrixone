@@ -60,7 +60,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewBadDB(tblName)
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -81,7 +81,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	var pkDefs []string
 
 	for _, col := range tableDef.Cols {
-
 		colName := col.Name
 		if colName == catalog.Row_ID {
 			continue
@@ -89,7 +88,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		if col.Default != nil {
 			if col.Default.Expr != nil {
-				nullOrNot = "DEFAULT " + col.Default.OriginString
+				originStr := col.Default.OriginString
+				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
+					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
+						originStr = fmt.Sprintf("'%s'", originStr)
+					}
+				}
+				nullOrNot = "DEFAULT " + originStr
 			} else if col.Default.NullAbility {
 				nullOrNot = "DEFAULT NULL"
 			}
@@ -110,10 +115,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
+		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
+
+		updateOpt := ""
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
@@ -399,7 +412,7 @@ func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) 
 	if stmt.Username == "" {
 		stmt.Username = ctx.GetUserName()
 	}
-	sql := "select concat(\"GRANT \", p.privilege_level, ' ON ', p.obj_type,  \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
 	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)

@@ -15,22 +15,29 @@
 package blockio
 
 import (
-	"bytes"
+	"context"
+	"errors"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type Reader struct {
-	reader objectio.Reader
-	fs     *objectio.ObjectFS
-	key    string
-	meta   *Meta
+	reader  objectio.Reader
+	fs      *objectio.ObjectFS
+	key     string
+	meta    *Meta
+	name    string
+	locs    []objectio.Extent
+	readCxt context.Context
 }
 
-func NewReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
+func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader, error) {
 	meta, err := DecodeMetaLocToMeta(key)
 	if err != nil {
 		return nil, err
@@ -40,55 +47,80 @@ func NewReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
 		return nil, err
 	}
 	return &Reader{
-		fs:     fs,
-		reader: reader,
-		key:    key,
-		meta:   meta,
+		fs:      fs,
+		reader:  reader,
+		key:     key,
+		meta:    meta,
+		readCxt: cxt,
 	}, nil
 }
 
-func (r *Reader) LoadBlkColumns(
-	colTypes []types.Type,
-	colNames []string,
-	nullables []bool,
-	opts *containers.Options) (*containers.Batch, error) {
-	bat := containers.NewBatch()
-
-	block, err := r.ReadMeta(nil)
+func NewCheckpointReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
+	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
 	}
+	reader, err := objectio.NewObjectReader(name, fs.Service)
+	if err != nil {
+		return nil, err
+	}
+	return &Reader{
+		fs:     fs,
+		reader: reader,
+		key:    key,
+		name:   name,
+		locs:   locs,
+	}, nil
+}
+
+func (r *Reader) LoadBlkColumnsByMeta(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	block objectio.BlockObject) (*containers.Batch, error) {
+	bat := containers.NewBatch()
+
 	for i := range colNames {
-		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
-		bat.AddVector(colNames[i], vec)
-		if r.meta.GetLoc().End() == 0 {
+		if block.GetExtent().End() == 0 {
 			continue
 		}
 		col, err := block.GetColumn(uint16(i))
 		if err != nil {
 			return bat, err
 		}
-		data, err := col.GetData(nil)
+		data, err := col.GetData(r.readCxt, nil)
 		if err != nil {
 			return bat, err
 		}
-		r := bytes.NewBuffer(data.Entries[0].Data)
-		if _, err = vec.ReadFrom(r); err != nil {
+		pkgVec := vector.New(colTypes[i])
+		if err = pkgVec.Read(data.Entries[0].Data); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(colTypes[i], nullables[i])
+		} else {
+			vec = containers.NewVectorWithSharedMemory(pkgVec, nullables[i])
+		}
+		bat.AddVector(colNames[i], vec)
 		bat.Vecs[i] = vec
 	}
-	return bat, err
+	return bat, nil
 }
 
 func (r *Reader) ReadMeta(m *mpool.MPool) (objectio.BlockObject, error) {
 	extents := make([]objectio.Extent, 1)
 	extents[0] = r.meta.GetLoc()
-	block, err := r.reader.ReadMeta(extents, m)
+	block, err := r.reader.ReadMeta(r.readCxt, extents, m)
 	if err != nil {
 		return nil, err
 	}
 	return block[0], err
+}
+
+func (r *Reader) ReadMetas(m *mpool.MPool) ([]objectio.BlockObject, error) {
+	block, err := r.reader.ReadMeta(r.readCxt, r.locs, m)
+	return block, err
 }
 
 func (r *Reader) GetDataObject(idx uint16, m *mpool.MPool) objectio.ColumnObject {
