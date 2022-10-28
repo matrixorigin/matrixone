@@ -34,17 +34,6 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg any) error {
-	//param := arg.(*Argument).Es
-	//if len(param.ExprList) == 2 {
-	//	param.ExprList = append(param.ExprList, &plan.Expr{
-	//		Typ: &plan.Type{Id: int32(types.T_int32)},
-	//		Expr: &plan2.Expr_C{C: &plan2.Const{
-	//			Isnull: false,
-	//			Value:  &plan2.Const_Ival{Ival: 1},
-	//		},
-	//		},
-	//	})
-	//}
 	return nil
 }
 
