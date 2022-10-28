@@ -53,3 +53,15 @@ func WithMinGlobalInterval(interval time.Duration) Option {
 		r.options.minGlobalInterval = interval
 	}
 }
+
+func WithForceFlushTimeout(to time.Duration) Option {
+	return func(r *runner) {
+		r.options.forceFlushTimeout = to
+	}
+}
+
+func WithForceFlushCheckInterval(interval time.Duration) Option {
+	return func(r *runner) {
+		r.options.forceFlushCheckInterval = interval
+	}
+}
