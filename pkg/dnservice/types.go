@@ -19,6 +19,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
+// StorageType txn storage type
+type StorageType string
+
+const (
+	// StorageTAE TAE txn storage backend
+	StorageTAE = StorageType("TAE")
+	// StorageMEMKV MEMKV txn storage backend
+	StorageMEMKV = StorageType("MEMKV")
+	// StorageMEMKV MEM txn storage backend
+	StorageMEM = StorageType("MEM")
+)
+
 // Option store option
 type Option func(*store)
 
