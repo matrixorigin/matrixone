@@ -40,6 +40,7 @@ var (
 	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
 	// used to make an AndExpr
 	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
+	AndFunctionName      = "and"
 )
 
 // Functions records all overloads of the same function name

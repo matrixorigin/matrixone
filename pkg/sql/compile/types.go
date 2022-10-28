@@ -63,6 +63,7 @@ type Source struct {
 	Attributes   []string
 	R            engine.Reader
 	Bat          *batch.Batch
+	Expr         *plan.Expr
 }
 
 // Col is the information of attribute

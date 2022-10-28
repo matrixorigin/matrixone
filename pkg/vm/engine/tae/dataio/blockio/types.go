@@ -30,6 +30,10 @@ const (
 	CheckpointExt = "ckp"
 )
 
+func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
+}
+
 func EncodeCheckpointName(prefix string, start, end types.TS) (name string) {
 	name = fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
 	return
@@ -87,6 +91,13 @@ func DecodeSegName(name string) (id *common.ID, err error) {
 		TableID:   tid,
 		SegmentID: sid,
 	}
+	return
+}
+func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	start = types.StringToTS(info[1])
+	end = types.StringToTS(info[2])
 	return
 }
 func DecodeCheckpointName(name string) (start, end types.TS) {
