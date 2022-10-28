@@ -43,9 +43,9 @@ select * from v3;
 SQL parser error: table "v3" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop view v3;
-invalid view view-subquery-with-in%!(EXTRA string=v3)
+invalid view 'view-subquery-with-in.v3'
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 [unknown result because it is related to issue#3312]
 create view v1 as SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
@@ -104,9 +104,9 @@ SQL parser error: table "v1" does not exist
 select * from v2;
 SQL parser error: table "v2" does not exist
 drop view v1;
-invalid view view-subquery-with-in%!(EXTRA string=v1)
+invalid view 'view-subquery-with-in.v1'
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -203,7 +203,7 @@ a
 4
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop view v3;
 drop table if exists t1;
 drop table if exists t2;
@@ -368,7 +368,7 @@ joce    43506    2002-10-22    joce
 drop view v1;
 drop view v2;
 drop view v3;
-invalid view view-subquery-with-in%!(EXTRA string=v3)
+invalid view 'view-subquery-with-in.v3'
 drop view v4;
 drop view v5;
 drop view v6;
@@ -395,7 +395,7 @@ select * from v2;
 SQL parser error: table "v2" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (oref int, grp int, ie int) ;
@@ -1062,7 +1062,7 @@ invalid input: column i1 does not exist
 select * from v1;
 SQL parser error: table "v1" does not exist
 drop view v1;
-invalid view view-subquery-with-in%!(EXTRA string=v1)
+invalid view 'view-subquery-with-in.v1'
 INSERT INTO t1 VALUES (NULL, NULL);
 invalid input: insert values does not match the number of columns
 SELECT i1, i2
@@ -1078,7 +1078,7 @@ invalid input: column i1 does not exist
 select * from v1;
 SQL parser error: table "v1" does not exist
 drop view v1;
-invalid view view-subquery-with-in%!(EXTRA string=v1)
+invalid view 'view-subquery-with-in.v1'
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;
@@ -1127,7 +1127,7 @@ select * from v2;
 SQL parser error: table "v2" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop table if exists t2;
 CREATE TABLE t1(select_id BIGINT, values_id BIGINT);
 table t1 already exists
@@ -1150,9 +1150,9 @@ SQL parser error: table "v1" does not exist
 select * from v2;
 SQL parser error: table "v2" does not exist
 drop view v1;
-invalid view view-subquery-with-in%!(EXTRA string=v1)
+invalid view 'view-subquery-with-in.v1'
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (a INT NOT NULL);
@@ -1265,21 +1265,21 @@ SQL parser error: table "v7" does not exist
 select * from v8;
 SQL parser error: table "v8" does not exist
 drop view v1;
-invalid view view-subquery-with-in%!(EXTRA string=v1)
+invalid view 'view-subquery-with-in.v1'
 drop view v2;
-invalid view view-subquery-with-in%!(EXTRA string=v2)
+invalid view 'view-subquery-with-in.v2'
 drop view v3;
-invalid view view-subquery-with-in%!(EXTRA string=v3)
+invalid view 'view-subquery-with-in.v3'
 drop view v4;
-invalid view view-subquery-with-in%!(EXTRA string=v4)
+invalid view 'view-subquery-with-in.v4'
 drop view v5;
-invalid view view-subquery-with-in%!(EXTRA string=v5)
+invalid view 'view-subquery-with-in.v5'
 drop view v6;
-invalid view view-subquery-with-in%!(EXTRA string=v6)
+invalid view 'view-subquery-with-in.v6'
 drop view v7;
-invalid view view-subquery-with-in%!(EXTRA string=v7)
+invalid view 'view-subquery-with-in.v7'
 drop view v8;
-invalid view view-subquery-with-in%!(EXTRA string=v8)
+invalid view 'view-subquery-with-in.v8'
 DROP TABLE IF EXISTS  t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t1xt2;
@@ -1477,7 +1477,7 @@ drop view v4;
 drop view v5;
 drop view v6;
 drop view v7;
-invalid view view-subquery-with-in%!(EXTRA string=v7)
+invalid view 'view-subquery-with-in.v7'
 drop view v8;
 drop view v9;
 drop view v10;
@@ -1485,7 +1485,7 @@ drop view v11;
 drop view v12;
 drop view v13;
 drop view v14;
-invalid view view-subquery-with-in%!(EXTRA string=v14)
+invalid view 'view-subquery-with-in.v14'
 drop view v15;
 drop view v16;
 drop view v17;

@@ -1054,7 +1054,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.NewBadDB(database.GetName())
 	} else {
 		nn := catalog.nameNodes[database.GetFullName()]
 		nn.DeleteNode(database.GetID())
@@ -1076,7 +1076,7 @@ func (catalog *Catalog) txnGetNodeByName(
 	fullName := genDBFullName(tenantID, name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.NewBadDB(name)
 	}
 	return node.TxnGetNodeLocked(ts)
 }

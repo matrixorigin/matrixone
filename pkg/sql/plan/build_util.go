@@ -159,6 +159,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+			return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+		}
+	}
+
 	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
 	if err != nil {
 		return nil, err
