@@ -1270,7 +1270,7 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		return nil
 	}
 
-	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
+	if nulls.Contains(w.Nsp, uint64(sel)) {
 		pos := uint64(v.Length() - 1)
 		nulls.Add(v.Nsp, pos)
 	} else if v.GetType().IsVarlen() {

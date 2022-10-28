@@ -72,6 +72,7 @@ func (c *Compile) Compile(pn *plan.Plan, u any, fill func(any, *batch.Batch) err
 	if err != nil {
 		return err
 	}
+	println(DebugShowScopes([]*Scope{s}))
 	c.scope = s
 	c.scope.Plan = pn
 	return nil
@@ -810,13 +811,30 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		return c.compileTop(n, ss)
+		vec, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		if err != nil {
+			panic(err)
+		}
+		return c.compileTop(n, vec.Col.([]int64)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
+	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
+		vec1, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		if err != nil {
+			panic(err)
+		}
+		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
+		if err != nil {
+			panic(err)
+		}
+		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		if offset < 8096 {
+			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+			return c.compileOffset(n, c.compileTop(n, limit+offset, ss))
+		}
+		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
-	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
-		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
 		return c.compileLimit(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
@@ -828,19 +846,20 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	}
 }
 
-func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
+	// use topN TO make scope.
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Top,
 			Idx: c.anal.curr,
-			Arg: constructTop(n, c.proc),
+			Arg: constructTop(n, topN),
 		})
 	}
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
-		Arg: constructMergeTop(n, c.proc),
+		Arg: constructMergeTop(n, topN),
 	}
 	return []*Scope{rs}
 }
