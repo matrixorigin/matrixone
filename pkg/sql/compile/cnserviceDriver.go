@@ -18,9 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -421,6 +422,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			ColList:      s.DataSource.Attributes,
 			PushdownId:   s.DataSource.PushdownId,
 			PushdownAddr: s.DataSource.PushdownAddr,
+			Expr:         s.DataSource.Expr,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -485,6 +487,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Attributes:   dsc.ColList,
 			PushdownId:   dsc.PushdownId,
 			PushdownAddr: dsc.PushdownAddr,
+			Expr:         dsc.Expr,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)

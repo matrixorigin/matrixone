@@ -50,9 +50,7 @@ drop table t2;
 -- test insert
 drop table if exists t3;
 create table t3 (d date);
--- @bvt:issue#4771
 insert into t3 values (date_format('20221214', '%Y-%m-%d'));
--- @bvt:issue
 drop table t3;
 
 
@@ -104,6 +102,6 @@ select date_format(concat('19980131',131415),'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|
 -- echo error
 select date_format(19980021000000,'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
 
--- @bvt:issue#4766
+
 select date_format('19980021000000','%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
--- @bvt:issue
+

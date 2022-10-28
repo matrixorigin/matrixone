@@ -84,3 +84,7 @@ try {
     System.out.println("VendorError: " + ex.getErrorCode());
 }
 ```
+
+## Reference
+
+For more information on MatrixOne support when developing applications using JDBC, see [JDBC supported features list in MatrixOne](../../../Reference/Limitations/mo-jdbc-feature-list.md).
