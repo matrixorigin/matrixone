@@ -58,10 +58,8 @@ execute s2 using @b6;
 set @b7='\%str%';
 execute s2 using @b7;
 
--- @bvt:issue#5882
 set @b8='%str1\%';
 execute s2 using @b8;
--- @bvt:issue
 
 set @b9='%\%str%';
 execute s2 using @b9;
