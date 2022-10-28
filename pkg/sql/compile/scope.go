@@ -156,7 +156,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if rds, err = rel.NewReader(c.ctx, mcpu, nil, s.NodeInfo.Data); err != nil {
+		if rds, err = rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 	}

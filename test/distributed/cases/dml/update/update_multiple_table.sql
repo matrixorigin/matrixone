@@ -5,16 +5,16 @@
 -- @label:bvt
 
 CREATE TABLE product(
-    id VARCHAR(20),
-    product_id VARCHAR(20),
-    product_name VARCHAR(50),
-    price FLOAT
+                        id VARCHAR(20),
+                        product_id VARCHAR(20),
+                        product_name VARCHAR(50),
+                        price FLOAT
 );
 
 CREATE TABLE product_price(
-    id VARCHAR(20),
-    product_id VARCHAR(20),
-    price FLOAT
+                              id VARCHAR(20),
+                              product_id VARCHAR(20),
+                              price FLOAT
 );
 
 INSERT INTO product() VALUES ('1', '1001', 'Java教程', '100');
@@ -40,15 +40,15 @@ DROP TABLE IF EXISTS product;
 DROP TABLE IF EXISTS product_price;
 
 CREATE TABLE stu(
-    id VARCHAR(10),
-    name VARCHAR(20),
-    class_id VARCHAR(5),
-    class_name VARCHAR(10)
+                    id VARCHAR(10),
+                    name VARCHAR(20),
+                    class_id VARCHAR(5),
+                    class_name VARCHAR(10)
 );
 CREATE TABLE class(
-    id VARCHAR(10),
-    name VARCHAR(20),
-    stu_name VARCHAR(20)
+                      id VARCHAR(10),
+                      name VARCHAR(20),
+                      stu_name VARCHAR(20)
 );
 
 INSERT INTO stu VALUES('1', '张三', '1', NULL), ('2', '李四', '1', NULL), ('3', '王五', '2', NULL);
@@ -60,10 +60,10 @@ SELECT stu.name, stu.class_name, class.name, class.stu_name FROM stu, class;
 UPDATE stu s INNER JOIN class c ON s.class_id = c.id SET s.class_name = 'test11', c.stu_name = 'test11';
 SELECT stu.id, stu.name, stu.class_name, class.stu_name FROM stu, class;
 
--- @bvt:issue#5201
+
 UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
 UPDATE stu s RIGHT JOIN class c ON s.class_id = c.id SET s.class_name = 'test33',c.stu_name = 'test33';
--- @bvt:issue
+SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 UPDATE stu s JOIN class c ON s.class_id = c.id SET s.class_name = c.name , c.stu_name = s.name;
 SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 
@@ -71,13 +71,13 @@ DROP TABLE IF EXISTS stu;
 DROP TABLE IF EXISTS class;
 
 CREATE TABLE t1(
-    id INT,
-    name VARCHAR(20),
-    paytime DATETIME
+                   id INT,
+                   name VARCHAR(20),
+                   paytime DATETIME
 );
 CREATE TABLE t2(
-    id INT,
-    processtime DATETIME
+                   id INT,
+                   processtime DATETIME
 );
 
 INSERT INTO t1() VALUES(1, 'has', '2022-08-17 19:16:18'), (2, 'norm', '2022-04-12 04:32:46');
@@ -120,12 +120,12 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 
 CREATE TABLE t1(
-    str1 CHAR(20) NOT NULL PRIMARY KEY,
-    str2 VARCHAR(20) NOT NULL
+                   str1 CHAR(20) NOT NULL PRIMARY KEY,
+                   str2 VARCHAR(20) NOT NULL
 );
 CREATE TABLE t2(
-    str1 CHAR(20),
-    str2 VARCHAR(20) NOT NULL
+                   str1 CHAR(20),
+                   str2 VARCHAR(20) NOT NULL
 );
 
 INSERT INTO t1 VALUES('this is a test', 'that is actual'), ('1001', 'game of throne');
@@ -142,13 +142,13 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 
 CREATE TABLE t1(
-    n1 INT,
-    n2 INT UNSIGNED,
-    n3 FLOAT
+                   n1 INT,
+                   n2 INT UNSIGNED,
+                   n3 FLOAT
 );
 CREATE TABLE t2(
-    n1 INT,
-    n2 DOUBLE
+                   n1 INT,
+                   n2 DOUBLE
 );
 
 INSERT INTO t1 VALUES(1, 2, 3), (5, 6, 7), (10, 11, 12), (12, -0, 19);
