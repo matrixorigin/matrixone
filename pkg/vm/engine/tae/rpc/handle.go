@@ -146,6 +146,16 @@ func (h *Handle) HandleGetLogTail(
 	return nil
 }
 
+func (h *Handle) HandleDeBug(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+
+	logutil.Infof("HandleDeBug is req %v", req.TableName)
+	return nil
+}
+
 // TODO:: need to handle resp.
 func (h *Handle) HandlePreCommit(
 	ctx context.Context,

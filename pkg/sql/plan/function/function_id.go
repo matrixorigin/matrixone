@@ -260,11 +260,11 @@ const (
 	MO_ENABLE_MEMORY_USAGE_DETAIL
 	MO_DISABLE_MEMORY_USAGE_DETAIL
 
+	MO_FLUSH_TABLE // Force flush table data
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
-
-	MO_FLUSH_TABLE // Force flush table data
 )
 
 // functionIdRegister is what function we have registered already.

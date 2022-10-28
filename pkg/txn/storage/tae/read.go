@@ -41,6 +41,12 @@ func (s *taeStorage) Read(
 			txnMeta, payload,
 			s.taeHandler.HandleGetLogTail,
 		)
+	case uint32(apipb.OpCode_OpDebug):
+		return handleRead(
+			ctx, s,
+			txnMeta, payload,
+			s.taeHandler.HandleDeBug,
+		)
 	default:
 		panic(moerr.NewInfo("op is not supported"))
 	}
