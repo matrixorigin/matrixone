@@ -376,6 +376,18 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 	}
 }
 
+func (s *service) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	data, err := s.storage.Debug(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
+	if err != nil {
+		response.TxnError = txn.WrapError(err, moerr.ErrTAEDebug)
+		return nil
+	}
+	response.CNOpResponse = &txn.CNOpResponse{
+		Payload: data,
+	}
+	return nil
+}
+
 func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
 		txnCtx.mu.Lock()
