@@ -332,7 +332,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT
+%token <str> JSON_EXTRACT ARROW
 
 // JSON table function
 %token <str> UNNEST

@@ -171,13 +171,13 @@ select * from v6;
 SQL parser error: table "v6" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-any%!(EXTRA string=v2)
+invalid view 'view-subquery-with-any.v2'
 drop view v3;
 drop view v4;
-invalid view view-subquery-with-any%!(EXTRA string=v4)
+invalid view 'view-subquery-with-any.v4'
 drop view v5;
 drop view v6;
-invalid view view-subquery-with-any%!(EXTRA string=v6)
+invalid view 'view-subquery-with-any.v6'
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -315,24 +315,24 @@ drop view v4;
 drop view v5;
 drop view v6;
 drop view v7;
-invalid view view-subquery-with-any%!(EXTRA string=v7)
+invalid view 'view-subquery-with-any.v7'
 drop view v8;
-invalid view view-subquery-with-any%!(EXTRA string=v8)
+invalid view 'view-subquery-with-any.v8'
 drop view v9;
 drop view v10;
 drop view v11;
-invalid view view-subquery-with-any%!(EXTRA string=v11)
+invalid view 'view-subquery-with-any.v11'
 drop view v12;
-invalid view view-subquery-with-any%!(EXTRA string=v12)
+invalid view 'view-subquery-with-any.v12'
 drop view v13;
 drop view v14;
-invalid view view-subquery-with-any%!(EXTRA string=v14)
+invalid view 'view-subquery-with-any.v14'
 drop view v15;
 drop view v16;
-invalid view view-subquery-with-any%!(EXTRA string=v16)
+invalid view 'view-subquery-with-any.v16'
 drop view v17;
 drop view v18;
-invalid view view-subquery-with-any%!(EXTRA string=v18)
+invalid view 'view-subquery-with-any.v18'
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 ( a double, b double );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
@@ -463,7 +463,7 @@ SQL parser error: table "v1" does not exist
 select * from v2;
 a1
 drop view v1;
-invalid view view-subquery-with-any%!(EXTRA string=v1)
+invalid view 'view-subquery-with-any.v1'
 drop view v2;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
@@ -497,10 +497,10 @@ select * from v4;
 SQL parser error: table "v4" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-any%!(EXTRA string=v2)
+invalid view 'view-subquery-with-any.v2'
 drop view v3;
 drop view v4;
-invalid view view-subquery-with-any%!(EXTRA string=v4)
+invalid view 'view-subquery-with-any.v4'
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
@@ -741,17 +741,17 @@ a
 1
 3
 drop view v1;
-invalid view view-subquery-with-any%!(EXTRA string=v1)
+invalid view 'view-subquery-with-any.v1'
 drop view v2;
-invalid view view-subquery-with-any%!(EXTRA string=v2)
+invalid view 'view-subquery-with-any.v2'
 drop view v3;
-invalid view view-subquery-with-any%!(EXTRA string=v3)
+invalid view 'view-subquery-with-any.v3'
 drop view v4;
-invalid view view-subquery-with-any%!(EXTRA string=v4)
+invalid view 'view-subquery-with-any.v4'
 drop view v5;
-invalid view view-subquery-with-any%!(EXTRA string=v5)
+invalid view 'view-subquery-with-any.v5'
 drop view v6;
-invalid view view-subquery-with-any%!(EXTRA string=v6)
+invalid view 'view-subquery-with-any.v6'
 drop view v7;
 drop view v8;
 drop view v9;
@@ -922,17 +922,17 @@ drop view v4;
 drop view v5;
 drop view v6;
 drop view v7;
-invalid view view-subquery-with-any%!(EXTRA string=v7)
+invalid view 'view-subquery-with-any.v7'
 drop view v8;
-invalid view view-subquery-with-any%!(EXTRA string=v8)
+invalid view 'view-subquery-with-any.v8'
 drop view v9;
-invalid view view-subquery-with-any%!(EXTRA string=v9)
+invalid view 'view-subquery-with-any.v9'
 drop view v10;
-invalid view view-subquery-with-any%!(EXTRA string=v10)
+invalid view 'view-subquery-with-any.v10'
 drop view v11;
-invalid view view-subquery-with-any%!(EXTRA string=v11)
+invalid view 'view-subquery-with-any.v11'
 drop view v12;
-invalid view view-subquery-with-any%!(EXTRA string=v12)
+invalid view 'view-subquery-with-any.v12'
 DROP TABLE IF EXISTS t1;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);

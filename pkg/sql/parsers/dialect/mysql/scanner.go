@@ -187,10 +187,7 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			}
 		case '>':
 			s.inc()
-			// TODO:
-			// JSON_UNQUOTE_EXTRACT_OP
-			// JSON_EXTRACT_OP
-			return 0, ""
+			return ARROW, ""
 		}
 		return int(ch), ""
 	case '<':
