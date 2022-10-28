@@ -36,6 +36,18 @@ func NewCoreTime() *CoreTime {
 	return &CoreTime{}
 }
 
+func FromDate(year int, month int, day int, hour int, minute int, second int, microsecond int) CoreTime {
+	return CoreTime{
+		year:        uint16(year),
+		month:       uint8(month),
+		day:         uint8(day),
+		hour:        uint8(hour),
+		minute:      uint8(minute),
+		second:      uint8(second),
+		microsecond: uint32(microsecond),
+	}
+}
+
 // String implements fmt.Stringer.
 func (t CoreTime) String() string {
 	return fmt.Sprintf("{%d %d %d %d %d %d %d}", t.getYear(), t.getMonth(), t.getDay(), t.getHour(), t.getMinute(), t.getSecond(), t.getMicrosecond())
@@ -402,6 +414,7 @@ func hour24Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool)
 	return input[step:], true
 }
 
+// Hour result (01..12)
 func hour12Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 1..12
 	if step <= 0 || v > 12 || v == 0 {

@@ -175,9 +175,8 @@ func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		ctx := make(map[string]int)
 		time := NewCoreTime()
-		success, _ := strToDate(time, timestr, format, ctx)
+		success := CoreStrToDate(time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
@@ -199,12 +198,11 @@ func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		ctx := make(map[string]int)
 		time := NewCoreTime()
-		success, _ := strToDate(time, timestr, format, ctx)
+		success := CoreStrToDate(time, timestr, format)
 		if !success {
-			nulls.Add(rNsp, uint64(idx))
 			// should be null
+			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidDate(int32(time.year), time.month, time.day) {
 				res[idx] = types.FromCalendar(int32(time.year), time.month, time.day)
@@ -223,9 +221,8 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		ctx := make(map[string]int)
 		time := NewCoreTime()
-		success, _ := strToDate(time, timestr, format, ctx)
+		success := CoreStrToDate(time, timestr, format)
 		if !success {
 			// should be null
 			nulls.Add(rNsp, uint64(idx))
@@ -239,6 +236,18 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 		}
 	}
 	return res, nil
+}
+
+func CoreStrToDate(t *CoreTime, date string, format string) bool {
+	ctx := make(map[string]int)
+	success, _ := strToDate(t, date, format, ctx)
+	if !success {
+		return false
+	}
+	if err := mysqlTimeFix(t, ctx); err != nil {
+		return false
+	}
+	return true
 }
 
 // strToDate converts date string according to format,
@@ -273,6 +282,40 @@ func strToDate(t *CoreTime, date string, format string, ctx map[string]int) (suc
 	}
 
 	return strToDate(t, dateRemain, formatRemain, ctx)
+}
+
+// mysqlTimeFix fixes the Time use the values in the context.
+func mysqlTimeFix(t *CoreTime, ctx map[string]int) error {
+	// Key of the ctx is the format char, such as `%j` `%p` and so on.
+	if yearOfDay, ok := ctx["%j"]; ok {
+		_ = yearOfDay
+	}
+	if valueAMorPm, ok := ctx["%p"]; ok {
+		if _, ok := ctx["%H"]; ok {
+			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+		}
+		if t.getHour() == 0 {
+			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
+		}
+		if t.getHour() == 12 {
+			// 12 is a special hour.
+			switch valueAMorPm {
+			case constForAM:
+				t.setHour(0)
+			case constForPM:
+				t.setHour(12)
+			}
+			return nil
+		}
+		if valueAMorPm == constForPM {
+			t.setHour(t.getHour() + 12)
+		}
+	} else {
+		if _, ok := ctx["%h"]; ok && t.getHour() == 12 {
+			t.setHour(0)
+		}
+	}
+	return nil
 }
 
 func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
