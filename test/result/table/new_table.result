@@ -80,4 +80,12 @@ str	strnull	intg	rel
 		0	0.0000
 drop table t1;
 create table t1(name varchar(10), age smallint default -1);
+drop table if exists t1;
+create table t1 (c int primary key, a int default null, b int, unique key a (a, b) );
+insert into t1 values(1, 1, 1), (2, 2, 2), (3, 3, 3);
+drop table if exists t2;
+create table t2 (a int, unique key a (a));
+insert into t2 values(1);
+drop table t1;
+drop table t2;
 drop database if exists motest;
