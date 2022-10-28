@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -367,12 +368,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 
 func (tbl *table) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
+	var index memtable.Tuple
 	/*
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
+	if tbl.primaryIdx >= 0 && expr != nil {
+		ok, v := getNonIntPkValueByExpr(expr, int32(tbl.primaryIdx),
+			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		if ok {
+			index = memtable.Tuple{
+				index_PrimaryKey,
+				memtable.ToOrdered(v),
+			}
+		}
+	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -390,7 +402,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs, tbl.tableDef,
+		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
 			blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err

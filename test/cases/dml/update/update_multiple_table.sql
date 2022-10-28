@@ -60,10 +60,10 @@ SELECT stu.name, stu.class_name, class.name, class.stu_name FROM stu, class;
 UPDATE stu s INNER JOIN class c ON s.class_id = c.id SET s.class_name = 'test11', c.stu_name = 'test11';
 SELECT stu.id, stu.name, stu.class_name, class.stu_name FROM stu, class;
 
--- @bvt:issue#5201
+
 UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
 UPDATE stu s RIGHT JOIN class c ON s.class_id = c.id SET s.class_name = 'test33',c.stu_name = 'test33';
--- @bvt:issue
+SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 UPDATE stu s JOIN class c ON s.class_id = c.id SET s.class_name = c.name , c.stu_name = s.name;
 SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 
