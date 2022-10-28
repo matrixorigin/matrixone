@@ -21,7 +21,6 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 */
 
 import (
-	"context"
 	"fmt"
 	"hash/fnv"
 
