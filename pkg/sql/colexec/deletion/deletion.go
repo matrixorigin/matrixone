@@ -17,8 +17,9 @@ package deletion
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
@@ -58,47 +59,25 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 	for i := range p.DeleteCtxs {
 		filterColIndex := p.DeleteCtxs[i].ColIndex
-		if p.DeleteCtxs[i].IsHideKey {
-			var cnt uint64
-			tmpBat := &batch.Batch{}
-			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
-			tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
-			// maxIndex := int32(len(bat.Vecs))
-			// if i < len(p.DeleteCtxs)-1 {
-			// 	maxIndex = p.DeleteCtxs[i+1].ColIndex
-			// }
-			// for j := filterColIndex + 1; j < maxIndex; j++ {
-			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
-			// }
-			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
+
+		var cnt uint64
+		tmpBat := &batch.Batch{}
+		tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
+		tmpBat, cnt = update.FilterBatch(tmpBat, batLen, proc)
+
+		length := tmpBat.GetVector(0).Length()
+		if length > 0 {
+			tmpBat.SetZs(length, proc.Mp())
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {
 				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 			affectedRows += cnt
-
-			tmpBat.Clean(proc.Mp())
-		} else {
-			tmpBat := &batch.Batch{}
-			tmpBat.Vecs = []*vector.Vector{bat.Vecs[filterColIndex]}
-			// maxIndex := int32(len(bat.Vecs))
-			// if i < len(p.DeleteCtxs)-1 {
-			// 	maxIndex = p.DeleteCtxs[i+1].ColIndex
-			// }
-			// for j := filterColIndex + 1; j < maxIndex; j++ {
-			// 	tmpBat.Vecs = append(tmpBat.Vecs, bat.Vecs[j])
-			// }
-			tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
-			err := p.DeleteCtxs[i].TableSource.Delete(ctx, tmpBat, p.DeleteCtxs[i].UseDeleteKey)
-			if err != nil {
-				tmpBat.Clean(proc.Mp())
-				return false, err
-			}
-			affectedRows += uint64(batLen)
-
-			tmpBat.Clean(proc.Mp())
 		}
+
+		tmpBat.Clean(proc.Mp())
+
 		for infoNum, info := range p.DeleteCtxs[i].IndexInfos {
 			rel := p.DeleteCtxs[i].IndexTables[infoNum]
 			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[filterColIndex+1:filterColIndex+1+int32(len(p.DeleteCtxs[i].IndexAttrs))], p.DeleteCtxs[i].IndexAttrs, info.Cols, proc)

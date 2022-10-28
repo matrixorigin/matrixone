@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,10 +63,9 @@ func TestWithRootDataDir(t *testing.T) {
 	require.Equal(t, root, opt.rootDataDir)
 }
 
-func TestWithDNTxnStorage(t *testing.T) {
-	s := "MEM"
-	opt := Options{}.WithDNTxnStorage(s)
-	require.Equal(t, s, opt.dn.txnStorageBackend)
+func TestWithStorage(t *testing.T) {
+	opt := Options{}.WithDNUseMEMStorage()
+	require.Equal(t, dnservice.StorageMEM, opt.storage.dnStorage)
 }
 
 func TestWithHostAddress(t *testing.T) {
@@ -112,20 +112,20 @@ func TestWithHKCNStoreTimeout(t *testing.T) {
 
 func TestWithDNHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultDNHeartbeatInterval, opt.dn.heartbeatInterval)
+	require.Equal(t, defaultDNHeartbeatInterval, opt.heartbeat.dn)
 
 	interval := 21 * time.Second
 	opt = opt.WithDNHeartbeatInterval(interval)
-	require.Equal(t, interval, opt.dn.heartbeatInterval)
+	require.Equal(t, interval, opt.heartbeat.dn)
 }
 
 func TestWithLogHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultLogHeartbeatInterval, opt.log.heartbeatInterval)
+	require.Equal(t, defaultLogHeartbeatInterval, opt.heartbeat.log)
 
 	interval := 22 * time.Second
 	opt = opt.WithLogHeartbeatInterval(interval)
-	require.Equal(t, interval, opt.log.heartbeatInterval)
+	require.Equal(t, interval, opt.heartbeat.log)
 }
 
 func TestWithHKCheckInterval(t *testing.T) {

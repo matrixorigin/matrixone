@@ -26,7 +26,6 @@ type Argument struct {
 }
 
 type DeleteCtx struct {
-	IsHideKey    bool
 	TableName    string
 	DbName       string
 	TableSource  engine.Relation
