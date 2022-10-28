@@ -446,7 +446,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	}
 
 	for _, indexInfo := range indexInfos {
-		indexTableName := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		indexTableName, err := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		if err != nil {
+			return err
+		}
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}

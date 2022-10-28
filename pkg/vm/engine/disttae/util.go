@@ -325,42 +325,38 @@ func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
+func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
 	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
 	if !canCompute {
 		return canCompute, nil
 	}
 	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
 	case *plan.Const_Ival:
-		return true, val.Ival
+		return transferIval(val.Ival, oid)
 	case *plan.Const_Dval:
-		return true, val.Dval
+		return transferDval(val.Dval, oid)
 	case *plan.Const_Sval:
-		return true, val.Sval
+		return transferSval(val.Sval, oid)
 	case *plan.Const_Bval:
-		return true, val.Bval
+		return transferBval(val.Bval, oid)
 	case *plan.Const_Uval:
-		return true, val.Uval
+		return transferUval(val.Uval, oid)
 	case *plan.Const_Fval:
-		return true, val.Fval
+		return transferFval(val.Fval, oid)
 	case *plan.Const_Dateval:
-		return true, val.Dateval
+		return transferDateval(val.Dateval, oid)
 	case *plan.Const_Timeval:
-		return true, val.Timeval
+		return transferTimeval(val.Timeval, oid)
 	case *plan.Const_Datetimeval:
-		return true, val.Datetimeval
+		return transferDatetimeval(val.Datetimeval, oid)
 	case *plan.Const_Decimal64Val:
-		return true, val.Decimal64Val
+		return transferDecimal64val(val.Decimal64Val.A, oid)
 	case *plan.Const_Decimal128Val:
-		return true, val.Decimal128Val
+		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
 	case *plan.Const_Timestampval:
-		return true, val.Timestampval
+		return transferTimestampval(val.Timestampval, oid)
 	case *plan.Const_Jsonval:
-		return true, val.Jsonval
-	case *plan.Const_Defaultval:
-		return true, val.Defaultval
-	case *plan.Const_UpdateVal:
-		return true, val.UpdateVal
+		return transferSval(val.Jsonval, oid)
 	}
 	return false, nil
 }
