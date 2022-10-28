@@ -58,4 +58,7 @@ type TxnService interface {
 	// RollbackDNShard handle rollback txn data in current DNShard request from coordinator DN. For reuse,
 	// the response is provided by the caller.
 	RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
+
+	// Debug handle txn debug request from CN. For reuse, the response is provided by the caller
+	Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 }

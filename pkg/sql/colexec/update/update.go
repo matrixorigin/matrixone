@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var nullRowid [16]byte
+
 func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("update rows")
 }
@@ -351,6 +353,9 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 func appendTuples[T any](flg bool, cnt *uint64, vs []T, nsp *nulls.Nulls, rvec *vector.Vector,
 	proc *process.Process, m map[[16]byte]int, rows []types.Rowid) error {
 	for i, row := range rows {
+		if row == nullRowid {
+			continue
+		}
 		if _, ok := m[row]; ok {
 			continue
 		}

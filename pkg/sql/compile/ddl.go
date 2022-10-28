@@ -97,10 +97,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := dbSource.Relation(c.ctx, def.Name); err != nil {
-			if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-				return err
-			}
+		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(def.Name)
+		}
+		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
 		}
 	}
 
