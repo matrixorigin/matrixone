@@ -31,6 +31,7 @@ func TestUnixTimestamp(t *testing.T) {
 	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-02 22:23:00"), 1641162180, false)
 	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-01-03 22:23:00"), 1641248580, false)
 	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2022-02-29 22:23:00"), 0, true)
+	UnixtimeCase(t, types.T_int64, MustTimestamp(time.UTC, "2050-02-29 22:23:00"), 0, true)
 }
 
 // func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)

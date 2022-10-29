@@ -745,7 +745,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 		}
 	}
 	if col.hasUpdate == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.updateExpr, attr.OnUpdate); err != nil {
 			panic(err)
 		}
@@ -956,7 +956,12 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
+func genBlockMetas(
+	ctx context.Context,
+	rows [][]any,
+	columnLength int,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
@@ -966,7 +971,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 					mp[blk.BlockID] = blockInfos[i]
 				}
 			} else {
-				mp[blk.BlockID] = blockInfos[i]
+				mp[blockInfos[i].BlockID] = blockInfos[i]
 			}
 		}
 		blockInfos = blockInfos[:0]
@@ -975,7 +980,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 		}
 	}
 
-	metas := make([]BlockMeta, len(rows))
+	metas := make([]BlockMeta, len(blockInfos))
 
 	idxs := make([]uint16, columnLength)
 	for i := 0; i < columnLength; i++ {
@@ -983,13 +988,13 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	}
 
 	for i, blockInfo := range blockInfos {
-		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(idxs, blockInfo, fs, m)
+		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}
 		metas[i] = BlockMeta{
 			Rows:    int64(rows),
-			Info:    blockInfo,
+			Info:    blockInfos[i],
 			Zonemap: zm,
 		}
 	}
@@ -1005,12 +1010,12 @@ func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
 	return false
 }
 
-func genModifedBlocks(deletes map[uint64][]int, orgs, modfs []BlockMeta,
+func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
-			if needRead(expr, blk, tableDef, proc) {
+			if needRead(ctx, expr, blk, tableDef, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
 					deletes: deletes[orgs[i].Info.BlockID],
@@ -1148,5 +1153,161 @@ func genColumnIndexKey(id uint64) memtable.Tuple {
 	return memtable.Tuple{
 		index_Column,
 		memtable.ToOrdered(id),
+	}
+}
+
+func transferIval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferUval(v uint64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferFval(v float32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDval(v float64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferSval(v string, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_json:
+		return true, []byte(v)
+	case types.T_char, types.T_varchar:
+		return true, []byte(v)
+	case types.T_text, types.T_blob:
+		return true, []byte(v)
+	case types.T_uuid:
+		var uv types.Uuid
+		copy(uv[:], []byte(v)[:])
+		return true, uv
+	default:
+		return false, nil
+	}
+}
+
+func transferBval(v bool, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_bool:
+		return true, v
+	default:
+		return false, nil
+	}
+}
+
+func transferDateval(v int32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_date:
+		return true, types.Date(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_time:
+		return true, types.Time(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDatetimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_datetime:
+		return true, types.Datetime(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimestampval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_timestamp:
+		return true, types.Timestamp(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal64val(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal64:
+		return true, types.Decimal64FromInt64Raw(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal128:
+		return true, types.Decimal128FromInt64Raw(a, b)
+	default:
+		return false, nil
 	}
 }

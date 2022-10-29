@@ -42,6 +42,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil, // no get cluster details func can be set
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
@@ -209,9 +210,46 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewStringVector(n, typ, m, random, vs)
 		}
 		return NewStringVector(n, typ, m, random, nil)
+	case types.T_json:
+		if vs, ok := Values.([]string); ok {
+			return NewJsonVector(n, typ, m, random, vs)
+		}
+		return NewJsonVector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
+}
+
+func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []string) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for _, v := range vs {
+			json, err := types.ParseStringToByteJson(v)
+			if err != nil {
+				vec.Free(m)
+				return nil
+			}
+			jbytes, err := json.Marshal()
+			if err != nil {
+				vec.Free(m)
+				return nil
+			}
+			if err := vec.Append(jbytes, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		json, _ := types.ParseStringToByteJson(`{"a":1}`)
+		jbytes, _ := json.Marshal()
+		if err := vec.Append(jbytes, false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func NewBoolVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []bool) *vector.Vector {

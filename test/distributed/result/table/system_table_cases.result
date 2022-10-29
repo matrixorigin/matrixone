@@ -1,0 +1,405 @@
+USE system;
+SELECT COUNT(*) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
+count(null)
+0
+(SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
+[unknown result because it is related to issue#5895]
+SELECT COUNT(*) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
+count(null)
+0
+SELECT * FROM rawlog LIMIT 1;
+[unknown result because it is related to issue#5892]
+SELECT * FROM log_info LIMIT 1;
+[unknown result because it is related to issue#5892]
+SELECT COUNT(*) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM log_info LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
+[unknown result because it is related to issue#5901]
+SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
+[unknown result because it is related to issue#5901]
+SELECT COUNT('') FROM (SELECT * FROM error_info LIMIT 10) AS temp;
+[unknown result because it is related to issue#5901]
+SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
+[unknown result because it is related to issue#5901]
+SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+count(null)
+0
+USE system_metrics;
+SELECT COUNT(*) FROM (SELECT * FROM metric LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM metric LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM metric LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM metric LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_total LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM sql_statement_errors LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_total LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sql_transaction_errors LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM server_connections LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM process_cpu_percent LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM process_resident_memory_bytes LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_seconds_total LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_cpu_combined_percent LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_used LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_memory_available LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_read_bytes LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_disk_write_bytes LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_recv_bytes LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
+count(*)
+10
+SELECT COUNT(0) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
+count(0)
+10
+SELECT COUNT('') FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
+count()
+10
+SELECT COUNT(NULL) FROM (SELECT * FROM sys_net_sent_bytes LIMIT 10) AS temp;
+count(null)
+0
+USE mysql;
+SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM user LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM user LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM db LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM db LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
+count(null)
+0
+USE information_schema;
+SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM columns LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM columns LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM profiling LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM schemata LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM triggers LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
+count(null)
+0
+SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
+count(*)
+0
+SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
+count(0)
+0
+SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
+count()
+0
+SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
+count(null)
+0

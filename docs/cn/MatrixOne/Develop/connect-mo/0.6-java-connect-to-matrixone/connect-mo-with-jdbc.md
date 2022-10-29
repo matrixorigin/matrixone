@@ -84,3 +84,7 @@ try {
     System.out.println("VendorError: " + ex.getErrorCode());
 }
 ```
+
+## 参考文档
+
+有关使用 JDBC 开发应用时的 MatrixOne 支持情况，参见[MatrixOne 的 JDBC 功能支持列表](../../../Reference/Limitations/mo-jdbc-feature-list.md)。

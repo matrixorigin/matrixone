@@ -61,8 +61,8 @@ type SQLType string
 var (
 	SQLTypeSelect SQLType = "select"
 	SQLTypeInsert SQLType = "insert"
-	SQLTypeUpdate SQLType = "delete"
-	SQLTypeDelete SQLType = "update"
+	SQLTypeUpdate SQLType = "update"
+	SQLTypeDelete SQLType = "delete"
 	SQLTypeOther  SQLType = "other"
 
 	SQLTypeBegin        SQLType = "begin"

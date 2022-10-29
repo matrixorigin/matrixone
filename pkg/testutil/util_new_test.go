@@ -103,5 +103,9 @@ func TestVector(t *testing.T) {
 		vec := NewVector(Rows, types.New(types.T_char, 0, 0, 0), m, true, nil)
 		vec.Free(m)
 	}
+	{
+		vec := NewVector(Rows, types.New(types.T_json, 0, 0, 0), m, true, nil)
+		vec.Free(m)
+	}
 	require.Equal(t, int64(0), m.CurrNB())
 }

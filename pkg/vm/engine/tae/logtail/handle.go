@@ -38,10 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-const (
-	IncrementalPrefix = "incremental"
-)
-
 func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
 	logutil.Debugf("[Logtail] begin handle %v", req)
 	defer func() {
@@ -529,9 +525,6 @@ type CheckpointLogtailRespBuilder struct {
 	blkMetaInsTxnBatch *containers.Batch
 	blkMetaDelBatch    *containers.Batch
 	blkMetaDelTxnBatch *containers.Batch
-
-	tempKey  string
-	tempName string
 }
 
 func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailRespBuilder {
@@ -564,9 +557,15 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 	b.BlockFn = b.VisitBlk
 	return b
 }
-func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
-	b.tempName = blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
-	writer := blockio.NewWriter(fs, b.tempName)
+
+func (b *CheckpointLogtailRespBuilder) ReplayCatalog(c *catalog.Catalog) {
+	c.OnReplayDatabaseBatch(b.GetDBBatchs())
+	c.OnReplayTableBatch(b.GetTblBatchs())
+	c.OnReplaySegmentBatch(b.GetSegBatchs())
+	c.OnReplayBlockBatch(b.GetBlkBatchs())
+}
+
+func (b *CheckpointLogtailRespBuilder) WriteToFS(writer *blockio.Writer) (blks []objectio.BlockObject) {
 	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
 		panic(err)
 	}
@@ -625,16 +624,11 @@ func (b *CheckpointLogtailRespBuilder) WriteToFS(fs *objectio.ObjectFS) {
 	if err != nil {
 		panic(err)
 	}
-	b.tempKey = blockio.EncodeMetalocFromMetas(b.tempName, blks)
+	return blks
 }
 
-func (b *CheckpointLogtailRespBuilder) ReadFromFS(fs *objectio.ObjectFS, m *mpool.MPool) {
-	b.tempName = blockio.EncodeCheckpointName(IncrementalPrefix, b.start, b.end)
-	reader, err := blockio.NewCheckpointReader(fs, b.tempKey)
-	if err != nil {
-		panic(err)
-	}
-	metas, err := reader.ReadMetas(m) //todo mpool
+func (b *CheckpointLogtailRespBuilder) ReadFromFS(reader *blockio.Reader, m *mpool.MPool) {
+	metas, err := reader.ReadMetas(m)
 	if err != nil {
 		panic(err)
 	}
