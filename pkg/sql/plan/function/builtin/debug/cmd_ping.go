@@ -59,6 +59,7 @@ func handlePing(ctx context.Context,
 								ShardID: shard.ShardID,
 							},
 							ReplicaID: shard.ReplicaID,
+							Address:   store.ServiceAddress,
 						},
 						Payload: protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter}),
 					})

@@ -55,7 +55,15 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		//    correctness of the transaction by forcing the timestamp of the transaction to
 		//    be modified, etc.
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
-			op, ok := proc.TxnOperator.(client.DebugableTxnOperator)
+			txnOp := proc.TxnOperator
+			if txnOp == nil {
+				v, err := proc.TxnClient.New()
+				if err != nil {
+					return nil, err
+				}
+				txnOp = v
+			}
+			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {
 				return nil, moerr.NewNotSupported("debug function not supported")
 			}

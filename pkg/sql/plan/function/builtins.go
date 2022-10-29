@@ -2389,6 +2389,7 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
+				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        debug.Handler,
