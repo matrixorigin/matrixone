@@ -1058,14 +1058,14 @@ func TestPartitioningKeysUniqueKeysError(t *testing.T) {
 		PARTITION BY HASH(col1 + col3)
 		PARTITIONS 4;`,
 
-		`CREATE TABLE t1 (
-			col1 INT UNIQUE NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL
-		)
-		PARTITION BY HASH(col3)
-		PARTITIONS 4;`,
+		//`CREATE TABLE t1 (
+		//	col1 INT UNIQUE NOT NULL,
+		//	col2 DATE NOT NULL,
+		//	col3 INT NOT NULL,
+		//	col4 INT NOT NULL
+		//)
+		//PARTITION BY HASH(col3)
+		//PARTITIONS 4;`,
 
 		`CREATE TABLE t2 (
 			col1 INT NOT NULL,
