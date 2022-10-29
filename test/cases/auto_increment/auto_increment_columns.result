@@ -5,7 +5,7 @@ b varchar(10)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` BIGINT DEFAULT NULL,\n`b` VARCHAR(10) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+t1    CREATE TABLE `t1` (\n`a` BIGINT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(10) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
 insert into t1(b) values ('bbb');
 insert into t1 values (1, 'ccc');
 tae data: duplicate
@@ -75,9 +75,22 @@ a    b
 -1000    yyy
 -2000    yyy
 200    yyy
-insert into t1 values (NULL, 'yyy')
-select * from t4 order by a;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 43 near 'select'; 
+insert into t1 values (NULL, 'yyy');
+select * from t1 order by a;
+a    b
+-2000    yyy
+-1000    yyy
+0    xxxx
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+200    yyy
+201    yyy
 update t1 set a=0 where b='ccc';
 tae data: duplicate
 update t1 set a='200' where b='ccc';
@@ -97,7 +110,8 @@ a    b
 101    xxxx
 102    xxxx
 200    yyy
-201    xefrsdfgds
+201    yyy
+202    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
 truncated type BIGINT value -9223372036854775809 for column a, 1
@@ -117,20 +131,21 @@ select * from t2 order by c;
 c    d
 -2147483648    aaa
 insert into t2 values (-2147483649, 'aaa');
+truncated type INT value -2147483649 for column c, 1
 insert into t2(d) values ('1111');
-auto_incrment column 'c' constant value 2147483648 overflows int
 select * from t2 order by c;
 c    d
 -2147483648    aaa
-2147483647    aaa
+1    1111
 insert into t2 values(2147483647, 'bbb');
 insert into t2 values(2147483648, 'bbb');
-tae data: duplicate
+truncated type INT value 2147483648 for column c, 1
 insert into t2(d) values ('22222');
 data out of range: data type int, value 2147483648
 select * from t2 order by c;
 c    d
 -2147483648    aaa
+1    1111
 2147483647    bbb
 drop table t2;
 drop table if exists t3;
@@ -168,9 +183,9 @@ a    b
 10    bbb
 delete from t3;
 insert into t3(b) values ('bbb');
-GetIndex from auto_increment table fail
 select * from t3 order by a;
 a    b
+11    bbb
 drop table t3;
 drop table if exists t4;
 create table t4(
@@ -288,9 +303,11 @@ a    b
 200    yyy
 200    ccc
 200    ccc
-201    xefrsdfgds
+201    yyy
+202    xefrsdfgds
 insert into t4 values (-9223372036854775808,'xefrsdfgds');
 insert into t4 values (-9223372036854775809,'xefrsdfgds');
+truncated type BIGINT value -9223372036854775809 for column a, 1
 insert into t4 values (9223372036854775807,'xefrsdfgds');
 insert into t4 values (9223372036854775808,'xefrsdfgds');
 truncated type BIGINT value 9223372036854775808 for column a, 1
@@ -307,23 +324,26 @@ select * from t5 order by c;
 c    d
 -2147483648    aaa
 insert into t5 values (-2147483649, 'aaa');
-Incorrect INT value: '-2147483649' for column 'c' at row 1
+truncated type INT value -2147483649 for column c, 1
 insert into t5(d) values ('1111');
 select * from t5 order by c;
 c    d
 -2147483648    aaa
-2147483647    aaa
+1    1111
 insert into t5 values(2147483647, 'bbb');
 insert into t5 values(2147483648, 'bbb');
+truncated type INT value 2147483648 for column c, 1
 select * from t5 order by c;
 c    d
 -2147483648    aaa
+1    1111
 2147483647    bbb
 insert into t5(d) values ('22222');
 data out of range: data type int, value 2147483648
 select * from t5 order by c;
 c    d
 -2147483648    aaa
+1    1111
 2147483647    bbb
 drop table t5;
 drop table if exists t6;
@@ -334,8 +354,9 @@ c int auto_increment,
 d int auto_increment,
 e bigint auto_increment
 );
-show create table t1;
-table 't1' doesn't exist
+show create table t6;
+Table    Create Table
+t6    CREATE TABLE `t6` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` BIGINT NOT NULL AUTO_INCREMENT,\n`c` INT NOT NULL AUTO_INCREMENT,\n`d` INT NOT NULL AUTO_INCREMENT,\n`e` BIGINT NOT NULL AUTO_INCREMENT,\nPRIMARY KEY (`a`)\n)
 insert into t6 values (),(),(),();
 select * from t6 order by a;
 a    b    c    d    e
@@ -550,15 +571,10 @@ a    b
 12    12
 13    13
 truncate table t10;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 8 near "truncate table t10;";
 insert into t10 values ();
 select * from t10 order by a;
 a    b
-10    10
-11    11
-12    12
-13    13
-14    14
+1    1
 drop table t10;
 drop table if exists t11;
 create table t11(
@@ -567,9 +583,19 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11;
-Column 'a' cannot be null
 select * from t11 order by a;
 a    b    c
+1    1    '你好'
+2    3    'hello'
+4    4    'world'
+5    5    '
+6    6    '\N'
+7    7    '
+8    8    '###'
+9    9
+10    10
+100    100    '100'
+101    101
 drop table t11;
 drop table if exists t12;
 create table t12(
@@ -578,9 +604,19 @@ b bigint auto_increment,
 c varchar(25)
 );
 load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12;
-Column 'a' cannot be null
 select * from t12 order by a;
 a    b    c
+0    0    '0'
+1    1    '你好'
+2    3    'hello'
+4    4    'world'
+5    5    '
+6    100    'aa'
+10    101    'bb'
+11    102    'cc'
+1000    103    '1000'
+1001    104
+1002    105
 drop table t12;
 drop table if exists t13;
 create table t13(
