@@ -125,7 +125,7 @@ func main() {
 	}
 	createTable = make([]string, len(tables))
 	for i, tbl := range tables {
-		createTable[i], err = getCreateTable(tbl.Name)
+		createTable[i], err = getCreateTable(database, tbl.Name)
 		if err != nil {
 			return
 		}
@@ -158,7 +158,7 @@ func main() {
 }
 
 func getTables(db string) (Tables, error) {
-	r, err := conn.Query("select relname,viewdef from mo_catalog.mo_tables where reldatabase = '" + db + "'")
+	r, err := conn.Query("select relname,viewdef from mo_catalog.mo_tables where reldatabase = '" + db + "'") //TODO: after unified sys table prefix, add condition in where clause
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func getTables(db string) (Tables, error) {
 		if err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(table, "__mo_cpkey") || strings.HasPrefix(table, "%!%") {
+		if strings.HasPrefix(table, "__mo_") || strings.HasPrefix(table, "%!%") { //TODO: after adding condition in where clause, remove this
 			continue
 		}
 		if len(viewdef) > 0 {
@@ -184,7 +184,7 @@ func getTables(db string) (Tables, error) {
 }
 
 func getCreateDB(db string) (string, error) {
-	r := conn.QueryRow("show create database " + db)
+	r := conn.QueryRow("show create database `" + db + "`")
 	var (
 		create string
 	)
@@ -195,8 +195,8 @@ func getCreateDB(db string) (string, error) {
 	return create, nil
 }
 
-func getCreateTable(tbl string) (string, error) {
-	r := conn.QueryRow("show create table " + tbl)
+func getCreateTable(db, tbl string) (string, error) {
+	r := conn.QueryRow("show create table `" + db + "`.`" + tbl + "`")
 	var create string
 	err := r.Scan(&tbl, &create)
 	if err != nil {
@@ -206,7 +206,7 @@ func getCreateTable(tbl string) (string, error) {
 }
 
 func showInsert(db string, tbl string) error {
-	r, err := conn.Query("select * from " + db + "." + tbl + " limit 0, " + strconv.Itoa(batchSize))
+	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "` limit 0, " + strconv.Itoa(batchSize))
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func showInsert(db string, tbl string) error {
 		r.Close()
 		buf.Reset()
 		cur += batchSize
-		r, err = conn.Query("select * from " + db + "." + tbl + " limit " + strconv.Itoa(cur) + ", " + strconv.Itoa(batchSize))
+		r, err = conn.Query("select * from `" + db + "`.`" + tbl + "` limit " + strconv.Itoa(cur) + ", " + strconv.Itoa(batchSize))
 		if err != nil {
 			return err
 		}
