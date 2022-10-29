@@ -41,14 +41,20 @@ type Column struct {
 	Name string
 	Type string
 }
-type Tables []string
+
+type Table struct {
+	Name   string
+	IsView bool
+}
+
+type Tables []Table
 
 func (t *Tables) String() string {
 	return fmt.Sprint(*t)
 }
 
 func (t *Tables) Set(value string) error {
-	*t = append(*t, value)
+	*t = append(*t, Table{value, false})
 	return nil
 }
 
@@ -97,14 +103,14 @@ func main() {
 		fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", database)
 		fmt.Println(createDb, ";")
 		fmt.Printf("USE `%s`;\n\n\n", database)
-		tables, err = getTables()
+		tables, err = getTables(database)
 		if err != nil {
 			return
 		}
 	}
 	createTable = make([]string, len(tables))
 	for i, tbl := range tables {
-		createTable[i], err = getCreateTable(tbl)
+		createTable[i], err = getCreateTable(tbl.Name)
 		if err != nil {
 			return
 		}
@@ -112,38 +118,52 @@ func main() {
 
 	for i, create := range createTable {
 		tbl := tables[i]
-		if isView(create) {
-			fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl)
-			fmt.Printf("%s;\n\n\n", create)
+		if tbl.IsView {
 			continue
 		}
-		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl)
+		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 		var suffix string
 		if !strings.HasSuffix(create, ";") {
 			suffix = ";"
 		}
 		fmt.Printf("%s%s\n", create, suffix)
-		err = showInsert(database, tbl)
+		err = showInsert(database, tbl.Name)
 		if err != nil {
 			return
 		}
 	}
+	for i, tbl := range tables {
+		if !tbl.IsView {
+			continue
+		}
+		fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
+		fmt.Printf("%s;\n\n\n", createTable[i])
+		continue
+	}
 }
 
-func getTables() ([]string, error) {
-	r, err := conn.Query("show tables")
+func getTables(db string) (Tables, error) {
+	r, err := conn.Query("select relname,viewdef from mo_catalog.mo_tables where reldatabase = '" + db + "'")
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	var tables []string
+	var tables Tables
 	for r.Next() {
 		var table string
-		err = r.Scan(&table)
+		var viewdef string
+		err = r.Scan(&table, &viewdef)
 		if err != nil {
 			return nil, err
 		}
-		tables = append(tables, table)
+		if strings.HasPrefix(table, "__mo_cpkey") || strings.HasPrefix(table, "%!%") {
+			continue
+		}
+		if len(viewdef) > 0 {
+			tables = append(tables, Table{table, true})
+		} else {
+			tables = append(tables, Table{table, false})
+		}
 	}
 	return tables, nil
 }
@@ -255,8 +275,4 @@ func convertValue(v interface{}, typ string) string {
 	default:
 		return fmt.Sprintf("'%v'", string(ret.([]byte)))
 	}
-}
-func isView(sql string) bool {
-	sql = strings.ToLower(sql)
-	return strings.HasPrefix(sql, "create view")
 }
