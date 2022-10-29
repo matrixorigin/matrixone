@@ -15,20 +15,19 @@
 package service
 
 import (
-	"path"
-	"strconv"
+	"path/filepath"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 var (
@@ -59,6 +58,11 @@ type LogService interface {
 
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
+
+	// GetTaskService returns the taskservice
+	GetTaskService() (taskservice.TaskService, bool)
+
+	CreateInitTasks() error
 }
 
 // logService wraps logservice.WrappedService.
@@ -132,6 +136,14 @@ func (ls *logService) StartHAKeeperReplica(
 	return ls.svc.StartHAKeeperReplica(replicaID, initialReplicas, join)
 }
 
+func (ls *logService) GetTaskService() (taskservice.TaskService, bool) {
+	return ls.svc.GetTaskService()
+}
+
+func (ls *logService) CreateInitTasks() error {
+	return ls.svc.CreateInitTasks()
+}
+
 // logOptions is options for a log service.
 type logOptions []logservice.Option
 
@@ -139,10 +151,9 @@ type logOptions []logservice.Option
 func newLogService(
 	cfg logservice.Config,
 	fs fileservice.FileService,
-	ts taskservice.TaskService,
 	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, fs, ts, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -158,13 +169,13 @@ func buildLogConfig(
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        defaultDeploymentID,
 		RTTMillisecond:      defaultRTTMillisecond,
-		DataDir:             buildLogDataDir(opt.rootDataDir, index),
 		ServiceAddress:      address.getLogListenAddress(index), // hakeeper client use this address
 		RaftAddress:         address.getLogRaftAddress(index),
 		GossipAddress:       address.getLogGossipAddress(index),
 		GossipSeedAddresses: address.getLogGossipSeedAddresses(),
 	}
-	cfg.HeartbeatInterval.Duration = opt.log.heartbeatInterval
+	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
+	cfg.HeartbeatInterval.Duration = opt.heartbeat.log
 	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
 	cfg.HAKeeperClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	// setting hakeeper configuration
@@ -186,11 +197,6 @@ func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
 	return []logservice.Option{
 		logservice.WithBackendFilter(filter),
 	}
-}
-
-// buildLogDataDir generates data directory for a log service.
-func buildLogDataDir(root string, index int) string {
-	return path.Join(root, "log", strconv.Itoa(index))
 }
 
 // startHAKeeperReplica selects the first `n` log services to start hakeeper replica.

@@ -131,7 +131,7 @@ func TestIeResult(t *testing.T) {
 	n, ty, s, e := result.Column(0)
 	require.NoError(t, e)
 	require.Equal(t, "test", n)
-	require.Equal(t, defines.MYSQL_TYPE_LONG, ty)
+	require.Equal(t, defines.MYSQL_TYPE_LONG, defines.MysqlType(ty))
 	require.True(t, s)
 	_, _, _, e = result.Column(1)
 	require.Error(t, e)

@@ -143,6 +143,8 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
 	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	defer taskService.StopScheduleCronTask()
+
 	store, err := getTestStore(cfg, false, taskService)
 	assert.NoError(t, err)
 	defer func() {
@@ -223,7 +225,6 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -235,7 +236,6 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -247,7 +247,6 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg3.Fill()
 	service3, err := NewService(cfg3,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -259,7 +258,6 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.Fill()
 	service4, err := NewService(cfg4,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -390,7 +388,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		require.Equal(t, 1, len(cb.Commands))
 		cmd := cb.Commands[0]
 		assert.True(t, cmd.Bootstrapping)
-		assert.Equal(t, pb.DnService, cmd.ServiceType)
+		assert.Equal(t, pb.DNService, cmd.ServiceType)
 		dnShardInfo := pb.DNShardInfo{
 			ShardID:   cmd.ConfigChange.Replica.ShardID,
 			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
@@ -454,8 +452,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 					}
 					if len(cb.Commands) > 0 {
 						cmd := cb.Commands[0]
-						if cmd.ServiceType == pb.DnService {
-							if cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
+						if cmd.ServiceType == pb.DNService {
+							if cmd.ConfigChange != nil && cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
 								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
 								dnRepaired = true
 							}
@@ -486,6 +484,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			if completed {
 				for _, s := range services[:3] {
 					s.store.taskScheduler.StopScheduleCronTask()
+					_ = s.task.holder.Close()
 				}
 				return
 			}
@@ -576,7 +575,7 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
 			assert.True(t, cb.Commands[0].Bootstrapping)
-			assert.Equal(t, pb.DnService, cb.Commands[0].ServiceType)
+			assert.Equal(t, pb.DNService, cb.Commands[0].ServiceType)
 			assert.True(t, cb.Commands[0].ConfigChange.Replica.ReplicaID > 0)
 
 			cb, err = store.getCommandBatch(ctx, store.id())
@@ -674,7 +673,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 
 		cnUUID1 := uuid.New().String()
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
@@ -690,7 +689,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 
 		cnUUID2 := uuid.New().String()
 		cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "b"})
 		assert.NoError(t, err)
@@ -768,7 +767,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 
 		cnUUID1 := uuid.New().String()
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
-		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
 		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
@@ -789,7 +788,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
 				cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
-				err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+				_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 				assert.NoError(t, err)
 				state, err = store.getCheckerState()
 				require.NoError(t, err)

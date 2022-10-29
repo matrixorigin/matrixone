@@ -16,6 +16,8 @@ package data
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,7 +36,7 @@ import (
 type CheckpointUnit interface {
 	MutationInfo() string
 	RunCalibration() int
-	EstimateScore(int64) int
+	EstimateScore(time.Duration) int
 	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
 
@@ -95,8 +97,8 @@ type Block interface {
 	ReplayImmutIndex() error
 	Close()
 	FreeData()
-	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
-	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
+	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

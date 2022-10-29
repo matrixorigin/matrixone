@@ -16,6 +16,19 @@ package dnservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+)
+
+// StorageType txn storage type
+type StorageType string
+
+const (
+	// StorageTAE TAE txn storage backend
+	StorageTAE = StorageType("TAE")
+	// StorageMEMKV MEMKV txn storage backend
+	StorageMEMKV = StorageType("MEMKV")
+	// StorageMEMKV MEM txn storage backend
+	StorageMEM = StorageType("MEM")
 )
 
 // Option store option
@@ -33,4 +46,7 @@ type Service interface {
 	StartDNReplica(metadata.DNShard) error
 	// CloseDNReplica close the DNShard replica.
 	CloseDNReplica(shard metadata.DNShard) error
+
+	// GetTaskService returns taskservice
+	GetTaskService() (taskservice.TaskService, bool)
 }

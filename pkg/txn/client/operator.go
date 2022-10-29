@@ -291,6 +291,19 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	for idx := range requests {
+		requests[idx].Method = txn.TxnMethod_DEBUG
+	}
+
+	if err := tc.validate(ctx, false); err != nil {
+		return nil, err
+	}
+
+	requests = tc.maybeInsertCachedWrites(ctx, requests, false)
+	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
+}
+
 func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
@@ -501,6 +514,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, rollbackTxnErrors)
+	case txn.TxnMethod_DEBUG:
+		if resp.TxnError != nil {
+			return resp.TxnError.UnwrapError()
+		}
+		return nil
 	default:
 		tc.logger.Fatal("invalid response",
 			zap.String("response", resp.DebugString()))
@@ -536,15 +554,15 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return nil
 	}
 
-	txnCode := uint16(txnError.Code)
-
+	// use txn internal error code to check error
+	txnCode := uint16(txnError.TxnErrCode)
 	if txnCode == moerr.ErrDNShardNotFound {
 		// do we still have the uuid and shard id?
 		return moerr.NewDNShardNotFound("", 0xDEADBEAF)
 	}
 
 	if _, ok := possibleErrorMap[txnCode]; ok {
-		return moerr.NewTxnError("convert to txnerror, code %d, msg %s", txnCode, txnError.Message)
+		return txnError.UnwrapError()
 	}
 
 	panic(moerr.NewInternalError("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))

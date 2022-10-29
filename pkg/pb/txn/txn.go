@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -70,7 +71,7 @@ func (m TxnRequest) DebugString() string {
 
 // DebugString returns debug string
 func (m TxnError) DebugString() string {
-	return fmt.Sprintf("%d-%s", m.Code, m.Message)
+	return fmt.Sprintf("%d: %s", m.TxnErrCode, m.UnwrapError().Error())
 }
 
 // DebugString returns debug string
@@ -149,7 +150,7 @@ func (m TxnMeta) DebugString() string {
 // GetTargetDN return dn shard ID that message need send to.
 func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	switch m.Method {
-	case TxnMethod_Read, TxnMethod_Write:
+	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
 	case TxnMethod_Commit:
 		return m.Txn.DNShards[0]
@@ -231,4 +232,31 @@ func ResponsesDebugString(responses []TxnResponse) string {
 	}
 	buf.WriteString("]")
 	return buf.String()
+}
+
+// WrapError wrapper error to TxnError
+func WrapError(err error, internalCode uint16) *TxnError {
+	if me, ok := err.(*moerr.Error); ok {
+		data, e := me.MarshalBinary()
+		if e != nil {
+			panic(e)
+		}
+		v := &TxnError{Error: data, Code: uint32(me.ErrorCode())}
+		v.TxnErrCode = v.Code
+		if internalCode != 0 {
+			v.TxnErrCode = uint32(internalCode)
+		}
+		return v
+	}
+
+	panic("only moerr supported")
+}
+
+// UnwrapError unwrap the moerr from the TxnError
+func (m TxnError) UnwrapError() error {
+	err := &moerr.Error{}
+	if e := err.UnmarshalBinary(m.Error); e != nil {
+		panic(e)
+	}
+	return err
 }

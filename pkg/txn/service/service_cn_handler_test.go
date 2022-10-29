@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReadBasic(t *testing.T) {
@@ -68,7 +69,9 @@ func TestReadWithDNShardNotMatch(t *testing.T) {
 
 	rTxn := NewTestTxn(1, 1)
 	resp := readTestData(t, sender, 1, rTxn, 1)
-	checkResponses(t, resp, newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
+	checkResponses(t, resp,
+		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
+	// newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
 func TestReadWithSelfWrite(t *testing.T) {
@@ -436,7 +439,8 @@ func TestWriteWithDNShardNotMatch(t *testing.T) {
 	sender.AddTxnService(s)
 
 	wTxn := NewTestTxn(1, 1)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1), newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1),
+		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
 }
 
 func TestWriteWithWWConflict(t *testing.T) {
@@ -457,7 +461,9 @@ func TestWriteWithWWConflict(t *testing.T) {
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 
 	wTxn2 := NewTestTxn(2, 1)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1), newTxnError(moerr.ErrTAEWrite, "write conlict"))
+	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1),
+		txn.WrapError(moerr.NewTAEWrite(), 0))
+	// newTxnError(moerr.ErrTAEWrite, "write conlict"))
 }
 
 func TestCommitWithSingleDNShard(t *testing.T) {
@@ -520,7 +526,8 @@ func TestCommitWithDNShardNotMatch(t *testing.T) {
 	for i := byte(0); i < n; i++ {
 		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
 	}
-	checkResponses(t, commitWriteData(t, sender, wTxn), newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
+	checkResponses(t, commitWriteData(t, sender, wTxn),
+		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
 }
 
 func TestCommitWithMultiDNShards(t *testing.T) {
@@ -594,7 +601,8 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
 	defer w2.close()
 
-	checkResponses(t, commitWriteData(t, sender, wTxn), newTxnError(moerr.ErrTAEPrepare, "cannot prepare"))
+	checkResponses(t, commitWriteData(t, sender, wTxn),
+		txn.WrapError(moerr.NewTAEPrepare("cannot prepare"), 0))
 
 	checkWaiter(t, w1, txn.TxnStatus_Aborted)
 	checkWaiter(t, w2, txn.TxnStatus_Aborted)
@@ -678,7 +686,8 @@ func TestRollbackWithDNShardNotFound(t *testing.T) {
 	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
-	checkResponses(t, rollbackWriteData(t, sender, wTxn), newTxnError(moerr.ErrDNShardNotFound, ""))
+	checkResponses(t, rollbackWriteData(t, sender, wTxn),
+		txn.WrapError(moerr.NewDNShardNotFound("", 1), 0))
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
@@ -691,6 +700,37 @@ func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.
 	responses := result.Responses
 	assert.Equal(t, len(keys), len(responses))
 	return responses
+}
+
+func TestDebug(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	sender.AddTxnService(s)
+
+	data := []byte("OK")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := sender.Send(ctx, []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_DEBUG,
+			CNRequest: &txn.CNOpRequest{
+				Payload: data,
+				Target:  NewTestDNShard(1),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, data, result.Responses[0].CNOpResponse.Payload)
 }
 
 func commitShardWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
@@ -749,7 +789,7 @@ func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*t
 		if resp.TxnError == nil {
 			assert.Equal(t, expectErrors[idx], resp.TxnError)
 		} else {
-			assert.Equal(t, expectErrors[idx].Code, resp.TxnError.Code)
+			assert.Equal(t, expectErrors[idx].TxnErrCode, resp.TxnError.TxnErrCode)
 		}
 	}
 }

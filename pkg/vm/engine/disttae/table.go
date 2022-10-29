@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -65,7 +66,17 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			}
 		}
 	}
-	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
+	priKeys := make([]*engine.Attribute, 0, 1)
+	if tbl.primaryIdx >= 0 {
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				if attr.Attr.Primary {
+					priKeys = append(priKeys, &attr.Attr)
+				}
+			}
+		}
+	}
+	dnList := needSyncDnStores(expr, tbl.tableDef, priKeys, tbl.db.txn.dnStores)
 	switch {
 	case tbl.tableId == catalog.MO_DATABASE_ID:
 		tbl.dnList = []int{0}
@@ -86,22 +97,33 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
 		}
+		// update meta
+		columnLength := len(tbl.getTableDef().Cols) - 1 //we use this data to fetch zonemap, but row_id has no zonemap
+		meta, err := tbl.db.txn.getTableMeta(ctx, tbl.db.databaseId,
+			genMetaTableName(tbl.tableId), !ok, columnLength)
+		if err != nil {
+			return nil, err
+		}
+		tbl.meta = meta
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
+	tbl.skipBlocks = make(map[uint64]uint8)
 	if tbl.meta == nil {
 		return ranges, nil
 	}
-	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
+	tbl.meta.modifedBlocks = make([][]ModifyBlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
-		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
+		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
-			if needRead(expr, blk, tbl.getTableDef(), tbl.proc) {
+			tbl.skipBlocks[blk.Info.BlockID] = 0
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
+			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	return ranges, nil
 }
@@ -123,12 +145,12 @@ func (tbl *table) getTableDef() *plan.TableDef {
 						Size:      attr.Attr.Type.Size,
 						Precision: attr.Attr.Type.Precision,
 						Scale:     attr.Attr.Type.Scale,
+						AutoIncr:  attr.Attr.AutoIncrement,
 					},
-					Primary:       attr.Attr.Primary,
-					Default:       attr.Attr.Default,
-					OnUpdate:      attr.Attr.OnUpdate,
-					Comment:       attr.Attr.Comment,
-					AutoIncrement: attr.Attr.AutoIncrement,
+					Primary:  attr.Attr.Primary,
+					Default:  attr.Attr.Default,
+					OnUpdate: attr.Attr.OnUpdate,
+					Comment:  attr.Attr.Comment,
 				})
 				i++
 			}
@@ -308,7 +330,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
@@ -316,12 +338,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 			}
 		}
 		for j := len(ranges); j < num; j++ {
-			rds[j] = &blockReader{
-				fs:       tbl.proc.FileService,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-			}
+			rds[j] = &emptyReader{}
 		}
 		return rds, nil
 	}
@@ -332,7 +349,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
@@ -340,7 +357,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:       tbl.proc.FileService,
+				fs:       tbl.db.fs,
 				tableDef: tableDef,
 				ts:       ts,
 				ctx:      ctx,
@@ -353,12 +370,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 
 func (tbl *table) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
+	var index memtable.Tuple
 	/*
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
+	if tbl.primaryIdx >= 0 && expr != nil {
+		ok, v := getNonIntPkValueByExpr(expr, int32(tbl.primaryIdx),
+			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		if ok {
+			index = memtable.Tuple{
+				index_PrimaryKey,
+				memtable.ToOrdered(v),
+			}
+		}
+	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -371,13 +399,13 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		var blks []BlockMeta
+		var blks []ModifyBlockMeta
 
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs,
-			blks, tbl.db.txn.meta.SnapshotTS, writes)
+		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
+			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err
 		}

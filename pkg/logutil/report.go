@@ -43,62 +43,36 @@ type ZapSink struct {
 	out zapcore.WriteSyncer
 }
 
-// logReporter should be trace.ReportLog
-var logReporter atomic.Value
-
 // zapReporter should be trace.ReportZap
 var zapReporter atomic.Value
-
-// levelChangeFunc should be trace.SetLogLevel function
-var levelChangeFunc atomic.Value
 
 // contextField should be trace.ContextField function
 var contextField atomic.Value
 
 type TraceReporter struct {
-	ReportLog    reportLogFunc
 	ReportZap    reportZapFunc
-	LevelSignal  levelChangeSignal
 	ContextField contextFieldFunc
 }
 
-type reportLogFunc func(context.Context, zapcore.Level, int, string, ...any)
 type reportZapFunc func(zapcore.Encoder, zapcore.Entry, []zapcore.Field) (*buffer.Buffer, error)
-type levelChangeSignal func(zapcore.LevelEnabler)
 type contextFieldFunc func(context.Context) zap.Field
 
-func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportZap(zapcore.Encoder, zapcore.Entry, []zapcore.Field) (*buffer.Buffer, error) {
 	return buffer.NewPool().Get(), nil
 }
-func noopLevelSignal(zapcore.LevelEnabler)       {}
 func noopContextField(context.Context) zap.Field { return zap.String("span", "{}") }
 
 func SetLogReporter(r *TraceReporter) {
-	if r.ReportLog != nil {
-		logReporter.Store(r.ReportLog)
-	}
 	if r.ReportZap != nil {
 		zapReporter.Store(r.ReportZap)
-	}
-	if r.LevelSignal != nil {
-		levelChangeFunc.Store(r.LevelSignal)
 	}
 	if r.ContextField != nil {
 		contextField.Store(r.ContextField)
 	}
 }
 
-func GetReportLogFunc() reportLogFunc {
-	return logReporter.Load().(reportLogFunc)
-}
-
 func GetReportZapFunc() reportZapFunc {
 	return zapReporter.Load().(reportZapFunc)
-}
-
-func GetLevelChangeFunc() levelChangeSignal {
-	return levelChangeFunc.Load().(levelChangeSignal)
 }
 
 func GetContextFieldFunc() contextFieldFunc {
@@ -149,6 +123,7 @@ func newTraceLogEncoder() *TraceLogEncoder {
 		Encoder: zapcore.NewJSONEncoder(
 			zapcore.EncoderConfig{
 				StacktraceKey:  "stacktrace",
+				SkipLineEnding: true,
 				LineEnding:     zapcore.DefaultLineEnding,
 				EncodeLevel:    zapcore.LowercaseLevelEncoder,
 				EncodeTime:     zapcore.EpochTimeEncoder,

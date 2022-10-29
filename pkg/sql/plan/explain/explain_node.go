@@ -441,7 +441,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(options *ExplainOptions) (string
 		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
 		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
 		" outputSize=" + strconv.FormatInt(a.AnalyzeInfo.OutputSize, 10) + "bytes" +
-		" memorySize=" + strconv.FormatInt(a.AnalyzeInfo.OutputSize, 10) + "bytes"
+		" memorySize=" + strconv.FormatInt(a.AnalyzeInfo.MemorySize, 10) + "bytes"
 	return result, nil
 }
 

@@ -14,10 +14,11 @@
 package disttae
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,30 +65,25 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, columnMap)
+			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		columnMap[int(idx)] = struct{}{}
+		colName := exprImpl.Col.Name
+		dotIdx := strings.Index(colName, ".")
+		colName = colName[dotIdx+1:]
+		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr) []int {
-	columnMap := make(map[int]struct{})
-	getColumnMapByExpr(expr, columnMap)
-
-	columns := make([]int, len(columnMap))
-	i := 0
-	for k := range columnMap {
-		columns[i] = k
-		i++
-	}
-	sort.Ints(columns)
-	return columns
+func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
+	columnMap := make(map[int]int)
+	getColumnMapByExpr(expr, tableDef, columnMap)
+	return columnMap
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
@@ -132,44 +128,54 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, error) {
-	name, extent, _ := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
+func fetchZonemapAndRowsFromBlockInfo(
+	ctx context.Context,
+	idxs []uint16,
+	blockInfo catalog.BlockInfo,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([][64]byte, uint32, error) {
+	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
 	// raed s3
 	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	idxList, err := reader.ReadIndex(extent, idxs, objectio.ZoneMapType, m)
+	obs, err := reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	for i, data := range idxList {
+	for i, idx := range idxs {
+		column, err := obs[0].GetColumn(idx)
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
+		if err != nil {
+			return nil, 0, err
+		}
 		bytes := data.(*objectio.ZoneMap).GetData()
 		copy(zonemapList[i][:], bytes[:])
 	}
 
-	return zonemapList, nil
+	return zonemapList, rows, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	getIdx := func(idx int) int {
-		return int(tableDef.Name2ColIndex[tableDef.Cols[columns[idx]].Name])
-	}
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
 
 	for i := 0; i < dataLength; i++ {
-		idx := getIdx(columns[i])
-		dataTypes[i] = uint8(tableDef.Cols[columns[i]].Typ.Id)
+		idx := columns[i]
+		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.zonemap[idx][:])
+		err := zm.Unmarshal(meta.Zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -325,40 +331,38 @@ func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
+func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
 	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
 	if !canCompute {
 		return canCompute, nil
 	}
 	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
 	case *plan.Const_Ival:
-		return true, val.Ival
+		return transferIval(val.Ival, oid)
 	case *plan.Const_Dval:
-		return true, val.Dval
+		return transferDval(val.Dval, oid)
 	case *plan.Const_Sval:
-		return true, val.Sval
+		return transferSval(val.Sval, oid)
 	case *plan.Const_Bval:
-		return true, val.Bval
+		return transferBval(val.Bval, oid)
 	case *plan.Const_Uval:
-		return true, val.Uval
+		return transferUval(val.Uval, oid)
 	case *plan.Const_Fval:
-		return true, val.Fval
+		return transferFval(val.Fval, oid)
 	case *plan.Const_Dateval:
-		return true, val.Dateval
+		return transferDateval(val.Dateval, oid)
+	case *plan.Const_Timeval:
+		return transferTimeval(val.Timeval, oid)
 	case *plan.Const_Datetimeval:
-		return true, val.Datetimeval
+		return transferDatetimeval(val.Datetimeval, oid)
 	case *plan.Const_Decimal64Val:
-		return true, val.Decimal64Val
+		return transferDecimal64val(val.Decimal64Val.A, oid)
 	case *plan.Const_Decimal128Val:
-		return true, val.Decimal128Val
+		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
 	case *plan.Const_Timestampval:
-		return true, val.Timestampval
+		return transferTimestampval(val.Timestampval, oid)
 	case *plan.Const_Jsonval:
-		return true, val.Jsonval
-	case *plan.Const_Defaultval:
-		return true, val.Defaultval
-	case *plan.Const_UpdateVal:
-		return true, val.UpdateVal
+		return transferSval(val.Jsonval, oid)
 	}
 	return false, nil
 }
@@ -600,18 +604,24 @@ func getHashValue(buf []byte) uint64 {
 	return states[0]
 }
 
-func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
+func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
+	fullList := func() []int {
+		dnList := make([]int, len(list))
+		for i := range list {
+			dnList[i] = i
+		}
+		return dnList
+	}
 	listLen := uint64(len(list))
 	if listLen == 1 || len(pkRange) == 0 {
-		return list
+		return []int{0}
 	}
 
 	listMap := make(map[uint64]struct{})
 	for _, r := range pkRange {
 		if r[1]-r[0] > MAX_RANGE_SIZE {
-			return list
+			return fullList()
 		}
-
 		for i := r[0]; i <= r[1]; i++ {
 			keys := make([]byte, 8)
 			binary.LittleEndian.PutUint64(keys, uint64(i))
@@ -619,24 +629,22 @@ func getListByRange[T DNStore](list []T, pkRange [][2]int64) []T {
 			modVal := val % listLen
 			listMap[modVal] = struct{}{}
 			if len(listMap) == int(listLen) {
-				return list
+				return fullList()
 			}
 		}
 	}
-
-	returnList := make([]T, len(listMap))
-	var i = 0
+	dnList := make([]int, len(listMap))
+	i := 0
 	for idx := range listMap {
-		returnList[i] = list[idx]
-		i = i + 1
+		dnList[i] = int(idx)
+		i++
 	}
-
-	return returnList
+	return dnList
 }
 
 func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (bool, error) {
 	zm := index.NewZoneMap(typ)
-	err := zm.Unmarshal(meta.zonemap[colIdx][:])
+	err := zm.Unmarshal(meta.Zonemap[colIdx][:])
 	if err != nil {
 		return false, err
 	}

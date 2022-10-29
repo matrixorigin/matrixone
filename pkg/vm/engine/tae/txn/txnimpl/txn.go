@@ -57,6 +57,10 @@ func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.DropDatabase(name)
 }
 
+func (txn *txnImpl) DropDatabaseByID(id uint64) (db handle.Database, err error) {
+	return txn.Store.DropDatabaseByID(id)
+}
+
 func (txn *txnImpl) UnsafeGetDatabase(id uint64) (db handle.Database, err error) {
 	return txn.Store.UnsafeGetDatabase(id)
 }
@@ -67,6 +71,10 @@ func (txn *txnImpl) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err
 
 func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 	return txn.Store.GetDatabase(name)
+}
+
+func (txn *txnImpl) GetDatabaseByID(id uint64) (db handle.Database, err error) {
+	return txn.Store.GetDatabaseByID(id)
 }
 
 func (txn *txnImpl) DatabaseNames() (names []string) {

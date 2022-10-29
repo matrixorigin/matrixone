@@ -91,7 +91,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	PrintScope(nil, []*Scope{c.scope})
+	// XXX PrintScope has a none-trivial amount of logging
+	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -607,6 +608,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Attributes:   attrs,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())

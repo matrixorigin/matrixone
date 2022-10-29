@@ -215,6 +215,7 @@ message Source {
   string    block = 4;
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
+  plan.Expr  expr = 7;
 }
 
 message NodeInfo {

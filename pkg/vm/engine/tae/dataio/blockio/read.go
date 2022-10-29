@@ -79,12 +79,9 @@ func BlockRead(
 	bat.Attrs = columns
 	for i, vec := range columnBatch.Vecs {
 		movec := containers.UnmarshalToMoVec(vec)
-		if vec.Allocated() != 0 { // allocated in mpool
-			movec.SetOriginal(false)
-		}
 		bat.Vecs[i] = movec
 	}
-	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
+	bat.SetZs(bat.Vecs[0].Length(), pool)
 
 	return bat, nil
 }
@@ -99,12 +96,12 @@ func BlockReadInner(
 	ts types.TS,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*containers.Batch, error) {
-	columnBatch, err := readColumnBatchByMetaloc(metaloc, colNames, colIdxs, colTyps, colNulls, fs, pool)
+	columnBatch, err := readColumnBatchByMetaloc(ctx, metaloc, colNames, colIdxs, colTyps, colNulls, fs, pool)
 	if err != nil {
 		return nil, err
 	}
 	if deltaloc != "" {
-		deleteBatch, err := readDeleteBatchByDeltaloc(deltaloc, fs)
+		deleteBatch, err := readDeleteBatchByDeltaloc(ctx, deltaloc, fs)
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +112,7 @@ func BlockReadInner(
 }
 
 func readColumnBatchByMetaloc(
+	ctx context.Context,
 	metaloc string,
 	colNames []string,
 	colIdxs []uint16,
@@ -140,7 +138,7 @@ func readColumnBatchByMetaloc(
 				prefix,
 				0,
 				rows,
-				pool,
+				nil,
 			)
 			if err != nil {
 				return nil, err
@@ -168,7 +166,7 @@ func readColumnBatchByMetaloc(
 
 	// TODO: objectio will add mpool later
 	// the ioResult is managed by golang itself.
-	ioResult, err := reader.Read(extent, idxsWithouRowid, nil)
+	ioResult, err := reader.Read(ctx, extent, idxsWithouRowid, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +189,7 @@ func readColumnBatchByMetaloc(
 	return bat, nil
 }
 
-func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
+func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
@@ -201,7 +199,7 @@ func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*co
 	if err != nil {
 		return nil, err
 	}
-	ioResult, err := reader.Read(extent, []uint16{0, 1, 2}, nil)
+	ioResult, err := reader.Read(ctx, extent, []uint16{0, 1, 2}, nil)
 	if err != nil {
 		return nil, err
 	}

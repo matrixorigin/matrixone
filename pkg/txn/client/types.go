@@ -78,6 +78,15 @@ type TxnOperator interface {
 	Rollback(ctx context.Context) error
 }
 
+// DebugableTxnOperator debugable txn operator
+type DebugableTxnOperator interface {
+	TxnOperator
+
+	// Debug send debug request to DN, after use, SendResult needs to call the Release
+	// method.
+	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+}
+
 // TxnIDGenerator txn id generator
 type TxnIDGenerator interface {
 	// Generate returns a unique transaction id

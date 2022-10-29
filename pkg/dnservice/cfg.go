@@ -15,7 +15,7 @@
 package dnservice
 
 import (
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,10 +39,16 @@ var (
 	defaultExecutionLevels    = int16(30)
 	defaultCatalogCkpInterval = time.Second * 30
 	defaultCatalogUnCkpLimit  = int64(10)
+	defaultLogBackend         = "batchstore"
+
+	storageDir     = "storage"
+	defaultDataDir = "./mo-data"
 )
 
 // Config dn store configuration
 type Config struct {
+	// DataDir data dir
+	DataDir string `toml:"-"`
 	// UUID dn store uuid
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
@@ -90,17 +96,14 @@ type Config struct {
 
 		// Storage txn storage config
 		Storage struct {
+			// dataDir data dir used to store the data
+			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
-			Backend string `toml:"backend"`
-			Name    string `toml:"name"`
-
-			// TAE tae storage configuration
-			TAE struct {
-			}
-
-			// Mem mem storage configuration
-			Mem struct {
-			}
+			Backend StorageType `toml:"backend"`
+			// FileService tae used fileservice, default is LOCAL
+			FileService string `toml:"fileservice"`
+			// LogBackend the backend used to store logs
+			LogBackend string `toml:"log-backend"`
 		}
 	}
 }
@@ -109,6 +112,10 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return moerr.NewInternalError("Config.UUID not set")
 	}
+	if c.DataDir == "" {
+		c.DataDir = defaultDataDir
+	}
+	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 		c.ServiceAddress = defaultServiceAddress
@@ -117,12 +124,15 @@ func (c *Config) Validate() error {
 		c.ServiceAddress = c.ListenAddress
 	}
 	if c.Txn.Storage.Backend == "" {
-		c.Txn.Storage.Backend = taeStorageBackend
+		c.Txn.Storage.Backend = StorageTAE
 	}
-	if c.Txn.Storage.Name == "" {
-		c.Txn.Storage.Name = localFileServiceName
+	if c.Txn.Storage.FileService == "" {
+		c.Txn.Storage.FileService = localFileServiceName
 	}
-	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
+	if c.Txn.Storage.LogBackend == "" {
+		c.Txn.Storage.LogBackend = defaultLogBackend
+	}
+	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {

@@ -34,6 +34,7 @@ var (
 	constDType          = types.Type{Oid: types.T_float64}
 	constSType          = types.Type{Oid: types.T_varchar}
 	constDateType       = types.Type{Oid: types.T_date}
+	constTimeType       = types.Type{Oid: types.T_time}
 	constDatetimeType   = types.Type{Oid: types.T_datetime}
 	constDecimal64Type  = types.Type{Oid: types.T_decimal64}
 	constDecimal128Type = types.Type{Oid: types.T_decimal128}
@@ -71,6 +72,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -183,6 +186,8 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -294,6 +299,8 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -336,7 +343,7 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := EvalExpr(bat, proc, t.F.Args[i])
+			v, err := EvalExprByZonemapBat(bat, proc, t.F.Args[i])
 			if err != nil {
 				if proc != nil {
 					mp := make(map[*vector.Vector]uint8)
@@ -465,6 +472,8 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
 				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			case *plan.Const_Timeval:
+				vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
 			case *plan.Const_Datetimeval:
 				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
@@ -588,7 +597,7 @@ func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 	return &plan.Expr_F{
 		F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID},
+			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
 	}

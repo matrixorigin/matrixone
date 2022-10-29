@@ -29,8 +29,6 @@ import (
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -41,6 +39,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"go.uber.org/zap"
 )
 
 type storeMeta struct {
@@ -139,7 +138,9 @@ type store struct {
 	}
 }
 
-func newLogStore(cfg Config, taskService taskservice.TaskService, logger *zap.Logger) (*store, error) {
+func newLogStore(cfg Config,
+	taskServiceGetter func() taskservice.TaskService,
+	logger *zap.Logger) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
@@ -155,7 +156,7 @@ func newLogStore(cfg Config, taskService taskservice.TaskService, logger *zap.Lo
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewTaskScheduler(taskService, hakeeperConfig),
+		taskScheduler: task.NewScheduler(taskServiceGetter, hakeeperConfig, logger),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
@@ -434,15 +435,18 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 }
 
 func (l *store) addCNStoreHeartbeat(ctx context.Context,
-	hb pb.CNStoreHeartbeat) error {
+	hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetCNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.logger.Error("propose failed", zap.Error(err))
-		return handleNotHAKeeperError(err)
+		return pb.CommandBatch{}, handleNotHAKeeperError(err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
-	return nil
 }
 
 func (l *store) cnAllocateID(ctx context.Context,

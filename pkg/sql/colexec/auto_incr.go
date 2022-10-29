@@ -74,7 +74,6 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	if err != nil {
 		return err
 	}
-	rel.Ranges(ctx, nil) // TODO
 	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
@@ -82,7 +81,7 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 	offset, step := make([]uint64, 0), make([]uint64, 0)
 	var err error
 	for i, col := range param.colDefs {
-		if !col.AutoIncrement {
+		if !col.Typ.AutoIncr {
 			continue
 		}
 		var d, s uint64
@@ -90,7 +89,6 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		if err != nil {
 			return nil, nil, err
 		}
-		param.rel.Ranges(param.ctx, nil) // TODO
 		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
 			return nil, nil, err
 		}
@@ -229,7 +227,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []uint64) error {
 	pos := 0
 	for i, col := range ColDefs {
-		if !col.AutoIncrement {
+		if !col.Typ.AutoIncr {
 			continue
 		}
 		vec := bat.Vecs[i]
@@ -429,7 +427,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 
 	name := rel.GetTableID(ctx) + "_"
 	for _, attr := range cols {
-		if !attr.AutoIncrement {
+		if !attr.Typ.AutoIncr {
 			continue
 		}
 		if rel, err = db.Relation(ctx, AUTO_INCR_TABLE); err != nil {
