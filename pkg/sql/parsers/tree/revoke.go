@@ -346,7 +346,6 @@ const (
 	PRIVILEGE_TYPE_STATIC_ALTER_VIEW
 	PRIVILEGE_TYPE_STATIC_SELECT     //Enable use of SELECT. Levels: Global, database, table, column.
 	PRIVILEGE_TYPE_STATIC_INSERT     //Enable use of INSERT. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_REPLACE    //Enable use of REPLACE. Levels: Global, database, table, column.
 	PRIVILEGE_TYPE_STATIC_TRUNCATE   //Enable use of REPLACE. Levels: Global, database, table, column.
 	PRIVILEGE_TYPE_STATIC_UPDATE     //Enable use of UPDATE. Levels: Global, database, table, column.
 	PRIVILEGE_TYPE_STATIC_DELETE     //Enable use of DELETE. Level: Global, database, table.

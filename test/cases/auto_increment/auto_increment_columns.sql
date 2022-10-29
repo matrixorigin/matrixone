@@ -234,7 +234,7 @@ d int auto_increment,
 e bigint auto_increment
 );
 
-show create table t1;
+show create table t6;
 
 insert into t6 values (),(),(),();
 select * from t6 order by a;

@@ -242,7 +242,7 @@ enum PartitionType {
 message PartitionInfo {
 	PartitionType type = 1;
 	Expr Expr = 2;
-	string partitionExpression = 3;
+	Expr partitionExpression = 3;
 	repeated Expr Columns = 4;
 	repeated string partitionColumns = 5;
 	uint64 partitionNum = 6;
@@ -497,10 +497,9 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
-	bool isHideKey = 5;
-	int32 colIndex = 6;
-	repeated IndexInfo index_infos = 7;
-	repeated string index_attrs = 8;
+	int32 colIndex = 5;
+	repeated IndexInfo index_infos = 6;
+	repeated string index_attrs = 7;
 }
 
 message Query {

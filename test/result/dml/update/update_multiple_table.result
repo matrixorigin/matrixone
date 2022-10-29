@@ -132,28 +132,46 @@ id    name    class_name    stu_name
 4    Rose    test11    test11
 4    Rose    test11    test11
 UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
-[unknown result because it is related to issue#5201]
 UPDATE stu s RIGHT JOIN class c ON s.class_id = c.id SET s.class_name = 'test33',c.stu_name = 'test33';
-[unknown result because it is related to issue#5201]
+SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
+name    class_name    stu_name
+Bob    test22    test33
+Bob    test22    test33
+Bob    test22    test33
+Ruby    test22    test33
+Ruby    test22    test33
+Ruby    test22    test33
+张三    test33    test33
+张三    test33    test33
+张三    test33    test33
+李四    test33    test33
+李四    test33    test33
+李四    test33    test33
+王五    test33    test33
+王五    test33    test33
+王五    test33    test33
+Rose    test33    test33
+Rose    test33    test33
+Rose    test33    test33
 UPDATE stu s JOIN class c ON s.class_id = c.id SET s.class_name = c.name , c.stu_name = s.name;
 SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 name    class_name    stu_name
-Bob    null    null
-Bob    null    张三
-Bob    null    王五
-Ruby    null    null
-Ruby    null    张三
-Ruby    null    王五
-张三    一班    null
+Bob    test22    test33
+Bob    test22    张三
+Bob    test22    王五
+Ruby    test22    test33
+Ruby    test22    张三
+Ruby    test22    王五
+张三    一班    test33
 张三    一班    张三
 张三    一班    王五
-李四    一班    null
+李四    一班    test33
 李四    一班    张三
 李四    一班    王五
-王五    二班    null
+王五    二班    test33
 王五    二班    张三
 王五    二班    王五
-Rose    二班    null
+Rose    二班    test33
 Rose    二班    张三
 Rose    二班    王五
 DROP TABLE IF EXISTS stu;

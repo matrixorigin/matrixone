@@ -48,7 +48,7 @@ func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	return col
 }
 
-func (cb *ColumnBlock) GetData(m *mpool.MPool) (*fileservice.IOVector, error) {
+func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
 	data := &fileservice.IOVector{
 		FilePath: cb.object.name,
@@ -62,7 +62,7 @@ func (cb *ColumnBlock) GetData(m *mpool.MPool) (*fileservice.IOVector, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = cb.object.fs.Read(context.Background(), data)
+	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		cb.freeData(data.Entries, m)
 		return nil, err
@@ -70,7 +70,7 @@ func (cb *ColumnBlock) GetData(m *mpool.MPool) (*fileservice.IOVector, error) {
 	return data, nil
 }
 
-func (cb *ColumnBlock) GetIndex(dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
+func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
 	var err error
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
@@ -87,7 +87,7 @@ func (cb *ColumnBlock) GetIndex(dataType IndexDataType, m *mpool.MPool) (IndexDa
 		if err != nil {
 			return nil, err
 		}
-		err = cb.object.fs.Read(context.Background(), data)
+		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			cb.freeData(data.Entries, m)
 			return nil, err

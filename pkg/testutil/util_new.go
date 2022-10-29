@@ -42,6 +42,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil, // no get cluster details func can be set
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
