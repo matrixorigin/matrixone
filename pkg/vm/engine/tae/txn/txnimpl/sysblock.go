@@ -346,7 +346,7 @@ func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	case pkgcatalog.SystemDBAttr_CatalogName:
 		colData.Append([]byte(pkgcatalog.SystemCatalogName))
 	case pkgcatalog.SystemDBAttr_CreateSQL:
-		colData.Append([]byte("todosql"))
+		colData.Append([]byte("CREATE DATABASE `" + db.GetName() + "`"))
 	case pkgcatalog.SystemDBAttr_Owner:
 		colData.Append(db.GetRoleID())
 	case pkgcatalog.SystemDBAttr_Creator:
