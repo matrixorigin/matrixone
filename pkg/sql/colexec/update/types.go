@@ -27,6 +27,8 @@ type Argument struct {
 	Engine       engine.Engine
 	DB           []engine.Database
 	TableID      []string
+	DBName       []string
+	TblName      []string
 }
 
 type UpdateCtx struct {

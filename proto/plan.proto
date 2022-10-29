@@ -197,10 +197,10 @@ message ColDef {
 	Type typ			= 3;
 	Default default 	= 4;
 	bool primary        = 5;
-	int32 pkidx 		= 7;
-	string comment		= 8;
-	bool is_cPkey = 9;
-	OnUpdate on_update = 10;
+	int32 pkidx 		= 6;
+	string comment		= 7;
+	bool is_cPkey 		= 8;
+	OnUpdate on_update  = 9;
 }
 
 message Default {
