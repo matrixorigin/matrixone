@@ -56,9 +56,6 @@ set wait_timeout = 33600;
 show variables like 'wait_timeout';
 set wait_timeout = 10;
 show variables like 'wait_timeout';
-show errors;
-show grants;
-show grants for dump@localhost;
 
 -- @bvt:issue#6034
 drop table if exists t;
