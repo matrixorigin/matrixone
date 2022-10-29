@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -200,7 +202,7 @@ func (s *service) registerExecutors() {
 	}
 
 	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
-		func(ctx context.Context, task task.Task) error {
+		func(ctx context.Context, t task.Task) error {
 			if err := frontend.InitSysTenant(moServerCtx); err != nil {
 				return err
 			}
@@ -213,6 +215,21 @@ func (s *service) registerExecutors() {
 			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
+
+			ts, ok := s.GetTaskService()
+			if !ok {
+				panic(moerr.NewInternalError("task Service not ok"))
+			}
+
+			// init metric/log merge task cron rule
+			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+				return err
+			}
+
 			return nil
 		})
+
+	// init metric/log merge task executor
+	s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 }
