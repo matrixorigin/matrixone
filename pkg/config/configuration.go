@@ -454,6 +454,9 @@ type ParameterUnit struct {
 
 	// FileService
 	FileService fileservice.FileService
+
+	// GetClusterDetails
+	GetClusterDetails engine.GetClusterDetailsFunc
 }
 
 func NewParameterUnit(
@@ -461,12 +464,14 @@ func NewParameterUnit(
 	storageEngine engine.Engine,
 	txnClient client.TxnClient,
 	clusterNodes engine.Nodes,
+	getClusterDetails engine.GetClusterDetailsFunc,
 ) *ParameterUnit {
 	return &ParameterUnit{
-		SV:            sv,
-		StorageEngine: storageEngine,
-		TxnClient:     txnClient,
-		ClusterNodes:  clusterNodes,
+		SV:                sv,
+		StorageEngine:     storageEngine,
+		TxnClient:         txnClient,
+		ClusterNodes:      clusterNodes,
+		GetClusterDetails: getClusterDetails,
 	}
 }
 
