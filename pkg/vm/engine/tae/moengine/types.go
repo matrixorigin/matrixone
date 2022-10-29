@@ -100,6 +100,8 @@ type Engine interface {
 
 	// GetTAE returns tae db struct
 	GetTAE(ctx context.Context) *db.DB
+
+	FlushTable(ctx context.Context, tenantID uint32, databaseName, tableName string, ts types.TS) error
 }
 
 type TxnEngine interface {

@@ -17,8 +17,6 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"sync"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -35,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sync"
 )
 
 func NewService(
@@ -102,10 +101,23 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
-
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		srv.cfg.HAKeeper.DiscoveryTimeout.Duration,
+	)
+	defer cancel()
+	c, err := logservice.NewCNHAKeeperClient(ctx, srv.cfg.HAKeeper.ClientConfig)
+	if err != nil {
+		return nil, err
+	}
+	stor, err := c.GetClusterDetails(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pu.DNStore = &stor.DNStores[0]
 	for _, opt := range options {
 		opt(srv)
 	}

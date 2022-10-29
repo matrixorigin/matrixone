@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -101,8 +100,6 @@ func (s *taeStorage) Debug(ctx context.Context,
 	txnMeta txn.TxnMeta,
 	op uint32,
 	payload []byte) ([]byte, error) {
-	logutil.Infof("Debug is sssssssss")
-	panic("Debug is sssssssss")
 	switch op {
 	case uint32(apipb.OpCode_OpDebug):
 		_, err := handleRead(

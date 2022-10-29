@@ -151,9 +151,8 @@ func (h *Handle) HandleDeBug(
 	meta txn.TxnMeta,
 	req db.FlushTable,
 	resp *apipb.SyncLogTailResp) (err error) {
-
-	logutil.Infof("HandleDeBug is req %v", req.TableName)
-	return nil
+	err = h.eng.FlushTable(ctx, req.AccessInfo.AccountID, req.DatabaseName, req.TableName, types.TimestampToTS(meta.GetSnapshotTS()))
+	return err
 }
 
 // TODO:: need to handle resp.

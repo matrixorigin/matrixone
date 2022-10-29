@@ -39,34 +39,37 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	if err != nil {
 		return nil, moerr.NewInvalidInput("payload encode err")
 	}
-
-	TxnOperator, err := proc.TxnClient.New()
-
-	reqs := make([]txn.TxnRequest, len(TxnOperator.Txn().DNShards))
-	for i, info := range TxnOperator.Txn().DNShards {
-		reqs[i] = txn.TxnRequest{
-			CNRequest: &txn.CNOpRequest{
-				OpCode:  uint32(api.OpCode_OpDebug),
-				Payload: payload,
-				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
-						ShardID: info.ShardID,
-					},
-					ReplicaID: info.ReplicaID,
-					Address:   info.Address,
-				},
-			},
-			Options: &txn.TxnRequestOptions{
-				RetryCodes: []int32{
-					// dn shard not found
-					int32(moerr.ErrDNShardNotFound),
-				},
-				RetryInterval: int64(time.Second),
-			},
-		}
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	TxnOperator, err := proc.TxnClient.New()
+	//cluster, err := proc.D.GetClusterDetails(ctx)
+	if err != nil {
+		return nil, moerr.NewInvalidInput("payload encode err")
+	}
+
+	reqs := make([]txn.TxnRequest, 1)
+	//for i, info := range proc.DNStores {
+	reqs[0] = txn.TxnRequest{
+		CNRequest: &txn.CNOpRequest{
+			OpCode:  uint32(api.OpCode_OpDebug),
+			Payload: payload,
+			Target: metadata.DNShard{
+				DNShardRecord: metadata.DNShardRecord{
+					ShardID: uint64(2),
+				},
+				ReplicaID: uint64(262146),
+				Address:   "127.0.0.1:22000",
+			},
+		},
+		Options: &txn.TxnRequestOptions{
+			RetryCodes: []int32{
+				// dn shard not found
+				int32(moerr.ErrDNShardNotFound),
+			},
+			RetryInterval: int64(time.Second),
+		},
+	}
+	//}
 	TxnOperator.(client.DebugableTxnOperator).Debug(ctx, reqs)
 	return nil, nil
 }

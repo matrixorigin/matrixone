@@ -181,6 +181,9 @@ func (e *txnEngine) GetDatabaseByID(_ context.Context, id uint64, txnHandle Txn)
 func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
 	return e.impl
 }
+func (e *txnEngine) FlushTable(ctx context.Context, tenantID uint32, databaseName, tableName string, ts types.TS) error {
+	return e.impl.FlushTable(tenantID, databaseName, tableName, ts)
+}
 
 func (e *txnEngine) Nodes() (engine.Nodes, error) {
 	return nil, nil

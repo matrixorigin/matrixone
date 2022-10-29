@@ -16,6 +16,7 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -454,6 +455,8 @@ type ParameterUnit struct {
 
 	// FileService
 	FileService fileservice.FileService
+
+	DNStore *logservice.DNStore
 }
 
 func NewParameterUnit(
