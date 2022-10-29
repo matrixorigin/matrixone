@@ -257,8 +257,8 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		}
 		timestamps = append(timestamps, ts[0])
 	}
-	if len(timestamps) <= 1 {
-		return moerr.NewInternalError("CSVMerge: only one timestamp")
+	if len(timestamps) == 0 {
+		return moerr.NewNotSupported("CSVMerge: NO timestamp for merge")
 	}
 	timestampStart := timestamps[0]
 	timestampEnd := timestamps[len(timestamps)-1]
@@ -545,7 +545,11 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 			case MergeTaskYesterday:
 				ts = ts.Add(-24 * time.Hour)
 			default:
-				return moerr.NewNotSupported("merge task not support args: %s", args)
+				var err error
+				// try to parse date format like '2021-01-01'
+				if ts, err = time.Parse("2006-01-02", date); err != nil {
+					return moerr.NewNotSupported("merge task not support args: %s", args)
+				}
 			}
 		}
 
@@ -575,10 +579,8 @@ const MergeTaskToday = "today"
 const MergeTaskYesterday = "yesterday"
 const ParamSeparator = " "
 
-// MergeTaskMetadata
-//
-// args like: "{db_tbl_name} [date, default: today]"
-var MergeTaskMetadata = func(id task.TaskCode, args ...string) task.TaskMetadata {
+// MergeTaskMetadata handle args like: "{db_tbl_name} [date, default: today]"
+func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       path.Join("ETL_merge_task", path.Join(args...)),
 		Executor: uint32(id),

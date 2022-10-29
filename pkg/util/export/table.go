@@ -362,7 +362,7 @@ var gTable map[string]*Table
 var mux sync.Mutex
 
 // RegisterTableDefine return old one, if already registered
-var RegisterTableDefine = func(table *Table) *Table {
+func RegisterTableDefine(table *Table) *Table {
 	mux.Lock()
 	defer mux.Unlock()
 	if len(gTable) == 0 {
@@ -374,7 +374,7 @@ var RegisterTableDefine = func(table *Table) *Table {
 	return old
 }
 
-var GetAllTable = func() []*Table {
+func GetAllTable() []*Table {
 	mux.Lock()
 	defer mux.Unlock()
 	tables := make([]*Table, 0, len(gTable))
@@ -387,6 +387,9 @@ var GetAllTable = func() []*Table {
 func SetPathBuilder(pathBuilder string) error {
 	tables := GetAllTable()
 	bp := PathBuilderFactory(pathBuilder)
+	if bp == nil {
+		return moerr.NewNotSupported("not support PathBuilder: %s", pathBuilder)
+	}
 	for _, tbl := range tables {
 		tbl.PathBuilder = bp
 	}
