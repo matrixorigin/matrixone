@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -381,6 +382,12 @@ func (c *testCluster) Close() error {
 
 	c.mu.running = false
 	c.stopper.Stop()
+
+	if !c.opt.keepData {
+		if err := os.RemoveAll(c.opt.rootDataDir); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1309,10 +1316,10 @@ func (c *testCluster) buildCNConfigs(
 	cfgs := make([]*cnservice.Config, 0, batch)
 	opts := make([]cnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildCnConfig(i, c.opt, address)
+		cfg := buildCNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
-		opt := buildCnOptions()
+		opt := buildCNOptions()
 		opts = append(opts, opt)
 	}
 	return cfgs, opts

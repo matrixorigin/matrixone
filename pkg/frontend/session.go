@@ -1388,7 +1388,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
-	table.Ranges(ctx, nil) // TODO
 	return table, nil
 }
 
