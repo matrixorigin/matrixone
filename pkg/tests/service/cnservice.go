@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"sync"
 
@@ -140,7 +141,7 @@ func newCNService(
 	}, nil
 }
 
-func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
+func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
 	port, err := getAvailablePort("127.0.0.1")
 	if err != nil {
 		panic(err)
@@ -157,11 +158,10 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 			Port: int64(p),
 		},
 	}
-
+	cfg.Frontend.StorePath = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
-	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
-
-	cfg.Engine.Type = cnservice.EngineMemory
+	cfg.HAKeeper.HeatbeatDuration.Duration = opt.heartbeat.cn
+	cfg.Engine.Type = opt.storage.cnEngine
 	cfg.TaskRunner.Parallelism = 4
 
 	// We need the filled version of configuration.
@@ -173,6 +173,6 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	return cfg
 }
 
-func buildCnOptions() cnOptions {
+func buildCNOptions() cnOptions {
 	return nil
 }

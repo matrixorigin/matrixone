@@ -14,6 +14,7 @@
 package disttae
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -127,7 +128,12 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
+func fetchZonemapAndRowsFromBlockInfo(
+	ctx context.Context,
+	idxs []uint16,
+	blockInfo catalog.BlockInfo,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([][64]byte, uint32, error) {
 	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
@@ -137,7 +143,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		return nil, 0, err
 	}
 
-	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
+	obs, err := reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -147,7 +153,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		if err != nil {
 			return nil, 0, err
 		}
-		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		data, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
 		if err != nil {
 			return nil, 0, err
 		}

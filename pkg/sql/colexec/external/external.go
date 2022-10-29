@@ -815,7 +815,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+				t := time.Local
+				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func NewService(
@@ -78,12 +79,24 @@ func NewService(
 		},
 	}
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil)
+	hakeeper, err := srv.getHAKeeperClient()
+	if err != nil {
+		return nil, err
+	}
+
+	pu := config.NewParameterUnit(
+		&cfg.Frontend,
+		nil,
+		nil,
+		nil,
+		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
+	)
 	cfg.Frontend.SetDefaultValues()
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}
+	srv.pu = pu
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
@@ -103,7 +116,7 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error {
 		return nil
 	}
 	for _, opt := range options {
@@ -161,7 +174,7 @@ func (s *service) releaseMessage(m *pipeline.Message) {
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage)
+	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage, s.pu.GetClusterDetails)
 	return nil
 }
 

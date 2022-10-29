@@ -33,20 +33,16 @@ import (
 )
 
 const (
-	memStorageBackend   = "MEM"
-	memKVStorageBackend = "MEMKV"
-	taeStorageBackend   = "TAE"
-
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
 	etlFileServiceName   = "ETL"
 )
 
 var (
-	supportTxnStorageBackends = map[string]struct{}{
-		memKVStorageBackend: {},
-		memStorageBackend:   {},
-		taeStorageBackend:   {},
+	supportTxnStorageBackends = map[StorageType]struct{}{
+		StorageMEMKV: {},
+		StorageMEM:   {},
+		StorageTAE:   {},
 	}
 )
 
@@ -60,7 +56,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	}
 
 	switch s.cfg.Txn.Storage.Backend {
-	case memStorageBackend:
+	case StorageMEM:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -72,14 +68,14 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 
-	case memKVStorageBackend:
+	case StorageMEMKV:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
 		}
 		return s.newMemKVStorage(shard, logClient)
 
-	case taeStorageBackend:
+	case StorageTAE:
 		ts, err := s.newTAEStorage(shard, factory)
 		if err != nil {
 			return nil, err
