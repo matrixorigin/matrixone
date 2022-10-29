@@ -158,6 +158,7 @@ const (
 	ErrPrimaryKeyDuplicated      uint16 = 20623
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
+	ErrTAEDebug                  uint16 = 20626
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535

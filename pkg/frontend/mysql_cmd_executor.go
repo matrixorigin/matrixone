@@ -165,7 +165,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt string, useEnv bool) context.Context {
 	if !trace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -182,6 +182,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
+	requestAt := envBegin
+	if !useEnv {
+		requestAt = time.Now()
+	}
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
 	stm := &trace.StatementInfo{
@@ -195,10 +199,45 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		Statement:            fmtCtx.String(),
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
-		RequestAt:            time.Now(),
+		RequestAt:            requestAt,
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+}
+
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt string, err error) context.Context {
+	if !trace.GetTracerProvider().IsEnable() {
+		return ctx
+	}
+	sessInfo := proc.SessionInfo
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		tenant, _ = GetTenantInfo("internal")
+	}
+	stmID, _ := uuid.NewUUID()
+	var txnID uuid.UUID
+	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+		copy(txnID[:], handler.GetTxn().Txn().ID)
+	}
+	var sesID uuid.UUID
+	copy(sesID[:], ses.GetUUID())
+	stm := &trace.StatementInfo{
+		StatementID:          stmID,
+		TransactionID:        txnID,
+		SessionID:            sesID,
+		Account:              tenant.GetTenant(),
+		User:                 tenant.GetUser(),
+		Host:                 sessInfo.GetHost(),
+		Database:             sessInfo.GetDatabase(),
+		Statement:            envStmt,
+		StatementFingerprint: "", // fixme: (Reserved)
+		StatementTag:         "", // fixme: (Reserved)
+		RequestAt:            envBegin,
+	}
+	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+	trace.EndStatement(ctx, err)
+	return ctx
 }
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
@@ -2354,6 +2393,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc, ses)
 	if err != nil {
 		retErr = moerr.NewParseError(err.Error())
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, sql, retErr)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
 	}
@@ -2374,10 +2414,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var columns []interface{}
 	var mrs *MysqlResultSet
 
+	singleStatement := len(cws) == 1
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sql, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
