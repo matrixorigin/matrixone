@@ -69,7 +69,7 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) error
 
-	HandleDeBug(
+	HandleFlushTable(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req db.FlushTable,

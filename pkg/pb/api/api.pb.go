@@ -33,7 +33,7 @@ const (
 	OpCode_OpGetLogTail OpCode = 1000
 	OpCode_OpWrite      OpCode = 1001
 	OpCode_OpPreCommit  OpCode = 1002
-	OpCode_OpDebug      OpCode = 1003
+	OpCode_OpDebugFlush OpCode = 1003
 )
 
 var OpCode_name = map[int32]string{
@@ -41,7 +41,7 @@ var OpCode_name = map[int32]string{
 	1000: "OpGetLogTail",
 	1001: "OpWrite",
 	1002: "OpPreCommit",
-	1003: "OpDebug",
+	1003: "OpDebugFlush",
 }
 
 var OpCode_value = map[string]int32{
@@ -49,7 +49,7 @@ var OpCode_value = map[string]int32{
 	"OpGetLogTail": 1000,
 	"OpWrite":      1001,
 	"OpPreCommit":  1002,
-	"OpDebug":      1003,
+	"OpDebugFlush": 1003,
 }
 
 func (x OpCode) String() string {

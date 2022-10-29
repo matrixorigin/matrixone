@@ -16,7 +16,7 @@ import (
 
 func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vectors) != 2 {
-		return nil, moerr.NewInvalidInput("no name")
+		return proc.AllocBoolScalarVector(false), moerr.NewInvalidInput("no name")
 	}
 	inputDbName := vectors[0]
 	inputTableName := vectors[1]
@@ -37,21 +37,20 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		},
 	})
 	if err != nil {
-		return nil, moerr.NewInvalidInput("payload encode err")
+		return proc.AllocBoolScalarVector(false), moerr.NewInternalError("payload encode err")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	TxnOperator, err := proc.TxnClient.New()
 	//cluster, err := proc.D.GetClusterDetails(ctx)
 	if err != nil {
-		return nil, moerr.NewInvalidInput("payload encode err")
+		return proc.AllocBoolScalarVector(false), moerr.NewInternalError("payload encode err")
 	}
 
 	reqs := make([]txn.TxnRequest, 1)
-	//for i, info := range proc.DNStores {
 	reqs[0] = txn.TxnRequest{
 		CNRequest: &txn.CNOpRequest{
-			OpCode:  uint32(api.OpCode_OpDebug),
+			OpCode:  uint32(api.OpCode_OpDebugFlush),
 			Payload: payload,
 			Target: metadata.DNShard{
 				DNShardRecord: metadata.DNShardRecord{
@@ -69,7 +68,9 @@ func MoFlushTable(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			RetryInterval: int64(time.Second),
 		},
 	}
-	//}
-	TxnOperator.(client.DebugableTxnOperator).Debug(ctx, reqs)
-	return nil, nil
+	_, err = TxnOperator.(client.DebugableTxnOperator).Debug(ctx, reqs)
+	if err != nil {
+		return proc.AllocBoolScalarVector(false), err
+	}
+	return proc.AllocBoolScalarVector(true), nil
 }

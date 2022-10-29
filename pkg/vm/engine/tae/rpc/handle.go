@@ -146,12 +146,16 @@ func (h *Handle) HandleGetLogTail(
 	return nil
 }
 
-func (h *Handle) HandleDeBug(
+func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req db.FlushTable,
 	resp *apipb.SyncLogTailResp) (err error) {
-	err = h.eng.FlushTable(ctx, req.AccessInfo.AccountID, req.DatabaseName, req.TableName, types.TimestampToTS(meta.GetSnapshotTS()))
+	err = h.eng.FlushTable(ctx,
+		req.AccessInfo.AccountID,
+		req.DatabaseName,
+		req.TableName,
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	return err
 }
 

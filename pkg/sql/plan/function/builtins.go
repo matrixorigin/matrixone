@@ -2341,7 +2341,7 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_bool,
 				Fn:        unary.MoFlushTable,
 			},
 		},

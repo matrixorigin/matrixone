@@ -101,11 +101,11 @@ func (s *taeStorage) Debug(ctx context.Context,
 	op uint32,
 	payload []byte) ([]byte, error) {
 	switch op {
-	case uint32(apipb.OpCode_OpDebug):
+	case uint32(apipb.OpCode_OpDebugFlush):
 		_, err := handleRead(
 			ctx, s,
 			txnMeta, payload,
-			s.taeHandler.HandleDeBug,
+			s.taeHandler.HandleFlushTable,
 		)
 		return nil, err
 	default:

@@ -41,12 +41,12 @@ func (s *taeStorage) Read(
 			txnMeta, payload,
 			s.taeHandler.HandleGetLogTail,
 		)
-	case uint32(apipb.OpCode_OpDebug):
+	case uint32(apipb.OpCode_OpDebugFlush):
 		panic("Debug is sssssssss ctm")
 		return handleRead(
 			ctx, s,
 			txnMeta, payload,
-			s.taeHandler.HandleDeBug,
+			s.taeHandler.HandleFlushTable,
 		)
 	default:
 		panic(moerr.NewInfo("op is not supported"))
