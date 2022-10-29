@@ -324,7 +324,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTi, _, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)

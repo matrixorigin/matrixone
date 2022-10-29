@@ -203,8 +203,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
 	}
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+	if err := colexec.UpdateInsertBatch(n.Engine, proc.Ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 		return false, err
 	}
 	if n.CPkeyColDef != nil {
@@ -228,7 +227,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
 	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
+		return false, handleWrite(n, proc, proc.Ctx, bat)
 	}
-	return handleLoadWrite(n, proc, ctx, bat)
+	return handleLoadWrite(n, proc, proc.Ctx, bat)
 }
