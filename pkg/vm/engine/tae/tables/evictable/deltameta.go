@@ -15,6 +15,7 @@
 package evictable
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -49,7 +50,7 @@ func (n *DeltaMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	reader, err := blockio.NewReader(n.fs, n.deltaloc)
+	reader, err := blockio.NewReader(context.Background(), n.fs, n.deltaloc)
 	if err != nil {
 		panic(err)
 	}

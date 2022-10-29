@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -31,6 +32,7 @@ const (
 	_host     = "127.0.0.1"
 	_port     = 6001
 	batchSize = 4096
+	timeout   = 10 * time.Second
 )
 
 var (
@@ -91,7 +93,20 @@ func main() {
 	if err != nil {
 		return
 	}
-	err = conn.Ping() // Before use, we must ping to validate DSN data:
+	ch := make(chan struct{})
+	go func() {
+		err = conn.Ping() // Before use, we must ping to validate DSN data:
+		if err != nil {
+			return
+		}
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		err = moerr.NewInternalError("connect to %s timeout", dsn)
+	}
 	if err != nil {
 		return
 	}
