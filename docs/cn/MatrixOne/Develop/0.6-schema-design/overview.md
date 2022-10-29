@@ -29,7 +29,7 @@ MatrixOne 支持一些和表同级的对象：
 
 MatrixOne 支持基于用户或角色的访问控制。你可以通过角色或直接指向用户，从而授予用户查看、修改或删除 数据对象和数据模式的权限。
 
-更多信息，参见[MatrixOne 中的权限控制](../../Security/access-control-overview.md)。
+更多信息，参见[MatrixOne 中的权限控制](../../0.6-Security/access-control-overview.md)。
 
 ## 对象大小限制
 

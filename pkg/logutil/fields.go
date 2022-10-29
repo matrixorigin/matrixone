@@ -24,5 +24,6 @@ func StatementField(val string) zap.Field    { return zap.String("statement", va
 func VarsField(val string) zap.Field         { return zap.String("vars", val) }
 func StatusField(val string) zap.Field       { return zap.String("status", val) }
 func ErrorField(err error) zap.Field         { return zap.Error(err) }
+func TableField(val string) zap.Field        { return zap.String("table", val) } // table name
 
 func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }

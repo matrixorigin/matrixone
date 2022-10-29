@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"context"
 	"fmt"
 	"unsafe"
 
@@ -290,7 +291,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		SegmentID: task.toSegEntry.GetID(),
 	}
 	name := blockio.EncodeSegName(id)
-	writer := blockio.NewWriter(task.mergedBlks[0].GetBlockData().GetFs(), name)
+	writer := blockio.NewWriter(context.Background(), task.mergedBlks[0].GetBlockData().GetFs(), name)
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
 		if err != nil {

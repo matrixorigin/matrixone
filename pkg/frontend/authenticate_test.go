@@ -142,7 +142,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -205,7 +205,7 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -239,7 +239,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -289,7 +289,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -324,7 +324,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTi, _, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)
@@ -337,7 +337,7 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -378,7 +378,7 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -441,7 +441,7 @@ func Test_initRole(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -6030,7 +6030,7 @@ func Test_genRevokeCases(t *testing.T) {
 }
 
 func newSes(priv *privilege) *Session {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)

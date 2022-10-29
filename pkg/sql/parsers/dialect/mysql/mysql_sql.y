@@ -332,7 +332,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT
+%token <str> JSON_EXTRACT ARROW
 
 // JSON table function
 %token <str> UNNEST
@@ -4744,7 +4744,16 @@ partition_method:
 |   sub_partition_method
 
 sub_partition_method:
-    linear_opt KEY algorithm_opt '(' column_name_list ')'
+    linear_opt KEY algorithm_opt '(' ')'
+    {
+        $$ = &tree.PartitionBy{
+            PType: &tree.KeyType{
+                Linear: $1,
+                Algorithm: $3,
+            },
+        }
+    }
+|   linear_opt KEY algorithm_opt '(' column_name_list ')'
     {
         $$ = &tree.PartitionBy{
             PType: &tree.KeyType{

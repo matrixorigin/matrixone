@@ -593,6 +593,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Attributes:   attrs,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())

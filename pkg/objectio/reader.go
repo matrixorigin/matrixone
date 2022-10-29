@@ -38,7 +38,7 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject, error) {
+func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.MPool) ([]BlockObject, error) {
 	var err error
 	if len(extents) == 0 {
 		return nil, nil
@@ -58,7 +58,7 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 	if err != nil {
 		return nil, err
 	}
-	err = r.object.fs.Read(context.Background(), metas)
+	err = r.object.fs.Read(ctx, metas)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +76,11 @@ func (r *ObjectReader) ReadMeta(extents []Extent, m *mpool.MPool) ([]BlockObject
 	return blocks, err
 }
 
-func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
+func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
 	extents := make([]Extent, 1)
 	extents[0] = extent
-	blocks, err := r.ReadMeta(extents, m)
+	blocks, err := r.ReadMeta(ctx, extents, m)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*file
 		r.freeData(data.Entries, m)
 		return nil, err
 	}
-	err = r.object.fs.Read(context.Background(), data)
+	err = r.object.fs.Read(ctx, data)
 	if err != nil {
 		r.freeData(data.Entries, m)
 		return nil, err
@@ -110,11 +110,11 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16, m *mpool.MPool) (*file
 	return data, nil
 }
 
-func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType, m *mpool.MPool) ([]IndexData, error) {
+func (r *ObjectReader) ReadIndex(ctx context.Context, extent Extent, idxs []uint16, typ IndexDataType, m *mpool.MPool) ([]IndexData, error) {
 	var err error
 	extents := make([]Extent, 1)
 	extents[0] = extent
-	blocks, err := r.ReadMeta(extents, m)
+	blocks, err := r.ReadMeta(ctx, extents, m)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
 
-		index, err := col.GetIndex(typ, m)
+		index, err := col.GetIndex(ctx, typ, m)
 		if err != nil {
 			return nil, err
 		}
@@ -132,15 +132,15 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType
 	return indexes, nil
 }
 
-func (r *ObjectReader) ReadAllMeta(fileSize int64, m *mpool.MPool) ([]BlockObject, error) {
-	footer, err := r.readFooter(fileSize, m)
+func (r *ObjectReader) ReadAllMeta(ctx context.Context, fileSize int64, m *mpool.MPool) ([]BlockObject, error) {
+	footer, err := r.readFooter(ctx, fileSize, m)
 	if err != nil {
 		return nil, err
 	}
-	return r.ReadMeta(footer.extents, m)
+	return r.ReadMeta(ctx, footer.extents, m)
 }
 
-func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, error) {
+func (r *ObjectReader) readFooter(ctx context.Context, fileSize int64, m *mpool.MPool) (*Footer, error) {
 	var err error
 	var footer *Footer
 
@@ -150,13 +150,13 @@ func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, erro
 	if size > fileSize {
 		size = fileSize
 	}
-	footer, err = r.readFooterAndUnMarshal(fileSize, size, m)
+	footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
 	if err != nil {
 		return nil, err
 	}
 	if len(footer.extents) == 0 {
 		size = int64(FooterSize + footer.blockCount*ExtentTypeSize)
-		footer, err = r.readFooterAndUnMarshal(fileSize, size, m)
+		footer, err = r.readFooterAndUnMarshal(ctx, fileSize, size, m)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (r *ObjectReader) readFooter(fileSize int64, m *mpool.MPool) (*Footer, erro
 	return footer, nil
 }
 
-func (r *ObjectReader) readFooterAndUnMarshal(fileSize, size int64, m *mpool.MPool) (*Footer, error) {
+func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, size int64, m *mpool.MPool) (*Footer, error) {
 	var err error
 	data := &fileservice.IOVector{
 		FilePath: r.name,
@@ -180,7 +180,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(fileSize, size int64, m *mpool.MPo
 		return nil, err
 	}
 	defer r.freeData(data.Entries, m)
-	err = r.object.fs.Read(context.Background(), data)
+	err = r.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
 	}

@@ -49,7 +49,8 @@ func WithMessageHandle(f func(ctx context.Context,
 	engine engine.Engine,
 	fs fileservice.FileService,
 	cli client.TxnClient,
-	mAcquirer func() morpc.Message) error) Option {
+	mAcquirer func() morpc.Message,
+	getClusterDetails engine.GetClusterDetailsFunc) error) Option {
 	return func(s *service) {
 		s.requestHandler = f
 	}
