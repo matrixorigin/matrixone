@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // Analyze analyzes information for operator
@@ -121,6 +122,8 @@ type Process struct {
 	Cancel context.CancelFunc
 
 	FileService fileservice.FileService
+
+	GetClusterDetails engine.GetClusterDetailsFunc
 
 	LoadTag bool
 }

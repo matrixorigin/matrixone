@@ -2372,6 +2372,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
+		pu.GetClusterDetails,
 	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize

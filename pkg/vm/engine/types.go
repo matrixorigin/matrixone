@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -211,3 +212,5 @@ type Engine interface {
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
 }
+
+type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
