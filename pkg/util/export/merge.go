@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -28,6 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/simdcsv"
 )
 
@@ -36,7 +41,8 @@ import (
 // ========================
 
 // Merge like a compaction, merge input files into one/two/... files.
-//   - `NewMergeService` init merge as service, with param `serviceInit` to avoid multi init.
+//   - `NewMergeService` init merge as service, with param `serviceInited` to avoid multi init.
+//   - `MergeTaskExecutorFactory` drive by Cron TaskService.
 //   - `NewMerge` handle merge obj init.
 //   - `Merge::Start` as service loop, trigger `Merge::Main` each cycle
 //   - `Merge::Main` handle handle job,
@@ -126,7 +132,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		pathBuilder:   NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
-		MinFilesMerge: 2,
+		MinFilesMerge: 1,
 		FileCacheSize: mpool.PB, // disable it by set very large
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
@@ -144,10 +150,10 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 // valid check missing init elems. Panic with has missing elems.
 func (m *Merge) valid() {
 	if m.Table == nil {
-		panic(moerr.NewInternalError("Merge Task missing input 'Table'"))
+		panic(moerr.NewInternalError("merge task missing input 'Table'"))
 	}
 	if m.FS == nil {
-		panic(moerr.NewInternalError("Merge Task missing input 'FileService'"))
+		panic(moerr.NewInternalError("merge task missing input 'FileService'"))
 	}
 }
 
@@ -184,10 +190,13 @@ func (m *Merge) Main(ts time.Time) error {
 	if m.datetime.IsZero() {
 		return moerr.NewInternalError("Merge Task missing input 'datetime'")
 	}
-	logutil.Debugf("Merge start on %s, %v", m.Table.GetIdentify(), m.datetime)
 	accounts, err := m.FS.List(m.ctx, "/")
 	if err != nil {
 		return err
+	}
+	if len(accounts) == 0 {
+		logutil.Info("merge find empty data")
+		return nil
 	}
 	for _, account := range accounts {
 		if !account.IsDir {
@@ -509,4 +518,125 @@ func (r *Row) Size() (size int64) {
 		size += int64(len(col))
 	}
 	return
+}
+
+func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
+
+	return func(ctx context.Context, task task.Task) error {
+
+		args := task.Metadata.Context
+		ts := time.Now()
+		logutil.Infof("start merge '%s' at %v", args, ts)
+
+		elems := strings.Split(string(args), ParamSeparator)
+		id := elems[0]
+		table, exist := gTable[id]
+		if !exist {
+			return moerr.NewNotSupported("merge task not support table: %s", id)
+		}
+		if !table.PathBuilder.SupportMergeSplit() {
+			logutil.Info("not support merge task", logutil.TableField(table.GetIdentify()))
+			return nil
+		}
+		if len(elems) == 2 {
+			date := elems[1]
+			switch date {
+			case MergeTaskToday:
+			case MergeTaskYesterday:
+				ts = ts.Add(-24 * time.Hour)
+			default:
+				return moerr.NewNotSupported("merge task not support args: %s", args)
+			}
+		}
+
+		// handle metric
+		opts = append(opts, WithTable(table))
+		merge := NewMerge(ctx, opts...)
+		if err := merge.Main(ts); err != nil {
+			logutil.Errorf("merge metric failed: %v", err)
+			return err
+		}
+
+		return nil
+	}
+}
+
+// MergeTaskCronExpr support sec level
+var MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
+
+const MergeTaskCronExprEvery15Sec = "*/15 * * * * *"
+const MergeTaskCronExprEvery05Min = "0 */5 * * * *"
+const MergeTaskCronExprEvery15Min = "0 */15 * * * *"
+const MergeTaskCronExprEvery1Hour = "0 0 */1 * * *"
+const MergeTaskCronExprEvery2Hour = "0 0 */2 * * *"
+const MergeTaskCronExprEvery4Hour = "0 0 4,8,12,16,20 * * *"
+const MergeTaskCronExprYesterday = "0 5 0 * * *"
+const MergeTaskToday = "today"
+const MergeTaskYesterday = "yesterday"
+const ParamSeparator = " "
+
+// MergeTaskMetadata
+//
+// args like: "{db_tbl_name} [date, default: today]"
+var MergeTaskMetadata = func(id task.TaskCode, args ...string) task.TaskMetadata {
+	return task.TaskMetadata{
+		ID:       path.Join("ETL_merge_task", path.Join(args...)),
+		Executor: uint32(id),
+		Context:  []byte(strings.Join(args, ParamSeparator)),
+	}
+}
+
+func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
+	var err error
+	// should init once in/with schema-init.
+	tables := GetAllTable()
+	logutil.Infof("init merge task with CronExpr: %s", MergeTaskCronExpr)
+	for _, tbl := range tables {
+		logutil.Debugf("init table merge task: %s", tbl.GetIdentify())
+		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify()), MergeTaskCronExpr); err != nil {
+			return err
+		}
+		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify(), MergeTaskYesterday), MergeTaskCronExprYesterday); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InitCronExpr support min interval 5 min, max 12 hour
+func InitCronExpr(duration time.Duration) error {
+	if duration < 0 || duration > 12*time.Hour {
+		return moerr.NewNotSupported("export cron expr not support cycle: %v", duration)
+	}
+	if duration < 5*time.Minute {
+		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())
+	} else if duration < time.Hour {
+		const unit = 5 * time.Minute
+		duration = (duration + unit - 1) / unit * unit
+		switch duration {
+		case 5 * time.Minute:
+			MergeTaskCronExpr = MergeTaskCronExprEvery05Min
+		case 15 * time.Minute:
+			MergeTaskCronExpr = MergeTaskCronExprEvery15Min
+		default:
+			MergeTaskCronExpr = fmt.Sprintf("@every %.0fm", duration.Minutes())
+		}
+	} else {
+		minHour := duration / time.Hour
+		switch minHour {
+		case 1:
+			MergeTaskCronExpr = MergeTaskCronExprEvery1Hour
+		case 2:
+			MergeTaskCronExpr = MergeTaskCronExprEvery2Hour
+		case 4:
+			MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
+		default:
+			var hours = make([]string, 0, 12)
+			for h := minHour; h < 24; h += minHour {
+				hours = append(hours, strconv.Itoa(int(h)))
+			}
+			MergeTaskCronExpr = fmt.Sprintf("0 0 %s * * *", strings.Join(hours, ","))
+		}
+	}
+	return nil
 }
