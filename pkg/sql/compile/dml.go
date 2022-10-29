@@ -61,7 +61,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			return 0, err
 		}
 
-		err = colexec.MoveAutoIncrCol(arg.DeleteCtxs[0].TableName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, rel.GetTableID(c.ctx), arg.DeleteCtxs[0].DbName)
 		if err != nil {
 			return 0, err
 		}
@@ -132,7 +132,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
+	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return 0, err
 	}
 	if p.CompositePkey != nil {
