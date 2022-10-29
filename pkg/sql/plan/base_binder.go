@@ -893,6 +893,17 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
 		}
+	case "timediff":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
+
+		if isNullExpr(args[0]) || isNullExpr(args[1]) {
+			break
+		}
+		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
+			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
+		}
 	}
 
 	// get args(exprs) & types

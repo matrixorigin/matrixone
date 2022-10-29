@@ -83,7 +83,6 @@ GRANT database all ON database * `dump`@`localhost`
 GRANT database ownership ON database * `dump`@`localhost`
 GRANT select ON table *.* `dump`@`localhost`
 GRANT insert ON table *.* `dump`@`localhost`
-GRANT replace ON table t `dump`@`localhost`
 GRANT update ON table *.* `dump`@`localhost`
 GRANT truncate ON table *.* `dump`@`localhost`
 GRANT delete ON table *.* `dump`@`localhost`
@@ -120,7 +119,6 @@ GRANT database all ON database * `root`@`localhost`
 GRANT database ownership ON database * `root`@`localhost`
 GRANT select ON table *.* `root`@`localhost`
 GRANT insert ON table *.* `root`@`localhost`
-GRANT replace ON table t `root`@`localhost`
 GRANT update ON table *.* `root`@`localhost`
 GRANT truncate ON table *.* `root`@`localhost`
 GRANT delete ON table *.* `root`@`localhost`
@@ -169,7 +167,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 show create database `1;drop table t1;`;
 invalid database 1;drop table t1;
 show create table `1;drop table t1;`;
-invalid database 1;drop table t1;
+no such table test03.1;drop table t1;
 show columns from `1;drop table t1;`;
 no such table test03.1;drop table t1;
 show table status from `1;drop table t1;`;

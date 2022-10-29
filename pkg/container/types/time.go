@@ -153,7 +153,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 		return -1, moerr.NewInvalidInput("invalid time value %s", s)
 	}
 
-	if !validTime(hour, minute, sec) {
+	if !ValidTime(hour, minute, sec) {
 		return -1, moerr.NewInvalidInput("invalid time value %s", s)
 	}
 
@@ -252,7 +252,7 @@ func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	if h < 0 {
 		h = -h
 	}
-	if !validTime(uint64(h), 0, 0) {
+	if !ValidTime(uint64(h), 0, 0) {
 		return 0, false
 	}
 	return newTime, true
@@ -276,7 +276,7 @@ func (t Time) sec() int64 {
 	return int64(t) / microSecsPerSec
 }
 
-func validTime(h, m, s uint64) bool {
+func ValidTime(h, m, s uint64) bool {
 	if h < minHourInTime || h > maxHourInTime {
 		return false
 	}

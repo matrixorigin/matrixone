@@ -92,9 +92,14 @@ func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			if err != nil {
 				return err
 			}
+			timeVec, err := vector.ProtoVectorToVector(e.Bat.Vecs[catalog.BLOCKMETA_COMMITTS_IDX+MO_PRIMARY_OFF])
+			if err != nil {
+				return err
+			}
 			vs := vector.MustTCols[uint64](vec)
-			for _, v := range vs {
-				if err := tbl.parts[idx].DeleteByBlockID(ctx, ts, v); err != nil {
+			timestamps := vector.MustTCols[types.TS](timeVec)
+			for i, v := range vs {
+				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
 					return err
 				}
 			}

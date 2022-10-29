@@ -52,4 +52,4 @@ The following is an example output:
 
 - You can create your own database using the `CREATE DATABASE` statement and change the current database using the `USE {databasename};` statement in a SQL session.
 
-- Use the root user to create objects such as database, roles, and users. Grant only the necessary privileges to roles and users. For more information, see [Access control in MatrixOne](../../Security/access-control-overview.md).
+- Use the root user to create objects such as database, roles, and users. Grant only the necessary privileges to roles and users. For more information, see [Access control in MatrixOne](../../0.6-Security/access-control-overview.md).

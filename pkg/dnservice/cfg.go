@@ -16,7 +16,6 @@ package dnservice
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -100,7 +99,7 @@ type Config struct {
 			// dataDir data dir used to store the data
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
-			Backend string `toml:"backend"`
+			Backend StorageType `toml:"backend"`
 			// FileService tae used fileservice, default is LOCAL
 			FileService string `toml:"fileservice"`
 			// LogBackend the backend used to store logs
@@ -125,7 +124,7 @@ func (c *Config) Validate() error {
 		c.ServiceAddress = c.ListenAddress
 	}
 	if c.Txn.Storage.Backend == "" {
-		c.Txn.Storage.Backend = taeStorageBackend
+		c.Txn.Storage.Backend = StorageTAE
 	}
 	if c.Txn.Storage.FileService == "" {
 		c.Txn.Storage.FileService = localFileServiceName
@@ -133,7 +132,7 @@ func (c *Config) Validate() error {
 	if c.Txn.Storage.LogBackend == "" {
 		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
-	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
+	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {

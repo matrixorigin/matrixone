@@ -83,7 +83,7 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	// find out use keys to delete
 	var useProjectExprs tree.SelectExprs = nil
 
-	useProjectExprs, useKey, isHideKey, attrs, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
+	useProjectExprs, useKey, attrs, err := buildUseProjection(stmt, useProjectExprs, objRef, tableDef, tf, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,6 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 		DbName:       objRef.SchemaName,
 		TblName:      tableDef.Name,
 		UseDeleteKey: useKey.Name,
-		IsHideKey:    isHideKey,
 		CanTruncate:  false,
 		IndexInfos:   tableDef.IndexInfos,
 		IndexAttrs:   attrs,
@@ -201,14 +200,13 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 
 	// find out use keys to delete
 	var err error
-	isHideKeyArr := make([]bool, tableCount)
 	useKeys := make([]*ColDef, tableCount)
 	colIndex := make([]int32, tableCount)
 	attrsArr := make([][]string, tableCount)
 	var useProjectExprs tree.SelectExprs = nil
 	for i := 0; i < tableCount; i++ {
 		colIndex[i] = int32(len(useProjectExprs))
-		useProjectExprs, useKeys[i], isHideKeyArr[i], attrsArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
+		useProjectExprs, useKeys[i], attrsArr[i], err = buildUseProjection(stmt, useProjectExprs, objRefs[i], tblDefs[i], tf, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +236,6 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 			DbName:       objRefs[i].SchemaName,
 			TblName:      tblDefs[i].Name,
 			UseDeleteKey: useKeys[i].Name,
-			IsHideKey:    isHideKeyArr[i],
 			CanTruncate:  false,
 			ColIndex:     colIndex[i],
 			IndexAttrs:   attrsArr[i],
@@ -266,20 +263,18 @@ func getTableNames(tableExprs tree.TableExprs) []*tree.TableName {
 	return tbs
 }
 
-func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, bool, []string, error) {
+func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRef, tableDef *TableDef, tf *tableInfo, ctx CompilerContext) (tree.SelectExprs, *ColDef, []string, error) {
 	var useKey *ColDef
-	isHideKey := false
 	tblName := tf.baseNameMap[tableDef.Name]
 
 	// we will allways return hideKey now
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 	if hideKey == nil {
-		return nil, nil, false, nil, moerr.NewInvalidState("cannot find hide key")
+		return nil, nil, nil, moerr.NewInvalidState("cannot find hide key")
 	}
 	e := tree.SetUnresolvedName(tblName, hideKey.Name)
 	ps = append(ps, tree.SelectExpr{Expr: e})
 	useKey = hideKey
-	isHideKey = true
 
 	// make true we can get all the index col data before update, so we can delete index info.
 	indexColNameMap := make(map[string]bool)
@@ -300,6 +295,6 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 		e, _ := tree.NewUnresolvedName(tf.baseNameMap[tableDef.Name], indexColName)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 	}
-	return ps, useKey, isHideKey, indexAttrs, nil
+	return ps, useKey, indexAttrs, nil
 
 }

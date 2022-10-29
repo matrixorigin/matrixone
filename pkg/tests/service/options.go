@@ -17,6 +17,8 @@ package service
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -35,10 +37,11 @@ const (
 
 	// default configuration for services
 	defaultHostAddr    = "127.0.0.1"
-	defaultRootDataDir = "/tmp/tests/service"
+	defaultRootDataDir = "/tmp/mo/tests"
 
 	// default configuration for dn service
-	defaultDnStorage = "MEM"
+	defaultDNStorage = dnservice.StorageTAE
+	defaultCNEngine  = cnservice.EngineDistributedTAE
 
 	// default configuration for log service
 	defaultGossipSeedNum = 3
@@ -54,12 +57,14 @@ const (
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
+	defaultCNHeartbeatInterval  = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
 type Options struct {
 	hostAddr    string
 	rootDataDir string
+	keepData    bool
 	logger      *zap.Logger
 
 	initial struct {
@@ -72,13 +77,15 @@ type Options struct {
 		logReplicaNum uint64
 	}
 
-	dn struct {
-		txnStorageBackend string
-		heartbeatInterval time.Duration
+	heartbeat struct {
+		dn  time.Duration
+		cn  time.Duration
+		log time.Duration
 	}
 
-	log struct {
-		heartbeatInterval time.Duration
+	storage struct {
+		dnStorage dnservice.StorageType
+		cnEngine  cnservice.EngineType
 	}
 
 	hakeeper struct {
@@ -126,8 +133,11 @@ func (opt *Options) validate() {
 	if opt.initial.logReplicaNum <= 0 {
 		opt.initial.logReplicaNum = defaultLogReplicaNum
 	}
-	if opt.dn.txnStorageBackend == "" {
-		opt.dn.txnStorageBackend = defaultDnStorage
+	if opt.storage.dnStorage == "" {
+		opt.storage.dnStorage = defaultDNStorage
+	}
+	if opt.storage.cnEngine == "" {
+		opt.storage.cnEngine = defaultCNEngine
 	}
 
 	// hakeeper configuration
@@ -148,11 +158,14 @@ func (opt *Options) validate() {
 	}
 
 	// heartbeat configuration
-	if opt.log.heartbeatInterval == 0 {
-		opt.log.heartbeatInterval = defaultLogHeartbeatInterval
+	if opt.heartbeat.log == 0 {
+		opt.heartbeat.log = defaultLogHeartbeatInterval
 	}
-	if opt.dn.heartbeatInterval == 0 {
-		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
+	if opt.heartbeat.dn == 0 {
+		opt.heartbeat.dn = defaultDNHeartbeatInterval
+	}
+	if opt.heartbeat.cn == 0 {
+		opt.heartbeat.cn = defaultCNHeartbeatInterval
 	}
 }
 
@@ -214,9 +227,33 @@ func (opt Options) WithRootDataDir(root string) Options {
 	return opt
 }
 
-// WithDNStorage sets dn transaction storage.
-func (opt Options) WithDNTxnStorage(s string) Options {
-	opt.dn.txnStorageBackend = s
+// WithDNUseTAEStorage sets dn transaction use tae storage.
+func (opt Options) WithDNUseTAEStorage() Options {
+	opt.storage.dnStorage = dnservice.StorageTAE
+	return opt
+}
+
+// WithDNUseMEMStorage sets dn transaction use mem storage.
+func (opt Options) WithDNUseMEMStorage() Options {
+	opt.storage.dnStorage = dnservice.StorageMEM
+	return opt
+}
+
+// WithCNUseTAEEngine use tae engine as cn engine
+func (opt Options) WithCNUseTAEEngine() Options {
+	opt.storage.cnEngine = cnservice.EngineTAE
+	return opt
+}
+
+// WithCNUseDistributedTAEEngine use distributed tae engine as cn engine
+func (opt Options) WithCNUseDistributedTAEEngine() Options {
+	opt.storage.cnEngine = cnservice.EngineDistributedTAE
+	return opt
+}
+
+// WithCNUseMemoryEngine use memory engine as cn engine
+func (opt Options) WithCNUseMemoryEngine() Options {
+	opt.storage.cnEngine = cnservice.EngineDistributedTAE
 	return opt
 }
 
@@ -269,19 +306,36 @@ func (opt Options) WithHKCheckInterval(interval time.Duration) Options {
 
 // WithDNHeartbeatInterval sets heartbeat interval fo dn service.
 func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
-	opt.dn.heartbeatInterval = interval
+	opt.heartbeat.dn = interval
 	return opt
 }
 
 // WithLogHeartbeatInterval sets heartbeat interval fo log service.
 func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
-	opt.log.heartbeatInterval = interval
+	opt.heartbeat.log = interval
 	return opt
 }
 
-// GetTxnStorageBackend returns the txn storage backend
-func (opt Options) GetTxnStorageBackend() string {
-	return opt.dn.txnStorageBackend
+// WithCNHeartbeatInterval sets heartbeat interval fo cn service.
+func (opt Options) WithCNHeartbeatInterval(interval time.Duration) Options {
+	opt.heartbeat.cn = interval
+	return opt
+}
+
+// GetDNStorageType returns the storage type that the dnservice used
+func (opt Options) GetDNStorageType() dnservice.StorageType {
+	return opt.storage.dnStorage
+}
+
+// GetCNEngineType returns the engine type that the cnservice used
+func (opt Options) GetCNEngineType() dnservice.StorageType {
+	return opt.storage.dnStorage
+}
+
+// WithKeepData sets keep data after cluster closed.
+func (opt Options) WithKeepData() Options {
+	opt.keepData = true
+	return opt
 }
 
 // gossipSeedNum calculates the count of gossip seed.

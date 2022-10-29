@@ -183,7 +183,13 @@ func (s *service) registerExecutors() {
 		return
 	}
 
-	pu := config.NewParameterUnit(&s.cfg.Frontend, nil, nil, nil)
+	pu := config.NewParameterUnit(
+		&s.cfg.Frontend,
+		nil,
+		nil,
+		nil,
+		s.pu.GetClusterDetails,
+	)
 	pu.StorageEngine = s.storeEngine
 	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()

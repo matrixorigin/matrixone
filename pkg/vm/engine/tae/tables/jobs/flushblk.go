@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -57,7 +58,7 @@ func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
 	name := blockio.EncodeBlkName(task.meta.AsCommonID(), task.ts)
-	writer := blockio.NewWriter(task.fs, name)
+	writer := blockio.NewWriter(context.Background(), task.fs, name)
 	block, err := writer.WriteBlock(task.data)
 	if err != nil {
 		return err
