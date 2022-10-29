@@ -36,6 +36,8 @@ type Collector interface {
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	GetAndRefreshMerged() *DirtyTreeEntry
 	Merge() *DirtyTreeEntry
+	GetMaxLSN(from, to types.TS) uint64
+	Init(maxts types.TS)
 }
 
 type DirtyEntryInterceptor = catalog.Processor
@@ -123,7 +125,9 @@ func NewDirtyCollector(
 	collector.merged.Store(NewEmptyDirtyTreeEntry())
 	return collector
 }
-
+func (d *dirtyCollector) Init(maxts types.TS) {
+	d.storage.maxTs = maxts
+}
 func (d *dirtyCollector) Run() {
 	from, to := d.findRange()
 
@@ -146,6 +150,10 @@ func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	return
 }
 
+func (d *dirtyCollector) GetMaxLSN(from, to types.TS) uint64 {
+	reader := d.sourcer.GetReader(from, to)
+	return reader.GetMaxLSN()
+}
 func (d *dirtyCollector) ScanInRange(from, to types.TS) (
 	entry *DirtyTreeEntry, count int) {
 	reader := d.sourcer.GetReader(from, to)

@@ -455,8 +455,8 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 }
 
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	for {
-		nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 		if offset >= nameVec.Length() {
 			break
 		}
@@ -467,13 +467,13 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def := new(ColDef)
 		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
-		types.Decode(data, def.Type)
+		types.Decode(data, &def.Type)
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
 			pDefault := &plan.Default{
 				Expr: &plan.Expr{},
 			}
-			types.Decode(data, pDefault)
+			types.Decode(data, &pDefault)
 			expr, err := pDefault.Expr.Marshal()
 			if err != nil {
 				panic(err)
@@ -492,16 +492,33 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
 			pupdate := &plan.Expr{}
-			types.Decode(data, pupdate)
+			types.Decode(data, &pupdate)
 			update, err := pupdate.Marshal()
 			if err != nil {
 				panic(err)
 			}
 			def.OnUpdate = update
 		}
+		idx := bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)
+		s.NameIndex[def.Name] = int(idx - 1)
+		def.Idx = int(idx - 1)
+		s.ColDefs = append(s.ColDefs, def)
+		if def.Name == PhyAddrColumnName {
+			def.PhyAddr = true
+			s.PhyAddrKey = def
+		}
+		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
+		if constraint == "p" {
+			def.SortKey = true
+			def.Primary = true
+			if s.SortKey == nil {
+				s.SortKey = NewSortKey()
+			}
+			s.SortKey.AddDef(def)
+		}
 		offset++
 	}
-	return offset + 1
+	return offset
 }
 
 func (s *Schema) AppendColDef(def *ColDef) (err error) {

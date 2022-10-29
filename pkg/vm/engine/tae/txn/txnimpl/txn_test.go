@@ -407,7 +407,7 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	c := catalog.MockCatalog(nil)
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)

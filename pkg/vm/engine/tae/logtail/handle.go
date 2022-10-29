@@ -537,7 +537,7 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 		dbDelBatch:         makeRespBatchFromSchema(DelSchema),
 		dbDelTxnBatch:      makeRespBatchFromSchema(DBDNSchema),
 		tblInsBatch:        makeRespBatchFromSchema(catalog.SystemTableSchema),
-		tblInsTxnBatch:     makeRespBatchFromSchema(TxnNodeSchema),
+		tblInsTxnBatch:     makeRespBatchFromSchema(TblDNSchema),
 		tblDelBatch:        makeRespBatchFromSchema(DelSchema),
 		tblDelTxnBatch:     makeRespBatchFromSchema(TblDNSchema),
 		tblColInsBatch:     makeRespBatchFromSchema(catalog.SystemColumnSchema),
@@ -558,11 +558,14 @@ func NewCheckpointLogtailRespBuilder(start, end types.TS) *CheckpointLogtailResp
 	return b
 }
 
-func (b *CheckpointLogtailRespBuilder) ReplayCatalog(c *catalog.Catalog) {
+func (b *CheckpointLogtailRespBuilder) ReplayCatalog(c *catalog.Catalog, dataFactory catalog.DataFactory) {
 	c.OnReplayDatabaseBatch(b.GetDBBatchs())
-	c.OnReplayTableBatch(b.GetTblBatchs())
-	c.OnReplaySegmentBatch(b.GetSegBatchs())
-	c.OnReplayBlockBatch(b.GetBlkBatchs())
+	ins, colins, dnins, del, dndel := b.GetTblBatchs()
+	c.OnReplayTableBatch(ins, colins, dnins, del, dndel, dataFactory)
+	ins, dnins, del, dndel = b.GetSegBatchs()
+	c.OnReplaySegmentBatch(ins, dnins, del, dndel, dataFactory)
+	ins, dnins, del, dndel = b.GetBlkBatchs()
+	c.OnReplayBlockBatch(ins, dnins, del, dndel, dataFactory)
 }
 
 func (b *CheckpointLogtailRespBuilder) WriteToFS(writer *blockio.Writer) (blks []objectio.BlockObject) {
@@ -668,9 +671,9 @@ func (b *CheckpointLogtailRespBuilder) ReadFromFS(reader *blockio.Reader, m *mpo
 		panic(err)
 	}
 	if b.tblInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
-		append(BaseTypes, TxnNodeSchema.Types()...),
-		append(BaseAttr, TxnNodeSchema.AllNames()...),
-		append([]bool{false, false}, TxnNodeSchema.AllNullables()...),
+		append(BaseTypes, TblDNSchema.Types()...),
+		append(BaseAttr, TblDNSchema.AllNames()...),
+		append([]bool{false, false}, TblDNSchema.AllNullables()...),
 		metas[5]); err != nil {
 		panic(err)
 	}
@@ -813,6 +816,8 @@ func (b *CheckpointLogtailRespBuilder) VisitTable(entry *catalog.TableEntry) (er
 					commitVec.Append(tblNode.GetEnd())
 				}
 			}
+			b.tblInsTxnBatch.GetVectorByName(SnapshotAttr_BlockMaxRow).Append(entry.GetSchema().BlockMaxRows)
+			b.tblInsTxnBatch.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Append(entry.GetSchema().SegmentMaxBlocks)
 			catalogEntry2Batch(b.tblInsBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
 			tblNode.TxnMVCCNode.FillTxnRows(b.tblInsTxnBatch)
 		} else {
@@ -872,6 +877,8 @@ func (b *CheckpointLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) (err 
 			b.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
 			b.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
 			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaDelTxnBatch)
+			b.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+			b.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		} else {
 			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
 			b.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())
@@ -884,6 +891,8 @@ func (b *CheckpointLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) (err 
 			b.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
 			b.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
 			metaNode.TxnMVCCNode.FillTxnRows(b.blkMetaInsTxnBatch)
+			b.blkMetaInsTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+			b.blkMetaInsTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		}
 	}
 	return nil

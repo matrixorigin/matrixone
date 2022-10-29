@@ -124,9 +124,9 @@ func (e *CheckpointEntry) NewCheckpointReader(fs *objectio.ObjectFS) *blockio.Re
 	return reader
 }
 
-func (e *CheckpointEntry) Replay(c *catalog.Catalog, fs *objectio.ObjectFS) {
+func (e *CheckpointEntry) Replay(c *catalog.Catalog, fs *objectio.ObjectFS, dataFactory catalog.DataFactory) {
 	reader := e.NewCheckpointReader(fs)
 	builder := logtail.NewCheckpointLogtailRespBuilder(e.start, e.end)
 	builder.ReadFromFS(reader, common.DefaultAllocator)
-	builder.ReplayCatalog(c)
+	builder.ReplayCatalog(c, dataFactory)
 }

@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
+	// "time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -41,12 +39,14 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_SegID   = "segment_id"
-	SnapshotAttr_TID     = "table_id"
-	SnapshotAttr_DBID    = "db_id"
-	SegmentAttr_ID       = "id"
-	SegmentAttr_CreateAt = "create_at"
-	SegmentAttr_State    = "state"
+	SnapshotAttr_SegID           = "segment_id"
+	SnapshotAttr_TID             = "table_id"
+	SnapshotAttr_DBID            = "db_id"
+	SegmentAttr_ID               = "id"
+	SegmentAttr_CreateAt         = "create_at"
+	SegmentAttr_State            = "state"
+	SnapshotAttr_BlockMaxRow     = "block_max_row"
+	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 )
 
 type DataFactory interface {
@@ -62,7 +62,6 @@ func rowIDToU64(rowID types.Rowid) uint64 {
 type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
-	store store.Store
 
 	scheduler   tasks.TaskScheduler
 	ckpmu       sync.RWMutex
@@ -89,12 +88,10 @@ func compareDBFn(a, b *DBEntry) int {
 	return a.DBBaseEntry.DoCompre(b.DBBaseEntry)
 }
 
-func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
-	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
+func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
-		store:       driver,
 		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList(compareDBFn),
@@ -109,7 +106,6 @@ func NewEmptyCatalog() *Catalog {
 	return &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
-		store:       nil,
 		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList(compareDBFn),
@@ -118,12 +114,10 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
-	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
+func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
-		store:       driver,
 		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList(compareDBFn),
@@ -131,14 +125,7 @@ func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 		scheduler:   scheduler,
 	}
 	catalog.InitSystemDB()
-	//scan dir
-	//for filename
-	// newEmpty builder
-	// builder.read
-	// builder.replay
-	replayer := NewReplayer(dataFactory, catalog)
-	err := catalog.store.Replay(replayer.ReplayerHandle)
-	return catalog, err
+	return catalog, nil
 }
 
 func (catalog *Catalog) InitSystemDB() {
@@ -161,7 +148,6 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 
-func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
@@ -239,7 +225,8 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	if dbun == nil {
 		db.Insert(un)
 	} else {
-		panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
+		return
+		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
 }
 
@@ -378,8 +365,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	tblun := tbl.SearchNode(un)
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
-	} else {
-		panic(fmt.Sprintf("duplicate node %v and %v", tblun, un))
+		// } else {
+		// 	panic(fmt.Sprintf("duplicate node %v and %v", tblun, un))
 	}
 
 }
@@ -411,7 +398,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 		}, true)
 	}
 }
-func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch) {
+func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch, dataFactory DataFactory) {
 	schemaOffset := 0
 	for i := 0; i < ins.Length(); i++ {
 		tid := ins.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(i).(uint64)
@@ -429,8 +416,10 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.AcInfo.UserID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).Get(i).(uint32)
 		schema.AcInfo.CreateAt = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
 		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
+		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
+		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
 		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
-		catalog.onReplayCreateTable(dbid, tid, schema, create, start, prepare, logIndex)
+		catalog.onReplayCreateTable(dbid, tid, schema, create, start, prepare, logIndex, dataFactory)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -440,7 +429,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 	}
 
 }
-func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, createAt, start, prepare types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, createAt, start, prepare types.TS, logIndex *wal.Index, dataFactory DataFactory) {
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -459,6 +448,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 	tbl.schema = schema
 	tbl.db = db
 	tbl.ID = tid
+	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	err = db.AddEntryLocked(tbl, nil)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -584,7 +574,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	}
 }
 
-func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *containers.Batch) {
+func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
 	idVec := ins.GetVectorByName(SegmentAttr_ID)
 	for i := 0; i < idVec.Length(); i++ {
 		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -596,7 +586,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		}
 		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(uint64)
 		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
-		catalog.onReplayCreateSegment(dbid, tid, sid, state, start, prepare, create, logIndex)
+		catalog.onReplayCreateSegment(dbid, tid, sid, state, start, prepare, create, logIndex, dataFactory)
 	}
 	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < idVec.Length(); i++ {
@@ -607,7 +597,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		catalog.onReplayDeleteSegment(dbid, tid, rowIDToU64(sid), start, prepare, create, logIndex)
 	}
 }
-func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, start, prepare, end types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, start, prepare, end types.TS, logIndex *wal.Index, dataFactory DataFactory) {
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -631,6 +621,7 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	seg.table = rel
 	seg.ID = segid
 	seg.state = state
+	seg.segData = dataFactory.MakeSegmentFactory()(seg)
 	rel.AddEntryLocked(seg)
 	un := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -766,7 +757,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 	}
 }
 
-func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch) {
+func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
@@ -780,18 +771,26 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		deltaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		start, prepare, end, logIndex := txnbase.GetFromBatch(insTxn, i)
-		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, start, prepare, end, logIndex)
+		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, start, prepare, end, logIndex, dataFactory)
 	}
-	for i := 0; i < del.Length(); i++ {
+	for i := 0; i < delTxn.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
 		start, prepare, end, logIndex := txnbase.GetFromBatch(delTxn, i)
-		catalog.onReplayDeleteBlock(dbid, tid, sid, rowIDToU64(blkID), start, prepare, end, logIndex)
+		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		deltaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		catalog.onReplayDeleteBlock(dbid, tid, sid, rowIDToU64(blkID), metaLoc, deltaLoc, start, prepare, end, logIndex)
 	}
 }
-func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, state EntryState, metaloc, deltaloc string, start, prepare, end types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayCreateBlock(
+	dbid, tid, segid, blkid uint64,
+	state EntryState,
+	metaloc, deltaloc string,
+	start, prepare, end types.TS,
+	logIndex *wal.Index,
+	dataFactory DataFactory) {
 	catalog.OnReplayBlockID(blkid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -815,6 +814,7 @@ func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, stat
 		blk.segment = seg
 		blk.ID = blkid
 		blk.state = state
+		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 		seg.AddEntryLocked(blk)
 		un = &MetadataMVCCNode{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -860,7 +860,7 @@ func (catalog *Catalog) onReplayCreateBlock(dbid, tid, segid, blkid uint64, stat
 	}
 	blk.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, start, prepare, end types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, metaloc, deltaloc string, start, prepare, end types.TS, logIndex *wal.Index) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -900,8 +900,8 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, star
 			End:      end,
 			LogIndex: logIndex,
 		},
-		MetaLoc:  prevUn.MetaLoc,
-		DeltaLoc: prevUn.DeltaLoc,
+		MetaLoc:  metaloc,
+		DeltaLoc: deltaloc,
 	}
 	blk.Insert(un)
 }
@@ -934,9 +934,9 @@ func (catalog *Catalog) ReplayTableRows() {
 	}
 }
 func (catalog *Catalog) Close() error {
-	if catalog.store != nil {
-		catalog.store.Close()
-	}
+	// if catalog.store != nil {
+	// 	catalog.store.Close()
+	// }
 	return nil
 }
 
@@ -1229,73 +1229,73 @@ func (catalog *Catalog) GetCheckpointed() *Checkpoint {
 	return catalog.checkpoints[len(catalog.checkpoints)-1]
 }
 
-func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
-	return func() error {
-		return catalog.Checkpoint(maxTs)
-	}
-}
-func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, minTS types.TS, err error) {
-	catalog.ckpmu.RLock()
-	defer catalog.ckpmu.RUnlock()
-	if len(catalog.checkpoints) != 0 {
-		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
-		if maxTS.Less(lastMax) {
-			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
-			return
-		}
-		if maxTS.Equal(lastMax) {
-			return
-		}
-		//minTs = lastMax + 1
-		minTS = lastMax.Next()
-	}
-	needCheckpoint = true
-	return
-}
+// func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
+// 	return func() error {
+// 		return catalog.Checkpoint(maxTs)
+// 	}
+// }
+// func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, minTS types.TS, err error) {
+// 	catalog.ckpmu.RLock()
+// 	defer catalog.ckpmu.RUnlock()
+// 	if len(catalog.checkpoints) != 0 {
+// 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
+// 		if maxTS.Less(lastMax) {
+// 			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
+// 			return
+// 		}
+// 		if maxTS.Equal(lastMax) {
+// 			return
+// 		}
+// 		//minTs = lastMax + 1
+// 		minTS = lastMax.Next()
+// 	}
+// 	needCheckpoint = true
+// 	return
+// }
 
-func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
-	now := time.Now()
-	var minTs types.TS
-	var needCheckpoint bool
-	if needCheckpoint, minTs, err = catalog.NeedCheckpoint(maxTs); !needCheckpoint {
-		return
-	}
-	entry := catalog.PrepareCheckpoint(minTs, maxTs)
-	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
-	if len(entry.LogIndexes) == 0 {
-		return
-	}
-	now = time.Now()
-	logEntry, err := entry.MakeLogEntry()
-	if err != nil {
-		return
-	}
-	logutil.Debugf("MakeLogEntry: %s", time.Since(now))
-	now = time.Now()
-	defer logEntry.Free()
-	checkpoint := new(Checkpoint)
-	checkpoint.MaxTS = maxTs
-	checkpoint.LSN = entry.MaxIndex.LSN
-	checkpoint.CommitId, err = catalog.store.Append(0, logEntry)
-	if err != nil {
-		panic(err)
-	}
-	if err = logEntry.WaitDone(); err != nil {
-		panic(err)
-	}
-	logutil.Debugf("SaveCheckpointed: %s", time.Since(now))
-	// for _, index := range entry.LogIndexes {
-	// 	logutil.Debugf("Ckp0Index %s", index.String())
-	// }
-	now = time.Now()
-	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
-		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
-		return
-	}
-	logutil.Debugf("CheckpointWal: %s", time.Since(now))
-	catalog.ckpmu.Lock()
-	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
-	catalog.ckpmu.Unlock()
-	logutil.Debugf("Max LogIndex: %s", entry.MaxIndex.String())
-	return
-}
+// func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
+// 	now := time.Now()
+// 	var minTs types.TS
+// 	var needCheckpoint bool
+// 	if needCheckpoint, minTs, err = catalog.NeedCheckpoint(maxTs); !needCheckpoint {
+// 		return
+// 	}
+// 	entry := catalog.PrepareCheckpoint(minTs, maxTs)
+// 	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
+// 	if len(entry.LogIndexes) == 0 {
+// 		return
+// 	}
+// 	now = time.Now()
+// 	logEntry, err := entry.MakeLogEntry()
+// 	if err != nil {
+// 		return
+// 	}
+// 	logutil.Debugf("MakeLogEntry: %s", time.Since(now))
+// 	now = time.Now()
+// 	defer logEntry.Free()
+// 	checkpoint := new(Checkpoint)
+// 	checkpoint.MaxTS = maxTs
+// 	checkpoint.LSN = entry.MaxIndex.LSN
+// 	checkpoint.CommitId, err = catalog.store.Append(0, logEntry)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	if err = logEntry.WaitDone(); err != nil {
+// 		panic(err)
+// 	}
+// 	logutil.Debugf("SaveCheckpointed: %s", time.Since(now))
+// 	// for _, index := range entry.LogIndexes {
+// 	// 	logutil.Debugf("Ckp0Index %s", index.String())
+// 	// }
+// 	now = time.Now()
+// 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
+// 		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
+// 		return
+// 	}
+// 	logutil.Debugf("CheckpointWal: %s", time.Since(now))
+// 	catalog.ckpmu.Lock()
+// 	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
+// 	catalog.ckpmu.Unlock()
+// 	logutil.Debugf("Max LogIndex: %s", entry.MaxIndex.String())
+// 	return
+// }

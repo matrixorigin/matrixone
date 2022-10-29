@@ -74,6 +74,7 @@ type runner struct {
 	scheduler tasks.TaskScheduler
 	fs        *objectio.ObjectFS
 	observers *observers
+	wal       wal.Driver
 
 	stopper *stopper.Stopper
 
@@ -113,6 +114,7 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
 	source logtail.Collector,
+	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
 		catalog:   catalog,
@@ -120,6 +122,7 @@ func NewRunner(
 		source:    source,
 		fs:        fs,
 		observers: new(observers),
+		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(b.end)
@@ -168,6 +171,12 @@ func (r *runner) onCheckpointEntries(items ...any) {
 		r.doGlobalCheckpoint(entry)
 	}
 	r.syncCheckpointMetadata(entry.start, entry.end)
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	e.WaitDone()
 
 	entry.SetState(ST_Finished)
 	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
@@ -186,9 +195,12 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
-func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
+func (r *runner) ForceCheckpoint(end types.TS) {
+	entry := NewCheckpointEntry(types.TS{}, end)
 	r.doIncrementalCheckpoint(entry)
 	r.storage.entries.Set(entry)
+	entry.SetState(ST_Finished)
+	r.storage.prevGlobal = entry
 	r.syncCheckpointMetadata(entry.start, entry.end)
 }
 func (r *runner) syncCheckpointMetadata(start, end types.TS) {
@@ -441,7 +453,7 @@ func (r *runner) crontask(ctx context.Context) {
 		} else {
 			r.dirtyEntryQueue.Enqueue(entry)
 		}
-		_ = r.tryScheduleCheckpoint
+		r.tryScheduleCheckpoint()
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

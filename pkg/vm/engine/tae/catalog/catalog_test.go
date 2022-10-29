@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
@@ -61,8 +60,7 @@ func TestCompoundPKSchema(t *testing.T) {
 }
 
 func TestCreateDB1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -149,8 +147,7 @@ func TestCreateDB1(t *testing.T) {
 //	  | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
 //	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -224,8 +221,7 @@ func TestTableEntry1(t *testing.T) {
 }
 
 func TestTableEntry2(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -288,8 +284,7 @@ func TestTableEntry2(t *testing.T) {
 }
 
 func TestDB1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -324,8 +319,7 @@ func TestDB1(t *testing.T) {
 }
 
 func TestTable1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -377,8 +371,7 @@ func TestTable1(t *testing.T) {
 // 4. Txn3 scan "tb" and also only "seg1" found
 // 5. Start Txn4, scan "tb" and both "seg1" and "seg2" found
 func TestSegment1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	catalog := MockCatalog(dir, "mock", nil, nil)
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start()

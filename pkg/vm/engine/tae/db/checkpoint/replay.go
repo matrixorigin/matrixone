@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -31,10 +32,13 @@ type metaFile struct {
 	end   types.TS
 }
 
-func (r *runner) Replay() {
+func (r *runner) Replay(dataFactory catalog.DataFactory) {
 	dirs, err := r.fs.ListDir(CheckpointDir)
 	if err != nil {
 		panic(err)
+	}
+	if len(dirs) == 0 {
+		return
 	}
 	metaFiles := make([]*metaFile, 0)
 	for i, dir := range dirs {
@@ -86,6 +90,7 @@ func (r *runner) Replay() {
 		}
 		bat.AddVector(colNames[i], vec)
 	}
+	maxTs := types.TS{}
 	for i := 0; i < bat.Length(); i++ {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
@@ -97,6 +102,10 @@ func (r *runner) Replay() {
 			state:    ST_Finished,
 		}
 		r.storage.entries.Set(checkpointEntry)
-		checkpointEntry.Replay(r.catalog, r.fs)
+		checkpointEntry.Replay(r.catalog, r.fs, dataFactory)
+		if maxTs.Less(checkpointEntry.end) {
+			maxTs = checkpointEntry.end
+		}
 	}
+	r.source.Init(maxTs)
 }
