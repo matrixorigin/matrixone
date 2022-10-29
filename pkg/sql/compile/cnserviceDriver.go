@@ -76,9 +76,10 @@ import (
 
 // messageHandleHelper a structure records some elements to help handle messages.
 type messageHandleHelper struct {
-	storeEngine engine.Engine
-	fileService fileservice.FileService
-	acquirer    func() morpc.Message
+	storeEngine       engine.Engine
+	fileService       fileservice.FileService
+	getClusterDetails engine.GetClusterDetailsFunc
+	acquirer          func() morpc.Message
 }
 
 // processHelper a structure records information about source process. and to help
@@ -98,13 +99,15 @@ type processHelper struct {
 // write back Analysis Information and error info if error occurs to client.
 func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
+	getClusterDetails engine.GetClusterDetailsFunc) error {
 	var errData []byte
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
-		storeEngine: storeEngine,
-		fileService: fileService,
-		acquirer:    messageAcquirer,
+		storeEngine:       storeEngine,
+		fileService:       fileService,
+		acquirer:          messageAcquirer,
+		getClusterDetails: getClusterDetails,
 	}
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
@@ -1043,6 +1046,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,
+		mHelper.getClusterDetails,
 	)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -1060,7 +1064,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		anal: &anaylze{},
 	}
 
-	c.fill = func(a any, b *batch.Batch) error {
+	c.fill = func(_ any, b *batch.Batch) error {
 		encodeData, errEncode := types.Encode(b)
 		if errEncode != nil {
 			return errEncode

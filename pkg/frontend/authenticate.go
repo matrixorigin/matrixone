@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -419,7 +421,6 @@ const (
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
 	PrivilegeTypeInsert
-	PrivilegeTypeReplace
 	PrivilegeTypeUpdate
 	PrivilegeTypeTruncate
 	PrivilegeTypeDelete
@@ -546,8 +547,6 @@ func (pt PrivilegeType) String() string {
 		return "select"
 	case PrivilegeTypeInsert:
 		return "insert"
-	case PrivilegeTypeReplace:
-		return "replace"
 	case PrivilegeTypeUpdate:
 		return "update"
 	case PrivilegeTypeTruncate:
@@ -626,8 +625,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeInsert:
 		return PrivilegeScopeTable
-	case PrivilegeTypeReplace:
-		return PrivilegeScopeRole
 	case PrivilegeTypeUpdate:
 		return PrivilegeScopeTable
 	case PrivilegeTypeTruncate:
@@ -1370,7 +1367,6 @@ var (
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeReplace:           {PrivilegeTypeReplace, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1409,7 +1405,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -1444,7 +1439,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -3127,7 +3121,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDBTableDirect = true
 	case *tree.Replace:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeReplace, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDBTableDirect = true
 	case *tree.Load:
 		objType = objectTypeTable
@@ -4306,8 +4300,6 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
 		privType = PrivilegeTypeInsert
-	case tree.PRIVILEGE_TYPE_STATIC_REPLACE:
-		privType = PrivilegeTypeReplace
 	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
 		privType = PrivilegeTypeUpdate
 	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
@@ -4721,6 +4713,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 
+		err = createTablesInSystemOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
+		if err != nil {
+			goto handleFailed
+		}
+
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
 		if err != nil {
 			goto handleFailed
@@ -4907,13 +4904,41 @@ func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundEx
 	return nil
 }
 
+// createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
+func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	var err error
+	sqls := make([]string, 0)
+	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
+	sqls = append(sqls, "use "+trace.SystemDBConst+";")
+	traceTables := trace.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, traceTables...)
+	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
+	sqls = append(sqls, "use "+metric.MetricDBConst+";")
+	metricTables := metric.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, metricTables...)
+
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)

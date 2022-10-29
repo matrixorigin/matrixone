@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func (s *service) initDistributedTAE(
@@ -54,10 +53,7 @@ func (s *service) initDistributedTAE(
 		s.fileService,
 		client,
 		hakeeper,
-		memoryengine.GetClusterDetailsFromHAKeeper(
-			ctx,
-			hakeeper,
-		),
+		pu.GetClusterDetails,
 	)
 
 	return nil
