@@ -242,7 +242,7 @@ enum PartitionType {
 message PartitionInfo {
 	PartitionType type = 1;
 	Expr Expr = 2;
-	string partitionExpression = 3;
+	Expr partitionExpression = 3;
 	repeated Expr Columns = 4;
 	repeated string partitionColumns = 5;
 	uint64 partitionNum = 6;
