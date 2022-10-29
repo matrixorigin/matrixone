@@ -1,6 +1,6 @@
 --env prepare statement
-drop user if exists user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
-drop role if exists test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
+drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
+drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
 drop database if exists grant_db;
 drop database if exists testdb;
 drop database if exists testdb4;
@@ -284,8 +284,8 @@ grant r1,r2 to r6,r7;
 grant r1,r2 to r6,r7;
 select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
 
-drop user if exists user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
-drop role if exists test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
+drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
+drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
 drop database if exists grant_db;
 drop database if exists testdb;
 drop database if exists testdb4;

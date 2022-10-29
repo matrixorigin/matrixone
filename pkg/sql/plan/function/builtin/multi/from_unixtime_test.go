@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -503,17 +502,7 @@ func newTmpProcess() *process.Process {
 }
 
 func newProcessWithMPool(mp *mpool.MPool) *process.Process {
-	process := process.New(
-		context.Background(),
-		mp,
-		nil, // no txn client can be set
-		nil, // no txn operator can be set
-		testutil.NewFS(),
-	)
-	process.Lim.Size = 1 << 20
-	process.Lim.BatchRows = 1 << 20
-	process.Lim.BatchSize = 1 << 20
-	process.Lim.ReaderSize = 1 << 20
+	process := testutil.NewProcessWithMPool(mp)
 	process.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
 	return process
 }

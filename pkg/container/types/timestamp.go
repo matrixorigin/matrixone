@@ -130,9 +130,13 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	}
 
 	result := dt.ToTimestamp(loc)
-	if result < TimestampMinValue {
-		return -1, moerr.NewInvalidArg("parse timestamp", s)
-	}
+	//for issue5305, do not do this check
+	//according to mysql, timestamp function actually return a datetime value
+	/*
+		if result < TimestampMinValue {
+			return -1, moerr.NewInvalidArg("parse timestamp", s)
+		}
+	*/
 
 	return result, nil
 }

@@ -988,6 +988,7 @@ DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
 
+-- @bvt:issue#5955
 CREATE TABLE t1 (
   pk INT PRIMARY KEY,
   int_key INT,
@@ -1002,7 +1003,7 @@ WHERE NULL NOT IN (
    WHERE INNR.varchar_key > 'n{'
 );
 DROP TABLE IF EXISTS t1;
-
+-- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t1(i INT);
