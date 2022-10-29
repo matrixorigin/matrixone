@@ -643,6 +643,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				vars[i] = []byte(val)
 
 			case defines.MYSQL_TYPE_TIME:
+				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
+				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
@@ -651,15 +653,15 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				pos = newPos
 				switch length {
 				case 0:
-					vars[i] = "+00:00:00.000000"
-				case 5:
+					vars[i] = "0d 00:00:00"
+				case 5, 8:
 					pos, vars[i] = mp.readTime(data, pos)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
+				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
@@ -711,18 +713,26 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 }
 
 func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
+	var symbol byte
 	negate := data[pos]
 	pos++
+	if negate == 1 {
+		symbol = '-'
+	}
+	day, pos, _ := mp.io.ReadUint64(data, pos)
 	hour := data[pos]
 	pos++
 	minute := data[pos]
 	pos++
 	second := data[pos]
 	pos++
-	ms := data[pos]
-	pos++
+	ms, pos, _ := mp.io.ReadUint64(data, pos)
 
-	return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", negate, hour, minute, second, ms)
+	if day > 0 {
+		return pos, fmt.Sprintf("%c%dd%02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
+	}
+
+	return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -2283,14 +2293,29 @@ func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
 	if int64(t) == 0 {
 		data = mp.append(data, 0)
 	} else {
-		data = mp.append(data, 5)
-		h, m, s, ms, isNeg := t.ClockFormat()
-		if isNeg {
-			data = mp.append(data, byte('-'))
+		hour, minute, sec, msec, isNeg := t.ClockFormat()
+		day := uint64(hour / 24)
+		hour = hour % 24
+		if msec != 0 {
+			data = mp.append(data, 12)
+			if isNeg {
+				data = append(data, byte(1))
+			} else {
+				data = append(data, byte(0))
+			}
+			data = mp.appendUint64(data, day)
+			data = mp.append(data, uint8(hour), minute, sec)
+			data = mp.appendUint64(data, msec)
 		} else {
-			data = mp.append(data, byte('+'))
+			data = mp.append(data, 8)
+			if isNeg {
+				data = append(data, byte(1))
+			} else {
+				data = append(data, byte(0))
+			}
+			data = mp.appendUint64(data, day)
+			data = mp.append(data, uint8(hour), minute, sec)
 		}
-		data = mp.append(data, byte(h), byte(m), byte(s), byte(ms))
 	}
 	return data
 }
