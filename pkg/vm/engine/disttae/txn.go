@@ -437,7 +437,7 @@ func (txn *Transaction) readTable(ctx context.Context, name string, databaseId u
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil,
+		rds, err := parts[i].NewReader(ctx, 1, nil, defs, nil, nil, nil,
 			txn.meta.SnapshotTS, nil, writes)
 		if err != nil {
 			return nil, err
