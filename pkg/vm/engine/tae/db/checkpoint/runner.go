@@ -236,7 +236,7 @@ func (r *runner) MockCheckpoint(end types.TS) {
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata()
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer := blockio.NewWriter(context.Background(),r.fs, name)
+	writer := blockio.NewWriter(context.Background(), r.fs, name)
 	if _, err = writer.WriteBlock(bat); err != nil {
 		return
 	}
@@ -254,7 +254,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	writer := blockio.NewWriter(context.Background(),r.fs, entry.Key())
+	writer := blockio.NewWriter(context.Background(), r.fs, entry.Key())
 	blks, err := data.WriteTo(writer)
 	if err != nil {
 		return

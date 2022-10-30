@@ -76,7 +76,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (err error) {
 		if err2 != nil {
 			return err2
 		}
-		data, err2 := col.GetData(context.Background(),nil)
+		data, err2 := col.GetData(context.Background(), nil)
 		if err2 != nil {
 			return err2
 		}
