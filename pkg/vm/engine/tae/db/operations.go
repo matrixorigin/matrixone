@@ -103,7 +103,7 @@ type CreateDatabaseReq struct {
 }
 
 type FlushTable struct {
-	AccessInfo AccessInfo
+	AccessInfo   AccessInfo
 	DatabaseName string
 	TableName    string
 }
