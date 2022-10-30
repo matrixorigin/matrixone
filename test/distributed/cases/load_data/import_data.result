@@ -83,17 +83,6 @@ delete from t2;
 import data infile '$resources/into_outfile_2/outfile_char_varchar_1.csv' into table t2 ignore 1 lines;
 
 select * from t2;
-[unknown result because it is related to issue#5148]
-delete from t2;
-
-import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
-
-select * from t2;
-[unknown result because it is related to issue#5087]
-delete from t2;
-
-import data infile '$resources/load_data/char_varchar_3.csv' into table t2;
-select * from t2;
 col1    col2    col3    col4
 a    b    c    d
 a    b    c    d
@@ -110,12 +99,29 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
-            
-            
+
+
 null    null    null    null
-            
+
 "    "    "    "
 ""    ""    ""    ""
+delete from t2;
+
+import data infile '$resources/load_data/char_varchar_2.csv' into table t2;
+
+select * from t2;
+col1    col2    col3    col4
+aa""aa    bb""bb    cc""cc    dd""dd
+aa"aa    bb"bb    cc"cc    dd"dd
+aa"""aa    bb"""bb    cc"""cc    dd"""dd
+aa""aa    bb""bb    cc""cc    dd""dd
+aa""""aa    bb""""bb    cc""""cc    dd""""dd
+aa"""aa    bb""bb    cc""cc    dd""dd
+delete from t2;
+
+import data infile '$resources/load_data/char_varchar_3.csv' into table t2;
+select * from t2;
+col1    col2    col3    col4
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"    aa"    bb"    bb"
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
@@ -184,7 +190,9 @@ col1    col2    col3    col4
 import data infile '$resources/load_data/float_1.csv' into table t3;
 
 select * from t3;
-[unknown result because it is related to issue#5104]
+col1    col2    col3    col4
+1.3    1.3    1.30    1.30000
+1.3    1.3    1.30    1.30000
 delete from t3;
 import data infile '$resources/load_data/float_2.csv' into table t3;
 select * from t3;
@@ -207,8 +215,9 @@ null    null    null    null
 1.2345679    1.23456789    1.23    1.23457
 1.0123457    1.0123456789    1.01    1.01235
 1.0E-10    1.0E-10    0.00    0.00000
-delete from t3
+delete from t3;
 import data infile '$resources/load_data/float_3.csv' into table t3;
+data truncated: data type DECIMAL64, value '1000.001' for column 'col3' at row '1'
 
 drop table t3;
 drop table if exists t4;
@@ -277,6 +286,7 @@ null    null    null    null
 null    null    null    null
 delete from t4;
 import data infile '$resources/load_data/time_date_5.csv' into table t4;
+data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
 
 select * from t4;
 [unknown result because it is related to issue#5118]

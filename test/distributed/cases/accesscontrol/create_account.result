@@ -1,0 +1,243 @@
+drop account if exists `test@123456`;
+drop account if exists testaccount;
+drop account if exists 123_acc;
+drop account if exists _acc;
+drop account if exists a12;
+drop account if exists _acc1;
+drop account if exists FaSt;
+drop account if exists `123`;
+drop account if exists a123;
+drop account if exists `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
+drop account if exists abc;
+drop account if exists abcd;
+drop account if exists cm1;
+drop account if exists cm2;
+drop account if exists cm3;
+drop account if exists accout_Xingming_insert;
+drop account if exists `ab.cd`;
+drop account if exists `test/123`;
+drop account if exists `test%`;
+drop account if exists `非常`;
+drop account if exists user_strip_01;
+drop account if exists account_1;
+create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='test@123456';
+account_name
+test@123456
+create account testaccount ADMIN_NAME 'admin@123' IDENTIFIED BY 'yyyy_1234@126.com';
+select account_name from mo_catalog.mo_account where account_name='testaccount';
+account_name
+testaccount
+create account 123_acc ADMIN_NAME '8888' IDENTIFIED BY 'ffffff';
+select account_name from mo_catalog.mo_account where account_name='123_acc';
+account_name
+123_acc
+create account _acc ADMIN_NAME 'AbcDef' IDENTIFIED BY 'NIU_2345';
+select account_name from mo_catalog.mo_account where account_name='_acc';
+account_name
+_acc
+create account a12 ADMIN_NAME 'a12' IDENTIFIED BY 'aaaaa';
+select account_name from mo_catalog.mo_account where account_name='a12';
+account_name
+a12
+create account _acc1 ADMIN_NAME '_AbcDef' IDENTIFIED BY '_2345';
+select account_name from mo_catalog.mo_account where account_name='_acc1';
+account_name
+_acc1
+create account a123 ADMIN_NAME 'a12' IDENTIFIED BY 'aaaaa';
+select account_name from mo_catalog.mo_account where account_name='a12';
+account_name
+a12
+create account FaSt ADMIN_NAME '账号' IDENTIFIED BY '账号密码';
+select account_name from mo_catalog.mo_account where account_name='fast';
+account_name
+fast
+create account `ab.cd` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='ab.cd';
+account_name
+ab.cd
+create account `test/123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='test/123';
+account_name
+test/123
+create account `test%` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='test%';
+account_name
+test%
+create account `123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='123';
+account_name
+123
+create account `非常` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='非常';
+account_name
+非常
+create account `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 415 near " `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';";
+select account_name from mo_catalog.mo_account where account_name=`abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
+invalid input: column abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff does not exist
+create account ` user_strip_01 ` ADMIN_NAME " admin " IDENTIFIED BY " 123456 ";
+select account_name from mo_catalog.mo_account where account_name='user_strip_01';
+account_name
+user_strip_01
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select account_name from mo_catalog.mo_account where account_name='abc';
+account_name
+abc
+create account ABC ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the tenant abc exists
+create account Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the tenant abc exists
+create account IF NOT EXISTS Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create account IF NOT EXISTS Abcd ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment '这是comment备注/123456';
+select account_name,comments from mo_catalog.mo_account where account_name='abcd';
+account_name    comments
+abcd    这是comment备注/123456
+create account IF NOT EXISTS cm1 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'this is test comment , please check';
+select account_name,comments from mo_catalog.mo_account where account_name='cm1';
+account_name    comments
+cm1    this is test comment , please check
+create account cm2 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
+select account_name,comments from mo_catalog.mo_account where account_name='cm2';
+account_name    comments
+cm2    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
+create account cm3 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment '';
+select account_name,comments from mo_catalog.mo_account where account_name='cm3';
+account_name    comments
+cm3    
+create accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';";
+create account a1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near ";";
+create accout a1 ADMIN_NAME ' admin';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin';";
+create accout a1 IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 IDENTIFIED BY '123456';";
+create accout a1 comment'aaaa';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 comment'aaaa';";
+create account 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account bbb ADMIN_NAME '' IDENTIFIED BY '123456';
+internal error: the name "" is invalid
+create account `` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " `` ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account aaa ADMIN_NAME 'admin' IDENTIFIED BY '';
+internal error: password is empty string
+create account test:account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near ":account ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+create account `test:account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: the name "test:account" is invalid
+create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " default ADMIN_NAME 'root' IDENTIFIED BY '123456';";
+create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " account ADMIN_NAME 'root' IDENTIFIED BY '123456';";
+select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
+count(*)
+0
+create account account_1 admin_name='admin' identified by '123456';
+show databases;
+Database
+mo_catalog
+system_metrics
+system
+information_schema
+mysql
+use mo_catalog;
+show tables;
+tables_in_mo_catalog
+mo_database
+mo_tables
+mo_columns
+mo_user
+mo_role
+mo_user_grant
+mo_role_grant
+mo_role_privs
+select user_name,authentication_string,owner from mo_user;
+user_name    authentication_string    owner
+admin    123456    0
+select role_name,obj_type,privilege_name,privilege_level from mo_role_privs;
+role_name    obj_type    privilege_name    privilege_level
+accountadmin    account    create user    *
+accountadmin    account    drop user    *
+accountadmin    account    alter user    *
+accountadmin    account    create role    *
+accountadmin    account    drop role    *
+accountadmin    account    create database    *
+accountadmin    account    drop database    *
+accountadmin    account    show databases    *
+accountadmin    account    connect    *
+accountadmin    account    manage grants    *
+accountadmin    account    account all    *
+accountadmin    database    show tables    *
+accountadmin    database    create table    *
+accountadmin    database    drop table    *
+accountadmin    database    alter table    *
+accountadmin    database    create view    *
+accountadmin    database    drop view    *
+accountadmin    database    alter view    *
+accountadmin    database    database all    *
+accountadmin    database    database ownership    *
+accountadmin    table    select    *.*
+accountadmin    table    insert    *.*
+accountadmin    table    update    *.*
+accountadmin    table    truncate    *.*
+accountadmin    table    delete    *.*
+accountadmin    table    reference    *.*
+accountadmin    table    index    *.*
+accountadmin    table    table all    *.*
+accountadmin    table    table ownership    *.*
+accountadmin    table    values    t
+public    account    connect    *
+create database account_1_db;
+CREATE USER account_1_user IDENTIFIED BY '123456';
+create table a(b int);
+internal error: do not have privilege to execute the statement
+use account_1_db;
+create table a(b int);
+use mo_catalog;
+select user_name,authentication_string,owner from mo_user where user_name ='account_1_user';
+user_name    authentication_string    owner
+create account accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
+select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
+account_name
+accout_xingming_insert
+drop account accout_Xingming_insert;
+select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
+account_name
+create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
+select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
+account_name
+accout_xingming_insert
+drop account if exists `test@123456`;
+drop account if exists testaccount;
+drop account if exists 123_acc;
+drop account if exists _acc;
+drop account if exists a12;
+drop account if exists _acc1;
+drop account if exists FaSt;
+drop account if exists `123`;
+drop account if exists a123;
+drop account if exists `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
+drop account if exists abc;
+drop account if exists abcd;
+drop account if exists cm1;
+drop account if exists cm2;
+drop account if exists cm3;
+drop account if exists accout_Xingming_insert;
+drop account if exists `ab.cd`;
+drop account if exists `test/123`;
+drop account if exists `test%`;
+drop account if exists `非常`;
+drop account if exists user_strip_01;
+drop account if exists account_1;
