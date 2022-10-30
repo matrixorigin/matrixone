@@ -158,18 +158,6 @@ func (catalog *Catalog) ReplayCmd(
 			idx.CSN = uint32(i)
 			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
-	case CmdLogBlock:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayBlock(cmd, dataFactory)
-	case CmdLogSegment:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplaySegment(cmd, dataFactory)
-	case CmdLogTable:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayTable(cmd, dataFactory)
-	case CmdLogDatabase:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
@@ -224,33 +212,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		return
 		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
-}
-
-func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
-	var err error
-	catalog.OnReplayDBID(cmd.DB.ID)
-
-	db, err := catalog.GetDatabaseByID(cmd.DB.ID)
-	if err != nil {
-		cmd.DB.RWMutex = new(sync.RWMutex)
-		cmd.DB.catalog = catalog
-		err = catalog.AddEntryLocked(cmd.DB, nil)
-		if err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-		un := n.GetPayload()
-		dbun := db.SearchNode(un)
-		if dbun == nil {
-			db.Insert(un) //TODO isvalid
-		} else {
-			dbun.Update(un)
-		}
-		return true
-	}, true)
 }
 
 func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containers.Batch) {
@@ -357,33 +318,6 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 
 }
 
-func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplayTableID(cmd.Table.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.Table.ID)
-	if err != nil {
-		cmd.Table.db = db
-		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		err = db.AddEntryLocked(cmd.Table, nil)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			node := rel.SearchNode(un)
-			if node == nil {
-				rel.Insert(un)
-			} else {
-				node.Update(un)
-			}
-			return true
-		}, true)
-	}
-}
 func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch, dataFactory DataFactory) {
 	schemaOffset := 0
 	for i := 0; i < ins.Length(); i++ {
@@ -519,34 +453,6 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		} else {
 			node.Update(un)
 		}
-	}
-}
-
-func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := rel.GetSegmentByID(cmd.Segment.ID)
-	if err != nil {
-		cmd.Segment.table = rel
-		rel.AddEntryLocked(cmd.Segment)
-	} else {
-		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			segun := seg.SearchNode(un)
-			if segun != nil {
-				segun.Update(un)
-			} else {
-				seg.Insert(un)
-			}
-			return true
-		}, true)
 	}
 }
 
@@ -689,37 +595,6 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		observer.OnTimeStamp(prepareTS)
 	}
 	seg.AddEntryLocked(cmd.Block)
-}
-
-func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplayBlockID(cmd.Block.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := rel.GetSegmentByID(cmd.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
-	if blk == nil {
-		cmd.Block.segment = seg
-		seg.AddEntryLocked(cmd.Block)
-	} else {
-		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			blkun := blk.SearchNode(un)
-			if blkun != nil {
-				blkun.Update(un)
-			}
-			blk.Insert(un)
-			return false
-		}, true)
-	}
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
