@@ -262,23 +262,23 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 	for i := 0; i < ins.Length(); i++ {
 		dbid := ins.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
 		name := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
-		start, prepare, createdAt, logIndex := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateDB(dbid, name, createdAt, start, prepare, logIndex)
+		txnNode := txnbase.ReadTuple(insTxn, i)
+		catalog.onReplayCreateDB(dbid, name, txnNode)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		start, prepare, delete, logIndex := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteDB(dbid, delete, start, prepare, logIndex)
+		txnNode := txnbase.ReadTuple(delTxn, i)
+		catalog.onReplayDeleteDB(dbid, txnNode)
 	}
 }
 
-func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, start, prepare types.TS, logindex *wal.Index) {
+func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnbase.TxnMVCCNode) {
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAt()
-		if !dbCreatedAt.Equal(createdAt) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", createdAt.ToString(), dbCreatedAt.ToString()))
+		if !dbCreatedAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
 		return
 	}
@@ -293,18 +293,13 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, createdAt, st
 	}
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: createdAt,
+			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      createdAt,
-			LogIndex: logindex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	db.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteDB(dbid uint64, deleteAt, start, prepare types.TS, logindex *wal.Index) {
+func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNode) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -312,22 +307,17 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, deleteAt, start, prepare t
 	}
 	dbDeleteAt := db.GetDeleteAt()
 	if !dbDeleteAt.IsEmpty() {
-		if !dbDeleteAt.Equal(deleteAt) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", deleteAt.ToString(), dbDeleteAt.ToString()))
+		if !dbDeleteAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
 	}
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: db.GetCreatedAt(),
-			DeletedAt: deleteAt,
+			DeletedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      deleteAt,
-			LogIndex: logindex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	db.Insert(un)
 }
@@ -419,18 +409,18 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
 		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
-		start, prepare, create, logIndex := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateTable(dbid, tid, schema, create, start, prepare, logIndex, dataFactory)
+		txnNode := txnbase.ReadTuple(insTxn, i)
+		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		start, prepare, delete, logIndex := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteTable(dbid, tid, delete, start, prepare, logIndex)
+		txnNode := txnbase.ReadTuple(delTxn, i)
+		catalog.onReplayDeleteTable(dbid, tid, txnNode)
 	}
 
 }
-func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, createAt, start, prepare types.TS, logIndex *wal.Index, dataFactory DataFactory) {
+func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -440,8 +430,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAt()
-		if !tblCreatedAt.Equal(createAt) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", createAt.ToString(), tblCreatedAt.ToString()))
+		if !tblCreatedAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		return
 	}
@@ -457,18 +447,13 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, cr
 	}
 	un := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: createAt,
+			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      createAt,
-			LogIndex: logIndex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	tbl.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, deleteAt, start, prepare types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.TxnMVCCNode) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -481,8 +466,8 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, deleteAt, start, p
 	}
 	tableDeleteAt := tbl.GetDeleteAt()
 	if !tableDeleteAt.IsEmpty() {
-		if !tableDeleteAt.Equal(deleteAt) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", deleteAt.ToString(), tableDeleteAt.ToString()))
+		if !tableDeleteAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
 	}
@@ -490,14 +475,9 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, deleteAt, start, p
 	un := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
-			DeletedAt: deleteAt,
+			DeletedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      deleteAt,
-			LogIndex: logIndex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	tbl.Insert(un)
 
@@ -586,19 +566,19 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 			state = ES_Appendable
 		}
 		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(uint64)
-		start, prepare, create, logIndex := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateSegment(dbid, tid, sid, state, start, prepare, create, logIndex, dataFactory)
+		txnNode := txnbase.ReadTuple(insTxn, i)
+		catalog.onReplayCreateSegment(dbid, tid, sid, state, txnNode, dataFactory)
 	}
 	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < idVec.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		start, prepare, create, logIndex := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteSegment(dbid, tid, rowIDToU64(sid), start, prepare, create, logIndex)
+		txnNode := txnbase.ReadTuple(delTxn, i)
+		catalog.onReplayDeleteSegment(dbid, tid, rowIDToU64(sid), txnNode)
 	}
 }
-func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, start, prepare, end types.TS, logIndex *wal.Index, dataFactory DataFactory) {
+func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state EntryState, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -613,8 +593,8 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	seg, _ := rel.GetSegmentByID(segid)
 	if seg != nil {
 		segCreatedAt := seg.GetCreatedAt()
-		if !segCreatedAt.Equal(end) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), segCreatedAt.ToString()))
+		if !segCreatedAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
 		}
 		return
 	}
@@ -626,18 +606,13 @@ func (catalog *Catalog) onReplayCreateSegment(dbid, tbid, segid uint64, state En
 	rel.AddEntryLocked(seg)
 	un := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: end,
+			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      end,
-			LogIndex: logIndex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	seg.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, start, prepare, end types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, txnNode *txnbase.TxnMVCCNode) {
 	catalog.OnReplaySegmentID(segid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -656,8 +631,8 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, start, p
 	}
 	segDeleteAt := seg.GetDeleteAt()
 	if !segDeleteAt.IsEmpty() {
-		if !segDeleteAt.Equal(end) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), segDeleteAt.ToString()))
+		if !segDeleteAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), segDeleteAt.ToString()))
 		}
 		return
 	}
@@ -665,14 +640,9 @@ func (catalog *Catalog) onReplayDeleteSegment(dbid, tbid, segid uint64, start, p
 	un := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
-			DeletedAt: end,
+			DeletedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      end,
-			LogIndex: logIndex,
-		},
+		TxnMVCCNode: txnNode,
 	}
 	seg.Insert(un)
 }
@@ -771,26 +741,25 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		deltaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		start, prepare, end, logIndex := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, start, prepare, end, logIndex, dataFactory)
+		txnNode := txnbase.ReadTuple(insTxn, i)
+		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
 	for i := 0; i < delTxn.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		start, prepare, end, logIndex := txnbase.ReadTuple(delTxn, i)
+		un := txnbase.ReadTuple(delTxn, i)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		deltaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		catalog.onReplayDeleteBlock(dbid, tid, sid, rowIDToU64(blkID), metaLoc, deltaLoc, start, prepare, end, logIndex)
+		catalog.onReplayDeleteBlock(dbid, tid, sid, rowIDToU64(blkID), metaLoc, deltaLoc, un)
 	}
 }
 func (catalog *Catalog) onReplayCreateBlock(
 	dbid, tid, segid, blkid uint64,
 	state EntryState,
 	metaloc, deltaloc string,
-	start, prepare, end types.TS,
-	logIndex *wal.Index,
+	txnNode *txnbase.TxnMVCCNode,
 	dataFactory DataFactory) {
 	catalog.OnReplayBlockID(blkid)
 	db, err := catalog.GetDatabaseByID(dbid)
@@ -819,16 +788,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 		seg.AddEntryLocked(blk)
 		un = &MetadataMVCCNode{
 			EntryMVCCNode: &EntryMVCCNode{
-				CreatedAt: end,
+				CreatedAt: txnNode.End,
 			},
-			TxnMVCCNode: &txnbase.TxnMVCCNode{
-				Start:    start,
-				Prepare:  prepare,
-				End:      end,
-				LogIndex: logIndex,
-			},
-			MetaLoc:  metaloc,
-			DeltaLoc: deltaloc,
+			TxnMVCCNode: txnNode,
+			MetaLoc:     metaloc,
+			DeltaLoc:    deltaloc,
 		}
 	} else {
 		prevUn := blk.MVCCChain.GetLatestNodeLocked().(*MetadataMVCCNode)
@@ -836,14 +800,9 @@ func (catalog *Catalog) onReplayCreateBlock(
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: prevUn.CreatedAt,
 			},
-			TxnMVCCNode: &txnbase.TxnMVCCNode{
-				Start:    start,
-				Prepare:  prepare,
-				End:      end,
-				LogIndex: logIndex,
-			},
-			MetaLoc:  metaloc,
-			DeltaLoc: deltaloc,
+			TxnMVCCNode: txnNode,
+			MetaLoc:     metaloc,
+			DeltaLoc:    deltaloc,
 		}
 		node := blk.MVCCChain.SearchNode(un).(*MetadataMVCCNode)
 		if node != nil {
@@ -861,7 +820,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	}
 	blk.Insert(un)
 }
-func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, metaloc, deltaloc string, start, prepare, end types.TS, logIndex *wal.Index) {
+func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, metaloc, deltaloc string, txnNode *txnbase.TxnMVCCNode) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -884,8 +843,8 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, meta
 	}
 	blkDeleteAt := blk.GetDeleteAt()
 	if !blkDeleteAt.IsEmpty() {
-		if !blkDeleteAt.Equal(end) {
-			panic(moerr.NewInternalError("logic err expect %s, get %s", end.ToString(), blkDeleteAt.ToString()))
+		if !blkDeleteAt.Equal(txnNode.End) {
+			panic(moerr.NewInternalError("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
 		}
 		return
 	}
@@ -893,16 +852,11 @@ func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, meta
 	un := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
-			DeletedAt: end,
+			DeletedAt: txnNode.End,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:    start,
-			Prepare:  prepare,
-			End:      end,
-			LogIndex: logIndex,
-		},
-		MetaLoc:  metaloc,
-		DeltaLoc: deltaloc,
+		TxnMVCCNode: txnNode,
+		MetaLoc:     metaloc,
+		DeltaLoc:    deltaloc,
 	}
 	blk.Insert(un)
 }
