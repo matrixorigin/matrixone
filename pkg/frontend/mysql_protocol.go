@@ -58,6 +58,10 @@ var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 var serverVersion atomic.Value
 
+func init() {
+	serverVersion.Store("0.5.0")
+}
+
 func InitServerVersion(v string) {
 	if len(v) > 0 {
 		switch v[0] {
