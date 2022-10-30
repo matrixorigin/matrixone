@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package plan;
 
@@ -46,15 +46,16 @@ message Const {
 		uint64 uval 	= 6;
 		float fval		= 7;
 		int32 dateval 		= 8;
-		int64 datetimeval		= 9;
-		decimal64 decimal64val = 10;
-		decimal128 decimal128val = 11;
-		int64 timestampval = 12;
-		string jsonval = 13;
-		bool defaultval = 14;
-		bool updateVal = 15;
+		int64 timeval = 9;
+		int64 datetimeval		= 10;
+		decimal64 decimal64val = 11;
+		decimal128 decimal128val = 12;
+		int64 timestampval = 13;
+		string jsonval = 14;
+		bool defaultval = 15;
+		bool updateVal = 16;
 	}
-	bool isBin = 16;
+	bool isBin = 17;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -196,10 +197,10 @@ message ColDef {
 	Type typ			= 3;
 	Default default 	= 4;
 	bool primary        = 5;
-	int32 pkidx 		= 7;
-	string comment		= 8;
-	bool is_cPkey = 9;
-	Expr on_update = 10;
+	int32 pkidx 		= 6;
+	string comment		= 7;
+	bool is_cPkey 		= 8;
+	OnUpdate on_update  = 9;
 }
 
 message Default {
@@ -208,15 +209,9 @@ message Default {
 	string origin_string = 3;
 }
 
-message IndexDef {
-	enum IndexType {
-		INVAILD		= 0;
-		ZONEMAP 	= 1;
-		BSI 		= 2;
-	}
-	IndexType typ				= 1;
-	string name 				= 2;
-	repeated string col_names 	= 3;
+message OnUpdate {
+	Expr expr = 1;
+	string origin_string = 2;
 }
 
 message PrimaryKeyDef {
@@ -247,7 +242,7 @@ enum PartitionType {
 message PartitionInfo {
 	PartitionType type = 1;
 	Expr Expr = 2;
-	string partitionExpression = 3;
+	Expr partitionExpression = 3;
 	repeated Expr Columns = 4;
 	repeated string partitionColumns = 5;
 	uint64 partitionNum = 6;
@@ -270,16 +265,22 @@ message ViewDef {
 	string view  = 1;
 }
 
-message ComputeIndexDef {
-	repeated string names = 1;
+message IndexDef {
+	repeated string index_names = 1;
 	repeated string table_names = 2;
 	repeated bool uniques = 3;
+	repeated Field fields = 4;
 }
 
-message ComputeIndexInfo {
+message Field {
+	repeated string col_names = 1;
+}
+
+message IndexInfo {
 	string table_name = 1;
-	repeated string attrs = 2;
+	repeated string col_names = 2;
 	repeated ColDef cols = 3;
+	Field field = 4;
 }
 
 message TableDef {
@@ -290,7 +291,6 @@ message TableDef {
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
 			PartitionInfo partition				= 5;
-			ComputeIndexDef compute_index = 6;
 		}
 	}
 	string name				= 1;
@@ -301,7 +301,7 @@ message TableDef {
 	map<string, int32> name2col_index = 6;
 	ColDef composite_pkey = 7;
 	TableFunction tbl_func = 8;
-	repeated ComputeIndexInfo compute_index_infos = 9;
+	repeated IndexInfo index_infos = 9;
 }
 
 message TableFunction{
@@ -497,10 +497,9 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
-	bool isHideKey = 5;
-	int32 colIndex = 6;
-	repeated ComputeIndexInfo compute_index_infos = 7;
-	repeated string index_attrs = 8;
+	int32 colIndex = 5;
+	repeated IndexInfo index_infos = 6;
+	repeated string index_attrs = 7;
 }
 
 message Query {
@@ -593,7 +592,7 @@ message InsertValues {
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
 	ColDef composite_pkey = 7;
-	repeated ComputeIndexInfo compute_index_infos = 8;
+	repeated IndexInfo index_infos = 8;
 }
 
 message column{
@@ -648,6 +647,7 @@ message DataDefinition {
 		SHOW_PROCESSLIST	= 23;
 		SHOW_TABLE_STATUS 	= 24;
 		SHOW_TARGET 		= 25;
+		SHOW_COLLATION 		= 26;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -757,9 +757,4 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
-}
-
-message IndexTableInfo {
-	string index_table_name = 1;
-	repeated ColDef cols = 2;
 }

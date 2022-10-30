@@ -27,19 +27,21 @@ type Argument struct {
 	Engine       engine.Engine
 	DB           []engine.Database
 	TableID      []string
+	DBName       []string
+	TblName      []string
 }
 
 type UpdateCtx struct {
-	PriKey             string
-	PriKeyIdx          int32 // delete if -1
-	HideKey            string
-	HideKeyIdx         int32
-	UpdateAttrs        []string
-	OtherAttrs         []string
-	IndexAttrs         []string
-	OrderAttrs         []string
-	TableSource        engine.Relation
-	CPkeyColDef        *plan.ColDef
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan.ComputeIndexInfo
+	PriKey      string
+	PriKeyIdx   int32 // delete if -1
+	HideKey     string
+	HideKeyIdx  int32
+	UpdateAttrs []string
+	OtherAttrs  []string
+	IndexAttrs  []string
+	OrderAttrs  []string
+	TableSource engine.Relation
+	CPkeyColDef *plan.ColDef
+	IndexTables []engine.Relation
+	IndexInfos  []*plan.IndexInfo
 }

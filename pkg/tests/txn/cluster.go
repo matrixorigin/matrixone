@@ -16,7 +16,6 @@ package txn
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -32,9 +31,6 @@ import (
 
 var (
 	defaultTestTimeout = time.Minute
-
-	memKVTxnStorage = "MEMKV"
-	memTxnStorage   = "MEM"
 )
 
 type cluster struct {
@@ -47,7 +43,8 @@ type cluster struct {
 
 // NewCluster new txn testing cluster based on the service.Cluster
 func NewCluster(t *testing.T, options service.Options) (Cluster, error) {
-	env, err := service.NewCluster(t, options)
+	logger := logutil.GetPanicLoggerWithLevel(zap.DebugLevel)
+	env, err := service.NewCluster(t, options.WithLogger(logger))
 	if err != nil {
 		return nil, err
 	}
@@ -55,10 +52,14 @@ func NewCluster(t *testing.T, options service.Options) (Cluster, error) {
 	return &cluster{
 		t:       t,
 		env:     env,
-		logger:  logutil.GetPanicLoggerWithLevel(zap.DebugLevel),
+		logger:  logger,
 		clock:   clock.NewUnixNanoHLCClockWithStopper(stopper, 0),
 		stopper: stopper,
 	}, nil
+}
+
+func (c *cluster) GetLogger() *zap.Logger {
+	return c.logger
 }
 
 func (c *cluster) Start() {
@@ -74,9 +75,11 @@ func (c *cluster) Start() {
 }
 
 func (c *cluster) Stop() {
+	c.logger.Info("cluster start stop")
 	if err := c.env.Close(); err != nil {
 		assert.FailNow(c.t, "stop testing cluster failed")
 	}
+	c.logger.Info("cluster stop completed")
 }
 
 func (c *cluster) Env() service.Cluster {
@@ -84,17 +87,7 @@ func (c *cluster) Env() service.Cluster {
 }
 
 func (c *cluster) NewClient() Client {
-	backend := c.env.Options().GetTxnStorageBackend()
-	switch backend {
-	case memKVTxnStorage:
-		cli, err := newKVClient(c.env, c.clock, c.logger)
-		require.NoError(c.t, err)
-		return cli
-	case memTxnStorage:
-		cli, err := newSQLClient(c.env)
-		require.NoError(c.t, err)
-		return cli
-	default:
-		panic(fmt.Sprintf("%s backend txn storage not support", backend))
-	}
+	cli, err := newSQLClient(c.logger, c.env)
+	require.NoError(c.t, err)
+	return cli
 }

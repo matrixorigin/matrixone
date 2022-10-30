@@ -17,12 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -53,7 +56,7 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &trace.StatementInfo{}
 	ctx = trace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, bool) context.Context {
 		return ctx
 	})
 	return ctx, stubs
@@ -505,6 +508,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -579,6 +583,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 					{Oid: types.T_char},
 					{Oid: types.T_varchar},
 					{Oid: types.T_date},
+					{Oid: types.T_time},
 					{Oid: types.T_datetime},
 					{Oid: types.T_json},
 				},
@@ -621,6 +626,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_char,
 			types.T_varchar,
 			types.T_date,
+			types.T_time,
 			types.T_datetime,
 			types.T_json,
 		}
@@ -643,6 +649,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
+			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 		}
@@ -815,13 +822,15 @@ func Test_handleShowColumns(t *testing.T) {
 		data[0][1] = typ
 		data[0][2] = []byte("NULL")
 		data[0][3] = int8(2)
+		defaultV, err := types.Encode(&plan2.Default{NullAbility: true, Expr: nil, OriginString: "", XXX_NoUnkeyedLiteral: struct{}{}, XXX_unrecognized: []byte{}, XXX_sizecache: 0})
+		convey.So(err, convey.ShouldBeNil)
+		data[0][5] = defaultV
 		data[0][primaryKeyPos] = []byte("p")
 		ses.SetData(data)
 		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowColumns(ses)
-		convey.So(err, convey.ShouldBeNil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1039,6 +1048,93 @@ func Test_handleLoadData(t *testing.T) {
 		}
 		err = mce.handleLoadData(ctx, proc, load)
 		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestHandleDump(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call handleDump func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.MoDump{
+			OutFile: "test",
+		}
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+		dump.MaxFileSize = 1024
+		err = mce.handleDump(ctx, dump)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDump2File(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("call dumpData2File func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		reader := mock_frontend.NewMockReader(ctrl)
+		cnt := 0
+		reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(attrs []string, b, c interface{}) (*batch.Batch, error) {
+			cnt += 1
+			if cnt == 1 {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.New(types.T_int64.ToType())
+				err := bat.Vecs[0].Append(int64(1), false, testutil.TestUtilMp)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			return nil, nil
+		}).AnyTimes()
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relation(ctx, gomock.Any()).Return(rel, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		mce := NewMysqlCmdExecutor()
+		ses := &Session{
+			protocol: proto,
+		}
+		mce.ses = ses
+		dump := &tree.MoDump{
+			OutFile: "test_dump_" + strconv.Itoa(int(time.Now().Unix())),
+		}
+		err = mce.dumpData2File(ctx, dump, "", []*dumpTable{{"a", "", rel, []string{"a"}, false}}, false)
+		convey.So(err, convey.ShouldBeNil)
+		os.RemoveAll(dump.OutFile)
 	})
 }
 

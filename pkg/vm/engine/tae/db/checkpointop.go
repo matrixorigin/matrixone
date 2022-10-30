@@ -93,12 +93,6 @@ func (ckp *catalogCheckpointer) onBlock(entry *catalog.BlockEntry) (err error) {
 	if catalog.CheckpointSelectOp(entry.MetaBaseEntry, ckp.minTs, ckp.maxTs) {
 		ckp.cnt++
 	}
-
-	blkData := entry.GetBlockData()
-	_, terminated := entry.GetTerminationTS()
-	if terminated && blkData.RunCalibration() > 0 {
-		ckp.db.CKPDriver.EnqueueCheckpointUnit(blkData)
-	}
 	return
 }
 

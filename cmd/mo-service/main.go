@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -39,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -118,21 +116,17 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// TODO: Use real task storage. And Each service initializes the logger with its own UUID
-	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage(),
-		logutil.GetGlobalLogger().With(zap.String("node", cfg.LogService.UUID)))
-
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
 	}
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs, ts)
+		return startCNService(cfg, stopper, fs)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper, fs, ts)
+		return startLogService(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
 	}
@@ -142,9 +136,8 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
-	if err := waitClusterContidion(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
@@ -153,7 +146,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
-			taskService,
+			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -162,6 +155,7 @@ func startCNService(
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
+		// TODO: global client need to refactor
 		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
 		if err != nil {
 			panic(err)
@@ -182,7 +176,7 @@ func startDNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 ) error {
-	if err := waitClusterContidion(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
@@ -209,10 +203,9 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService, taskService)
+	s, err := logservice.NewService(lscfg, fileService)
 	if err != nil {
 		panic(err)
 	}
@@ -299,25 +292,11 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if SV.MergeCycle > 0 {
-		stopper.RunNamedTask("merge", func(ctx context.Context) {
-			merge, inited := export.NewMergeService(ctx,
-				export.WithTable(metric.SingleMetricTable),
-				export.WithFileService(fs),
-				export.WithMinFilesMerge(1),
-			)
-			if inited {
-				return
-			}
-			if merge == nil {
-				panic(moerr.NewInternalError("MergeService init failed."))
-			}
-			cycle := time.Duration(SV.MergeCycle) * time.Second
-			logutil.Infof("merge cycle: %v", cycle)
-			go merge.Start(cycle)
-			<-ctx.Done()
-			merge.Stop()
-		})
+	if SV.MergeCycle.Duration > 0 {
+		err = export.InitCronExpr(SV.MergeCycle.Duration)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

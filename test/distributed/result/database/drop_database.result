@@ -4,6 +4,7 @@ create database test01;
 drop database test01;
 show databases;
 Database
+mo_task
 mo_catalog
 system
 system_metrics

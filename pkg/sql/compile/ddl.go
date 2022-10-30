@@ -97,14 +97,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := dbSource.Relation(c.ctx, def.Name); err != nil {
-			if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-				return err
-			}
+		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(def.Name)
+		}
+		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -125,7 +126,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, id)
+	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
-	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
@@ -171,10 +172,15 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 				Names: defVal.Pk.GetNames(),
 			}
 		case *plan.TableDef_DefType_Idx:
-			exeDefs[i] = &engine.IndexTableDef{
-				ColNames: defVal.Idx.GetColNames(),
-				Name:     defVal.Idx.GetName(),
+			indexDef := &engine.ComputeIndexDef{}
+			indexDef.IndexNames = defVal.Idx.IndexNames
+			indexDef.TableNames = defVal.Idx.TableNames
+			indexDef.Uniques = defVal.Idx.Uniques
+			indexDef.Fields = make([][]string, 0)
+			for _, field := range defVal.Idx.Fields {
+				indexDef.Fields = append(indexDef.Fields, field.ColNames)
 			}
+			exeDefs[i] = indexDef
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -198,12 +204,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
-		case *plan.TableDef_DefType_ComputeIndex:
-			computeIndexDef := &engine.ComputeIndexDef{}
-			computeIndexDef.Names = defVal.ComputeIndex.Names
-			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
-			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
-			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil

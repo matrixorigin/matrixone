@@ -21,7 +21,7 @@ SELECT CONCAT_WS('My', NULL, 'QL');
 -- @bvt:issue#3247
 SELECT CONCAT_WS(14,'.3');
 -- @bvt:issue
-SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));
+-- SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));
 
 #Test cases of query with single table and operators
 drop table if exists t1;

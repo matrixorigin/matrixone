@@ -30,6 +30,7 @@ import (
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
+const MO_DEFUALT_HOSTNAME = "localhost"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -59,7 +60,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewBadDB(tblName)
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -80,7 +81,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	var pkDefs []string
 
 	for _, col := range tableDef.Cols {
-
 		colName := col.Name
 		if colName == catalog.Row_ID {
 			continue
@@ -88,7 +88,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		if col.Default != nil {
 			if col.Default.Expr != nil {
-				nullOrNot = "DEFAULT " + col.Default.OriginString
+				originStr := col.Default.OriginString
+				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
+					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
+						originStr = fmt.Sprintf("'%s'", originStr)
+					}
+				}
+				nullOrNot = "DEFAULT " + originStr
 			} else if col.Default.NullAbility {
 				nullOrNot = "DEFAULT NULL"
 			}
@@ -109,10 +115,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
+		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
+
+		updateOpt := ""
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
@@ -253,8 +267,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and (account_id = %v or account_id = 0)",
-		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (account_id = %v or account_id = 0)",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountId)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -392,13 +406,14 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 // TODO: Improve SQL. Currently, Lack of the mata of grants
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := ""
-	if stmt.Username == "" {
-		sql = "select concat(\"GRANT \", p.privilege_level, ' ON ', p.obj_type,  \" `root`\", \"@\", \"`localhost`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id"
-	} else {
-		sql = "select concat(\"GRANT\", p.privilege_level, 'ON', p.obj_type,  \"`%s`\", \"@\", \"`%s`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Hostname)
+	if stmt.Hostname == "" {
+		stmt.Hostname = MO_DEFUALT_HOSTNAME
 	}
+	if stmt.Username == "" {
+		stmt.Username = ctx.GetUserName()
+	}
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+	sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -444,6 +459,12 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_STATUS
 	sql := "select '' as `Variable_name`, '' as `Value` where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_COLLATION
+	sql := "select 'utf8mb4_bin' as `Collation`, 'utf8mb4' as `Charset`, 46 as `Id`, 'Yes' as `Compiled`, 1 as `Sortlen`"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

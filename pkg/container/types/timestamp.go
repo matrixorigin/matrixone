@@ -101,9 +101,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	} else if len(msecStr) < int(precision) {
 		lengthMsecStr := len(msecStr)
 		padZeros := int(precision) - lengthMsecStr
-		for i := 0; i < padZeros; i++ {
-			msecStr = msecStr + string('0')
-		}
+		msecStr = msecStr + FillString[padZeros]
 	}
 	if len(msecStr) == 0 { // this means the precision is 0
 		return 0, msecCarry, nil
@@ -132,9 +130,13 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	}
 
 	result := dt.ToTimestamp(loc)
-	if result < TimestampMinValue {
-		return -1, moerr.NewInvalidArg("parse timestamp", s)
-	}
+	//for issue5305, do not do this check
+	//according to mysql, timestamp function actually return a datetime value
+	/*
+		if result < TimestampMinValue {
+			return -1, moerr.NewInvalidArg("parse timestamp", s)
+		}
+	*/
 
 	return result, nil
 }

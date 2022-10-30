@@ -34,7 +34,8 @@ const (
 	// using a static instance, no alloc.
 	Ok              uint16 = 0
 	OkStopCurrRecur uint16 = 1
-	OkExpectedEOF   uint16 = 2
+	OkExpectedEOF   uint16 = 2 // Expected End Of File
+	OkExpectedEOB   uint16 = 3 // Expected End of Batch
 	OkMax           uint16 = 99
 
 	// 100 - 200 is Info
@@ -157,6 +158,7 @@ const (
 	ErrPrimaryKeyDuplicated      uint16 = 20623
 	ErrAppendableSegmentNotFound uint16 = 20624
 	ErrAppendableBlockNotFound   uint16 = 20625
+	ErrTAEDebug                  uint16 = 20626
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -231,7 +233,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
 	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
 	ErrBadS3Config:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "bad s3 config: %s"},
-	ErrBadView:                      {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view %s"},
+	ErrBadView:                      {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view '%s.%s'"},
 	ErrInvalidTask:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid task, task runner %s, id %d"},
 	ErrInvalidServiceIndex:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid service idx %d"},
 	ErrDragonboatTimeout:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
@@ -455,6 +457,7 @@ func (e *Error) Succeeded() bool {
 // with other error code checking.
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
 var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
+var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -471,6 +474,10 @@ func GetOkStopCurrRecur() *Error {
 
 func GetOkExpectedEOF() *Error {
 	return &errOkExptededEOF
+}
+
+func GetOkExpectedEOB() *Error {
+	return &errOkExptededEOB
 }
 
 func NewInfo(msg string) *Error {

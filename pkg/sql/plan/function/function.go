@@ -40,12 +40,18 @@ var (
 	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
 	// used to make an AndExpr
 	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
+	AndFunctionName      = "and"
 )
 
 // Functions records all overloads of the same function name
 // and its function-id and type-check-function
 type Functions struct {
 	Id int
+
+	Flag plan.Function_FuncFlag
+
+	// Layout adapt to plan/function.go, used for `explain SQL`.
+	Layout FuncExplainLayout
 
 	// TypeCheckFn checks if the input parameters can satisfy one of the overloads
 	// and returns its index id.
@@ -114,11 +120,6 @@ type Function struct {
 	// whether the function needs to append a hidden parameter, such as 'uuid'
 	AppendHideArg bool
 
-	Flag plan.Function_FuncFlag
-
-	// Layout adapt to plan/function.go, used for `explain SQL`.
-	Layout FuncExplainLayout
-
 	Args      []types.T
 	ReturnTyp types.T
 
@@ -131,6 +132,19 @@ type Function struct {
 
 	// Info records information about the function overload used to print
 	Info string
+
+	flag plan.Function_FuncFlag
+
+	// Layout adapt to plan/function.go, used for `explain SQL`.
+	layout FuncExplainLayout
+}
+
+func (f *Function) GetFlag() plan.Function_FuncFlag {
+	return f.flag
+}
+
+func (f *Function) GetLayout() FuncExplainLayout {
+	return f.layout
 }
 
 // ReturnType return result-type of function, and the result is nullable
@@ -147,11 +161,11 @@ func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func (f Function) IsAggregate() bool {
-	return f.Flag == plan.Function_AGG
+	return f.GetFlag() == plan.Function_AGG
 }
 
 func (f Function) isFunction() bool {
-	return f.Layout == STANDARD_FUNCTION || f.Layout >= NOPARAMETER_FUNCTION
+	return f.GetLayout() == STANDARD_FUNCTION || f.GetLayout() >= NOPARAMETER_FUNCTION
 }
 
 // functionRegister records the information about
@@ -219,7 +233,7 @@ func GetFunctionIsMonotonicalById(overloadID int64) (bool, error) {
 	if function.Volatile {
 		return false, nil
 	}
-	isMonotonical := (function.Flag & plan.Function_MONOTONICAL) != 0
+	isMonotonical := (function.GetFlag() & plan.Function_MONOTONICAL) != 0
 	return isMonotonical, nil
 }
 
@@ -314,6 +328,8 @@ func setDefaultPrecision(typ *types.Type) {
 	} else if typ.Oid == types.T_timestamp {
 		typ.Precision = 6
 	} else if typ.Oid == types.T_datetime {
+		typ.Precision = 6
+	} else if typ.Oid == types.T_time {
 		typ.Precision = 6
 	}
 	typ.Size = int32(typ.Oid.TypeLen())

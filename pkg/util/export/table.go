@@ -69,6 +69,7 @@ var NormalTableEngine = "TABLE"
 var ExternalTableEngine = "EXTERNAL"
 
 type Table struct {
+	Account          string
 	Database         string
 	Table            string
 	Columns          []Column
@@ -81,6 +82,14 @@ type Table struct {
 	AccountColumn *Column
 	// TableOptions default is nil, see GetTableOptions
 	TableOptions TableOptions
+	// SupportUserAccess default false. if true, user account can access.
+	SupportUserAccess bool
+}
+
+func (tbl *Table) Clone() *Table {
+	t := &Table{}
+	*t = *tbl
+	return t
 }
 
 func (tbl *Table) GetName() string {
@@ -152,7 +161,7 @@ func (tbl *Table) GetTableOptions() TableOptions {
 	if tbl.TableOptions != nil {
 		return tbl.TableOptions
 	}
-	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table)
+	return GetOptionFactory(tbl.Engine)(tbl.Database, tbl.Table, tbl.Account)
 }
 
 type ViewOption func(view *View)
@@ -171,11 +180,19 @@ type View struct {
 	OriginTable *Table
 	Columns     []Column
 	Condition   WhereCondition
+	// SupportUserAccess default false. if true, user account can access.
+	SupportUserAccess bool
 }
 
 func WithColumn(c Column) ViewOption {
 	return ViewOption(func(v *View) {
 		v.Columns = append(v.Columns, c)
+	})
+}
+
+func SupportUserAccess(support bool) ViewOption {
+	return ViewOption(func(v *View) {
+		v.SupportUserAccess = support
 	})
 }
 
@@ -301,6 +318,7 @@ type CsvTableOptions struct {
 	Formatter string
 	DbName    string
 	TblName   string
+	Account   string
 }
 
 func getExternalTableDDLPrefix(sql string) string {
@@ -320,20 +338,20 @@ func (o *CsvTableOptions) GetTableOptions(builder PathBuilder) string {
 		builder = NewDBTablePathBuilder()
 	}
 	if len(o.Formatter) > 0 {
-		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName))
+		return fmt.Sprintf(o.Formatter, builder.BuildETLPath(o.DbName, o.TblName, o.Account))
 	}
 	return ""
 }
 
-func GetOptionFactory(engine string) func(db, tbl string) TableOptions {
+func GetOptionFactory(engine string) func(db, tbl, account string) TableOptions {
 	var infileFormatter = ` infile{"filepath"="etl:%s","compression"="none"}` +
 		` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 	switch engine {
 	case NormalTableEngine:
-		return func(_, _ string) TableOptions { return NoopTableOptions{} }
+		return func(_, _, _ string) TableOptions { return NoopTableOptions{} }
 	case ExternalTableEngine:
-		return func(db, tbl string) TableOptions {
-			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl}
+		return func(db, tbl, account string) TableOptions {
+			return &CsvTableOptions{Formatter: infileFormatter, DbName: db, TblName: tbl, Account: account}
 		}
 	default:
 		panic(moerr.NewInternalError("unknown engine: %s", engine))
@@ -344,7 +362,7 @@ var gTable map[string]*Table
 var mux sync.Mutex
 
 // RegisterTableDefine return old one, if already registered
-var RegisterTableDefine = func(table *Table) *Table {
+func RegisterTableDefine(table *Table) *Table {
 	mux.Lock()
 	defer mux.Unlock()
 	if len(gTable) == 0 {
@@ -356,7 +374,7 @@ var RegisterTableDefine = func(table *Table) *Table {
 	return old
 }
 
-var GetAllTable = func() []*Table {
+func GetAllTable() []*Table {
 	mux.Lock()
 	defer mux.Unlock()
 	tables := make([]*Table, 0, len(gTable))
@@ -369,6 +387,9 @@ var GetAllTable = func() []*Table {
 func SetPathBuilder(pathBuilder string) error {
 	tables := GetAllTable()
 	bp := PathBuilderFactory(pathBuilder)
+	if bp == nil {
+		return moerr.NewNotSupported("not support PathBuilder: %s", pathBuilder)
+	}
 	for _, tbl := range tables {
 		tbl.PathBuilder = bp
 	}

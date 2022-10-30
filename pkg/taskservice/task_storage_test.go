@@ -26,7 +26,8 @@ import (
 
 var (
 	storages = map[string]func(*testing.T) TaskStorage{
-		"mem": createMem,
+		"mem":     createMem,
+		"refresh": createRefresh,
 	}
 )
 
@@ -34,33 +35,22 @@ func createMem(t *testing.T) TaskStorage {
 	return NewMemTaskStorage()
 }
 
-//func createMysql(t *testing.T) TaskStorage {
-//	storage, err := NewMysqlTaskStorage("mysql", "wzr:1234@/task")
-//	require.NoError(t, err)
-//	return storage
-//}
-
-func dropTable(s TaskStorage) error {
-	if m, ok := s.(*mysqlTaskStorage); ok {
-		_, err := m.db.Exec("drop table sys_async_task")
-		if err != nil {
-			return err
-		}
-		_, err = m.db.Exec("drop table sys_cron_task")
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	return nil
+func createRefresh(t *testing.T) TaskStorage {
+	return newRefreshableTaskStorage(nil, func() (string, error) { return "", nil }, NewFixedTaskStorageFactory(NewMemTaskStorage()))
 }
+
+// TODO: move to cluster testing.
+// func createMysql(t *testing.T) TaskStorage {
+// 	storage, err := NewMysqlTaskStorage("root:root@tcp(127.0.0.1:12345)/", "mo_task")
+// 	require.NoError(t, err)
+// 	return storage
+// }
 
 func TestAddTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -77,7 +67,6 @@ func TestUpdateTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -96,7 +85,6 @@ func TestUpdateTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -120,7 +108,6 @@ func TestDeleteTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -145,7 +132,6 @@ func TestQueryTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -171,7 +157,6 @@ func TestAddAndQueryCronTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -193,7 +178,6 @@ func TestUpdateCronTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
-				assert.NoError(t, dropTable(s))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -266,7 +250,7 @@ func mustDeleteTestTask(t *testing.T, s TaskStorage, expectUpdated int, conds ..
 }
 
 func mustAddTestCronTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.CronTask) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 	defer cancel()
 
 	n, err := s.AddCronTask(ctx, tasks...)

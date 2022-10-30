@@ -93,11 +93,11 @@ function run_tests(){
     make cgo
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
 
     else
         logger "INF" "Run UT with race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  $UT_REPORT > $UT_FILTER

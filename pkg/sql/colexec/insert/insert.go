@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,18 +33,18 @@ import (
 )
 
 type Argument struct {
-	Ts                 uint64
-	TargetTable        engine.Relation
-	TargetColDefs      []*plan.ColDef
-	Affected           uint64
-	Engine             engine.Engine
-	DB                 engine.Database
-	TableID            string
-	CPkeyColDef        *plan.ColDef
-	DBName             string
-	TableName          string
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan.ComputeIndexInfo
+	Ts            uint64
+	TargetTable   engine.Relation
+	TargetColDefs []*plan.ColDef
+	Affected      uint64
+	Engine        engine.Engine
+	DB            engine.Database
+	TableID       string
+	CPkeyColDef   *plan.ColDef
+	DBName        string
+	TableName     string
+	IndexTables   []engine.Relation
+	IndexInfos    []*plan.IndexInfo
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -59,10 +60,10 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
-	for idx, info := range n.ComputeIndexInfos {
+	for idx, info := range n.IndexInfos {
 		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
 		if rowNum != 0 {
-			err := n.ComputeIndexTables[idx].Write(ctx, b)
+			err := n.IndexTables[idx].Write(ctx, b)
 			if err != nil {
 				return err
 			}
@@ -202,8 +203,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
 	}
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+	if err := colexec.UpdateInsertBatch(n.Engine, proc.Ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 		return false, err
 	}
 	if n.CPkeyColDef != nil {
@@ -222,8 +222,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		}
 	}
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
+	// set null value's data
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
-	return handleLoadWrite(n, proc, ctx, bat)
+	if !proc.LoadTag {
+		return false, handleWrite(n, proc, proc.Ctx, bat)
+	}
+	return handleLoadWrite(n, proc, proc.Ctx, bat)
 }

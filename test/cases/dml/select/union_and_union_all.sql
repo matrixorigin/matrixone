@@ -89,9 +89,7 @@ select a from t3 union select col2 from t4;
 
 select a from t3 union select col3 from t4;
 
--- @bvt:issue#4942
 select a from t3 union select col4 from t4;
--- @bvt:issue
 
 drop table t3;
 drop table t4;
@@ -119,9 +117,7 @@ insert into t6 values ('bb', '22');
 insert into t6 values ('cc', '33');
 insert into t6 values ('dd', '44');
 
--- @bvt:issue#4944
 select a from t5 union select col1 from t6;
--- @bvt:issue
 select a from t5 union select col2 from t6;
 select b from t5 union select col1 from t6;
 select b from t5 union select col2 from t6;
