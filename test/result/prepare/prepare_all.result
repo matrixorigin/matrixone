@@ -207,13 +207,17 @@ time1    time2    time3
 execute s3 using @min_date;
 time1    time2    time3
 execute s3 using @max_datetime;
-time1    time2    time3
+invalid argument parse timestamp, bad value 9999-12-31 23:59:59.999999
 execute s3 using @min_datetime;
 time1    time2    time3
 execute s3 using @max_timestamp;
 time1    time2    time3
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01
 execute s3 using @min_timestamp;
 time1    time2    time3
+1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
 DEALLOCATE PREPARE s3;
 set @time1='2022-10-24';
 set @time2='2022-10-25 10:10:10.000000';
