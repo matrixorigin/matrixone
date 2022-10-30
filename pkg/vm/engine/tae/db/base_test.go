@@ -97,7 +97,7 @@ func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation
 }
 
 func (e *testEngine) checkpointCatalog() {
-	e.DB.BGCheckpointRunner.ForceCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
+	e.DB.BGCheckpointRunner.MockCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {

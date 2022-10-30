@@ -145,6 +145,7 @@ func NewRunner(
 }
 
 func (r *runner) onCheckpointEntries(items ...any) {
+	var err error
 	entry := r.MaxCheckpoint()
 	if entry.IsFinished() {
 		return
@@ -166,17 +167,30 @@ func (r *runner) onCheckpointEntries(items ...any) {
 
 	now := time.Now()
 	if entry.IsIncremental() {
-		r.doIncrementalCheckpoint(entry)
+		err = r.doIncrementalCheckpoint(entry)
 	} else {
-		r.doGlobalCheckpoint(entry)
+		err = r.doGlobalCheckpoint(entry)
 	}
-	r.syncCheckpointMetadata(entry.start, entry.end)
+	if err != nil {
+		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
+		return
+	}
+	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
+		// TODO:
+		// 1. Retry
+		// 2. Clean garbage
+		return
+	}
+
 	lsn := r.source.GetMaxLSN(entry.start, entry.end)
 	e, err := r.wal.RangeCheckpoint(1, lsn)
 	if err != nil {
 		panic(err)
 	}
-	e.WaitDone()
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 
 	entry.SetState(ST_Finished)
 	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
@@ -195,41 +209,62 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
-func (r *runner) ForceCheckpoint(end types.TS) {
+func (r *runner) MockCheckpoint(end types.TS) {
+	var err error
 	entry := NewCheckpointEntry(types.TS{}, end)
-	r.doIncrementalCheckpoint(entry)
+	if err = r.doIncrementalCheckpoint(entry); err != nil {
+		panic(err)
+	}
+	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		panic(err)
+	}
 	r.storage.entries.Set(entry)
 	entry.SetState(ST_Finished)
 	r.storage.prevGlobal = entry
-	r.syncCheckpointMetadata(entry.start, entry.end)
 }
-func (r *runner) syncCheckpointMetadata(start, end types.TS) {
+
+func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata()
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer := blockio.NewWriter(r.fs, name)
-	writer.WriteBlock(bat)
-	writer.Sync()
+	if _, err = writer.WriteBlock(bat); err != nil {
+		return
+	}
+
+	// TODO: checkpoint entry should maintain the location
+	_, err = writer.Sync()
+	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
 	if err != nil {
-		panic(err)
+		return
 	}
-	writer := entry.MakeWriter(r.fs)
-	blks := builder.WriteTo(writer)
-	entry.EncodeAndSetLocation(blks)
+	writer := blockio.NewWriter(r.fs, entry.Key())
+	blks, err := builder.WriteTo(writer)
+	if err != nil {
+		return
+	}
+	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
+	entry.SetLocation(location)
+	return
 }
 
-func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
+func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
 	// TODO
 	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
 	if err != nil {
-		panic(err)
+		return
 	}
-	writer := entry.MakeWriter(r.fs)
-	blks := builder.WriteTo(writer)
-	entry.EncodeAndSetLocation(blks)
+	writer := blockio.NewWriter(r.fs, entry.Key())
+	blks, err := builder.WriteTo(writer)
+	if err != nil {
+		return
+	}
+	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
+	entry.SetLocation(location)
+	return
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {

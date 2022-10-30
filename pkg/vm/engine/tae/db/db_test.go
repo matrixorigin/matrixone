@@ -708,7 +708,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-	tae.BGCheckpointRunner.ForceCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -825,7 +825,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	tae.BGCheckpointRunner.ForceCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
