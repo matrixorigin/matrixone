@@ -216,8 +216,8 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	writer := entry.NewCheckpointWriter(r.fs)
-	blks := builder.WriteToFS(writer)
+	writer := entry.MakeWriter(r.fs)
+	blks := builder.WriteTo(writer)
 	entry.EncodeAndSetLocation(blks)
 }
 
@@ -227,8 +227,8 @@ func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	writer := entry.NewCheckpointWriter(r.fs)
-	blks := builder.WriteToFS(writer)
+	writer := entry.MakeWriter(r.fs)
+	blks := builder.WriteTo(writer)
 	entry.EncodeAndSetLocation(blks)
 }
 
