@@ -108,9 +108,7 @@ use mo_catalog;
 show tables;
 -- @bvt:issue
 select user_name,authentication_string,owner from mo_user;
--- @bvt:issue#6054
 select role_name,obj_type,privilege_name,privilege_level from mo_role_privs;
--- @bvt:issue
 create database account_1_db;
 CREATE USER account_1_user IDENTIFIED BY '123456';
 create table a(b int);
