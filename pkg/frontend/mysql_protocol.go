@@ -1055,8 +1055,6 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 
 // the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
-	//TODO:check the user and the connection
-	//TODO:get the user's password
 	var psw []byte
 	var err error
 	var tenant *TenantInfo

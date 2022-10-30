@@ -1704,7 +1704,9 @@ func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
 func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
+	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
+	logutil.Debugf("background exec sql done")
 	if err != nil {
 		return nil, err
 	}
