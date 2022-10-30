@@ -28,7 +28,7 @@ import (
 
 func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing(ctx,
+	result, err := handlePing()(ctx,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
@@ -45,7 +45,7 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 func TestCmdPingDNWithSingleDN(t *testing.T) {
 	shardID := uint64(1)
 	ctx := context.Background()
-	result, err := handlePing(ctx,
+	result, err := handlePing()(ctx,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
@@ -77,7 +77,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 
 func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing(ctx,
+	result, err := handlePing()(ctx,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
@@ -115,7 +115,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 
 func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing(ctx,
+	result, err := handlePing()(ctx,
 		dn,
 		"1",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {

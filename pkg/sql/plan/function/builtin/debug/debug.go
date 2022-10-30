@@ -54,6 +54,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		// 2. may support debug support for transactions in the future, such as testing the
 		//    correctness of the transaction by forcing the timestamp of the transaction to
 		//    be modified, etc.
+		// TODO: add more ut tests for this.
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {

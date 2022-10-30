@@ -36,7 +36,7 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		strings.ToUpper(pb.CmdMethod_Ping.String()): handlePing,
+		strings.ToUpper(pb.CmdMethod_Ping.String()): handlePing(),
 	}
 )
 
