@@ -518,10 +518,6 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (e *DBEntry) MakeLogEntry() *EntryCommand {
-	return newDBCmd(0, CmdLogDatabase, e)
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()

@@ -348,10 +348,6 @@ func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {
-	return newSegmentCmd(0, CmdLogSegment, entry)
-}
-
 func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
 	return entry.GetTable().GetCatalog().GetScheduler()
 }

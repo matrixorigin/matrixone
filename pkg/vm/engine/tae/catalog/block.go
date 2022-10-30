@@ -187,10 +187,6 @@ func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *BlockEntry) MakeLogEntry() *EntryCommand {
-	return newBlockCmd(0, CmdLogBlock, entry)
-}
-
 func (entry *BlockEntry) DestroyData() (err error) {
 	if entry.blkData == nil {
 		return

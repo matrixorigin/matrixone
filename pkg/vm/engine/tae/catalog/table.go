@@ -405,10 +405,6 @@ func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *TableEntry) MakeLogEntry() *EntryCommand {
-	return newTableCmd(0, CmdLogTable, entry)
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()
