@@ -105,9 +105,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
-	db.BGCheckpointRunner.Replay(dataFactory)
+	ts, err := db.BGCheckpointRunner.Replay(dataFactory)
+	if err != nil {
+		panic(err)
+	}
 
-	db.Replay(dataFactory)
+	db.Replay(dataFactory, ts)
 	db.Catalog.ReplayTableRows()
 
 	db.DBLocker, dbLocker = dbLocker, nil

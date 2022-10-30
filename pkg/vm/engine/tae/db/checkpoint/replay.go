@@ -33,7 +33,7 @@ type metaFile struct {
 	end   types.TS
 }
 
-func (r *runner) Replay(dataFactory catalog.DataFactory) (err error) {
+func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
 	dirs, err := r.fs.ListDir(CheckpointDir)
 	if err != nil {
 		return
@@ -74,11 +74,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (err error) {
 		}
 		col, err2 := bs[0].GetColumn(uint16(i))
 		if err2 != nil {
-			return err2
+			return types.TS{}, err2
 		}
 		data, err2 := col.GetData(context.Background(), nil)
 		if err2 != nil {
-			return err2
+			return types.TS{}, err2
 		}
 		pkgVec := vector.New(colTypes[i])
 		if err = pkgVec.Read(data.Entries[0].Data); err != nil {
@@ -92,7 +92,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (err error) {
 		}
 		bat.AddVector(colNames[i], vec)
 	}
-	maxTs := types.TS{}
 	for i := 0; i < bat.Length(); i++ {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)

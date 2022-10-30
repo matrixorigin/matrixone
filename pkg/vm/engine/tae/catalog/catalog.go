@@ -194,13 +194,13 @@ func (catalog *Catalog) ReplayCmd(
 
 func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	prepareTS := cmd.GetTs()
-	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
-			observer.OnStaleIndex(idx)
-		}
-		return
-	}
+	// prepareTS := cmd.GetTs()
+	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	// 	if observer != nil {
+	// 		observer.OnStaleIndex(idx)
+	// 	}
+	// 	return
+	// }
 	var err error
 	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
 	un.SetLogIndex(idx)
@@ -323,13 +323,13 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 }
 func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.Table.ID)
-	prepareTS := cmd.GetTs()
-	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
-			observer.OnStaleIndex(idx)
-		}
-		return
-	}
+	// prepareTS := cmd.GetTs()
+	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	// 	if observer != nil {
+	// 		observer.OnStaleIndex(idx)
+	// 	}
+	// 	return
+	// }
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -488,13 +488,13 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	idx *wal.Index,
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	prepareTS := cmd.GetTs()
-	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
-			observer.OnStaleIndex(idx)
-		}
-		return
-	}
+	// prepareTS := cmd.GetTs()
+	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	// 	if observer != nil {
+	// 		observer.OnStaleIndex(idx)
+	// 	}
+	// 	return
+	// }
 
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
@@ -652,12 +652,12 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	prepareTS := cmd.GetTs()
-	if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
-			observer.OnStaleIndex(idx)
-		}
-		return
-	}
+	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+	// 	if observer != nil {
+	// 		observer.OnStaleIndex(idx)
+	// 	}
+	// 	return
+	// }
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -1174,14 +1174,14 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs types.TS) *CheckpointEn
 	return ckpEntry
 }
 
-func (catalog *Catalog) GetCheckpointed() *Checkpoint {
-	catalog.ckpmu.RLock()
-	defer catalog.ckpmu.RUnlock()
-	if len(catalog.checkpoints) == 0 {
-		return EmptyCheckpoint
-	}
-	return catalog.checkpoints[len(catalog.checkpoints)-1]
-}
+// func (catalog *Catalog) GetCheckpointed() *Checkpoint {
+// 	catalog.ckpmu.RLock()
+// 	defer catalog.ckpmu.RUnlock()
+// 	if len(catalog.checkpoints) == 0 {
+// 		return EmptyCheckpoint
+// 	}
+// 	return catalog.checkpoints[len(catalog.checkpoints)-1]
+// }
 
 // func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
 // 	return func() error {
