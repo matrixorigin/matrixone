@@ -32,6 +32,7 @@ const (
 	CmdMethod_Ping CmdMethod = 0
 
 	// Flush is to force flush the table data.
+	// parameter should be "DbName@TableName"
 	CmdMethod_Flush CmdMethod = 1
 )
 

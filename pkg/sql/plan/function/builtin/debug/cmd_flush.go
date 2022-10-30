@@ -16,6 +16,7 @@ func handleFlush() handleFunc {
 			return nil, nil
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) []byte {
+			// parameter should be "DbName@TableName"
 			parameters := strings.Split(parameter, "@")
 			payload, err := types.Encode(db.FlushTable{
 				DatabaseName: parameters[0],
@@ -33,8 +34,8 @@ func handleFlush() handleFunc {
 		},
 		func(data []byte) (interface{}, error) {
 			if data != nil {
-				return pb.DebugResult{Data: data}, nil
+				return pb.DebugResult{Method: pb.CmdMethod_Flush.String(), Data: data}, nil
 			}
-			return pb.DebugResult{Data: "true"}, nil
+			return pb.DebugResult{Method: pb.CmdMethod_Flush.String(), Data: "succeed"}, nil
 		})
 }

@@ -29,10 +29,10 @@ import (
 
 func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
-	ClusterDetail := func() (logservice.ClusterDetails, error) {
+	clusterDetails := func() (logservice.ClusterDetails, error) {
 		return logservice.ClusterDetails{}, nil
 	}
-	proc := process.New(ctx, nil, nil, nil, nil, ClusterDetail)
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -47,7 +47,7 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 func TestCmdPingDNWithSingleDN(t *testing.T) {
 	shardID := uint64(1)
 	ctx := context.Background()
-	ClusterDetail := func() (logservice.ClusterDetails, error) {
+	clusterDetails := func() (logservice.ClusterDetails, error) {
 		return logservice.ClusterDetails{
 			DNStores: []logservice.DNStore{
 				{
@@ -60,7 +60,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 			},
 		}, nil
 	}
-	proc := process.New(ctx, nil, nil, nil, nil, ClusterDetail)
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -80,7 +80,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 
 func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
-	ClusterDetail := func() (logservice.ClusterDetails, error) {
+	clusterDetails := func() (logservice.ClusterDetails, error) {
 		return logservice.ClusterDetails{
 			DNStores: []logservice.DNStore{
 				{
@@ -96,7 +96,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 			},
 		}, nil
 	}
-	proc := process.New(ctx, nil, nil, nil, nil, ClusterDetail)
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
 	result, err := handlePing()(proc,
 		dn,
 		"",
@@ -119,7 +119,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 
 func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
-	ClusterDetail := func() (logservice.ClusterDetails, error) {
+	clusterDetails := func() (logservice.ClusterDetails, error) {
 		return logservice.ClusterDetails{
 			DNStores: []logservice.DNStore{
 				{
@@ -135,7 +135,7 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 			},
 		}, nil
 	}
-	proc := process.New(ctx, nil, nil, nil, nil, ClusterDetail)
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
 	result, err := handlePing()(proc,
 		dn,
 		"1",
