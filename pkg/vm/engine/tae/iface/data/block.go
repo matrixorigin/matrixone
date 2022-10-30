@@ -91,7 +91,6 @@ type Block interface {
 	SetMaxCheckpointTS(ts types.TS)
 	GetMaxCheckpointTS() types.TS
 
-	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	ReplayImmutIndex() error
