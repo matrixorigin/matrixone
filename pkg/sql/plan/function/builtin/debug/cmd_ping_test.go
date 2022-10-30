@@ -38,7 +38,7 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 			return logservice.ClusterDetails{}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.DebugResult{Method: pb.CmdMethod_Ping.String(), Data: make([]pb.DNPingResponse, 0)},
+	assert.Equal(t, pb.DebugResult{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
 		result)
 }
 
@@ -71,7 +71,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.DebugResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []pb.DNPingResponse{{ShardID: shardID}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: shardID}},
 	}, result)
 }
 
@@ -109,7 +109,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.DebugResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []pb.DNPingResponse{{ShardID: 1}, {ShardID: 2}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}, pb.DNPingResponse{ShardID: 2}},
 	}, result)
 }
 
@@ -144,6 +144,6 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.DebugResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []pb.DNPingResponse{{ShardID: 1}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}},
 	}, result)
 }

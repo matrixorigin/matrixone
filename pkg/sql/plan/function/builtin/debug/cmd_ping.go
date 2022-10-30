@@ -41,6 +41,11 @@ func handlePing() handleFunc {
 		},
 		func(dnShardID uint64, parameter string) []byte {
 			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter})
+		},
+		func(data []byte) (interface{}, error) {
+			pong := pb.DNPingResponse{}
+			protoc.MustUnmarshal(&pong, data)
+			return pong, nil
 		})
 }
 
@@ -48,16 +53,18 @@ func handlePing() handleFunc {
 // method: debug command type.
 // whichDN: used to decide which DNs to send the debug request to, nil returned means send all dns.
 // payload: used to get debug command request payload
+// repsonseUnmarshaler: used to unmarshal response
 func getDNHandlerFunc(method pb.CmdMethod,
 	whichDN func(parameter string) ([]uint64, error),
-	payload func(dnShardID uint64, parameter string) []byte) handleFunc {
+	payload func(dnShardID uint64, parameter string) []byte,
+	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
 	return func(ctx context.Context,
 		service serviceType,
 		parameter string,
 		sender requestSender,
 		clusterDetailsGetter engine.GetClusterDetailsFunc) (pb.DebugResult, error) {
 		if service != dn {
-			return pb.DebugResult{}, moerr.NewNotSupported("ping service %s not supported", service)
+			return pb.DebugResult{}, moerr.NewNotSupported("service %s not supported", service)
 		}
 		targetDNs, err := whichDN(parameter)
 		if err != nil {
@@ -95,7 +102,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 				}
 			}
 		}
-		results := make([]pb.DNPingResponse, 0, len(requests))
+		results := make([]interface{}, 0, len(requests))
 		if len(requests) > 0 {
 			responses, err := sender(ctx, requests)
 			if err != nil {
@@ -106,9 +113,11 @@ func getDNHandlerFunc(method pb.CmdMethod,
 			}
 
 			for _, resp := range responses {
-				pong := pb.DNPingResponse{}
-				protoc.MustUnmarshal(&pong, resp.Payload)
-				results = append(results, pong)
+				r, err := repsonseUnmarshaler(resp.Payload)
+				if err != nil {
+					return pb.DebugResult{}, err
+				}
+				results = append(results, r)
 			}
 		}
 		return pb.DebugResult{Method: method.String(), Data: results}, nil
