@@ -187,9 +187,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		// if observer != nil {
-		// 	observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
-		// }
 		if blk.GetMetaLoc() != "" {
 			continue
 		}

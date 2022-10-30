@@ -52,7 +52,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	opts = opts.FillDefaults(dirname)
 
-	indexBufMgr := buffer.NewNodeManager(opts.CacheCfg.IndexCapacity, nil)
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
@@ -64,13 +63,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:         dirname,
-		Opts:        opts,
-		IndexBufMgr: indexBufMgr,
-		MTBufMgr:    mutBufMgr,
-		TxnBufMgr:   txnBufMgr,
-		Fs:          fs,
-		Closed:      new(atomic.Value),
+		Dir:       dirname,
+		Opts:      opts,
+		MTBufMgr:  mutBufMgr,
+		TxnBufMgr: txnBufMgr,
+		Fs:        fs,
+		Closed:    new(atomic.Value),
 	}
 
 	switch opts.LogStoreT {

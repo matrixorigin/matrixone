@@ -49,9 +49,8 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexBufMgr base.INodeManager
-	MTBufMgr    base.INodeManager
-	TxnBufMgr   base.INodeManager
+	MTBufMgr  base.INodeManager
+	TxnBufMgr base.INodeManager
 
 	TxnMgr     *txnbase.TxnManager
 	LogtailMgr *logtail.LogtailMgr
