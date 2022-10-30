@@ -116,10 +116,9 @@ BUILD_NAME=binary
 build: config cgo cmd/mo-service/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
 	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
-	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
 
-.PHONY: mo-dump
-mo-dump:
+.PHONY: modump
+modump:
 	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
 
 # build mo-service binary for debugging with go's race detector enabled

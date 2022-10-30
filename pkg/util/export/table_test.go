@@ -15,7 +15,10 @@
 package export
 
 import (
+	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -58,27 +61,37 @@ var dummyFloat64Column = Column{Name: "float64", Type: "DOUBLE", Default: "0.0",
 var dummyFloat64CreateSql = "`float64` DOUBLE DEFAULT \"0.0\" COMMENT \"float64 column\""
 
 var dummyTable = &Table{
+	Account:          "test",
 	Database:         "db_dummy",
 	Table:            "tbl_dummy",
 	Columns:          []Column{dummyStrColumn, dummyInt64Column, dummyFloat64Column},
 	PrimaryKeyColumn: []Column{dummyStrColumn, dummyInt64Column},
 	Engine:           ExternalTableEngine,
 	Comment:          "dummy table",
-	TableOptions:     NoopTableOptions{},
+	PathBuilder:      NewAccountDatePathBuilder(),
+	TableOptions:     nil,
 }
 
-var dummyTableCreateExistsSql = "CREATE TABLE IF NOT EXISTS `db_dummy`.`tbl_dummy`(" +
+func dummyFillTable(str string, i int64, f float64) *Row {
+	row := dummyTable.GetRow()
+	row.SetVal(dummyStrColumn.Name, str)
+	row.SetInt64(dummyInt64Column.Name, i)
+	row.SetFloat64(dummyFloat64Column.Name, f)
+	return row
+}
+
+var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
 	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
-	"\n)"
-var dummyTableCreateSql = "CREATE TABLE `db_dummy`.`tbl_dummy`(" +
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+var dummyTableCreateSql = "CREATE EXTERNAL TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
 	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
-	"\n)"
+	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 
 type dummyCondition struct{}
 
@@ -307,5 +320,61 @@ func TestViewOption_Apply(t *testing.T) {
 			got := tt.args.view.ToCreateSql(true)
 			assert.Equalf(t, tt.wantCreate, got, "ToCreateSql(%v)", true)
 		})
+	}
+}
+
+func TestTable_GetTableOptions(t *testing.T) {
+	type fields struct {
+		Account           string
+		Database          string
+		Table             string
+		Columns           []Column
+		PrimaryKeyColumn  []Column
+		Engine            string
+		Comment           string
+		PathBuilder       PathBuilder
+		AccountColumn     *Column
+		TableOptions      TableOptions
+		SupportUserAccess bool
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   TableOptions
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tbl := &Table{
+				Account:           tt.fields.Account,
+				Database:          tt.fields.Database,
+				Table:             tt.fields.Table,
+				Columns:           tt.fields.Columns,
+				PrimaryKeyColumn:  tt.fields.PrimaryKeyColumn,
+				Engine:            tt.fields.Engine,
+				Comment:           tt.fields.Comment,
+				PathBuilder:       tt.fields.PathBuilder,
+				AccountColumn:     tt.fields.AccountColumn,
+				TableOptions:      tt.fields.TableOptions,
+				SupportUserAccess: tt.fields.SupportUserAccess,
+			}
+			assert.Equalf(t, tt.want, tbl.GetTableOptions(), "GetTableOptions()")
+		})
+	}
+}
+
+func TestSetPathBuilder(t *testing.T) {
+	var err error
+	err = SetPathBuilder((*DBTablePathBuilder)(nil).GetName())
+	require.Nil(t, err)
+	err = SetPathBuilder("AccountDate")
+	require.Nil(t, err)
+	err = SetPathBuilder("unknown")
+	var moErr *moerr.Error
+	if errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrNotSupported) {
+		t.Logf("got ErrNotSupported normally")
+	} else {
+		t.Errorf("unexpect err: %v", err)
 	}
 }
