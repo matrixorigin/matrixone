@@ -155,11 +155,12 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 				if entry.IsDir && i+1 == len(pathDir) {
 					continue
 				}
-				matched, _ := filepath.Match(pathDir[i], entry.Name)
+				name := path.Base(entry.Name)
+				matched, _ := filepath.Match(pathDir[i], name)
 				if !matched {
 					continue
 				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				l.PushBack(path.Join(l.Front().Value.(string), name))
 			}
 			l.Remove(l.Front())
 		}
