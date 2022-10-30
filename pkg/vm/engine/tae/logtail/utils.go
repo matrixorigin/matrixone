@@ -421,7 +421,7 @@ func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
 				dbNode.GetEnd())
-			dbNode.TxnMVCCNode.FillTxnRows(collector.data.dbDelTxnBatch)
+			dbNode.TxnMVCCNode.AppendTuple(collector.data.dbDelTxnBatch)
 			collector.data.dbDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID())
 		} else {
 			catalogEntry2Batch(collector.data.dbInsBatch,
@@ -430,7 +430,7 @@ func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
 				dbNode.GetEnd())
-			dbNode.TxnMVCCNode.FillTxnRows(collector.data.dbInsTxnBatch)
+			dbNode.TxnMVCCNode.AppendTuple(collector.data.dbInsTxnBatch)
 		}
 	}
 	return nil
@@ -463,7 +463,7 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd())
-			tblNode.TxnMVCCNode.FillTxnRows(collector.data.tblInsTxnBatch)
+			tblNode.TxnMVCCNode.AppendTuple(collector.data.tblInsTxnBatch)
 		} else {
 			collector.data.tblDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetDB().GetID())
 			collector.data.tblDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetID())
@@ -478,7 +478,7 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd())
-			tblNode.TxnMVCCNode.FillTxnRows(collector.data.tblDelTxnBatch)
+			tblNode.TxnMVCCNode.AppendTuple(collector.data.tblDelTxnBatch)
 		}
 	}
 	return nil
@@ -498,14 +498,14 @@ func (collector *IncrementalCollector) VisitSeg(entry *catalog.SegmentEntry) (er
 			collector.data.segDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd())
 			collector.data.segDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID())
 			collector.data.segDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID())
-			segNode.TxnMVCCNode.FillTxnRows(collector.data.segDelTxnBatch)
+			segNode.TxnMVCCNode.AppendTuple(collector.data.segDelTxnBatch)
 		} else {
 			collector.data.segInsBatch.GetVectorByName(SegmentAttr_ID).Append(entry.GetID())
 			collector.data.segInsBatch.GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd())
 			collector.data.segInsBatch.GetVectorByName(SegmentAttr_State).Append(entry.IsAppendable())
 			collector.data.segInsTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID())
 			collector.data.segInsTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID())
-			segNode.TxnMVCCNode.FillTxnRows(collector.data.segInsTxnBatch)
+			segNode.TxnMVCCNode.AppendTuple(collector.data.segInsTxnBatch)
 		}
 	}
 	return nil
@@ -525,7 +525,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			collector.data.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID())
 			collector.data.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
 			collector.data.blkMetaDelTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
-			metaNode.TxnMVCCNode.FillTxnRows(collector.data.blkMetaDelTxnBatch)
+			metaNode.TxnMVCCNode.AppendTuple(collector.data.blkMetaDelTxnBatch)
 			collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 			collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		} else {
@@ -539,7 +539,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID())
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID())
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(SnapshotAttr_SegID).Append(entry.GetSegment().GetID())
-			metaNode.TxnMVCCNode.FillTxnRows(collector.data.blkMetaInsTxnBatch)
+			metaNode.TxnMVCCNode.AppendTuple(collector.data.blkMetaInsTxnBatch)
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		}

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
 	// "time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -261,12 +262,12 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 	for i := 0; i < ins.Length(); i++ {
 		dbid := ins.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
 		name := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
-		start, prepare, createdAt, logIndex := txnbase.GetFromBatch(insTxn, i)
+		start, prepare, createdAt, logIndex := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateDB(dbid, name, createdAt, start, prepare, logIndex)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		start, prepare, delete, logIndex := txnbase.GetFromBatch(delTxn, i)
+		start, prepare, delete, logIndex := txnbase.ReadTuple(delTxn, i)
 		catalog.onReplayDeleteDB(dbid, delete, start, prepare, logIndex)
 	}
 }
@@ -418,13 +419,13 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
 		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
-		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
+		start, prepare, create, logIndex := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateTable(dbid, tid, schema, create, start, prepare, logIndex, dataFactory)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		start, prepare, delete, logIndex := txnbase.GetFromBatch(delTxn, i)
+		start, prepare, delete, logIndex := txnbase.ReadTuple(delTxn, i)
 		catalog.onReplayDeleteTable(dbid, tid, delete, start, prepare, logIndex)
 	}
 
@@ -585,7 +586,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 			state = ES_Appendable
 		}
 		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(uint64)
-		start, prepare, create, logIndex := txnbase.GetFromBatch(insTxn, i)
+		start, prepare, create, logIndex := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateSegment(dbid, tid, sid, state, start, prepare, create, logIndex, dataFactory)
 	}
 	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
@@ -593,7 +594,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		start, prepare, create, logIndex := txnbase.GetFromBatch(delTxn, i)
+		start, prepare, create, logIndex := txnbase.ReadTuple(delTxn, i)
 		catalog.onReplayDeleteSegment(dbid, tid, rowIDToU64(sid), start, prepare, create, logIndex)
 	}
 }
@@ -770,7 +771,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(uint64)
 		metaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		deltaLoc := string(ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		start, prepare, end, logIndex := txnbase.GetFromBatch(insTxn, i)
+		start, prepare, end, logIndex := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, start, prepare, end, logIndex, dataFactory)
 	}
 	for i := 0; i < delTxn.Length(); i++ {
@@ -778,7 +779,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(uint64)
 		blkID := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		start, prepare, end, logIndex := txnbase.GetFromBatch(delTxn, i)
+		start, prepare, end, logIndex := txnbase.ReadTuple(delTxn, i)
 		metaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		deltaLoc := string(delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		catalog.onReplayDeleteBlock(dbid, tid, sid, rowIDToU64(blkID), metaLoc, deltaLoc, start, prepare, end, logIndex)
