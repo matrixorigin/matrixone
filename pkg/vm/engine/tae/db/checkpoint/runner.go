@@ -300,19 +300,32 @@ func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool)
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	maxEntry, _ := r.storage.entries.Max()
-	if maxEntry != nil && entry.IsIncremental() {
-		if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
-			success = false
-		} else if !maxEntry.IsFinished() {
-			success = false
-		} else {
-			r.storage.entries.Set(entry)
-			success = true
-		}
+
+	// if it's the first entry, add it
+	if maxEntry == nil {
+		r.storage.entries.Set(entry)
+		success = true
 		return
 	}
+
+	// if it is not the right candidate, skip this request
+	// [startTs, endTs] --> [endTs+1, ?]
+	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+		success = false
+		return
+	}
+
+	// if the max entry is not finished, skip this request
+	if !maxEntry.IsFinished() {
+		success = false
+		return
+	}
+
 	r.storage.entries.Set(entry)
-	r.storage.prevGlobal = entry
+	if !maxEntry.IsIncremental() {
+		r.storage.prevGlobal = maxEntry
+	}
+
 	success = true
 	return
 }
@@ -376,7 +389,8 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	prevGlobal := r.MaxGlobalCheckpoint()
 
-	if r.globalPolicy.Check(prevGlobal.GetEnd()) {
+	if prevGlobal != nil && r.globalPolicy.Check(prevGlobal.GetEnd()) {
+		// FIXME
 		r.tryScheduleGlobalCheckpoint(entry.GetEnd())
 		return
 	}

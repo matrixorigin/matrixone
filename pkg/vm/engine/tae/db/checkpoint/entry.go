@@ -95,7 +95,8 @@ func (e *CheckpointEntry) IsFinished() bool {
 }
 
 func (e *CheckpointEntry) IsIncremental() bool {
-	return !e.start.IsEmpty()
+	// Currently only incremental is supported
+	return true
 }
 
 func (e *CheckpointEntry) String() string {
