@@ -690,9 +690,8 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	cmd.Block.RWMutex = new(sync.RWMutex)
 	cmd.Block.segment = seg
 	cmd.Block.blkData = dataFactory.MakeBlockFactory()(cmd.Block)
-	ts := cmd.Block.blkData.GetMaxCheckpointTS()
 	if observer != nil {
-		observer.OnTimeStamp(ts)
+		observer.OnTimeStamp(prepareTS)
 	}
 	seg.AddEntryLocked(cmd.Block)
 }
@@ -1183,3 +1182,74 @@ func (catalog *Catalog) GetCheckpointed() *Checkpoint {
 	}
 	return catalog.checkpoints[len(catalog.checkpoints)-1]
 }
+
+// func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
+// 	return func() error {
+// 		return catalog.Checkpoint(maxTs)
+// 	}
+// }
+// func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, minTS types.TS, err error) {
+// 	catalog.ckpmu.RLock()
+// 	defer catalog.ckpmu.RUnlock()
+// 	if len(catalog.checkpoints) != 0 {
+// 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
+// 		if maxTS.Less(lastMax) {
+// 			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
+// 			return
+// 		}
+// 		if maxTS.Equal(lastMax) {
+// 			return
+// 		}
+// 		//minTs = lastMax + 1
+// 		minTS = lastMax.Next()
+// 	}
+// 	needCheckpoint = true
+// 	return
+// }
+
+// func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
+// 	now := time.Now()
+// 	var minTs types.TS
+// 	var needCheckpoint bool
+// 	if needCheckpoint, minTs, err = catalog.NeedCheckpoint(maxTs); !needCheckpoint {
+// 		return
+// 	}
+// 	entry := catalog.PrepareCheckpoint(minTs, maxTs)
+// 	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
+// 	if len(entry.LogIndexes) == 0 {
+// 		return
+// 	}
+// 	now = time.Now()
+// 	logEntry, err := entry.MakeLogEntry()
+// 	if err != nil {
+// 		return
+// 	}
+// 	logutil.Debugf("MakeLogEntry: %s", time.Since(now))
+// 	now = time.Now()
+// 	defer logEntry.Free()
+// 	checkpoint := new(Checkpoint)
+// 	checkpoint.MaxTS = maxTs
+// 	checkpoint.LSN = entry.MaxIndex.LSN
+// 	checkpoint.CommitId, err = catalog.store.Append(0, logEntry)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	if err = logEntry.WaitDone(); err != nil {
+// 		panic(err)
+// 	}
+// 	logutil.Debugf("SaveCheckpointed: %s", time.Since(now))
+// 	// for _, index := range entry.LogIndexes {
+// 	// 	logutil.Debugf("Ckp0Index %s", index.String())
+// 	// }
+// 	now = time.Now()
+// 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
+// 		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
+// 		return
+// 	}
+// 	logutil.Debugf("CheckpointWal: %s", time.Since(now))
+// 	catalog.ckpmu.Lock()
+// 	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
+// 	catalog.ckpmu.Unlock()
+// 	logutil.Debugf("Max LogIndex: %s", entry.MaxIndex.String())
+// 	return
+// }

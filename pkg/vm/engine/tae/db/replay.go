@@ -53,8 +53,6 @@ func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
 		entry.InitData(replayer.DataFactory)
-		blkData := entry.GetBlockData()
-		replayer.OnTimeStamp(blkData.GetMaxCheckpointTS())
 		return
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {

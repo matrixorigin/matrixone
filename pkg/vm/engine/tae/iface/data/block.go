@@ -89,7 +89,7 @@ type Block interface {
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	SetMaxCheckpointTS(ts types.TS)
-	GetMaxCheckpointTS() types.TS
+	// GetMaxCheckpointTS() types.TS
 
 	Destroy() error
 	ReplayIndex() error
