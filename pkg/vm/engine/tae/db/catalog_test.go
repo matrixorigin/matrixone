@@ -323,7 +323,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	var zeroV types.TS
 	entry := tae.Catalog.PrepareCheckpoint(zeroV, ts)
 	maxIndex := entry.GetMaxIndex()
-	tae.BGCheckpointRunner.ForceCheckpoint(ts)
+	tae.BGCheckpointRunner.MockCheckpoint(ts)
 	testutils.WaitExpect(1000, func() bool {
 		ckp := tae.Scheduler.GetCheckpointedLSN()
 		return ckp == maxIndex.LSN
@@ -466,7 +466,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	}
 	replayEntry.PrintItems()
 
-	tae.BGCheckpointRunner.ForceCheckpoint(endTs)
+	tae.BGCheckpointRunner.MockCheckpoint(endTs)
 
 	assert.Equal(t, endTs, tae.Catalog.GetCheckpointed().MaxTS)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

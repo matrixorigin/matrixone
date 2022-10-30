@@ -571,66 +571,64 @@ func (b *CheckpointLogtailRespBuilder) ReplayCatalog(
 	return
 }
 
-func (b *CheckpointLogtailRespBuilder) WriteTo(writer *blockio.Writer) (blks []objectio.BlockObject) {
-	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
-		panic(err)
+func (b *CheckpointLogtailRespBuilder) WriteTo(
+	writer *blockio.Writer) (blks []objectio.BlockObject, err error) {
+	if _, err = writer.WriteBlock(b.dbInsBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.dbInsTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.dbInsTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.dbDelBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.dbDelBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.dbDelTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.dbDelTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblInsBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblInsBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblInsTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblInsTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblDelBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblDelBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblDelTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblDelTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblColInsBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblColInsBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.tblColDelBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.tblColDelBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.segInsBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.segInsBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.segInsTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.segInsTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.segDelBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.segDelBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.segDelTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.segDelTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.blkMetaInsBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.blkMetaInsBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.blkMetaInsTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.blkMetaInsTxnBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.blkMetaDelBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.blkMetaDelBatch); err != nil {
+		return
 	}
-	if _, err := writer.WriteBlock(b.blkMetaDelTxnBatch); err != nil {
-		panic(err)
+	if _, err = writer.WriteBlock(b.blkMetaDelTxnBatch); err != nil {
+		return
 	}
-	blks, err := writer.Sync()
-	if err != nil {
-		panic(err)
-	}
-	return blks
+	blks, err = writer.Sync()
+	return
 }
 
 func (b *CheckpointLogtailRespBuilder) ReadFrom(

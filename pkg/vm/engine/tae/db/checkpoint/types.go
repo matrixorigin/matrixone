@@ -34,7 +34,7 @@ type Runner interface {
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) error
 
-	ForceCheckpoint(end types.TS)
+	MockCheckpoint(end types.TS)
 }
 
 type Observer interface {
