@@ -17,6 +17,8 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"sync"
 )
 
 func NewService(
@@ -71,6 +72,7 @@ func NewService(
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
 	}
+
 	srv.responsePool = &sync.Pool{
 		New: func() any {
 			return &pipeline.Message{}
@@ -116,6 +118,9 @@ func NewService(
 
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error {
 		return nil
+	}
+	for _, opt := range options {
+		opt(srv)
 	}
 
 	return srv, nil
