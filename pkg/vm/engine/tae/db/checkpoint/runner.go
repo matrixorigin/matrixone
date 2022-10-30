@@ -221,6 +221,14 @@ func (r *runner) MockCheckpoint(end types.TS) {
 	r.storage.entries.Set(entry)
 	entry.SetState(ST_Finished)
 	r.storage.prevGlobal = entry
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
