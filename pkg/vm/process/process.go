@@ -66,6 +66,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
+	proc.GetClusterDetails = p.GetClusterDetails
 
 	// reg and cancel
 	proc.Ctx = newctx

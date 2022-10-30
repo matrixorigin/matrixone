@@ -228,10 +228,11 @@ col3 timestamp,
 col4 bool
 );
 import data infile '$resources/load_data/time_date_1.csv' into table t4;
-data truncated: data type TIMESTAMP, value '1970-01-01 00:00:01' for column 'col3' at row '1'
 
 select * from t4;
-[unknown result because it is related to issue#5046]
+col1    col2    col3    col4
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
 delete from t4;
 import data infile '$resources/load_data/time_date_2.csv' into table t4;
 select * from t4;
@@ -290,7 +291,7 @@ import data infile '$resources/load_data/time_date_5.csv' into table t4;
 data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
 
 select * from t4;
-[unknown result because it is related to issue#5118]
+col1    col2    col3    col4
 delete from t4;
 drop table t4;
 drop table if exists t5;
