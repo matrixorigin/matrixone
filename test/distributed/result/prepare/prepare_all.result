@@ -200,7 +200,7 @@ time1    time2    time3
 execute s3 using @min_date;
 time1    time2    time3
 execute s3 using @max_datetime;
-time1    time2    time3
+invalid argument parse timestamp, bad value 9999-12-31 23:59:59.999999
 execute s3 using @min_datetime;
 time1    time2    time3
 execute s3 using @max_timestamp;
