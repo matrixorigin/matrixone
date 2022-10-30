@@ -237,12 +237,15 @@ func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
-	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end)
+	data, err := factory(r.catalog)
 	if err != nil {
 		return
 	}
+	defer data.Close()
+
 	writer := blockio.NewWriter(r.fs, entry.Key())
-	blks, err := builder.WriteTo(writer)
+	blks, err := data.WriteTo(writer)
 	if err != nil {
 		return
 	}
@@ -252,19 +255,8 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
-	// TODO
-	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
-	if err != nil {
-		return
-	}
-	writer := blockio.NewWriter(r.fs, entry.Key())
-	blks, err := builder.WriteTo(writer)
-	if err != nil {
-		return
-	}
-	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
-	entry.SetLocation(location)
-	return
+	// TODO: do global checkpoint
+	return r.doIncrementalCheckpoint(entry)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
