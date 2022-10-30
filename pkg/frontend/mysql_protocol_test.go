@@ -91,7 +91,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
 
 	//before anything using the configuration
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)
@@ -1270,7 +1270,7 @@ func TestMysqlResultSet(t *testing.T) {
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	if err != nil {
 		panic(err)

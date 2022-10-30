@@ -19,10 +19,13 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -45,7 +48,28 @@ var (
 )
 
 func TestInsertOperator(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+
 	proc := testutil.NewProc()
+	proc.TxnClient = txnClient
+	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
@@ -57,6 +81,7 @@ func TestInsertOperator(t *testing.T) {
 		Zs: []int64{1, 1, 1},
 	}
 	argument1 := Argument{
+		Engine:      eng,
 		TargetTable: &mockRelation{},
 		TargetColDefs: []*plan.ColDef{
 			{Name: "int64_column", Typ: i64typ},

@@ -96,7 +96,7 @@ type Engine struct {
 	db                *DB
 	cli               client.TxnClient
 	idGen             IDGenerator
-	getClusterDetails GetClusterDetailsFunc
+	getClusterDetails engine.GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap

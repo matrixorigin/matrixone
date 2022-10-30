@@ -8,7 +8,7 @@ drop table if exists dis_table_06;
 drop table if exists dis_table_07;
 drop table if exists dis_view_01;
 drop table if exists dis_view_02;
-drop table if exists dis_temp_01;;
+drop table if exists dis_temp_01;
 drop table if exists iso_table_0001;
 
 create table dis_table_01(a int,b varchar(25));
@@ -176,8 +176,8 @@ rollback ;
 select * from dis_temp_01;
 drop table dis_temp_01;
 
-start transaction ;
-load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02 ;
+start transaction;
+load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 -- @session:id=1{
 update dis_table_02 set b='pppp';
 select * from dis_table_02;
