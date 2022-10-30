@@ -14,6 +14,8 @@
 
 package options
 
+import "time"
+
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
 	InsertCapacity uint64 `toml:"insert-cache-size"`
@@ -32,6 +34,11 @@ type CheckpointCfg struct {
 	ExecutionLevels    int16 `toml:"execution-levels"`
 	CatalogUnCkpLimit  int64 `toml:"catalog-unckp-limit"`
 	CatalogCkpInterval int64 `toml:"catalog-ckp-interval"`
+
+	MinCount            int64         `toml:"checkpoint-min-count"`
+	ScanInterval        time.Duration `toml:"checkpoint-scan-interval"`
+	IncrementalInterval time.Duration `toml:"checkpoint-incremental-interval"`
+	GlobalInterval      time.Duration `toml:"checkpoint-global-interval"`
 }
 
 type SchedulerCfg struct {

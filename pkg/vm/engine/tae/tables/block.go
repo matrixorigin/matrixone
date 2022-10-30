@@ -179,6 +179,12 @@ func (blk *dataBlock) RunCalibration() (score int) {
 }
 
 func (blk *dataBlock) estimateABlkRawScore() (score int) {
+	blk.meta.RLock()
+	hasAnyCommitted := blk.meta.HasCommittedNode()
+	blk.meta.RUnlock()
+	if !hasAnyCommitted {
+		return 1
+	}
 	// Max row appended
 	rows := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {

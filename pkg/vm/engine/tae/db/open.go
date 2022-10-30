@@ -101,10 +101,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
 		checkpoint.WithFlushInterval(time.Duration(opts.CheckpointCfg.FlushInterval)*time.Millisecond),
-		checkpoint.WithCollectInterval(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond),
-		checkpoint.WithMinCount(int(opts.CheckpointCfg.CatalogUnCkpLimit)),
-		checkpoint.WithMinIncrementalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond),
-		checkpoint.WithMinGlobalInterval(time.Duration(opts.CheckpointCfg.CatalogCkpInterval*1000)*time.Millisecond))
+		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
+		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
+		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
+		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
 	db.BGCheckpointRunner.Replay(dataFactory)
 
 	db.Replay(dataFactory)

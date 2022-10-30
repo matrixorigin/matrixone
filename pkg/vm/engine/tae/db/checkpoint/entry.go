@@ -102,7 +102,8 @@ func (e *CheckpointEntry) String() string {
 	if !e.IsIncremental() {
 		t = "G"
 	}
-	return fmt.Sprintf("CKP[%s](%s->%s)", t, e.start.ToString(), e.end.ToString())
+	state := e.GetState()
+	return fmt.Sprintf("CKP[%s][%v](%s->%s)", t, state, e.start.ToString(), e.end.ToString())
 }
 
 func (e *CheckpointEntry) Key() string {

@@ -187,7 +187,6 @@ func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
 	}
 	if scanner.dbmask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
-		logutil.Infof("StopRecurScanDatabase: %s", entry.String())
 	}
 	return
 }
