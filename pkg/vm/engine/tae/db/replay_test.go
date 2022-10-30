@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -1193,9 +1194,12 @@ func TestReplay10(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
+	expr := &plan.Expr{}
+	exprbuf, err := expr.Marshal()
+	assert.NoError(t, err)
 	schema.ColDefs[1].Default = catalog.Default{
 		NullAbility: false,
-		Expr:        []byte("hello"),
+		Expr:        exprbuf,
 	}
 	schema.ColDefs[2].Default = catalog.Default{
 		NullAbility: true,
@@ -1208,15 +1212,15 @@ func TestReplay10(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, opts)
+	tae, err = Open(tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()
-	t.Log(tae.Catalog.SimplePPString(common.PPL3))
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	assert.Equal(t, "hello", string(schema1.ColDefs[1].Default.Expr))
+	assert.Equal(t, exprbuf, schema1.ColDefs[1].Default.Expr)
 	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
 }
 
