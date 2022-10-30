@@ -2383,7 +2383,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Host:         pu.SV.Host,
 		ConnectionID: uint64(proto.ConnectionID()),
 		Database:     ses.GetDatabaseName(),
-		Version:      serverVersion,
+		Version:      serverVersion.Load().(string),
 		TimeZone:     ses.GetTimeZone(),
 	}
 
