@@ -128,6 +128,24 @@ internal error: truncate relation 1 is not permitted
 truncate table mo_role_grant;
 internal error: truncate relation 1 is not permitted
 truncate table mo_role_privs;
+use system ;
+truncate table statement_info;
+truncate table rawlog;
+truncate table log_info;
+truncate table error_info;
+truncate table span_info;
+use information_schema;
+truncate table key_column_usage ;
+truncate table columns;
+truncate table profiling;
+truncate table PROCESSLIST;
+truncate table user_privileges;
+truncate table schemata;
+truncate table character_sets;
+truncate table triggers;
+truncate table tables;
+truncate table engines;
+use truncate_table_2;
 drop table if exists trun_table_01;
 drop table if exists trun_table_02;
 drop table if exists trun_table_03;
