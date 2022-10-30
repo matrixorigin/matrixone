@@ -56,14 +56,14 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 // DefaultClientConnStatus default server status
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
-var serverVersion = ""
+var serverVersion atomic.Value
 
 func InitServerVersion(v string) {
 	if len(v) > 0 {
 		switch v[0] {
 		case 'v': // format 'v1.1.1'
 			v = v[1:]
-			serverVersion = v
+			serverVersion.Store(v)
 		default:
 			vv := []byte(v)
 			for i := 0; i < len(vv); i++ {
@@ -72,10 +72,10 @@ func InitServerVersion(v string) {
 					i--
 				}
 			}
-			serverVersion = string(vv)
+			serverVersion.Store(string(vv))
 		}
 	} else {
-		serverVersion = "0.5.0"
+		serverVersion.Store("0.5.0")
 	}
 }
 
@@ -1189,7 +1189,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
 	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, serverVersion)
+	pos = mp.writeStringNUL(data, pos, serverVersion.Load().(string))
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
