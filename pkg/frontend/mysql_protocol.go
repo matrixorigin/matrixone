@@ -1059,13 +1059,16 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:get the user's password
 	var psw []byte
 	var err error
+	var tenant *TenantInfo
 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
+		logutil.Debugf("authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
+		logutil.Debugf("authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
@@ -1074,8 +1077,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 			return moerr.NewInternalError("check password failed")
 		}
 	} else {
+		logutil.Debugf("skip authenticate user")
 		//Get tenant info
-		tenant, err := GetTenantInfo(mp.GetUserName())
+		tenant, err = GetTenantInfo(mp.GetUserName())
 		if err != nil {
 			return err
 		}
@@ -1100,6 +1104,7 @@ func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
 }
 
 func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
+	var err, err2 error
 	if len(payload) < 2 {
 		return false, moerr.NewInternalError("received a broken response packet")
 	}
@@ -1109,9 +1114,9 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		return false, moerr.NewInternalError("read capabilities from response packet failed")
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
-		var ok bool
-		var err error
-		if ok, resp41, err = mp.analyseHandshakeResponse41(payload); !ok {
+		var ok2 bool
+		logutil.Debugf("analyse handshake response")
+		if ok2, resp41, err = mp.analyseHandshakeResponse41(payload); !ok2 {
 			return false, err
 		}
 
@@ -1123,7 +1128,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		authResponse = resp41.authResponse
 		mp.capability = mp.capability & resp41.capabilities
 
-		if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
+		if nameAndCharset, ok3 := collationID2CharsetAndName[int(resp41.collationID)]; !ok3 {
 			return false, moerr.NewInternalError("get collationName and charset failed")
 		} else {
 			mp.collationID = int(resp41.collationID)
@@ -1136,9 +1141,8 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp41.database
 	} else {
 		var resp320 response320
-		var ok bool
-		var err error
-		if ok, resp320, err = mp.analyseHandshakeResponse320(payload); !ok {
+		var ok2 bool
+		if ok2, resp320, err = mp.analyseHandshakeResponse320(payload); !ok2 {
 			return false, err
 		}
 
@@ -1158,13 +1162,20 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp320.database
 	}
 
-	if err := mp.authenticateUser(authResponse); err != nil {
+	logutil.Debugf("authenticate user")
+	if err = mp.authenticateUser(authResponse); err != nil {
+		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-		_ = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
+		err2 = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
+		if err2 != nil {
+			logutil.Errorf("send err packet failed.error:%v", err2)
+			return false, err2
+		}
 		return false, err
 	}
 
-	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	logutil.Debugf("handle handshake end")
+	err = mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return false, err
 	}
