@@ -105,7 +105,7 @@ func (e *CheckpointEntry) String() string {
 	return fmt.Sprintf("CKP[%s](%s->%s)", t, e.start.ToString(), e.end.ToString())
 }
 
-func (e CheckpointEntry) Key() string {
+func (e *CheckpointEntry) Key() string {
 	return blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
 }
 
