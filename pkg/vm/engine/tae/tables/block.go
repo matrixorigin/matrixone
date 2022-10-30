@@ -258,6 +258,9 @@ func (blk *dataBlock) EstimateScore(interval time.Duration) int {
 	if dropped {
 		return 0
 	}
+	if score == 0 {
+		return 0
+	}
 	if score > 1 {
 		return score
 	}

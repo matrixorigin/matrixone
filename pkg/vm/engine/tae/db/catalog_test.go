@@ -16,15 +16,16 @@ package db
 
 import (
 	"bytes"
-	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/panjf2000/ants/v2"
@@ -274,7 +275,8 @@ func TestLogDatabase(t *testing.T) {
 
 func TestCheckpointCatalog2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13, 12)
@@ -319,162 +321,10 @@ func TestCheckpointCatalog2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	ts := tae.Scheduler.GetCheckpointTS()
-	var zeroV types.TS
-	entry := tae.Catalog.PrepareCheckpoint(zeroV, ts)
-	maxIndex := entry.GetMaxIndex()
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	tae.BGCheckpointRunner.MockCheckpoint(ts)
 	testutils.WaitExpect(1000, func() bool {
-		ckp := tae.Scheduler.GetCheckpointedLSN()
-		return ckp == maxIndex.LSN
+		return tae.Scheduler.GetCheckpointedLSN() == tae.BGCheckpointRunner.MaxLSN()
 	})
-	assert.Equal(t, maxIndex.LSN, tae.Scheduler.GetCheckpointedLSN())
-}
-
-func TestCheckpointCatalog(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	var mu struct {
-		sync.RWMutex
-		commitTss []types.TS
-	}
-	txn, _ := tae.StartTxn(nil)
-	schema := catalog.MockSchemaAll(2, 0)
-	db, err := txn.CreateDatabase("db")
-	assert.Nil(t, err)
-	_, err = db.CreateRelation(schema)
-	assert.Nil(t, err)
-	err = txn.Commit()
-	assert.Nil(t, err)
-	mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
-
-	pool, _ := ants.NewPool(1)
-	var wg sync.WaitGroup
-	mockRes := func() {
-		defer wg.Done()
-		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
-		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment(false)
-		assert.Nil(t, err)
-		var id *common.ID
-		for i := 0; i < 4; i++ {
-			blk, err := seg.CreateBlock(false)
-			if i == 2 {
-				id = blk.Fingerprint()
-			}
-			assert.Nil(t, err)
-		}
-		err = txn.Commit()
-		assert.Nil(t, err)
-
-		mu.Lock()
-		mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
-		mu.Unlock()
-
-		txn, _ = tae.StartTxn(nil)
-		db, err = txn.GetDatabase("db")
-		assert.Nil(t, err)
-		rel, err = db.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		seg, err = rel.GetSegment(id.SegmentID)
-		assert.Nil(t, err)
-		err = seg.SoftDeleteBlock(id.BlockID)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
-
-		mu.Lock()
-		mu.commitTss = append(mu.commitTss, txn.GetCommitTS())
-		mu.Unlock()
-	}
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		err := pool.Submit(mockRes)
-		assert.Nil(t, err)
-	}
-	wg.Wait()
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-
-	//startTs := uint64(0)
-	//endTs := tae.Scheduler.GetSafeTS() - 2
-	var startTs types.TS
-	sort.Slice(mu.commitTss, func(i, j int) bool {
-		return mu.commitTss[i].Less(mu.commitTss[j])
-	})
-	//endTs := tae.Scheduler.GetSafeTS().Prev().Prev()
-	endTs := mu.commitTss[len(mu.commitTss)-1].Prev()
-	t.Logf("endTs=%d", endTs)
-
-	entry := tae.Catalog.PrepareCheckpoint(startTs, endTs)
-	blkCnt := 0
-	blocks := make([]*catalog.BlockEntry, 0)
-	for _, cmd := range entry.Entries {
-		if cmd.Block != nil {
-			blkCnt++
-			blocks = append(blocks, cmd.Block)
-		}
-	}
-	entry.PrintItems()
-	assert.Equal(t, 8, blkCnt)
-	entry2 := tae.Catalog.PrepareCheckpoint(endTs.Next(), tae.Scheduler.GetCheckpointTS())
-
-	blkCnt = 0
-	for _, cmd := range entry2.Entries {
-		if cmd.Block != nil {
-			blkCnt++
-			t.Logf("%s", cmd.Block.StringLocked())
-		}
-	}
-	assert.Equal(t, 1, blkCnt)
-	var zeroV types.TS
-	entry3 := tae.Catalog.PrepareCheckpoint(zeroV, endTs.Prev())
-	entry3.PrintItems()
-
-	blockEntry := blocks[6]
-	seg := blockEntry.GetSegment()
-	blk, err := seg.GetBlockEntryByID(blockEntry.ID)
-	t.Log(blk.String())
-	assert.Nil(t, err)
-	assert.True(t, blk.HasDropCommitted())
-	assert.True(t, blk.GetDeleteAt().Greater(endTs))
-	assert.True(t, blk.GetCreatedAt().Greater(startTs))
-	assert.Equal(t, blk.GetCreatedAt(), blockEntry.GetCreatedAt())
-
-	var zeroV1 types.TS
-	//assert.Equal(t, uint64(0), blockEntry.DeleteAt)
-	assert.Equal(t, zeroV1, blockEntry.GetDeleteAt())
-
-	buf, err := entry.Marshal()
-	assert.Nil(t, err)
-	t.Log(len(buf))
-
-	replayEntry := catalog.NewEmptyCheckpointEntry()
-	err = replayEntry.Unmarshal(buf)
-	assert.Nil(t, err)
-	assert.Equal(t, entry.MinTS, replayEntry.MinTS)
-	assert.Equal(t, entry.MaxTS, replayEntry.MaxTS)
-	assert.Equal(t, len(entry.Entries), len(replayEntry.Entries))
-	for i := 0; i < len(entry.Entries); i++ {
-		if entry.Entries[i].Block != nil {
-			blk1 := entry.Entries[i].Block
-			blk2 := replayEntry.Entries[i].Block
-			assert.Equal(t, blk1.ID, blk2.ID)
-			assert.Equal(t, blk1.GetCreatedAt(), blk2.GetCreatedAt())
-			assert.Equal(t, blk1.GetDeleteAt(), blk2.GetDeleteAt())
-		}
-	}
-	replayEntry.PrintItems()
-
-	tae.BGCheckpointRunner.MockCheckpoint(endTs)
-
-	// assert.Equal(t, endTs, tae.Catalog.GetCheckpointed().MaxTS)
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-
-	// logEntry, err := entry.MakeLogEntry()
-	// assert.Nil(t, err)
-	// lsn, err := tae.Wal.AppendEntry(wal.GroupCatalog, logEntry)
-	// logEntry.WaitDone()
-	// logEntry.Free()
-	// t.Log(lsn)
+	assert.Equal(t, tae.BGCheckpointRunner.MaxLSN(), tae.Scheduler.GetCheckpointedLSN())
 }

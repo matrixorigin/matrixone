@@ -117,17 +117,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	// calibrationOp := newCalibrationOp(db)
-	// catalogCheckpointer := newCatalogCheckpointer(
-	// 	db,
-	// 	opts.CheckpointCfg.CatalogUnCkpLimit,
-	// 	time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond)
+	calibrationOp := newCalibrationOp(db)
 	gcCollector := newGarbageCollector(
 		db,
 		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
-	// scanner.RegisterOp(calibrationOp)
+	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(gcCollector)
-	// scanner.RegisterOp(catalogCheckpointer)
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(
