@@ -24,16 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 1
+	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13, 12)
