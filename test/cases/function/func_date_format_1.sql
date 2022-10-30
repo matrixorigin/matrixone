@@ -83,12 +83,8 @@ drop table t5;
 
 
 SELECT DATE_FORMAT("2009-01-01",'%W %d %M %Y') as valid_date;
-
--- @bvt:issue#4764
 SELECT DATE_FORMAT('0000-01-01','%W %d %M %Y') as valid_date;
 SELECT DATE_FORMAT('0000-02-28','%W %d %M %Y') as valid_date;
--- @bvt:issue
-
 SELECT DATE_FORMAT('9999-02-28','%W %d %M %Y') as valid_date;
 
 select date_format('1997-01-02 03:04:05', '%M %W %D %Y %y %m %d %h %i %s %w');
@@ -102,6 +98,6 @@ select date_format(concat('19980131',131415),'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|
 -- echo error
 select date_format(19980021000000,'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
 
--- @bvt:issue#4766
+
 select date_format('19980021000000','%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
--- @bvt:issue
+

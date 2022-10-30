@@ -22,12 +22,10 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"go.uber.org/zap"
-
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/lni/vfs"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"go.uber.org/zap"
 )
 
 const (
@@ -298,4 +296,15 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 	}
 	l.mu.metadata.Shards = shards
 	l.mustSaveMetadata()
+}
+
+func (l *store) getReplicaID(shardID uint64) int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, rec := range l.mu.metadata.Shards {
+		if rec.ShardID == shardID {
+			return int64(rec.ReplicaID)
+		}
+	}
+	return -1
 }

@@ -528,7 +528,7 @@ func (t T) FixedLength() int {
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type
-func isUnsignedInt(t T) bool {
+func IsUnsignedInt(t T) bool {
 	if t == T_uint8 || t == T_uint16 || t == T_uint32 || t == T_uint64 {
 		return true
 	}
@@ -536,7 +536,7 @@ func isUnsignedInt(t T) bool {
 }
 
 // isSignedInt: return true if the types.T is Signed integer type
-func isSignedInt(t T) bool {
+func IsSignedInt(t T) bool {
 	if t == T_int8 || t == T_int16 || t == T_int32 || t == T_int64 {
 		return true
 	}
@@ -545,7 +545,7 @@ func isSignedInt(t T) bool {
 
 // if expr type is integer return true,else return false
 func IsInteger(t T) bool {
-	if isUnsignedInt(t) || isSignedInt(t) {
+	if IsUnsignedInt(t) || IsSignedInt(t) {
 		return true
 	}
 	return false

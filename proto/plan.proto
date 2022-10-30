@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package plan;
 
@@ -197,16 +197,21 @@ message ColDef {
 	Type typ			= 3;
 	Default default 	= 4;
 	bool primary        = 5;
-	int32 pkidx 		= 7;
-	string comment		= 8;
-	bool is_cPkey = 9;
-	Expr on_update = 10;
+	int32 pkidx 		= 6;
+	string comment		= 7;
+	bool is_cPkey 		= 8;
+	OnUpdate on_update  = 9;
 }
 
 message Default {
 	bool null_ability = 1;
 	Expr expr = 2;
 	string origin_string = 3;
+}
+
+message OnUpdate {
+	Expr expr = 1;
+	string origin_string = 2;
 }
 
 message PrimaryKeyDef {
@@ -237,7 +242,7 @@ enum PartitionType {
 message PartitionInfo {
 	PartitionType type = 1;
 	Expr Expr = 2;
-	string partitionExpression = 3;
+	Expr partitionExpression = 3;
 	repeated Expr Columns = 4;
 	repeated string partitionColumns = 5;
 	uint64 partitionNum = 6;
@@ -492,10 +497,9 @@ message DeleteTableCtx {
 	string tblName = 2;
 	string useDeleteKey = 3;
 	bool canTruncate = 4;
-	bool isHideKey = 5;
-	int32 colIndex = 6;
-	repeated IndexInfo index_infos = 7;
-	repeated string index_attrs = 8;
+	int32 colIndex = 5;
+	repeated IndexInfo index_infos = 6;
+	repeated string index_attrs = 7;
 }
 
 message Query {

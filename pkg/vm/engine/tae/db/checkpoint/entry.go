@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -114,7 +115,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (err error) {
-	reader, err := blockio.NewReader(fs, e.location)
+	reader, err := blockio.NewReader(context.Background(),fs, e.location)
 	if err != nil {
 		return
 	}
