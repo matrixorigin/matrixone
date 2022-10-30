@@ -216,9 +216,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	writer := entry.MakeWriter(r.fs)
+	writer := blockio.NewWriter(r.fs, entry.Key())
 	blks := builder.WriteTo(writer)
-	entry.EncodeAndSetLocation(blks)
+	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
+	entry.SetLocation(location)
 }
 
 func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
@@ -227,9 +228,10 @@ func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
 	if err != nil {
 		panic(err)
 	}
-	writer := entry.MakeWriter(r.fs)
+	writer := blockio.NewWriter(r.fs, entry.Key())
 	blks := builder.WriteTo(writer)
-	entry.EncodeAndSetLocation(blks)
+	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
+	entry.SetLocation(location)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {

@@ -30,7 +30,6 @@ type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
-	fileName   string
 	location   string
 }
 
@@ -106,27 +105,23 @@ func (e *CheckpointEntry) String() string {
 	return fmt.Sprintf("CKP[%s](%s->%s)", t, e.start.ToString(), e.end.ToString())
 }
 
-func (e *CheckpointEntry) MakeWriter(fs *objectio.ObjectFS) *blockio.Writer {
-	e.fileName = blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
-	return blockio.NewWriter(fs, e.fileName)
+func (e CheckpointEntry) Key() string {
+	return blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
 }
 
-func (e *CheckpointEntry) MakeReader(fs *objectio.ObjectFS) *blockio.Reader {
+func (e *CheckpointEntry) Replay(
+	c *catalog.Catalog,
+	fs *objectio.ObjectFS,
+	dataFactory catalog.DataFactory) (err error) {
 	reader, err := blockio.NewReader(fs, e.location)
 	if err != nil {
-		panic(err)
+		return
 	}
-	return reader
-}
 
-func (e *CheckpointEntry) EncodeAndSetLocation(blks []objectio.BlockObject) {
-	metaLoc := blockio.EncodeMetalocFromMetas(e.fileName, blks)
-	e.SetLocation(metaLoc)
-}
-
-func (e *CheckpointEntry) Replay(c *catalog.Catalog, fs *objectio.ObjectFS, dataFactory catalog.DataFactory) {
-	reader := e.MakeReader(fs)
 	builder := logtail.NewCheckpointLogtailRespBuilder(e.start, e.end)
-	builder.ReadFromFS(reader, common.DefaultAllocator)
-	builder.ReplayCatalog(c, dataFactory)
+	if err = builder.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	err = builder.ReplayCatalog(c, dataFactory)
+	return
 }
