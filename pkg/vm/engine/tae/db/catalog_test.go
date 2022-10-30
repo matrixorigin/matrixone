@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -140,137 +138,6 @@ func TestShowDatabaseNames(t *testing.T) {
 		assert.Equal(t, "db2", names[2])
 		assert.Nil(t, txn.Commit())
 	}
-}
-
-func TestLogBlock(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(2, 0)
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment(false)
-	blk, _ := seg.CreateBlock(false)
-	meta := blk.GetMeta().(*catalog.BlockEntry)
-	err := txn.Commit()
-	assert.Nil(t, err)
-	ts := tae.Scheduler.GetCheckpointTS()
-	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
-	assert.NotNil(t, cmd)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	entryCmd := cmd2.(*catalog.EntryCommand)
-	t.Log(meta.StringLocked())
-	t.Log(entryCmd.Block.StringLocked())
-	assert.Equal(t, meta.ID, entryCmd.Block.ID)
-	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Block.GetCreatedAt()))
-	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Block.GetDeleteAt()))
-}
-
-func TestLogSegment(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(2, 0)
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment(false)
-	meta := seg.GetMeta().(*catalog.SegmentEntry)
-	err := txn.Commit()
-	assert.Nil(t, err)
-	ts := tae.Scheduler.GetCheckpointTS()
-	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
-	assert.NotNil(t, cmd)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	entryCmd := cmd2.(*catalog.EntryCommand)
-	t.Log(meta.StringLocked())
-	t.Log(entryCmd.Segment.StringLocked())
-	assert.Equal(t, meta.ID, entryCmd.Segment.ID)
-	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Segment.GetCreatedAt()))
-	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Segment.GetDeleteAt()))
-}
-
-func TestLogTable(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 3)
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
-	meta := rel.GetMeta().(*catalog.TableEntry)
-	err := txn.Commit()
-	assert.Nil(t, err)
-	ts := tae.Scheduler.GetCheckpointTS()
-	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
-	assert.NotNil(t, cmd)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	entryCmd := cmd2.(*catalog.EntryCommand)
-	t.Log(meta.StringLocked())
-	t.Log(entryCmd.Table.StringLocked())
-	assert.Equal(t, meta.ID, entryCmd.Table.ID)
-	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.Table.GetCreatedAt()))
-	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.Table.GetDeleteAt()))
-	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
-	assert.Equal(t, meta.GetSchema().BlockMaxRows, entryCmd.Table.GetSchema().BlockMaxRows)
-	assert.Equal(t, meta.GetSchema().SegmentMaxBlocks, entryCmd.Table.GetSchema().SegmentMaxBlocks)
-	assert.Equal(t, meta.GetSchema().GetSingleSortKeyIdx(), entryCmd.Table.GetSchema().GetSingleSortKeyIdx())
-	assert.Equal(t, meta.GetSchema().Types(), entryCmd.Table.GetSchema().Types())
-}
-
-func TestLogDatabase(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
-	defer tae.Close()
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	meta := db.GetMeta().(*catalog.DBEntry)
-	err := txn.Commit()
-	assert.Nil(t, err)
-	ts := tae.Scheduler.GetCheckpointTS()
-	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
-	assert.NotNil(t, cmd)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	entryCmd := cmd2.(*catalog.EntryCommand)
-	t.Log(meta.StringLocked())
-	t.Log(entryCmd.DB.StringLocked())
-	assert.Equal(t, meta.ID, entryCmd.DB.ID)
-	assert.True(t, meta.GetCreatedAt().Equal(entryCmd.DB.GetCreatedAt()))
-	assert.True(t, meta.GetDeleteAt().Equal(entryCmd.DB.GetDeleteAt()))
-	assert.Equal(t, meta.GetName(), entryCmd.DB.GetName())
 }
 
 func TestCheckpointCatalog2(t *testing.T) {

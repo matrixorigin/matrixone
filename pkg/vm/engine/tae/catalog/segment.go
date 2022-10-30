@@ -352,18 +352,6 @@ func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {
 	return newSegmentCmd(0, CmdLogSegment, entry)
 }
 
-func (entry *SegmentEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &SegmentEntry{
-		MetaBaseEntry: ret.(*MetaBaseEntry),
-		state:         entry.state,
-		table:         entry.table,
-	}
-}
-
 func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
 	return entry.GetTable().GetCatalog().GetScheduler()
 }

@@ -522,19 +522,6 @@ func (e *DBEntry) MakeLogEntry() *EntryCommand {
 	return newDBCmd(0, CmdLogDatabase, e)
 }
 
-func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := e.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &DBEntry{
-		DBBaseEntry: ret.(*DBBaseEntry),
-		acInfo:      e.acInfo,
-		name:        e.name,
-		catalog:     e.catalog,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()
