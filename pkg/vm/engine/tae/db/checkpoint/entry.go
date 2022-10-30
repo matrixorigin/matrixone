@@ -118,10 +118,10 @@ func (e *CheckpointEntry) Replay(
 		return
 	}
 
-	builder := logtail.NewCheckpointLogtailRespBuilder(e.start, e.end)
-	if err = builder.ReadFrom(reader, common.DefaultAllocator); err != nil {
+	data := logtail.NewCheckpointData()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
-	err = builder.ReplayCatalog(c, dataFactory)
+	err = data.ApplyReplayTo(c, dataFactory)
 	return
 }
