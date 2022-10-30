@@ -568,7 +568,7 @@ func (b *CheckpointLogtailRespBuilder) ReplayCatalog(c *catalog.Catalog, dataFac
 	c.OnReplayBlockBatch(ins, dnins, del, dndel, dataFactory)
 }
 
-func (b *CheckpointLogtailRespBuilder) WriteToFS(writer *blockio.Writer) (blks []objectio.BlockObject) {
+func (b *CheckpointLogtailRespBuilder) WriteTo(writer *blockio.Writer) (blks []objectio.BlockObject) {
 	if _, err := writer.WriteBlock(b.dbInsBatch); err != nil {
 		panic(err)
 	}
