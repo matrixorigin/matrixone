@@ -103,7 +103,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (err error) {
 			location: metaloc,
 			state:    ST_Finished,
 		}
-		r.storage.entries.Set(checkpointEntry)
+		r.tryAddNewCheckpointEntry(checkpointEntry)
 		if err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
 			return
 		}
