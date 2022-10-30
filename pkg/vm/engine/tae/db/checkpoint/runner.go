@@ -241,8 +241,6 @@ func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 			}
 		}
 	}
-
-	return
 }
 
 func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
