@@ -956,7 +956,12 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
+func genBlockMetas(
+	ctx context.Context,
+	rows [][]any,
+	columnLength int,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
@@ -983,7 +988,7 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	}
 
 	for i, blockInfo := range blockInfos {
-		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(idxs, blockInfo, fs, m)
+		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}
@@ -1005,12 +1010,12 @@ func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
 	return false
 }
 
-func genModifedBlocks(deletes map[uint64][]int, orgs, modfs []BlockMeta,
+func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
 	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
 	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
-			if needRead(expr, blk, tableDef, proc) {
+			if needRead(ctx, expr, blk, tableDef, proc) {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
 					deletes: deletes[orgs[i].Info.BlockID],

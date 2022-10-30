@@ -216,14 +216,12 @@ DEALLOCATE PREPARE s2;
 
 prepare s3 from 'select * from t2 where time3=?';
 
--- @bvt:issue#4527
 execute s3 using @max_date;
 execute s3 using @min_date;
 execute s3 using @max_datetime;
 execute s3 using @min_datetime;
 execute s3 using @max_timestamp;
 execute s3 using @min_timestamp;
--- @bvt:issue
 
 DEALLOCATE PREPARE s3;
 

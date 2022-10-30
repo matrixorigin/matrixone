@@ -16,9 +16,6 @@ package taestorage
 
 import (
 	"context"
-	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -33,6 +30,7 @@ import (
 )
 
 type taeStorage struct {
+	shard      metadata.DNShard
 	taeHandler rpchandle.Handler
 }
 
@@ -54,6 +52,7 @@ func NewTAEStorage(
 		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
+		shard:      shard,
 		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil
@@ -94,22 +93,4 @@ func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 // StartRecovery implements storage.TxnTAEStorage
 func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.taeHandler.HandleStartRecovery(ctx, ch)
-}
-
-func (s *taeStorage) Debug(ctx context.Context,
-	txnMeta txn.TxnMeta,
-	op uint32,
-	payload []byte) ([]byte, error) {
-	switch op {
-	case uint32(apipb.OpCode_OpDebugFlush):
-		_, err := handleRead(
-			ctx, s,
-			txnMeta, payload,
-			s.taeHandler.HandleFlushTable,
-		)
-		return nil, err
-	default:
-		panic(moerr.NewInfo("op is not supported"))
-	}
-	return nil, moerr.NewNotSupported("TAEStorage not support debug method")
 }

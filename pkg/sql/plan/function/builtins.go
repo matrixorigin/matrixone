@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/debug"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 )
@@ -2332,20 +2333,6 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	MO_FLUSH_TABLE: {
-		Id:     MO_FLUSH_TABLE,
-		Flag:   plan.Function_INTERNAL,
-		Layout: STANDARD_FUNCTION,
-		Overloads: []Function{
-			{
-				Index:     0,
-				Volatile:  true,
-				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_bool,
-				Fn:        unary.MoFlushTable,
-			},
-		},
-	},
 	DATEDIFF: {
 		Id:     DATEDIFF,
 		Flag:   plan.Function_STRICT,
@@ -2371,6 +2358,41 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_int64,
 				Fn:        multi.TimeStampDiff,
+			},
+		},
+	},
+	TIMEDIFF: {
+		Id:     TIMEDIFF,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.TimeDiff[types.Datetime],
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_time, types.T_time},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.TimeDiff[types.Time],
+			},
+		},
+	},
+	MO_DEBUG: {
+		Id:     MO_DEBUG,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        debug.Handler,
 			},
 		},
 	},
