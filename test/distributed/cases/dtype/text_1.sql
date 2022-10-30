@@ -300,18 +300,16 @@ delete from t8 where col12 is not NULL;
 
 -------------------------------------------
 
--- @bvt:issue#4635
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
-select cast(col13 as decimal(5,3));
+select cast(col13 as decimal(5,3)) from t8;
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
 
-select cast(col13 as decimal(5,3));
-select cast(col13 as decimal(20,15));
+select cast(col13 as decimal(5,3)) from t8;
+select cast(col13 as decimal(20,15)) from t8;
 
 drop table if exists t8;
--- @bvt:issue
 
 
 -- test text support function

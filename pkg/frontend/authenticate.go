@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -419,7 +421,6 @@ const (
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
 	PrivilegeTypeInsert
-	PrivilegeTypeReplace
 	PrivilegeTypeUpdate
 	PrivilegeTypeTruncate
 	PrivilegeTypeDelete
@@ -546,8 +547,6 @@ func (pt PrivilegeType) String() string {
 		return "select"
 	case PrivilegeTypeInsert:
 		return "insert"
-	case PrivilegeTypeReplace:
-		return "replace"
 	case PrivilegeTypeUpdate:
 		return "update"
 	case PrivilegeTypeTruncate:
@@ -626,8 +625,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeInsert:
 		return PrivilegeScopeTable
-	case PrivilegeTypeReplace:
-		return PrivilegeScopeRole
 	case PrivilegeTypeUpdate:
 		return PrivilegeScopeTable
 	case PrivilegeTypeTruncate:
@@ -668,10 +665,10 @@ var (
 		"mo_role_privs":           0,
 		`%!%mo_increment_columns`: 0,
 	}
+	createAutoTableSql = "create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);"
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
@@ -1287,7 +1284,7 @@ type privilege struct {
 	entries []privilegeEntry
 	special specialTag
 	//the statement writes the database or table directly like drop database and table
-	writeDBTableDirect bool
+	writeDatabaseAndTableDirectly bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -1370,7 +1367,6 @@ var (
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeDatabase, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
-		PrivilegeTypeReplace:           {PrivilegeTypeReplace, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -1409,7 +1405,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -1444,7 +1439,6 @@ var (
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
-		PrivilegeTypeReplace,
 		PrivilegeTypeUpdate,
 		PrivilegeTypeTruncate,
 		PrivilegeTypeDelete,
@@ -3004,7 +2998,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	special := specialTagNone
 	objType := objectTypeAccount
 	var extraEntries []privilegeEntry
-	writeDBTableDirect := false
+	writeDatabaseAndTableDirectly := false
 	dbName := ""
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
@@ -3083,7 +3077,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3095,26 +3089,26 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -3124,37 +3118,37 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Insert:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.Replace:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeReplace, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
 	case *tree.Load:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.Import:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.Delete:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation:
 		objType = objectTypeNone
@@ -3186,6 +3180,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.MoDump:
 		if st.Tables != nil {
 			objType = objectTypeTable
@@ -3204,7 +3202,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		entries[i].databaseName = dbName
 	}
 	entries = append(entries, extraEntries...)
-	return &privilege{kind, objType, entries, special, writeDBTableDirect}
+	return &privilege{kind, objType, entries, special, writeDatabaseAndTableDirectly}
 }
 
 // privilege will be done on the table
@@ -3282,6 +3280,15 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			PrivilegeTypeInsert,
 			ins.GetDbName(),
 			ins.GetTblName()})
+	} else if p.GetDdl() != nil {
+		truncateTable := p.GetDdl().GetTruncateTable()
+		if truncateTable != nil {
+			appendPot(privilegeTips{
+				typ:          PrivilegeTypeTruncate,
+				databaseName: truncateTable.GetDatabase(),
+				tableName:    truncateTable.GetTable(),
+			})
+		}
 	}
 	return pots
 }
@@ -3501,7 +3508,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if err != nil {
 					return false, err
 				}
-				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDBTableDirect)
+				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDatabaseAndTableDirectly)
 				if operateCatalog {
 					yes = false
 				}
@@ -3552,7 +3559,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if err != nil {
 								return false, err
 							}
-							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
+							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDatabaseAndTableDirectly)
 							if operateCatalog {
 								yes = false
 							}
@@ -4306,8 +4313,6 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
 		privType = PrivilegeTypeInsert
-	case tree.PRIVILEGE_TYPE_STATIC_REPLACE:
-		privType = PrivilegeTypeReplace
 	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
 		privType = PrivilegeTypeUpdate
 	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
@@ -4480,6 +4485,11 @@ func InitSysTenant(ctx context.Context) error {
 		return err
 	}
 
+	err = bh.Exec(ctx, createAutoTableSql)
+	if err != nil {
+		return err
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -4638,6 +4648,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var err error
 	var exists bool
 	var newTenant *TenantInfo
+	var newTenantCtx context.Context
+	var newUserId int64
 	tenant := ses.GetTenantInfo()
 	pu := config.GetParameterUnit(ctx)
 
@@ -4690,7 +4702,31 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			goto handleFailed
 		}
 	} else {
-		newTenant, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTenant, newTenantCtx, newUserId, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		if err != nil {
+			goto handleFailed
+		}
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = bh.Exec(newTenantCtx, createAutoTableSql)
+		if err != nil {
+			return err
+		}
+
+		err = bh.Exec(ctx, "begin;")
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = createTablesInMoCatalogOfGeneralTenant2(tenant, bh, ca, newTenantCtx, int64(newTenant.TenantID), newUserId)
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = createTablesInSystemOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
@@ -4716,7 +4752,7 @@ handleFailed:
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, context.Context, int64, error) {
 	var err error
 	var initMoAccount string
 
@@ -4724,19 +4760,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	var newTenantID int64
 	var newUserId int64
 	var comment = ""
-	var initDataSqls []string
-	var initMoRole1 string
-	var initMoRole2 string
-	var initMoUser1 string
-	var initMoUserGrant1 string
-	var initMoUserGrant2 string
 	var newTenant *TenantInfo
-	var name, password, status string
 	var newTenantCtx context.Context
-
-	addSqlIntoSet := func(sql string) {
-		initDataSqls = append(initDataSqls, sql)
-	}
 
 	if nameIsInvalid(ca.Name) {
 		err = moerr.NewInternalError("the account name is invalid")
@@ -4792,13 +4817,18 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		UserID:        uint32(newUserId),
 		DefaultRoleID: publicRoleID,
 	}
-
 	//with new tenant
 	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
 	newUserId = dumpID + 1
 	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
 	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
+handleFailed:
+	return newTenant, newTenantCtx, newUserId, err
+}
 
+func createTablesInMoCatalogOfGeneralTenant2(tenant *TenantInfo, bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenantID, newUserId int64) error {
+	var err error
+	var initDataSqls []string
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
@@ -4807,30 +4837,32 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 	}
 
 	//initialize the default data of tables for the tenant
-
+	addSqlIntoSet := func(sql string) {
+		initDataSqls = append(initDataSqls, sql)
+	}
 	//step 2:add new role entries to the mo_role
-	initMoRole1 = fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 = fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 		err = moerr.NewInternalError("only support password verification now")
-		goto handleFailed
+		return err
 	}
-	name = ca.AuthOption.AdminName
-	password = ca.AuthOption.IdentifiedType.Str
+	name := ca.AuthOption.AdminName
+	password := ca.AuthOption.IdentifiedType.Str
 	if len(password) == 0 {
 		err = moerr.NewInternalError("password is empty string")
-		goto handleFailed
+		return err
 	}
-	status = rootStatus
+	status := rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
@@ -4838,7 +4870,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 	//the first user id in the general tenant
-	initMoUser1 = fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -4869,9 +4901,9 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	}
 
 	//step5: add new entries to the mo_user_grant
-	initMoUserGrant1 = fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant1)
-	initMoUserGrant2 = fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
@@ -4879,21 +4911,47 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		bh.ClearExecResultSet()
 		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 	}
+	return nil
+}
 
-handleFailed:
-	return newTenant, err
+// createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
+func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	var err error
+	sqls := make([]string, 0)
+	sqls = append(sqls, "create database "+trace.SystemDBConst+";")
+	sqls = append(sqls, "use "+trace.SystemDBConst+";")
+	traceTables := trace.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, traceTables...)
+	sqls = append(sqls, "create database "+metric.MetricDBConst+";")
+	sqls = append(sqls, "use "+metric.MetricDBConst+";")
+	metricTables := metric.GetSchemaForAccount(newTenant.GetTenant())
+	sqls = append(sqls, metricTables...)
+
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)

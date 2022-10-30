@@ -296,6 +296,6 @@ func PathBuilderFactory(pathBuilder string) PathBuilder {
 	case (*AccountDatePathBuilder)(nil).GetName():
 		return NewAccountDatePathBuilder()
 	default:
-		panic(moerr.NewNotSupported("not support PathBuilder: %s", pathBuilder))
+		return nil
 	}
 }

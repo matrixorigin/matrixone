@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -108,7 +109,7 @@ func (e *CheckpointEntry) String() string {
 
 func (e *CheckpointEntry) NewCheckpointWriter(fs *objectio.ObjectFS) *blockio.Writer {
 	e.fileName = blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
-	return blockio.NewWriter(fs, e.fileName)
+	return blockio.NewWriter(context.Background(), fs, e.fileName)
 }
 
 func (e *CheckpointEntry) EncodeAndSetLocation(blks []objectio.BlockObject) {
