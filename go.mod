@@ -35,6 +35,7 @@ require (
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.5
 	github.com/tidwall/btree v1.4.3
+	github.com/tidwall/pretty v1.2.1
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.uber.org/zap v1.21.0
 	golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab
