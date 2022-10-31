@@ -66,6 +66,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
 		return buildShowCreateView(newStmt, ctx)
 	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		sql := fmt.Sprintf("select relname as `Table`, rel_createsql as `Create Table` from %s.%s where relname = '%s'", MO_CATALOG_DB_NAME, catalog.MO_TABLES, tblName)
+		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+	}
 
 	// sql := `
 	// 	SELECT *

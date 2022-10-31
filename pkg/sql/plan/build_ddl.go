@@ -183,43 +183,30 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
 	if stmt.Param != nil {
-		json_byte, err := json.Marshal(stmt.Param)
-		if err != nil {
-			return nil, err
-		}
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemExternalRel,
-			},
-			{
-				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: string(json_byte),
-			},
-		}
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			},
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemExternalRel,
 		})
 	} else {
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
-			},
-		}
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			},
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemOrdinaryRel,
 		})
 	}
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
