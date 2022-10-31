@@ -30,48 +30,32 @@ func TestStrToDate(t *testing.T) {
 			expect  string
 		}{
 			{
-				datestr: "2010-01-07 23:12:34.12345",
-				expect:  `Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01 01 Thu Thursday 4 2010 2010 2010 10 %`,
+				datestr: "04/31/2004",
+				expect:  "2004-04-31",
 			},
 			{
-				datestr: "2012-12-21 23:12:34.123456",
-				expect:  "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %",
+				datestr: "05/31/2012",
+				expect:  "2012-05-31",
 			},
 			{
-				datestr: "0001-01-01 00:00:00.123456",
-				expect:  `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 01 53 01 Mon Monday 1 0000 0001 0001 01 %`,
+				datestr: "04/23/2009",
+				expect:  "2009-04-23",
 			},
 			{
-				datestr: "2016-09-3 00:59:59.123456",
-				expect:  `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`,
+				datestr: "01/31/2004",
+				expect:  "2004-01-31",
 			},
 			{
-				datestr: "2012-10-01 00:00:00",
-				expect:  `Oct October 10 10 1st 01 1 275 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 40 40 40 40 Mon Monday 1 2012 2012 2012 12 %`,
+				datestr: "07/03/2018",
+				expect:  "2018-07-03",
 			},
 			{
-				datestr: "2009-10-04 22:23:00",
-				expect:  `Oct October 10 10 4th 04 4 277 22 10 23 PM 10:23:00 PM 22:23:00 00 000000 40 40 40 40 Sun Sunday 0 2009 2009 2009 09 %`,
+				datestr: "08/25/2014",
+				expect:  "2014-08-25",
 			},
 			{
-				datestr: "2007-10-04 22:23:00",
-				expect:  `Oct October 10 10 4th 04 4 277 22 10 23 PM 10:23:00 PM 22:23:00 00 000000 39 40 39 40 Thu Thursday 4 2007 2007 2007 07 %`,
-			},
-			{
-				datestr: "1900-10-04 22:23:00",
-				expect:  `Oct October 10 10 4th 04 4 277 22 10 23 PM 10:23:00 PM 22:23:00 00 000000 39 40 39 40 Thu Thursday 4 1900 1900 1900 00 %`,
-			},
-			{
-				datestr: "1997-10-04 22:23:00",
-				expect:  `Oct October 10 10 4th 04 4 277 22 10 23 PM 10:23:00 PM 22:23:00 00 000000 39 40 39 40 Sat Saturday 6 1997 1997 1997 97 %`,
-			},
-			{
-				datestr: "1999-01-01",
-				expect:  `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 00 00 52 53 Fri Friday 5 1998 1998 1999 99 %`,
-			},
-			{
-				datestr: "2006-06-01",
-				expect:  `Jun June 06 6 1st 01 1 152 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 22 22 22 22 Thu Thursday 4 2006 2006 2006 06 %`,
+				datestr: "06/30/2022",
+				expect:  "2022-06-30",
 			},
 		}
 
@@ -82,15 +66,301 @@ func TestStrToDate(t *testing.T) {
 			expects = append(expects, c.expect)
 		}
 
-		dateVector := testutil.MakeDateTimeVector(datestrs, nil)
-
-		format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%m/%d/%Y`
 		formatVector := testutil.MakeScalarVarchar(format, 11)
-
-		expectVector := testutil.MakeVarcharVector(expects, nil)
+		expectVector := testutil.MakeDateVector(expects, []uint64{0})
 
 		proc := testutil.NewProc()
-		result, err := DateFormat([]*vector.Vector{dateVector, formatVector}, proc)
+		result, err := StrToDate([]*vector.Vector{datestrVector, formatVector}, proc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(expectVector, result)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestStrToDate2(t *testing.T) {
+	convey.Convey("Test02 STR_TO_DATE() with multi line", t, func() {
+		cases := []struct {
+			datestr string
+			format  string
+			expect  string
+		}{
+			{
+				datestr: "May 1, 2013",
+				expect:  "2013-05-01",
+			},
+			{
+				datestr: "Feb 28, 2022",
+				expect:  "2022-02-28",
+			},
+			{
+				datestr: "Jul 20, 2022",
+				expect:  "2022-07-20",
+			},
+			{
+				datestr: "Aug 1, 2013",
+				expect:  "2013-08-01",
+			},
+			{
+				datestr: "Nov 28, 2022",
+				expect:  "2022-11-28",
+			},
+			{
+				datestr: "Dec 20, 2022",
+				expect:  "2022-12-20",
+			},
+		}
+
+		var datestrs []string
+		var expects []string
+		for _, c := range cases {
+			datestrs = append(datestrs, c.datestr)
+			expects = append(expects, c.expect)
+		}
+
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%b %d,%Y`
+		formatVector := testutil.MakeScalarVarchar(format, 11)
+		expectVector := testutil.MakeDateVector(expects, nil)
+
+		proc := testutil.NewProc()
+		result, err := StrToDate([]*vector.Vector{datestrVector, formatVector}, proc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(expectVector, result)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestStrToTime(t *testing.T) {
+	convey.Convey("Test03 STR_TO_DATE() with multi line", t, func() {
+		cases := []struct {
+			datestr string
+			format  string
+			expect  string
+		}{
+			{
+				datestr: "09:30:17",
+				expect:  "09:30:17",
+			},
+			{
+				datestr: "11:30:17",
+				expect:  "11:30:17",
+			},
+			{
+				datestr: "01:30:17",
+				expect:  "01:30:17",
+			},
+			{
+				datestr: "12:30:17",
+				expect:  "00:30:17",
+			},
+			{
+				datestr: "05:30:17",
+				expect:  "05:30:17",
+			},
+			{
+				datestr: "09:30:17",
+				expect:  "09:30:17",
+			},
+			{
+				datestr: "04:30:17",
+				expect:  "04:30:17",
+			},
+		}
+
+		var datestrs []string
+		var expects []string
+		for _, c := range cases {
+			datestrs = append(datestrs, c.datestr)
+			expects = append(expects, c.expect)
+		}
+
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%h:%i:%s`
+		formatVector := testutil.MakeScalarVarchar(format, 11)
+		expectVector := testutil.MakeTimeVector(expects, nil)
+
+		proc := testutil.NewProc()
+		result, err := StrToTime([]*vector.Vector{datestrVector, formatVector}, proc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(expectVector, result)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestStrToTime2(t *testing.T) {
+	convey.Convey("Test04 STR_TO_DATE() with multi line", t, func() {
+		cases := []struct {
+			datestr string
+			format  string
+			expect  string
+		}{
+			{
+				datestr: "11:13:56",
+				expect:  "11:13:56",
+			},
+			{
+				datestr: "12:33:51",
+				expect:  "00:33:51",
+			},
+			{
+				datestr: "03:23:36",
+				expect:  "03:23:36",
+			},
+			{
+				datestr: "01:43:46",
+				expect:  "01:43:46",
+			},
+			{
+				datestr: "10:53:41",
+				expect:  "10:53:41",
+			},
+			{
+				datestr: "09:23:46",
+				expect:  "09:23:46",
+			},
+		}
+
+		var datestrs []string
+		var expects []string
+		for _, c := range cases {
+			datestrs = append(datestrs, c.datestr)
+			expects = append(expects, c.expect)
+		}
+
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%r`
+		formatVector := testutil.MakeScalarVarchar(format, 11)
+		expectVector := testutil.MakeTimeVector(expects, nil)
+
+		proc := testutil.NewProc()
+		result, err := StrToTime([]*vector.Vector{datestrVector, formatVector}, proc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(expectVector, result)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestStrToDateTime(t *testing.T) {
+	convey.Convey("Test05 STR_TO_DATE() with multi line", t, func() {
+		cases := []struct {
+			datestr string
+			format  string
+			expect  string
+		}{
+			{
+				datestr: "2022-05-27 11:30:00",
+				expect:  "2022-05-27 11:30:00",
+			},
+			{
+				datestr: "2012-05-26 12:30:00",
+				expect:  "2012-05-26 12:30:00",
+			},
+			{
+				datestr: "2002-07-26 02:30:01",
+				expect:  "2002-07-26 02:30:01",
+			},
+			{
+				datestr: "2001-03-26 08:10:01",
+				expect:  "2001-03-26 08:10:01",
+			},
+			{
+				datestr: "2011-08-26 07:15:01",
+				expect:  "2011-08-26 07:15:01",
+			},
+			{
+				datestr: "2011-11-26 06:15:01",
+				expect:  "2011-11-26 06:15:01",
+			},
+			{
+				datestr: "2011-12-26 06:15:01",
+				expect:  "2011-12-26 06:15:01",
+			},
+		}
+
+		var datestrs []string
+		var expects []string
+		for _, c := range cases {
+			datestrs = append(datestrs, c.datestr)
+			expects = append(expects, c.expect)
+		}
+
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%Y-%m-%d %H:%i:%s`
+		formatVector := testutil.MakeScalarVarchar(format, 11)
+		expectVector := testutil.MakeDateTimeVector(expects, nil)
+
+		proc := testutil.NewProc()
+		result, err := StrToDateTime([]*vector.Vector{datestrVector, formatVector}, proc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(expectVector, result)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestStrToDateTime2(t *testing.T) {
+	convey.Convey("Test06 STR_TO_DATE() with multi line", t, func() {
+		cases := []struct {
+			datestr string
+			format  string
+			expect  string
+		}{
+			{
+				datestr: "8:10:2.123456 13-01-02",
+				expect:  "2013-01-02 08:10:02.123456",
+			},
+			{
+				datestr: "12:19:2.123456 06-01-02",
+				expect:  "2006-01-02 12:19:02.123456",
+			},
+			{
+				datestr: "15:21:2.123456 22-01-02",
+				expect:  "2022-01-02 15:21:02.123456",
+			},
+			{
+				datestr: "11:11:2.123456 25-01-02",
+				expect:  "2025-01-02 11:11:02.123456",
+			},
+			{
+				datestr: "19:31:2.123456 11-01-02",
+				expect:  "2011-01-02 19:31:02.123456",
+			},
+			{
+				datestr: "1:41:2.123456 02-01-02",
+				expect:  "2002-01-02 01:41:02.123456",
+			},
+		}
+
+		var datestrs []string
+		var expects []string
+		for _, c := range cases {
+			datestrs = append(datestrs, c.datestr)
+			expects = append(expects, c.expect)
+		}
+
+		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
+		format := `%H:%i:%S.%f %y-%m-%d`
+		formatVector := testutil.MakeScalarVarchar(format, 11)
+		expectVector := testutil.MakeDateTimeVector(expects, nil)
+
+		proc := testutil.NewProc()
+		result, err := StrToDateTime([]*vector.Vector{datestrVector, formatVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -188,4 +458,45 @@ func Test_CoreStrToDate(t *testing.T) {
 			require.Equalf(t, tt.expect, *time, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
 		})
 	}
+}
+
+func Test_CoreStrToDateErr(t *testing.T) {
+	tests := []struct {
+		name   string
+		date   string
+		format string
+	}{
+		// invalid days when `AllowInvalidDate` is false
+		//{"Test01", `04/31/2004`, `%m/%d/%Y`},                        // not exists in the real world
+		//{"Test02", "29/Feb/2021 12:34:56.", "%d/%b/%Y %H:%i:%s.%f"}, // Feb 29 in non-leap-year
+
+		{"Test03", `512 2021`, `%m%d %Y`}, // MySQL will try to parse '51' for '%m', fail
+
+		{"Test04", `a09:30:17`, `%h:%i:%s`}, // format mismatch
+		{"Test05", `12:43:24 a`, `%r`},      // followed by incomplete 'AM'/'PM'
+		{"Test06", `23:60:12`, `%T`},        // invalid minute
+		{"Test07", `18`, `%l`},
+		{"Test08", `00:21:22 AM`, `%h:%i:%s %p`},
+		{"Test09", `100/10/22`, `%y/%m/%d`},
+		{"Test10", "2010-11-12 11 am", `%Y-%m-%d %H %p`},
+		{"Test11", "2010-11-12 13 am", `%Y-%m-%d %h %p`},
+		{"Test12", "2010-11-12 0 am", `%Y-%m-%d %h %p`},
+		// MySQL accept `SEPTEMB` as `SEPTEMBER`, but we don't want this "feature" in TiDB
+		// unless we have to.
+		{"Test13", "15 SEPTEMB 2001", "%d %M %Y"},
+		// '%r'
+		{"Test14", "13:13:56 AM13/5/2019", "%r"},  // hh = 13 with am is invalid
+		{"Test15", "00:13:56 AM13/05/2019", "%r"}, // hh = 0 with am is invalid
+		{"Test16", "00:13:56 pM13/05/2019", "%r"}, // hh = 0 with pm is invalid
+		{"Test17", "11:13:56a", "%r"},             // EOF while parsing "AM"/"PM"
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			//ctx := make(map[string]int)
+			time := NewCoreTime()
+			gotSuccess := CoreStrToDate(time, tt.date, tt.format)
+			require.Falsef(t, gotSuccess, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
+		})
+	}
+
 }
