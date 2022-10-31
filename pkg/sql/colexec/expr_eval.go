@@ -28,8 +28,14 @@ import (
 
 var (
 	constBType          = types.Type{Oid: types.T_bool}
-	constIType          = types.Type{Oid: types.T_int64}
-	constUType          = types.Type{Oid: types.T_uint64}
+	constI8Type         = types.Type{Oid: types.T_int8}
+	constI16Type        = types.Type{Oid: types.T_int16}
+	constI32Type        = types.Type{Oid: types.T_int32}
+	constI64Type        = types.Type{Oid: types.T_int64}
+	constU8Type         = types.Type{Oid: types.T_uint8}
+	constU16Type        = types.Type{Oid: types.T_uint16}
+	constU32Type        = types.Type{Oid: types.T_uint32}
+	constU64Type        = types.Type{Oid: types.T_uint64}
 	constFType          = types.Type{Oid: types.T_float32}
 	constDType          = types.Type{Oid: types.T_float64}
 	constSType          = types.Type{Oid: types.T_varchar}
@@ -54,12 +60,24 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 		switch t.C.GetValue().(type) {
 		case *plan.Const_Bval:
 			vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
-		case *plan.Const_Ival:
-			vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
+		case *plan.Const_I8Val:
+			vec = vector.NewConstFixed(constI8Type, length, int8(t.C.GetI8Val()), proc.Mp())
+		case *plan.Const_I16Val:
+			vec = vector.NewConstFixed(constI16Type, length, int16(t.C.GetI16Val()), proc.Mp())
+		case *plan.Const_I32Val:
+			vec = vector.NewConstFixed(constI32Type, length, t.C.GetI32Val(), proc.Mp())
+		case *plan.Const_I64Val:
+			vec = vector.NewConstFixed(constI64Type, length, t.C.GetI64Val(), proc.Mp())
+		case *plan.Const_U8Val:
+			vec = vector.NewConstFixed(constU8Type, length, uint8(t.C.GetU8Val()), proc.Mp())
+		case *plan.Const_U16Val:
+			vec = vector.NewConstFixed(constU16Type, length, uint16(t.C.GetU16Val()), proc.Mp())
+		case *plan.Const_U32Val:
+			vec = vector.NewConstFixed(constU32Type, length, t.C.GetU32Val(), proc.Mp())
+		case *plan.Const_U64Val:
+			vec = vector.NewConstFixed(constU64Type, length, t.C.GetU64Val(), proc.Mp())
 		case *plan.Const_Fval:
 			vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
-		case *plan.Const_Uval:
-			vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 		case *plan.Const_Dval:
 			vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 		case *plan.Const_Dateval:

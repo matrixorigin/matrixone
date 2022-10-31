@@ -524,10 +524,52 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Bval: vec.Col.([]bool)[0],
 			},
 		}
+	case types.T_int8:
+		return &plan.Const{
+			Value: &plan.Const_I8Val{
+				I8Val: int32(vec.Col.([]int8)[0]),
+			},
+		}
+	case types.T_int16:
+		return &plan.Const{
+			Value: &plan.Const_I16Val{
+				I16Val: int32(vec.Col.([]int16)[0]),
+			},
+		}
+	case types.T_int32:
+		return &plan.Const{
+			Value: &plan.Const_I32Val{
+				I32Val: vec.Col.([]int32)[0],
+			},
+		}
 	case types.T_int64:
 		return &plan.Const{
-			Value: &plan.Const_Ival{
-				Ival: vec.Col.([]int64)[0],
+			Value: &plan.Const_I64Val{
+				I64Val: vec.Col.([]int64)[0],
+			},
+		}
+	case types.T_uint8:
+		return &plan.Const{
+			Value: &plan.Const_U8Val{
+				U8Val: uint32(vec.Col.([]uint8)[0]),
+			},
+		}
+	case types.T_uint16:
+		return &plan.Const{
+			Value: &plan.Const_U16Val{
+				U16Val: uint32(vec.Col.([]uint16)[0]),
+			},
+		}
+	case types.T_uint32:
+		return &plan.Const{
+			Value: &plan.Const_U32Val{
+				U32Val: vec.Col.([]uint32)[0],
+			},
+		}
+	case types.T_uint64:
+		return &plan.Const{
+			Value: &plan.Const_U64Val{
+				U64Val: vec.Col.([]uint64)[0],
 			},
 		}
 	case types.T_float64:
@@ -622,12 +664,13 @@ func needQuoteType(id types.T) bool {
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 	key := [2]types.T{columnT, constT}
+	// lowIntCol > highIntConst
 	if _, ok := intCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_Ival)
+		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.Ival
+		constVal := val.I64Val
 
 		switch columnT {
 		case types.T_int8:
@@ -639,12 +682,13 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 		}
 	}
 
+	// lowUIntCol > highUIntConst
 	if _, ok := uintCastTableForRewrite[key]; ok {
-		val, valOk := constExpr.C.Value.(*plan.Const_Uval)
+		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
 			return false
 		}
-		constVal := val.Uval
+		constVal := val.U64Val
 
 		switch columnT {
 		case types.T_uint8:
@@ -656,12 +700,22 @@ func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
 		}
 	}
 
-	if columnT == types.T_float32 && constT == types.T_float64 {
-		val, valOk := constExpr.C.Value.(*plan.Const_Dval)
+	// lowUIntCol > highIntConst
+	if _, ok := uint2intCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
 		if !valOk {
 			return false
 		}
-		return val.Dval < float64(math.MaxFloat32) && val.Dval > float64(math.SmallestNonzeroFloat32)
+		constVal := val.I64Val
+
+		switch columnT {
+		case types.T_uint8:
+			return constVal <= int64(math.MaxUint8)
+		case types.T_uint16:
+			return constVal <= int64(math.MaxUint16)
+		case types.T_uint32:
+			return constVal <= int64(math.MaxUint32)
+		}
 	}
 
 	return false

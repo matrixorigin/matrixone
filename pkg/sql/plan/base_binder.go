@@ -1015,54 +1015,16 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 
 	switch astExpr.ValType {
 	case tree.P_null:
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: true,
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_any),
-				Nullable: true,
-			},
-		}, nil
+		return makePlan2NullConstExprWithType(), nil
 	case tree.P_bool:
 		val := constant.BoolVal(astExpr.Value)
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Bval{
-						Bval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_bool),
-				Nullable: false,
-				Size:     1,
-			},
-		}, nil
+		return makePlan2BoolConstExprWithType(val), nil
 	case tree.P_int64:
 		val, ok := constant.Int64Val(astExpr.Value)
 		if !ok {
 			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
-		expr := &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Ival{
-						Ival: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_int64),
-				Nullable: false,
-				Size:     8,
-			},
-		}
+		expr := makePlan2Int64ConstExprWithType(val)
 		if typ != nil && typ.Id == int32(types.T_varchar) {
 			return appendCastBeforeExpr(expr, typ)
 		}
@@ -1072,21 +1034,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		if !ok {
 			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Uval{
-						Uval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_uint64),
-				Nullable: false,
-				Size:     8,
-			},
-		}, nil
+		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
 		if typ != nil {
 			if typ.Id == int32(types.T_decimal64) {
@@ -1163,21 +1111,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		if !ok {
 			return returnDecimalExpr(originString)
 		}
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Dval{
-						Dval: floatValue,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_float64),
-				Nullable: false,
-				Size:     8,
-			},
-		}, nil
+		return makePlan2Float64ConstExprWithType(floatValue), nil
 	case tree.P_hexnum:
 		s := astExpr.String()[2:]
 		if len(s)%2 != 0 {
@@ -1232,7 +1166,6 @@ func appendCastBeforeExpr(expr *Expr, toType *Type, isBin ...bool) (*Expr, error
 }
 
 func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-
 	firstExpr := intervalExpr.Expr.(*plan.Expr_List).List.List[0]
 	secondExpr := intervalExpr.Expr.(*plan.Expr_List).List.List[1]
 
@@ -1272,26 +1205,8 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		}
 		return []*Expr{
 			dateExpr,
-			{
-				Expr: &plan.Expr_C{
-					C: &Const{
-						Value: &plan.Const_Ival{
-							Ival: returnNum,
-						},
-					},
-				},
-				Typ: intervalTypeInFunction,
-			},
-			{
-				Expr: &plan.Expr_C{
-					C: &Const{
-						Value: &plan.Const_Ival{
-							Ival: int64(returnType),
-						},
-					},
-				},
-				Typ: intervalTypeInFunction,
-			},
+			makePlan2Int64ConstExprWithType(returnNum),
+			makePlan2Int64ConstExprWithType(int64(returnType)),
 		}, nil
 	}
 
@@ -1320,16 +1235,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	return []*Expr{
 		dateExpr,
 		numberExpr,
-		{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Value: &plan.Const_Ival{
-						Ival: int64(intervalType),
-					},
-				},
-			},
-			Typ: intervalTypeInFunction,
-		},
+		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
 }
 

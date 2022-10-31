@@ -594,16 +594,28 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 		switch c := item.C.Value.(type) {
-		case *plan.Const_Ival:
-			pc.Value = &plan.Const_Ival{Ival: c.Ival}
+		case *plan.Const_I8Val:
+			pc.Value = &plan.Const_I8Val{I8Val: c.I8Val}
+		case *plan.Const_I16Val:
+			pc.Value = &plan.Const_I16Val{I16Val: c.I16Val}
+		case *plan.Const_I32Val:
+			pc.Value = &plan.Const_I32Val{I32Val: c.I32Val}
+		case *plan.Const_I64Val:
+			pc.Value = &plan.Const_I64Val{I64Val: c.I64Val}
 		case *plan.Const_Dval:
 			pc.Value = &plan.Const_Dval{Dval: c.Dval}
 		case *plan.Const_Sval:
 			pc.Value = &plan.Const_Sval{Sval: c.Sval}
 		case *plan.Const_Bval:
 			pc.Value = &plan.Const_Bval{Bval: c.Bval}
-		case *plan.Const_Uval:
-			pc.Value = &plan.Const_Uval{Uval: c.Uval}
+		case *plan.Const_U8Val:
+			pc.Value = &plan.Const_U8Val{U8Val: c.U8Val}
+		case *plan.Const_U16Val:
+			pc.Value = &plan.Const_U16Val{U16Val: c.U16Val}
+		case *plan.Const_U32Val:
+			pc.Value = &plan.Const_U32Val{U32Val: c.U32Val}
+		case *plan.Const_U64Val:
+			pc.Value = &plan.Const_U64Val{U64Val: c.U64Val}
 		case *plan.Const_Fval:
 			pc.Value = &plan.Const_Fval{Fval: c.Fval}
 		case *plan.Const_Dateval:
