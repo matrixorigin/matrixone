@@ -307,6 +307,42 @@ func testFileService(
 		assert.Equal(t, entries[7].IsDir, false)
 		assert.Equal(t, entries[7].Name, "7")
 
+		// with / suffix
+		entries, err = fs.List(ctx, "qux/quux/")
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with / prefix
+		entries, err = fs.List(ctx, "/qux/quux/")
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with fs name
+		entries, err = fs.List(ctx, joinPath(fsName, "qux/quux/"))
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with fs name and / prefix and suffix
+		entries, err = fs.List(ctx, joinPath(fsName, "/qux/quux/"))
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
 		for _, entry := range entries {
 			err := fs.Delete(ctx, path.Join("qux/quux", entry.Name))
 			assert.Nil(t, err)
@@ -558,6 +594,26 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 		err = fs.Delete(ctx, vec.FilePath)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
+	})
+
+	t.Run("issue6110", func(t *testing.T) {
+		ctx := context.Background()
+		fs := newFS(fsName)
+		err := fs.Write(ctx, IOVector{
+			FilePath: "path/to/file/foo",
+			Entries: []IOEntry{
+				{
+					Offset: 0,
+					Size:   4,
+					Data:   []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+		entries, err := fs.List(ctx, joinPath(fsName, "/path"))
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(entries))
+		assert.Equal(t, "to", entries[0].Name)
 	})
 
 }
