@@ -77,9 +77,12 @@ func NewS3FS(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFromURL(endpoint),
-		),
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(endpoint),
+			),
+		},
 	)
 }
 
@@ -103,6 +106,23 @@ func NewS3FSOnMinio(
 	}
 	endpoint = u.String()
 
+	endpointResolver := s3.EndpointResolverFunc(
+		func(
+			region string,
+			options s3.EndpointResolverOptions,
+		) (
+			ep aws.Endpoint,
+			err error,
+		) {
+			_ = options
+			ep.URL = endpoint
+			ep.Source = aws.EndpointSourceCustom
+			ep.HostnameImmutable = true
+			ep.SigningRegion = region
+			return
+		},
+	)
+
 	return newS3FS(
 		sharedConfigProfile,
 		name,
@@ -110,24 +130,12 @@ func NewS3FSOnMinio(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					_ = options
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				endpointResolver,
 			),
-		),
+		},
 	)
 
 }
@@ -139,7 +147,8 @@ func newS3FS(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
-	options ...func(*s3.Options),
+	configOptions []func(*config.LoadOptions) error,
+	s3Options []func(*s3.Options),
 ) (*S3FS, error) {
 
 	if endpoint == "" {
@@ -152,9 +161,12 @@ func newS3FS(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
 	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx,
+	configOptions = append(configOptions,
 		config.WithSharedConfigProfile(sharedConfigProfile),
 		config.WithLogger(logutil.GetS3Logger()),
+	)
+	cfg, err := config.LoadDefaultConfig(ctx,
+		configOptions...,
 	)
 	if err != nil {
 		return nil, err
@@ -162,7 +174,7 @@ func newS3FS(
 
 	client := s3.NewFromConfig(
 		cfg,
-		options...,
+		s3Options...,
 	)
 
 	// head bucket to validate config
