@@ -230,8 +230,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		for _, prefix := range output.CommonPrefixes {
 			filePath := s.keyToPath(*prefix.Prefix)
 			filePath = strings.TrimRight(filePath, "/")
+			_, name := pathpkg.Split(filePath)
 			entries = append(entries, DirEntry{
-				Name:  filePath,
+				Name:  name,
 				IsDir: true,
 			})
 		}

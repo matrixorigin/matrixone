@@ -58,6 +58,8 @@ func ParsePath(s string) (path Path, err error) {
 		return
 	}
 
+	path.File = strings.TrimLeft(path.File, "/") // trim leading /
+
 	path.Full = joinPath(path.Service, path.File)
 	return
 }
