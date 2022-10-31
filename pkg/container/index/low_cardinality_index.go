@@ -15,9 +15,9 @@
 package index
 
 import (
-	"errors"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/index/dict"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	ErrNotSupported = errors.New("the type is not supported for low cardinality index")
+	ErrNotSupported = moerr.NewNotSupported("the type is not supported for low cardinality index")
 )
 
 type LowCardinalityIndex struct {
