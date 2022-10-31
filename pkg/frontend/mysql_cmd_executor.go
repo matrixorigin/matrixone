@@ -2372,6 +2372,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
+		pu.GetClusterDetails,
 	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
@@ -2382,7 +2383,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Host:         pu.SV.Host,
 		ConnectionID: uint64(proto.ConnectionID()),
 		Database:     ses.GetDatabaseName(),
-		Version:      serverVersion,
+		Version:      serverVersion.Load().(string),
 		TimeZone:     ses.GetTimeZone(),
 	}
 

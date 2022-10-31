@@ -210,6 +210,160 @@ func (mr *MockTxnOperatorMockRecorder) WriteAndCommit(ctx, ops interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteAndCommit", reflect.TypeOf((*MockTxnOperator)(nil).WriteAndCommit), ctx, ops)
 }
 
+// MockDebugableTxnOperator is a mock of DebugableTxnOperator interface.
+type MockDebugableTxnOperator struct {
+	ctrl     *gomock.Controller
+	recorder *MockDebugableTxnOperatorMockRecorder
+}
+
+// MockDebugableTxnOperatorMockRecorder is the mock recorder for MockDebugableTxnOperator.
+type MockDebugableTxnOperatorMockRecorder struct {
+	mock *MockDebugableTxnOperator
+}
+
+// NewMockDebugableTxnOperator creates a new mock instance.
+func NewMockDebugableTxnOperator(ctrl *gomock.Controller) *MockDebugableTxnOperator {
+	mock := &MockDebugableTxnOperator{ctrl: ctrl}
+	mock.recorder = &MockDebugableTxnOperatorMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockDebugableTxnOperator) EXPECT() *MockDebugableTxnOperatorMockRecorder {
+	return m.recorder
+}
+
+// ApplySnapshot mocks base method.
+func (m *MockDebugableTxnOperator) ApplySnapshot(data []byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplySnapshot", data)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ApplySnapshot indicates an expected call of ApplySnapshot.
+func (mr *MockDebugableTxnOperatorMockRecorder) ApplySnapshot(data interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplySnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).ApplySnapshot), data)
+}
+
+// Commit mocks base method.
+func (m *MockDebugableTxnOperator) Commit(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Commit", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Commit indicates an expected call of Commit.
+func (mr *MockDebugableTxnOperatorMockRecorder) Commit(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Commit), ctx)
+}
+
+// Debug mocks base method.
+func (m *MockDebugableTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Debug", ctx, ops)
+	ret0, _ := ret[0].(*rpc.SendResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Debug indicates an expected call of Debug.
+func (mr *MockDebugableTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Debug), ctx, ops)
+}
+
+// Read mocks base method.
+func (m *MockDebugableTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Read", ctx, ops)
+	ret0, _ := ret[0].(*rpc.SendResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Read indicates an expected call of Read.
+func (mr *MockDebugableTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Read), ctx, ops)
+}
+
+// Rollback mocks base method.
+func (m *MockDebugableTxnOperator) Rollback(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Rollback", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Rollback indicates an expected call of Rollback.
+func (mr *MockDebugableTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Rollback), ctx)
+}
+
+// Snapshot mocks base method.
+func (m *MockDebugableTxnOperator) Snapshot() ([]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Snapshot")
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Snapshot indicates an expected call of Snapshot.
+func (mr *MockDebugableTxnOperatorMockRecorder) Snapshot() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Snapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Snapshot))
+}
+
+// Txn mocks base method.
+func (m *MockDebugableTxnOperator) Txn() txn.TxnMeta {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Txn")
+	ret0, _ := ret[0].(txn.TxnMeta)
+	return ret0
+}
+
+// Txn indicates an expected call of Txn.
+func (mr *MockDebugableTxnOperatorMockRecorder) Txn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Txn))
+}
+
+// Write mocks base method.
+func (m *MockDebugableTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Write", ctx, ops)
+	ret0, _ := ret[0].(*rpc.SendResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Write indicates an expected call of Write.
+func (mr *MockDebugableTxnOperatorMockRecorder) Write(ctx, ops interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Write), ctx, ops)
+}
+
+// WriteAndCommit mocks base method.
+func (m *MockDebugableTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteAndCommit", ctx, ops)
+	ret0, _ := ret[0].(*rpc.SendResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WriteAndCommit indicates an expected call of WriteAndCommit.
+func (mr *MockDebugableTxnOperatorMockRecorder) WriteAndCommit(ctx, ops interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteAndCommit", reflect.TypeOf((*MockDebugableTxnOperator)(nil).WriteAndCommit), ctx, ops)
+}
+
 // MockTxnIDGenerator is a mock of TxnIDGenerator interface.
 type MockTxnIDGenerator struct {
 	ctrl     *gomock.Controller
