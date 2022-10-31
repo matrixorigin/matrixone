@@ -207,8 +207,8 @@ type mockTxn struct {
 	catalog *Catalog
 }
 
-func (txn *mockTxn) CreateDatabase(name string) (handle.Database, error) {
-	entry, err := txn.catalog.CreateDBEntry(name, txn)
+func (txn *mockTxn) CreateDatabase(name, createSql string) (handle.Database, error) {
+	entry, err := txn.catalog.CreateDBEntry(name, createSql, txn)
 	if err != nil {
 		return nil, err
 	}

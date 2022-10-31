@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -85,7 +86,11 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name)
+	createSql := "todosql"
+	if ctx != nil {
+		createSql, _ = ctx.Value(defines.SqlKey{}).(string)
+	}
+	_, err = txn.CreateDatabase(name, createSql)
 	return
 }
 
@@ -95,7 +100,7 @@ func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle T
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name)
+	_, err = txn.CreateDatabase(name, "todosql")
 	return
 }
 
