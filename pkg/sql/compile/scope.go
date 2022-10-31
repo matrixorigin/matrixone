@@ -126,6 +126,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c)
 	}
+	// XXX There are some problems with remote run, so I disabled it for now in order to use cicd quickly
+	if true {
+		return s.ParallelRun(c)
+	}
 
 	err := s.remoteRun(c)
 	// tell connect operator that it's over
