@@ -194,7 +194,7 @@ func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
 func (r *runner) syncCheckpointMetadata(start, end types.TS) {
 	bat := r.collectCheckpointMetadata()
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer := blockio.NewWriter(r.fs, name)
+	writer := blockio.NewWriter(context.Background(), r.fs, name)
 	writer.WriteBlock(bat)
 	writer.Sync()
 }

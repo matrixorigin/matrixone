@@ -16,6 +16,7 @@ package evictable
 
 import (
 	"bytes"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -101,7 +102,7 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 	}
 
 	// Do IO, fetch data buf
-	fsVector, err := col.GetData(nil)
+	fsVector, err := col.GetData(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}

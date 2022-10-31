@@ -1,0 +1,222 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package binary
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTimeDiffInTime(t *testing.T) {
+	cases := []struct {
+		name string
+		vecs []*vector.Vector
+		proc *process.Process
+		want *vector.Vector
+	}{
+		{
+			name: "TEST01",
+			vecs: makeTimeVectors("22:22:22", "11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("11:11:11", procs),
+		},
+		{
+			name: "TEST02",
+			vecs: makeTimeVectors("22:22:22", "-11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("33:33:33", procs),
+		},
+		{
+			name: "TEST03",
+			vecs: makeTimeVectors("-22:22:22", "11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-33:33:33", procs),
+		},
+		{
+			name: "TEST04",
+			vecs: makeTimeVectors("-22:22:22", "-11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-11:11:11", procs),
+		},
+		{
+			name: "TEST05",
+			vecs: makeTimeVectors("11:11:11", "22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-11:11:11", procs),
+		},
+		{
+			name: "TEST06",
+			vecs: makeTimeVectors("11:11:11", "-22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("33:33:33", procs),
+		},
+		{
+			name: "TEST07",
+			vecs: makeTimeVectors("-11:11:11", "22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-33:33:33", procs),
+		},
+		{
+			name: "TEST08",
+			vecs: makeTimeVectors("-11:11:11", "-22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("11:11:11", procs),
+		},
+		{
+			name: "TEST09",
+			vecs: makeTimeVectors("-838:59:59", "838:59:59", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-838:59:59", procs),
+		},
+		{
+			name: "TEST10",
+			vecs: makeTimeVectors("-838:59:59", "-838:59:59", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("00:00:00", procs),
+		},
+		{
+			name: "TEST11",
+			vecs: makeTimeVectors("838:59:59", "838:59:59", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("00:00:00", procs),
+		},
+		{
+			name: "TEST12",
+			vecs: makeTimeVectors("838:59:59", "-838:59:59", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("838:59:59", procs),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			diff, err := TimeDiff[types.Time](c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.want, diff)
+		})
+	}
+}
+
+func TestTimeDiffInDateTime(t *testing.T) {
+	cases := []struct {
+		name string
+		vecs []*vector.Vector
+		proc *process.Process
+		want *vector.Vector
+	}{
+		{
+			name: "TEST01",
+			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2012-12-12 11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("11:11:11", procs),
+		},
+		{
+			name: "TEST02",
+			vecs: makeDateTimeVectors("2012-12-12 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-11:11:11", procs),
+		},
+		{
+			name: "TEST03",
+			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2000-12-12 11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("838:59:59", procs),
+		},
+		{
+			name: "TEST04",
+			vecs: makeDateTimeVectors("2000-12-12 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-838:59:59", procs),
+		},
+		{
+			name: "TEST05",
+			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2012-10-10 11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("838:59:59", procs),
+		},
+		{
+			name: "TEST06",
+			vecs: makeDateTimeVectors("2012-10-10 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-838:59:59", procs),
+		},
+		{
+			name: "TEST07",
+			vecs: makeDateTimeVectors("2012-12-12 22:22:22", "2012-12-10 11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("59:11:11", procs),
+		},
+		{
+			name: "TEST08",
+			vecs: makeDateTimeVectors("2012-12-10 11:11:11", "2012-12-12 22:22:22", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("-59:11:11", procs),
+		},
+		{
+			name: "TEST09",
+			vecs: makeDateTimeVectors("2012-12-10 11:11:11", "2012-12-10 11:11:11", procs.Mp()),
+			proc: testutil.NewProc(),
+			want: makeResultVector("00:00:00", procs),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			diff, err := TimeDiff[types.Datetime](c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.want, diff)
+		})
+	}
+}
+
+func makeDateTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vector {
+	vec := make([]*vector.Vector, 2)
+
+	firstDate, _ := types.ParseDatetime(firstStr, 0)
+	secondDate, _ := types.ParseDatetime(secondStr, 0)
+
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, firstDate, mp)
+	vec[1] = vector.NewConstFixed(types.T_datetime.ToType(), 1, secondDate, mp)
+	return vec
+}
+
+func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vector {
+	vec := make([]*vector.Vector, 2)
+
+	firstDate, _ := types.ParseTime(firstStr, 0)
+	secondDate, _ := types.ParseTime(secondStr, 0)
+
+	vec[0] = vector.NewConstFixed(types.T_time.ToType(), 1, firstDate, mp)
+	vec[1] = vector.NewConstFixed(types.T_time.ToType(), 1, secondDate, mp)
+	return vec
+}
+
+func makeResultVector(res string, proc *process.Process) *vector.Vector {
+	resultVector, _ := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
+	result := make([]string, 1)
+	result[0] = res
+	vector.AppendString(resultVector, result, proc.Mp())
+	return resultVector
+}

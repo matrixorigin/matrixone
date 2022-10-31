@@ -19,6 +19,7 @@ gen_config
 main
 /mo-server
 /mo-service
+/mo-dump
 cube*/
 store/
 mo-data/

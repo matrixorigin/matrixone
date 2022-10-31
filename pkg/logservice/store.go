@@ -132,10 +132,10 @@ type store struct {
 
 	mu struct {
 		sync.Mutex
-		truncateCh      chan struct{}
-		pendingTruncate map[uint64]struct{}
-		metadata        metadata.LogStore
+		metadata metadata.LogStore
 	}
+	shardSnapshotInfo shardSnapshotInfo
+	snapshotMgr       *snapshotManager
 }
 
 func newLogStore(cfg Config,
@@ -161,9 +161,10 @@ func newLogStore(cfg Config,
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
 		logger:        logger,
+
+		shardSnapshotInfo: newShardSnapshotInfo(),
+		snapshotMgr:       newSnapshotManager(&cfg),
 	}
-	ls.mu.truncateCh = make(chan struct{})
-	ls.mu.pendingTruncate = make(map[uint64]struct{})
 	ls.mu.metadata = metadata.LogStore{UUID: cfg.UUID}
 	if err := ls.stopper.RunNamedTask("truncation-worker", func(ctx context.Context) {
 		logger.Info("logservice truncation worker started")
@@ -233,6 +234,9 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 		return moerr.NewInvalidInput("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
 	cfg := getRaftConfig(shardID, replicaID)
+	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
+		panic(err)
+	}
 	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
@@ -364,10 +368,6 @@ func (l *store) truncateLog(ctx context.Context,
 		l.logger.Error(fmt.Sprintf("shardID %d already truncated to index %d", shardID, result.Value))
 		return moerr.NewInvalidTruncateLsn(shardID, result.Value)
 	}
-	l.mu.Lock()
-	l.mu.pendingTruncate[shardID] = struct{}{}
-	l.mu.Unlock()
-	l.mu.truncateCh <- struct{}{}
 	return nil
 }
 
@@ -676,28 +676,6 @@ func (l *store) ticker(ctx context.Context) {
 	}
 }
 
-func (l *store) truncationWorker(ctx context.Context) {
-	defer func() {
-		l.logger.Info("truncation worker stopped")
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-l.mu.truncateCh:
-			if err := l.processTruncateLog(ctx); err != nil {
-				l.logger.Error("truncate failed", zap.Error(err))
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
-	}
-}
-
 func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
@@ -725,49 +703,6 @@ func (l *store) hakeeperTick() {
 			return
 		}
 	}
-}
-
-// TODO: add tests for this
-func (l *store) processTruncateLog(ctx context.Context) error {
-	l.mu.Lock()
-	pendings := l.mu.pendingTruncate
-	l.mu.pendingTruncate = make(map[uint64]struct{})
-	l.mu.Unlock()
-
-	for shardID := range pendings {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-
-		if err := func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			lsn, err := l.getTruncatedLsn(ctx, shardID)
-			if err != nil {
-				l.logger.Error("GetTruncatedIndex failed", zap.Error(err))
-				// FIXME: check error type, see whether it is a tmp one
-				return err
-			}
-			// the first 4 entries for a 3-replica raft group are tiny anyway
-			if lsn > 1 {
-				opts := dragonboat.SnapshotOption{
-					OverrideCompactionOverhead: true,
-					CompactionIndex:            lsn - 1,
-				}
-				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
-					l.logger.Error("SyncRequestSnapshot failed", zap.Error(err))
-					// FIXME: check error type, see whether it is a tmp one
-					return err
-				}
-			}
-			return nil
-		}(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
