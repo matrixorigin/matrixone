@@ -54,7 +54,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
-	param.batchSize = 40000
+	param.batchSize = 1000
 	param.records = make([][]string, param.batchSize)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
