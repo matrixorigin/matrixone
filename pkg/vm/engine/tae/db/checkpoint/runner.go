@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -258,12 +259,13 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	writer := blockio.NewWriter(context.Background(), r.fs, entry.Key())
+	filename := uuid.NewString()
+	writer := blockio.NewWriter(context.Background(), r.fs, filename)
 	blks, err := data.WriteTo(writer)
 	if err != nil {
 		return
 	}
-	location := blockio.EncodeMetalocFromMetas(entry.Key(), blks)
+	location := blockio.EncodeMetalocFromMetas(filename, blks)
 	entry.SetLocation(location)
 	return
 }
