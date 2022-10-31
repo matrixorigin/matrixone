@@ -167,8 +167,10 @@ func TestLowCardinalityGroup(t *testing.T) {
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
 		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
 
 		rbat := tc.proc.Reg.InputBatch
 		require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustTCols[int64](rbat.Vecs[0]))
