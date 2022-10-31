@@ -10,7 +10,7 @@ Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with C
 
 For more information on the required operating system versions for deploying MatrixOne, see [Hardware and Operating system requirements](../FAQs/deployment-faqs.md)。
 
-## <h2><a name="code_source">Method 1: Building from source code</a></h2>
+## Before you start
 
 ### 1. Install Go as necessary dependancy
 
@@ -20,7 +20,15 @@ Go version 1.19 is required.
 
 MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended.
 
-### 3. Get the MatrixOne code to build MatrixOne
+To install MySQL client, enter into the [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) download page:
+
+1. According to your System, Select **Select Operating System**.
+
+2. Click **Select OS Version** from the drop-down list.  Version 8.0.30 or later is recommended.
+
+## <h2><a name="code_source">Method 1: Building from source code</a></h2>
+
+### 1. Get the MatrixOne code to build MatrixOne
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
@@ -76,21 +84,15 @@ The **main** branch is the default branch, the code on the main branch is always
     ./mo-server system_vars_config.toml
     ```
 
-### 4. Connect to MatrixOne Server
+### 2. Connect to MatrixOne Server
 
-When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
-
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+When you finish installing and starting MatrixOne, many logs are generated in startup mode. Then you can start a new terminal and connect to a matrixone, for more information on connecting to MatrixOne, see [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## <h2><a name="binary_packages">Method 2: Downloading binary packages</a></h2>
 
 For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
-### 1. Install MySQL Client
-
-MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended.
-
-### 2. Download binary packages and decompress
+### 1. Download binary packages and decompress
 
 **Linux Environment**
 
@@ -121,6 +123,8 @@ MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommende
       unzip mo-server-v0.5.1-darwin-x86_64.zip
       ```
 
+      MacOS does not contain the `wget` command by default. You need to install the `wget` command in advance. You can also download and install the binary packages by referring to *Download Method 2* as below.
+
    + Downloading method 2:
 
       ```bash
@@ -135,17 +139,15 @@ MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommende
 !!! info
     MatrixOne only supports installation on ARM chipset with source code build; if you are using MacOS M1 and above, for more information on using source code build to install MatrixOne, see <a href="#code_source">Method 1: Building from source code</a>. Using release binary files from X86 chipset will lead to unknown problems.
 
-### 3.Launch MatrixOne server
+### 2.Launch MatrixOne server
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-### 4. Connect to MatrixOne Server
+### 3. Connect to MatrixOne Server
 
-When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
-
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+When you finish installing and starting MatrixOne, many logs are generated in startup mode. Then you can start a new terminal and connect to a matrixone, for more information on connecting to MatrixOne, see [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## <h2><a name="use_docker">Method 3: Using docker</a></h2>
 
@@ -199,9 +201,7 @@ For more information on the description of *Docker run*, run the commands `docke
 
 ### 4. Connect to MatrixOne Server
 
-When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
-
-See [Connect to MatrixOne server](connect-to-matrixone-server.md).
+When you finish installing and starting MatrixOne, many logs are generated in startup mode. Then you can start a new terminal and connect to a matrixone, for more information on connecting to MatrixOne, see [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## Reference
 
