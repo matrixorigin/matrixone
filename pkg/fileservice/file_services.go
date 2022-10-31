@@ -64,7 +64,7 @@ func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error 
 	if err != nil {
 		return err
 	}
-	return fs.Delete(ctx, path.Full)
+	return fs.Delete(ctx, filePath)
 }
 
 func (f *FileServices) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
@@ -79,7 +79,7 @@ func (f *FileServices) List(ctx context.Context, dirPath string) ([]DirEntry, er
 	if err != nil {
 		return nil, err
 	}
-	return fs.List(ctx, path.Full)
+	return fs.List(ctx, dirPath)
 }
 
 func (f *FileServices) Name() string {
