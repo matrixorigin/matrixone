@@ -343,7 +343,7 @@ var functionIdRegister = map[string]int32{
 	"find_in_set": FINDINSET,
 	"power":       POW,
 	"startswith":  STARTSWITH,
-	"to_date":     TO_DATE,
+	"to_date":     STR_TO_DATE,
 	"str_to_date": STR_TO_DATE,
 	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method

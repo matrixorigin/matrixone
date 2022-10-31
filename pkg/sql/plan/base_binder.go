@@ -905,7 +905,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
 			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
 		}
-	case "str_to_date":
+	case "str_to_date", "to_date":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
