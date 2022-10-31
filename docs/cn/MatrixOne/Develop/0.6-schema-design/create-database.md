@@ -53,6 +53,6 @@ SHOW DATABASES;
 
 - 你可以使用 `CREATE DATABASE` 语句来创建数据库，并且在 SQL 会话中使用 `USE {databasename};` 语句来使用你所创建的数据库。
 
-- 使用 root 用户创建数据库、角色、用户等，并只赋予必要的权限，参见[MatrixOne 中的权限控制](../../Security/access-control-overview.md)。
+- 使用 root 用户创建数据库、角色、用户等，并只赋予必要的权限，参见[MatrixOne 中的权限控制](../../0.6-Security/access-control-overview.md)。
 
 - 你已经准备完毕 *modatabase* 数据库，可以将表添加到该数据库中，参见下一章节[创建表](create-table.md)。

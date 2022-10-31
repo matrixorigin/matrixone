@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -26,16 +25,14 @@ import (
 // Engine is an engine.Engine impl
 type Engine struct {
 	shardPolicy       ShardPolicy
-	getClusterDetails GetClusterDetailsFunc
+	getClusterDetails engine.GetClusterDetailsFunc
 	idGenerator       IDGenerator
 }
-
-type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)
 
 func New(
 	ctx context.Context,
 	shardPolicy ShardPolicy,
-	getClusterDetails GetClusterDetailsFunc,
+	getClusterDetails engine.GetClusterDetailsFunc,
 	idGenerator IDGenerator,
 ) *Engine {
 	_ = ctx

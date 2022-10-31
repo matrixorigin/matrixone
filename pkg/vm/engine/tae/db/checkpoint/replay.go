@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"context"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,7 +55,7 @@ func (r *runner) Replay() {
 	if err != nil {
 		panic(err)
 	}
-	bs, err := reader.ReadAllMeta(dir.Size, common.DefaultAllocator)
+	bs, err := reader.ReadAllMeta(context.Background(), dir.Size, common.DefaultAllocator)
 	if err != nil {
 		panic(err)
 	}
@@ -70,7 +71,7 @@ func (r *runner) Replay() {
 		if err != nil {
 			panic(err)
 		}
-		data, err := col.GetData(nil)
+		data, err := col.GetData(context.Background(), nil)
 		if err != nil {
 			panic(err)
 		}

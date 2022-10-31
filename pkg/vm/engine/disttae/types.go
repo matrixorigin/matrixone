@@ -85,8 +85,8 @@ type MVCC interface {
 		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
 	NewReader(ctx context.Context, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
-		tableDef *plan.TableDef, blks []ModifyBlockMeta, ts timestamp.Timestamp,
-		fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
+		tableDef *plan.TableDef, skipBlocks map[uint64]uint8, blks []ModifyBlockMeta,
+		ts timestamp.Timestamp, fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -96,7 +96,7 @@ type Engine struct {
 	db                *DB
 	cli               client.TxnClient
 	idGen             IDGenerator
-	getClusterDetails GetClusterDetailsFunc
+	getClusterDetails engine.GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
@@ -222,6 +222,9 @@ type table struct {
 	partition  string
 	relKind    string
 	createSql  string
+
+	// use for skip rows
+	skipBlocks map[uint64]uint8
 }
 
 type column struct {
