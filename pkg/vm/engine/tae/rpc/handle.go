@@ -153,8 +153,8 @@ func (h *Handle) HandleFlushTable(
 	resp *apipb.SyncLogTailResp) (err error) {
 	err = h.eng.FlushTable(ctx,
 		req.AccessInfo.AccountID,
-		req.DatabaseName,
-		req.TableName,
+		req.DatabaseID,
+		req.TableID,
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	return err
 }

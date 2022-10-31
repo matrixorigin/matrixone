@@ -21,6 +21,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 	"strings"
 )
 
@@ -31,11 +32,40 @@ func handleFlush() handleFunc {
 			return nil, nil
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			// parameter should be "DbName@TableName"
-			parameters := strings.Split(parameter, "@")
+			// parameter should be "DbName.TableName"
+			parameters := strings.Split(parameter, ".")
+			txnOp := proc.TxnOperator
+			if proc.TxnOperator == nil {
+				v, err := proc.TxnClient.New()
+				if err != nil {
+					return nil, err
+				}
+				txnOp = v
+				if err = proc.SessionInfo.StorageEngine.New(proc.Ctx, txnOp); err != nil {
+					return nil, err
+				}
+			}
+			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
+			if err != nil {
+				return nil, err
+			}
+			rel, err := database.Relation(proc.Ctx, parameters[1])
+			if err != nil {
+				return nil, err
+			}
+			dId := database.GetDatabaseId(proc.Ctx)
+			tId := rel.GetTableID(proc.Ctx)
+			dbId, err := strconv.Atoi(dId)
+			if err != nil {
+				return nil, err
+			}
+			tableId, err := strconv.Atoi(tId)
+			if err != nil {
+				return nil, err
+			}
 			payload, err := types.Encode(db.FlushTable{
-				DatabaseName: parameters[0],
-				TableName:    parameters[1],
+				DatabaseID: uint64(dbId),
+				TableID:    uint64(tableId),
 				AccessInfo: db.AccessInfo{
 					AccountID: proc.SessionInfo.AccountId,
 					UserID:    proc.SessionInfo.UserId,

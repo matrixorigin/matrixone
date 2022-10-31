@@ -17,7 +17,6 @@ package moengine
 import (
 	"bytes"
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -101,7 +100,7 @@ type Engine interface {
 	// GetTAE returns tae db struct
 	GetTAE(ctx context.Context) *db.DB
 
-	FlushTable(ctx context.Context, tenantID uint32, databaseName, tableName string, ts types.TS) error
+	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
 }
 
 type TxnEngine interface {

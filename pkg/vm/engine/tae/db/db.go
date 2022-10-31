@@ -71,17 +71,9 @@ type DB struct {
 
 func (db *DB) FlushTable(
 	tenantID uint32,
-	dbName, tableName string,
+	dbId, tableId uint64,
 	ts types.TS) (err error) {
-	dbEntry, err := db.Catalog.GetDBEntryByName(tenantID, dbName, ts)
-	if err != nil {
-		return
-	}
-	tableEntry, err := dbEntry.GetTableEntryByName(tenantID, tableName, ts)
-	if err != nil {
-		return
-	}
-	err = db.BGCheckpointRunner.FlushTable(dbEntry.GetID(), tableEntry.GetID(), ts)
+	err = db.BGCheckpointRunner.FlushTable(dbId, tableId, ts)
 	return
 }
 
