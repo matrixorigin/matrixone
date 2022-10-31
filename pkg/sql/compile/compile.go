@@ -827,9 +827,10 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
-		if offset < 8192 {
+		topN := limit + offset
+		if topN <= 8192 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-			return c.compileOffset(n, c.compileTop(n, limit+offset, ss))
+			return c.compileOffset(n, c.compileTop(n, topN, ss))
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
