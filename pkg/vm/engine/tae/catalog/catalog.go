@@ -242,12 +242,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.catalog = catalog
 	db.ID = dbid
 	db.name = name
-	err := catalog.AddEntryLocked(db, nil)
-	if err != nil {
-		logutil.Warnf("add db %v, err %v", db.fullName, err)
-		// logutil.Info(catalog.SimplePPString(common.PPL3))
-		// panic(err)
-	}
+	_ = catalog.AddEntryLocked(db, nil)
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
@@ -372,12 +367,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.db = db
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
-	err = db.AddEntryLocked(tbl, nil)
-	if err != nil {
-		logutil.Infof("add table %v, err %v", tbl.schema.Name, err)
-		// logutil.Info(catalog.SimplePPString(common.PPL3))
-		// panic(err)
-	}
+	_ = db.AddEntryLocked(tbl, nil)
 	un := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
