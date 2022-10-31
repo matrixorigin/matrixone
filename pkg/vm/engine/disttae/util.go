@@ -14,6 +14,7 @@
 package disttae
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -139,7 +140,12 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 	return bloomFilter, zoneMap, nil
 }
 
-func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo, fs fileservice.FileService, m *mpool.MPool) ([][64]byte, uint32, error) {
+func fetchZonemapAndRowsFromBlockInfo(
+	ctx context.Context,
+	idxs []uint16,
+	blockInfo catalog.BlockInfo,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([][64]byte, uint32, error) {
 	name, extent, rows := blockio.DecodeMetaLoc(blockInfo.MetaLoc)
 	zonemapList := make([][64]byte, len(idxs))
 
@@ -149,7 +155,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		return nil, 0, err
 	}
 
-	obs, err := reader.ReadMeta([]objectio.Extent{extent}, m)
+	obs, err := reader.ReadMeta(ctx, []objectio.Extent{extent}, m)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -159,7 +165,7 @@ func fetchZonemapAndRowsFromBlockInfo(idxs []uint16, blockInfo catalog.BlockInfo
 		if err != nil {
 			return nil, 0, err
 		}
-		data, err := column.GetIndex(objectio.ZoneMapType, m)
+		data, err := column.GetIndex(ctx, objectio.ZoneMapType, m)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -337,42 +343,38 @@ func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32) (bool, any) {
+func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
 	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
 	if !canCompute {
 		return canCompute, nil
 	}
 	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
 	case *plan.Const_Ival:
-		return true, val.Ival
+		return transferIval(val.Ival, oid)
 	case *plan.Const_Dval:
-		return true, val.Dval
+		return transferDval(val.Dval, oid)
 	case *plan.Const_Sval:
-		return true, val.Sval
+		return transferSval(val.Sval, oid)
 	case *plan.Const_Bval:
-		return true, val.Bval
+		return transferBval(val.Bval, oid)
 	case *plan.Const_Uval:
-		return true, val.Uval
+		return transferUval(val.Uval, oid)
 	case *plan.Const_Fval:
-		return true, val.Fval
+		return transferFval(val.Fval, oid)
 	case *plan.Const_Dateval:
-		return true, val.Dateval
+		return transferDateval(val.Dateval, oid)
 	case *plan.Const_Timeval:
-		return true, val.Timeval
+		return transferTimeval(val.Timeval, oid)
 	case *plan.Const_Datetimeval:
-		return true, val.Datetimeval
+		return transferDatetimeval(val.Datetimeval, oid)
 	case *plan.Const_Decimal64Val:
-		return true, val.Decimal64Val
+		return transferDecimal64val(val.Decimal64Val.A, oid)
 	case *plan.Const_Decimal128Val:
-		return true, val.Decimal128Val
+		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
 	case *plan.Const_Timestampval:
-		return true, val.Timestampval
+		return transferTimestampval(val.Timestampval, oid)
 	case *plan.Const_Jsonval:
-		return true, val.Jsonval
-	case *plan.Const_Defaultval:
-		return true, val.Defaultval
-	case *plan.Const_UpdateVal:
-		return true, val.UpdateVal
+		return transferSval(val.Jsonval, oid)
 	}
 	return false, nil
 }

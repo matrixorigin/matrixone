@@ -291,6 +291,19 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	for idx := range requests {
+		requests[idx].Method = txn.TxnMethod_DEBUG
+	}
+
+	if err := tc.validate(ctx, false); err != nil {
+		return nil, err
+	}
+
+	requests = tc.maybeInsertCachedWrites(ctx, requests, false)
+	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
+}
+
 func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
@@ -501,6 +514,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, rollbackTxnErrors)
+	case txn.TxnMethod_DEBUG:
+		if resp.TxnError != nil {
+			return resp.TxnError.UnwrapError()
+		}
+		return nil
 	default:
 		tc.logger.Fatal("invalid response",
 			zap.String("response", resp.DebugString()))

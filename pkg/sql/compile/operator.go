@@ -273,7 +273,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 			DbName:       n.DeleteTablesCtx[i].DbName,
 			UseDeleteKey: n.DeleteTablesCtx[i].UseDeleteKey,
 			CanTruncate:  n.DeleteTablesCtx[i].CanTruncate,
-			IsHideKey:    n.DeleteTablesCtx[i].IsHideKey,
 			ColIndex:     n.DeleteTablesCtx[i].ColIndex,
 			IndexInfos:   n.DeleteTablesCtx[i].IndexInfos,
 			IndexTables:  indexTables,
@@ -323,6 +322,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
+	dbName := make([]string, len(n.UpdateCtxs))
+	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
@@ -335,6 +336,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 
 		tableID[i] = relation.GetTableID(ctx)
+		dbName[i] = updateCtx.DbName
+		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -375,6 +378,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:      eg,
 		DB:          db,
 		TableID:     tableID,
+		DBName:      dbName,
+		TblName:     tblName,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }

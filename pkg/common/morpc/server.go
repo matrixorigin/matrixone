@@ -189,6 +189,8 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	if !s.options.disableAutoCancelContext && request.cancel != nil {
 		defer request.cancel()
 	}
+	// get requestID here to avoid data race, because the request maybe released in handler
+	requestID := request.Message.GetID()
 	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
@@ -200,7 +202,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
-			zap.Uint64("request-id", request.Message.GetID()))
+			zap.Uint64("request-id", requestID))
 	}
 	return nil
 }

@@ -333,7 +333,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 					}
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
 			value, err := oq.mrs.GetValue(0, i)
 			if err != nil {
 				return err
