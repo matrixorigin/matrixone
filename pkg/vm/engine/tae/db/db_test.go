@@ -3980,10 +3980,15 @@ func TestFlushTable(t *testing.T) {
 
 	tae.createRelAndAppend(bat, true)
 
-	err := tae.FlushTable(
+	_, rel := tae.getRelation()
+	db, err := rel.GetDB()
+	assert.Nil(t, err)
+	table, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	err = tae.FlushTable(
 		0,
-		defaultTestDB,
-		schema.Name,
+		db.GetID(),
+		table.ID(),
 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
 	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
