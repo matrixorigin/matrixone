@@ -36,6 +36,7 @@ const (
 	DefaultFsp = 0
 )
 
+// Convert the string to date type value according to the format string
 func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	dateVector := vectors[0]
 	formatVector := vectors[1]
@@ -80,6 +81,7 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	}
 }
 
+// Convert the string to datetime type value according to the format string
 func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	dateVector := vectors[0]
 	formatVector := vectors[1]
@@ -124,6 +126,7 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	}
 }
 
+// // Convert the string to time type value according to the format string,such as '09:30:17'
 func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	dateVector := vectors[0]
 	formatVector := vectors[1]
@@ -244,7 +247,7 @@ func CoreStrToDate(t *CoreTime, date string, format string) bool {
 	if !success {
 		return false
 	}
-	if err := mysqlTimeFix(t, ctx); err != nil {
+	if err := checkMysqlTime(t, ctx); err != nil {
 		return false
 	}
 	return true
@@ -284,12 +287,9 @@ func strToDate(t *CoreTime, date string, format string, ctx map[string]int) (suc
 	return strToDate(t, dateRemain, formatRemain, ctx)
 }
 
-// mysqlTimeFix fixes the Time use the values in the context.
-func mysqlTimeFix(t *CoreTime, ctx map[string]int) error {
+// checkMysqlTime fixes the Time use the values in the context.
+func checkMysqlTime(t *CoreTime, ctx map[string]int) error {
 	// Key of the ctx is the format char, such as `%j` `%p` and so on.
-	if yearOfDay, ok := ctx["%j"]; ok {
-		_ = yearOfDay
-	}
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
 			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
@@ -318,6 +318,7 @@ func mysqlTimeFix(t *CoreTime, ctx map[string]int) error {
 	return nil
 }
 
+// Judge the return value type of the str_to_date function according to the value of the fromat parameter
 func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
 	isDuration, isDate := GetFormatType(format)
 	if isDuration && !isDate {
@@ -362,6 +363,7 @@ func GetFormatType(format string) (isDuration, isDate bool) {
 	return
 }
 
+// Skip spaces in strings
 func skipWhiteSpace(input string) string {
 	for i, c := range input {
 		if !unicode.IsSpace(c) {
