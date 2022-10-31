@@ -28,6 +28,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -52,6 +53,11 @@ var (
 )
 
 func main() {
+	// TODO: remove this hack after https://github.com/matrixorigin/matrixone/issues/5727 resolved.
+	gomonkey.ApplyFunc(os.Exit, func(code int) {
+		panic(code)
+	})
+
 	flag.Parse()
 	maybePrintVersion()
 
