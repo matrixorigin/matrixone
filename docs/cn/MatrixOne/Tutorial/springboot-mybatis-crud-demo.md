@@ -18,7 +18,7 @@
 
 ### 1. 安装构建 MatrixOne
 
-按照步骤介绍完成[安装单机版 MatrixOne 0.6](../../../Get-Started/install-standalone-matrixone.md)，在 MySQL 客户端新建一个命名为 `test` 数据库。
+按照步骤介绍完成[安装单机版 MatrixOne 0.6](../Get-Started/install-standalone-matrixone.md)，在 MySQL 客户端新建一个命名为 `test` 数据库。
 
 ```
 mysql> CREATE DATABASE test;
