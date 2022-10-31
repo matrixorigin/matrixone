@@ -493,6 +493,10 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		}
 		def := new(ColDef)
 		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
+		if _, ok := s.NameIndex[def.Name]; ok {
+			offset++
+			continue
+		}
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
 		types.Decode(data, &def.Type)
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
