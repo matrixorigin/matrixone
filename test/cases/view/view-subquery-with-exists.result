@@ -471,7 +471,7 @@ SQL syntax error: column "t1.s1" must appear in the GROUP BY clause or be used i
 select * from v1;
 SQL parser error: table "v1" does not exist
 drop view v1;
-invalid view view-subquery-with-exists%!(EXTRA string=v1)
+invalid view 'view-subquery-with-exists.v1'
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (id int not null, text varchar(20) not null default '', primary key (id));
@@ -483,7 +483,7 @@ SQL syntax error: column "t1.id" must appear in the GROUP BY clause or be used i
 select * from v1;
 SQL parser error: table "v1" does not exist
 drop view v1;
-invalid view view-subquery-with-exists%!(EXTRA string=v1)
+invalid view 'view-subquery-with-exists.v1'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -525,10 +525,10 @@ select * from v4;
 SQL parser error: table "v4" does not exist
 drop view v1;
 drop view v2;
-invalid view view-subquery-with-exists%!(EXTRA string=v2)
+invalid view 'view-subquery-with-exists.v2'
 drop view v3;
 drop view v4;
-invalid view view-subquery-with-exists%!(EXTRA string=v4)
+invalid view 'view-subquery-with-exists.v4'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

@@ -150,7 +150,7 @@ func (m TxnMeta) DebugString() string {
 // GetTargetDN return dn shard ID that message need send to.
 func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	switch m.Method {
-	case TxnMethod_Read, TxnMethod_Write:
+	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
 	case TxnMethod_Commit:
 		return m.Txn.DNShards[0]
