@@ -16,10 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,31 @@ func TestS3FS(t *testing.T) {
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				128*1024,
 			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("dynamic s3", func(t *testing.T) {
+		testFileService(t, func(name string) FileService {
+			buf := new(strings.Builder)
+			w := csv.NewWriter(buf)
+			err := w.Write([]string{
+				"s3",
+				config.Endpoint,
+				config.Region,
+				config.Bucket,
+				config.APIKey,
+				config.APISecret,
+				time.Now().Format("2006-01-02.15:04:05.000000"),
+				name,
+			})
+			assert.Nil(t, err)
+			w.Flush()
+			fs, _, err := GetForETL(nil, joinPath(
+				buf.String(),
+				"foo/bar/baz",
+			))
 			assert.Nil(t, err)
 			return fs
 		})
