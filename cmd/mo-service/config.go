@@ -15,6 +15,7 @@
 package main
 
 import (
+	"fmt"
 	"hash/fnv"
 	"math"
 	"net"
@@ -197,6 +198,13 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "logservice-data", cfg.UUID)
+	// Should sync directory structure with dragonboat.
+	hostname, err := os.Hostname()
+	if err != nil {
+		panic(fmt.Sprintf("cannot get hostname: %s", err))
+	}
+	cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, hostname,
+		fmt.Sprintf("%020d", cfg.DeploymentID), "exported-snapshot")
 	return cfg
 }
 
