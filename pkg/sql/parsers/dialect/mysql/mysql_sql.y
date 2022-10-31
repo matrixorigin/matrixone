@@ -294,8 +294,6 @@ import (
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
 
-// MODump
-%token <str> MODUMP
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -374,7 +372,6 @@ import (
 %type <statement> do_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
-%type <statement> mo_dump_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -597,7 +594,6 @@ stmt_list:
 
 stmt:
     create_stmt
-|   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
@@ -630,25 +626,6 @@ stmt:
         $$ = tree.Statement(nil)
     }
 
-
-mo_dump_stmt:
-    MODUMP DATABASE database_id INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    Database: tree.Identifier($3),
-	    OutFile: $5,
-	    MaxFileSize: int64($6),
-	}
-    }
-|   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
-    {
-	$$ = &tree.MoDump{
-	    Database: tree.Identifier($3),
-	    Tables: $5,
-	    OutFile: $7,
-	    MaxFileSize: int64($8),
-	}
-    }
 
 
 
@@ -7776,7 +7753,6 @@ reserved_keyword:
 |   UNBOUNDED
 |   SECONDARY
 |   DECLARE
-|   MODUMP
 
 non_reserved_keyword:
     ACCOUNT
