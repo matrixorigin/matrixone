@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Check the code to see if the issue number is removed
-        if: contains(github.event.issue.labels.*.name, 'bvt')
+        if: contains(github.event.issue.labels.*.name, 'bvt') || contains(github.event.issue.labels.*.name, 'cn-dn-bvt')
         id: get_check_val
         env:
           ISSUE_NUM: ${{ github.event.issue.number }}
