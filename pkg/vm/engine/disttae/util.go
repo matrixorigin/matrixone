@@ -66,27 +66,27 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) error {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			err := getColumnMapByExpr(arg, tableDef, columnMap)
-			if expr != nil {
+			if err != nil {
 				return err
 			}
 		}
+
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
 		colName := exprImpl.Col.Name
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		if colIdx, ok := tableDef.Name2ColIndex[colName]; ok {
-			columnMap[int(idx)] = int(colIdx)
+			(*columnMap)[int(idx)] = int(colIdx)
 		} else {
 			errMsg := fmt.Sprintf("can not find colName [%s]", colName)
 			logutil.Error(errMsg)
 			return moerr.NewInternalError(errMsg)
-
 		}
 	}
 	return nil
@@ -94,7 +94,7 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[
 
 func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, error) {
 	columnMap := make(map[int]int)
-	err := getColumnMapByExpr(expr, tableDef, columnMap)
+	err := getColumnMapByExpr(expr, tableDef, &columnMap)
 	return columnMap, err
 }
 
@@ -180,6 +180,7 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
+	zonemapLength := len(meta.Zonemap)
 
 	for i := 0; i < dataLength; i++ {
 		idx := columns[i]
@@ -187,15 +188,23 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
+		if idx > zonemapLength {
+			errMsg := fmt.Sprintf("zonemap index %d > zonemap's length %d", idx, zonemapLength)
+			logutil.Error(errMsg)
+			return nil, nil, moerr.NewInternalError(errMsg)
+		}
+
 		err := zm.Unmarshal(meta.Zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err
 		}
 
-		datas[i] = [2]any{
-			zm.GetMin(),
-			zm.GetMax(),
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			return nil, nil, moerr.NewInternalError("zonemap is nil")
 		}
+		datas[i] = [2]any{min, max}
 	}
 
 	return datas, dataTypes, nil
