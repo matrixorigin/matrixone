@@ -53,6 +53,13 @@ func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
 	}
 }
 
+// WithCodecMaxBodySize set rpc max body size
+func WithCodecMaxBodySize(size int) CodecOption {
+	return func(c *messageCodec) {
+		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
+	}
+}
+
 type messageCodec struct {
 	codec codec.Codec
 	bc    *baseCodec
