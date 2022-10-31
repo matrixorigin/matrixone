@@ -175,17 +175,6 @@ var dateFormatParserTable = map[string]dateFormatParser{
 	"%@": skipAllAlpha,          // Skip all alpha characters
 	// Deprecated since MySQL 5.7.5
 	"%y": yearNumericTwoDigits, // Year, numeric (two digits)
-	// TODO: Add the following...
-	// "%a": abbreviatedWeekday,         // Abbreviated weekday name (Sun..Sat)
-	// "%D": dayOfMonthWithSuffix,       // Day of the month with English suffix (0th, 1st, 2nd, 3rd)
-	// "%U": weekMode0,                  // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
-	// "%u": weekMode1,                  // Week (00..53), where Monday is the first day of the week; WEEK() mode 1
-	// "%V": weekMode2,                  // Week (01..53), where Sunday is the first day of the week; WEEK() mode 2; used with %X
-	// "%v": weekMode3,                  // Week (01..53), where Monday is the first day of the week; WEEK() mode 3; used with %x
-	// "%W": weekdayName,                // Weekday name (Sunday..Saturday)
-	// "%w": dayOfWeek,                  // Day of the week (0=Sunday..6=Saturday)
-	// "%X": yearOfWeek,                 // Year for the week where Sunday is the first day of the week, numeric, four digits; used with %V
-	// "%x": yearOfWeek,                 // Year for the week, where Monday is the first day of the week, numeric, four digits; used with %v
 }
 
 func matchDateWithToken(t *CoreTime, date string, token string, ctx map[string]int) (remain string, succ bool) {
@@ -215,6 +204,7 @@ func parseNDigits(input string, limit int) (number int, step int) {
 	return int(num), step
 }
 
+// Seconds (00..59)
 func secondsNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2)
 	if step <= 0 || v >= 60 {
@@ -224,6 +214,7 @@ func secondsNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) 
 	return input[step:], true
 }
 
+// Minutes, numeric (00..59)
 func minutesNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2)
 	if step <= 0 || v >= 60 {
@@ -255,6 +246,7 @@ func parseSep(input string) (string, parseState) {
 	return input, parseStateNormal
 }
 
+// Time, 12-hour (hh:mm:ss followed by AM or PM)
 func time12Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	tryParse := func(input string) (string, parseState) {
 		// hh:mm:ss AM
@@ -323,6 +315,7 @@ func time12Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	return remain, true
 }
 
+// Time, 24-hour (hh:mm:ss)
 func time24Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	tryParse := func(input string) (string, parseState) {
 		// hh:mm:ss
@@ -372,6 +365,7 @@ const (
 	constForPM
 )
 
+// judege AM or PM
 func isAMOrPM(_ *CoreTime, input string, ctx map[string]int) (string, bool) {
 	if len(input) < 2 {
 		return input, false
@@ -395,6 +389,7 @@ var oneToSixDigitRegex = regexp.MustCompile("^[0-9]{0,6}")
 // numericRegex: it was for any numeric characters
 var numericRegex = regexp.MustCompile("[0-9]+")
 
+// Day of the month, numeric (0..31)
 func dayOfMonthNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 0..31
 	if step <= 0 || v > 31 {
@@ -404,6 +399,7 @@ func dayOfMonthNumeric(t *CoreTime, input string, _ map[string]int) (string, boo
 	return input[step:], true
 }
 
+// Hour (00..23)
 func hour24Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 0..23
 	if step <= 0 || v > 23 {
@@ -425,6 +421,7 @@ func hour12Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool)
 	return input[step:], true
 }
 
+// Microseconds (000000..999999)
 func microSeconds(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 6)
 	if step <= 0 {
@@ -438,10 +435,12 @@ func microSeconds(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	return input[step:], true
 }
 
+// Year, numeric, four digits
 func yearNumericFourDigits(t *CoreTime, input string, ctx map[string]int) (string, bool) {
 	return yearNumericNDigits(t, input, ctx, 4)
 }
 
+// Year, numeric (two digits)
 func yearNumericTwoDigits(t *CoreTime, input string, ctx map[string]int) (string, bool) {
 	return yearNumericNDigits(t, input, ctx, 2)
 }
@@ -468,6 +467,7 @@ func adjustYear(y int) int {
 	return y
 }
 
+// Day of year (001..366)
 func dayOfYearNumeric(_ *CoreTime, input string, ctx map[string]int) (string, bool) {
 	// MySQL declares that "%j" should be "Day of year (001..366)". But actually,
 	// it accepts a number that is up to three digits, which range is [1, 999].
@@ -479,6 +479,7 @@ func dayOfYearNumeric(_ *CoreTime, input string, ctx map[string]int) (string, bo
 	return input[step:], true
 }
 
+// Abbreviated month name (Jan..Dec)
 func abbreviatedMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	if len(input) >= 3 {
 		monthName := strings.ToLower(input[:3])
@@ -497,6 +498,7 @@ func hasCaseInsensitivePrefix(input, prefix string) bool {
 	return strings.EqualFold(input[:len(prefix)], prefix)
 }
 
+// Month name (January..December)
 func fullNameMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	for i, month := range MonthNames {
 		if hasCaseInsensitivePrefix(input, month) {
@@ -507,6 +509,7 @@ func fullNameMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	return input, false
 }
 
+// Month, numeric (0..12)
 func monthNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 1..12
 	if step <= 0 || v > 12 {
@@ -525,6 +528,7 @@ func DateFSP(date string) (fsp int) {
 	return
 }
 
+// Skip all numbers
 func skipAllNums(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
@@ -537,6 +541,7 @@ func skipAllNums(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 	return input[retIdx:], true
 }
 
+// Skip all punctation characters
 func skipAllPunct(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
@@ -549,6 +554,7 @@ func skipAllPunct(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 	return input[retIdx:], true
 }
 
+// Skip all alpha characters
 func skipAllAlpha(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
