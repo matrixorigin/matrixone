@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"fmt"
 	"math"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -278,6 +281,22 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		for _, name := range txn.deleteMetaTables {
 			txn.db.delMetaTable(name)
 		}
+	}
+	if err != nil {
+		for _, es := range txn.writes {
+			for _, e := range es {
+				fmt.Printf("+++bat.Attrs: %v-%v\n", e.typ, e.bat.Attrs)
+				for i, vec := range e.bat.Vecs {
+					if vec.Typ.IsVarlen() {
+						vs := vector.MustStrCols(vec)
+						fmt.Printf("\t[%v] = %v\n", i, vs)
+					} else {
+						fmt.Printf("\t[%v] = %v\n", i, vec)
+					}
+				}
+			}
+		}
+		os.Exit(0)
 	}
 	return err
 }
