@@ -108,6 +108,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
+	tbl.skipBlocks = make(map[uint64]uint8)
 	if tbl.meta == nil {
 		return ranges, nil
 	}
@@ -116,11 +117,12 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
-			if needRead(expr, blk, tbl.getTableDef(), tbl.proc) {
+			tbl.skipBlocks[blk.Info.BlockID] = 0
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(deletes,
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	return ranges, nil
@@ -403,7 +405,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 			blks = tbl.meta.modifedBlocks[i]
 		}
 		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
-			blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
+			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err
 		}

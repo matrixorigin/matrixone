@@ -1,6 +1,6 @@
 # Query Data from a Single Table
 
-本篇文章介绍如何使用 SQL 来对数据库中的数据进行查询。
+This document describes how to use SQL to query data from a single table in a database.
 
 ## Before you start
 

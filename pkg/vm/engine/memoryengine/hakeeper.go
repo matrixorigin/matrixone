@@ -22,13 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func GetClusterDetailsFromHAKeeper(
 	ctx context.Context,
 	client logservice.CNHAKeeperClient,
 ) (
-	get GetClusterDetailsFunc,
+	get engine.GetClusterDetailsFunc,
 ) {
 
 	var lock sync.Mutex

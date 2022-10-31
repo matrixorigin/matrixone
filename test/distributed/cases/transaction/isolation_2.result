@@ -179,7 +179,7 @@ select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
 2    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 delete from dis_table_02 where a=1;
 rollback ;
 commit ;
@@ -187,12 +187,12 @@ select * from aaa;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
 2    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 select * from aaa;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
 2    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 drop view aaa ;
 start transaction ;
 insert into dis_table_02(b,c) values ('','1999-06-04');
@@ -201,15 +201,15 @@ execute stmt1;
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
 update dis_table_02 set c='2000-09-02' where a=2;
 select * from dis_table_02;
 a    b    c
-4        1999-06-04 00:00:00
+92        1999-06-04 00:00:00
 2    aaaa    2000-09-02 00:00:00
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 begin ;
 create database dis_db_02;
 rollback ;
@@ -218,21 +218,21 @@ w-w conflict
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
 begin ;
 prepare stmt1 from "insert into dis_table_02(b,c) values('oppo','1009-11-11')";
 execute stmt1;
 select * from dis_table_02;
 a    b    c
-4    oppo    1009-11-11 00:00:00
+93    oppo    1009-11-11 00:00:00
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
@@ -241,17 +241,17 @@ commit;
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-4    oppo    1009-11-11 00:00:00
+93    oppo    1009-11-11 00:00:00
 use dis_db_02;
 invalid database dis_db_02
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-4    oppo    1009-11-11 00:00:00
+93    oppo    1009-11-11 00:00:00
 insert into dis_table_02(b,c) values ('','1999-06-04');
 create temporary table dis_temp_01(a int,b varchar,primary key(a));
 begin ;
@@ -266,24 +266,25 @@ rollback ;
 select * from dis_temp_01;
 a    b
 drop table dis_temp_01;
-start transaction ;
-load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02 ;
-tae data: duplicate
+start transaction;
+load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 update dis_table_02 set b='pppp';
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    pppp    2000-09-08 00:00:00
+91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-4    pppp    1009-11-11 00:00:00
-5    pppp    1999-06-04 00:00:00
+93    pppp    1009-11-11 00:00:00
+94    pppp    1999-06-04 00:00:00
+5    pppp    1897-04-29 00:00:00
+6    pppp    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
-3    vvv    2000-09-08 00:00:00
+91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-4    oppo    1009-11-11 00:00:00
-5        1999-06-04 00:00:00
+93    oppo    1009-11-11 00:00:00
+94        1999-06-04 00:00:00
 begin ;
 create view dis_view_02 as select * from dis_table_02;
 insert into dis_table_02 values (2,'oooo','1802-03-20');
@@ -291,10 +292,12 @@ select * from dis_table_02;
 a    b    c
 2    oooo    1802-03-20 00:00:00
 1    pppp    2020-09-08 00:00:00
-3    pppp    2000-09-08 00:00:00
+91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-4    pppp    1009-11-11 00:00:00
-5    pppp    1999-06-04 00:00:00
+93    pppp    1009-11-11 00:00:00
+94    pppp    1999-06-04 00:00:00
+5    pppp    1897-04-29 00:00:00
+6    pppp    2030-12-29 00:00:00
 use isolation_2;
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
@@ -302,14 +305,15 @@ select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 insert into dis_table_02 values (2,'oooo','1802-03-20');
 commit;
-w-w conflict
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    pppp    2000-09-08 00:00:00
+91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-4    pppp    1009-11-11 00:00:00
-5    pppp    1999-06-04 00:00:00
+93    pppp    1009-11-11 00:00:00
+94    pppp    1999-06-04 00:00:00
+5    pppp    1897-04-29 00:00:00
+6    pppp    2030-12-29 00:00:00
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 drop table dis_view_02;
@@ -342,48 +346,58 @@ a    b    c
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    pppp    2000-09-08 00:00:00
+91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-4    pppp    1009-11-11 00:00:00
-5    pppp    1999-06-04 00:00:00
+93    pppp    1009-11-11 00:00:00
+94    pppp    1999-06-04 00:00:00
+5    pppp    1897-04-29 00:00:00
+6    pppp    2030-12-29 00:00:00
 update dis_table_02 set b='tittttt' where a>1;
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    tittttt    2000-09-08 00:00:00
+91    tittttt    2000-09-08 00:00:00
 2    tittttt    2222-07-12 00:00:00
-4    tittttt    1009-11-11 00:00:00
-5    tittttt    1999-06-04 00:00:00
+93    tittttt    1009-11-11 00:00:00
+94    tittttt    1999-06-04 00:00:00
+5    tittttt    1897-04-29 00:00:00
+6    tittttt    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 start transaction ;
-w-w conflict
+tae data: duplicate
 update dis_table_02 set b='catttteee' where a>1;
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    catttteee    2000-09-08 00:00:00
+91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-4    catttteee    1009-11-11 00:00:00
-5    catttteee    1999-06-04 00:00:00
+93    catttteee    1009-11-11 00:00:00
+94    catttteee    1999-06-04 00:00:00
+5    catttteee    1897-04-29 00:00:00
+6    catttteee    2030-12-29 00:00:00
 commit;
 commit;
 w-w conflict
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    catttteee    2000-09-08 00:00:00
+91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-4    catttteee    1009-11-11 00:00:00
-5    catttteee    1999-06-04 00:00:00
+93    catttteee    1009-11-11 00:00:00
+94    catttteee    1999-06-04 00:00:00
+5    catttteee    1897-04-29 00:00:00
+6    catttteee    2030-12-29 00:00:00
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
-3    catttteee    2000-09-08 00:00:00
+91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-4    catttteee    1009-11-11 00:00:00
-5    catttteee    1999-06-04 00:00:00
+93    catttteee    1009-11-11 00:00:00
+94    catttteee    1999-06-04 00:00:00
+5    catttteee    1897-04-29 00:00:00
+6    catttteee    2030-12-29 00:00:00
 create database if not exists iso_db_02;
 start transaction ;
 use iso_db_02;

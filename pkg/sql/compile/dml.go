@@ -39,11 +39,18 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
+	var tableID string
 	if arg.DeleteCtxs[0].CanTruncate {
 		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
+
+		var rel engine.Relation
+		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
+			return 0, err
+		}
+		tableID = rel.GetTableID(c.ctx)
 
 		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
@@ -52,16 +59,12 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			}
 		}
 
-		var rel engine.Relation
-		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
-			return 0, err
-		}
 		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 		if err != nil {
 			return 0, err
 		}
 
-		err = colexec.MoveAutoIncrCol(arg.DeleteCtxs[0].TableName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
 		if err != nil {
 			return 0, err
 		}
@@ -132,7 +135,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
+	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return 0, err
 	}
 	if p.CompositePkey != nil {
