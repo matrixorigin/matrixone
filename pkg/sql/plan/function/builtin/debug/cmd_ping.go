@@ -38,8 +38,8 @@ func handlePing() handleFunc {
 			}
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string, _ *process.Process) []byte {
-			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter})
+		func(dnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
+			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter}), nil
 		},
 		func(data []byte) (interface{}, error) {
 			pong := pb.DNPingResponse{}
@@ -55,7 +55,7 @@ func handlePing() handleFunc {
 // repsonseUnmarshaler: used to unmarshal response
 func getDNHandlerFunc(method pb.CmdMethod,
 	whichDN func(parameter string) ([]uint64, error),
-	payload func(dnShardID uint64, parameter string, proc *process.Process) []byte,
+	payload func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
 	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
 	return func(proc *process.Process,
 		service serviceType,
@@ -86,6 +86,10 @@ func getDNHandlerFunc(method pb.CmdMethod,
 		for _, store := range detail.GetDNStores() {
 			for _, shard := range store.Shards {
 				if len(targetDNs) == 0 || containsDN(shard.ShardID) {
+					payLoad, err := payload(shard.ShardID, parameter, proc)
+					if err != nil {
+						return pb.DebugResult{}, err
+					}
 					requests = append(requests, txn.CNOpRequest{
 						OpCode: uint32(method),
 						Target: metadata.DNShard{
@@ -95,7 +99,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 							ReplicaID: shard.ReplicaID,
 							Address:   store.ServiceAddress,
 						},
-						Payload: payload(shard.ShardID, parameter, proc),
+						Payload: payLoad,
 					})
 				}
 			}

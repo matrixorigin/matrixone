@@ -15,6 +15,7 @@
 package debug
 
 import (
+	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
@@ -29,7 +30,7 @@ func handleFlush() handleFunc {
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string, proc *process.Process) []byte {
+		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter should be "DbName@TableName"
 			parameters := strings.Split(parameter, "@")
 			payload, err := types.Encode(db.FlushTable{
@@ -42,14 +43,13 @@ func handleFlush() handleFunc {
 				},
 			})
 			if err != nil {
-				panic(any(moerr.NewInternalError("payload encode err")))
+				return nil, moerr.NewInternalError("payload encode err")
 			}
-			return payload
+			return payload, nil
 		},
 		func(data []byte) (interface{}, error) {
-			if data != nil {
-				return pb.DebugResult{Method: pb.CmdMethod_Flush.String(), Data: data}, nil
-			}
-			return pb.DebugResult{Method: pb.CmdMethod_Flush.String(), Data: "succeed"}, nil
+			resp := pb.DNStringResponse{}
+			protoc.MustUnmarshal(&resp, data)
+			return resp, nil
 		})
 }

@@ -15,7 +15,7 @@
 package debug
 
 import (
-	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 	"testing"
 
@@ -64,7 +64,7 @@ func TestHandler(t *testing.T) {
 
 	vec3 := vector.New(types.New(types.T_varchar, 0, 0, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
-	proc := process.New(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil)
+	proc := testutil.NewProcess()
 	supportedCmds[strings.ToUpper("test_cmd")] = func(proc *process.Process,
 		service serviceType,
 		parameter string,

@@ -35,7 +35,16 @@ func (s *taeStorage) Debug(ctx context.Context,
 			txnMeta, data,
 			s.taeHandler.HandleFlushTable,
 		)
-		return nil, err
+		if err != nil {
+			resp := protoc.MustMarshal(&debug.DNStringResponse{
+				ReturnStr: "Failed",
+			})
+			return resp, err
+		}
+		resp := protoc.MustMarshal(&debug.DNStringResponse{
+			ReturnStr: "OK",
+		})
+		return resp, err
 	default:
 		return nil, moerr.NewNotSupported("TAEStorage not support debug method %d", opCode)
 	}
