@@ -542,9 +542,12 @@ func (fp *fixedPool) free(hdr unsafe.Pointer) {
 }
 
 func (mp *MPool) Free(bs []byte) {
-	if bs == nil {
+	if bs == nil || cap(bs) == 0 {
 		// free nil is OK.
 		return
+	}
+	if len(bs) == 0 {
+		bs = bs[:cap(bs)]
 	}
 
 	pb := (unsafe.Pointer)(&bs[0])
