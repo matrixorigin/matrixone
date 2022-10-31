@@ -431,7 +431,6 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
-	PrivilegeTypeDump
 )
 
 type PrivilegeScope uint8
@@ -565,8 +564,6 @@ func (pt PrivilegeType) String() string {
 		return "execute"
 	case PrivilegeTypeValues:
 		return "values"
-	case PrivilegeTypeDump:
-		return "dump"
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -643,8 +640,6 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeValues:
 		return PrivilegeScopeTable
-	case PrivilegeTypeDump:
-		return PrivilegeScopeDatabase
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -3183,14 +3178,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
-		}
-	case *tree.MoDump:
-		if st.Tables != nil {
-			objType = objectTypeTable
-			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		} else {
-			objType = objectTypeDatabase
-			typs = append(typs, PrivilegeTypeDump, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		}
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
