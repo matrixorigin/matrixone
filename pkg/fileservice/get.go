@@ -15,9 +15,14 @@
 package fileservice
 
 import (
+	"context"
+	"net/url"
 	"path/filepath"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -49,11 +54,19 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	return
 }
 
+// GetForETL get or creates a FileService instance for ETL operations
+// if service part of path is empty, a LocalETLFS will be created
+// if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
+// if service part of path is argumented, a FileService instance will be created dynamically with those arguments
+// supported dynamic file service:
+// s3,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
+// minio,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
 func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
 	fsPath, err := ParsePath(path)
 	if err != nil {
 		return nil, "", err
 	}
+
 	if fsPath.Service == "" {
 		// no service, create local ETL fs
 		dir, file := filepath.Split(path)
@@ -62,13 +75,158 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			return nil, "", err
 		}
 		readPath = file
+
+	} else if len(fsPath.ServiceArguments) > 0 {
+		// service with arguments, create dynamically
+		switch fsPath.Service {
+
+		case "s3":
+			res, err = newS3FSFromArguments(fsPath.ServiceArguments)
+			if err != nil {
+				return
+			}
+
+		case "minio":
+			res, err = newMinioS3FSFromArguments(fsPath.ServiceArguments)
+			if err != nil {
+				return
+			}
+
+		default:
+			err = moerr.NewInvalidInput("no such service: %s", fsPath.Service)
+		}
+
+		readPath = fsPath.File
+
 	} else {
 		// get etl fs
 		res, err = Get[ETLFileService](fs, fsPath.Service)
 		if err != nil {
 			return nil, "", err
 		}
-		readPath = fsPath.Full
+		readPath = path
 	}
+
 	return
+}
+
+func newS3FSFromArguments(arguments []string) (*S3FS, error) {
+	endpoint := arguments[0]
+	region := arguments[1]
+	_ = region
+	bucket := arguments[2]
+	accessKey := arguments[3]
+	accessSecret := arguments[4]
+	keyPrefix := arguments[5]
+	var name string
+	if len(arguments) > 6 {
+		name = arguments[6]
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	fs, err := newS3FS(
+		"",
+		name,
+		endpoint,
+		bucket,
+		keyPrefix,
+		0,
+		[]func(*config.LoadOptions) error{
+			config.WithCredentialsProvider(
+				aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+					return aws.Credentials{
+						AccessKeyID:     accessKey,
+						SecretAccessKey: accessSecret,
+					}, nil
+				}),
+			),
+		},
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(endpoint),
+			),
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs, nil
+}
+
+func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
+	endpoint := arguments[0]
+	region := arguments[1]
+	_ = region
+	bucket := arguments[2]
+	accessKey := arguments[3]
+	accessSecret := arguments[4]
+	keyPrefix := arguments[5]
+	var name string
+	if len(arguments) > 6 {
+		name = arguments[6]
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	endpointResolver := s3.EndpointResolverFunc(
+		func(
+			region string,
+			options s3.EndpointResolverOptions,
+		) (
+			ep aws.Endpoint,
+			err error,
+		) {
+			_ = options
+			ep.URL = endpoint
+			ep.Source = aws.EndpointSourceCustom
+			ep.HostnameImmutable = true
+			ep.SigningRegion = region
+			return
+		},
+	)
+
+	fs, err := newS3FS(
+		"",
+		name,
+		endpoint,
+		bucket,
+		keyPrefix,
+		0,
+		[]func(*config.LoadOptions) error{
+			config.WithCredentialsProvider(
+				aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+					return aws.Credentials{
+						AccessKeyID:     accessKey,
+						SecretAccessKey: accessSecret,
+					}, nil
+				}),
+			),
+		},
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				endpointResolver,
+			),
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs, nil
 }
