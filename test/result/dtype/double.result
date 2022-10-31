@@ -421,3 +421,60 @@ select * from t1;
 a	b
 1.0	apple
 2.0	apple
+drop table if exists double_test;
+create table double_test(c1 double(6,1));
+insert into double_test values(-1.7976931348623157E+308);
+insert into double_test values(1.7976931348623157E+308);
+insert into double_test values(1000000);
+insert into double_test values(1000001);
+insert into double_test values(999999);
+insert into double_test values(-1000000);
+insert into double_test values(-1000001);
+insert into double_test values(-999999);
+insert into double_test values(100000);
+insert into double_test values(100001);
+insert into double_test values(99999);
+insert into double_test values(-100000);
+insert into double_test values(-100001);
+insert into double_test values(-99999);
+insert into double_test values(10000000);
+insert into double_test values(10000001);
+insert into double_test values(9999999);
+insert into double_test values(-10000000);
+insert into double_test values(-10000001);
+insert into double_test values(-9999999);
+insert into double_test values(10000);
+insert into double_test values(10001);
+insert into double_test values(9999);
+insert into double_test values(-10000);
+insert into double_test values(-10001);
+insert into double_test values(-9999);
+select * from double_test order by 1;
+c1
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.9
+-99999.0
+-10001.0
+-10000.0
+-9999.0
+9999.0
+10000.0
+10001.0
+99999.0
+99999.9
+99999.9
+99999.9
+99999.9
+99999.9
+99999.9
+99999.9
+99999.9
+99999.9
+drop table double_test;
