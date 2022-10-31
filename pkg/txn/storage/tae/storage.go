@@ -17,7 +17,6 @@ package taestorage
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -32,6 +31,7 @@ import (
 )
 
 type taeStorage struct {
+	shard      metadata.DNShard
 	taeHandler rpchandle.Handler
 }
 
@@ -53,6 +53,7 @@ func NewTAEStorage(
 		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
+		shard:      shard,
 		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil
@@ -93,8 +94,4 @@ func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 // StartRecovery implements storage.TxnTAEStorage
 func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	s.taeHandler.HandleStartRecovery(ctx, ch)
-}
-
-func (s *taeStorage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
-	return nil, moerr.NewNotSupported("TAEStorage not support debug method")
 }
