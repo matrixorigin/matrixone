@@ -128,13 +128,14 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 
 // Q: How to boot from the checkpoints?
 // A: When a meta version is created, it contains all information of the previouse version. So we always
-//    delete the stale versions when a new version is created. Over time, the number of objects under
-//    `ckp/` is small.
-//    1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
-//       from the meta object.
-//    2. Apply the latest global checkpoint
-//    3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
-//       latest version.
+//
+//	delete the stale versions when a new version is created. Over time, the number of objects under
+//	`ckp/` is small.
+//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
+//	   from the meta object.
+//	2. Apply the latest global checkpoint
+//	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
+//	   latest version.
 type runner struct {
 	options struct {
 		// checkpoint scanner interval duration

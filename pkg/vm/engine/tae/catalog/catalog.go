@@ -219,7 +219,11 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 		dbid := ins.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
 		name := string(ins.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
 		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateDB(dbid, name, txnNode)
+		tenantID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).Get(i).(uint32)
+		userID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).Get(i).(uint32)
+		roleID := ins.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).Get(i).(uint32)
+		createAt := ins.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).Get(i).(types.Timestamp)
+		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt)
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -228,7 +232,7 @@ func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containe
 	}
 }
 
-func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnbase.TxnMVCCNode) {
+func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnbase.TxnMVCCNode, tenantID, userID, roleID uint32, createAt types.Timestamp) {
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
@@ -242,6 +246,12 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.catalog = catalog
 	db.ID = dbid
 	db.name = name
+	db.acInfo = accessInfo{
+		TenantID: tenantID,
+		UserID:   userID,
+		RoleID:   roleID,
+		CreateAt: createAt,
+	}
 	_ = catalog.AddEntryLocked(db, nil, true)
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
