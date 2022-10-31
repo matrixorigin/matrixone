@@ -72,7 +72,6 @@ func (c *Compile) Compile(pn *plan.Plan, u any, fill func(any, *batch.Batch) err
 	if err != nil {
 		return err
 	}
-	println(DebugShowScopes([]*Scope{s}))
 	c.scope = s
 	c.scope.Plan = pn
 	return nil
@@ -828,7 +827,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			panic(err)
 		}
 		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
-		if offset < 8096 {
+		if offset < 8192 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
 			return c.compileOffset(n, c.compileTop(n, limit+offset, ss))
 		}
