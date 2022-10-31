@@ -180,7 +180,9 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 			ws = make([]int64, len(bat.Zs))
 		}
 		ws = ws[:len(bat.Zs)]
-		bat.Zs = shuffle.Int64Shuffle(bat.Zs, ws, sels)
+		xws := shuffle.FixedLengthShuffle(bat.Zs, ws, sels)
+		copy(bat.Zs, xws)
+		bat.Zs = bat.Zs[:len(sels)]
 		m.PutSels(ws)
 	}
 	return nil
