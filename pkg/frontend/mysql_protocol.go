@@ -658,7 +658,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				switch length {
 				case 0:
 					vars[i] = "0d 00:00:00"
-				case 5, 8:
+				case 8, 12:
 					pos, vars[i] = mp.readTime(data, pos, length)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
@@ -731,7 +731,7 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, str
 	second := data[pos]
 	pos++
 	// time with ms
-	if len == 8 {
+	if len == 12 {
 		ms, pos, _ := mp.io.ReadUint64(data, pos)
 		if day > 0 {
 			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
