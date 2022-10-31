@@ -405,22 +405,6 @@ func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *TableEntry) MakeLogEntry() *EntryCommand {
-	return newTableCmd(0, CmdLogTable, entry)
-}
-
-func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &TableEntry{
-		TableBaseEntry: ret.(*TableBaseEntry),
-		schema:         entry.schema,
-		db:             entry.db,
-	}
-}
-
 // IsActive is coarse API: no consistency check
 func (entry *TableEntry) IsActive() bool {
 	db := entry.GetDB()

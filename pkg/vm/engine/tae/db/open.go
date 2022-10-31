@@ -52,7 +52,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	opts = opts.FillDefaults(dirname)
 
-	indexBufMgr := buffer.NewNodeManager(opts.CacheCfg.IndexCapacity, nil)
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
@@ -64,13 +63,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:         dirname,
-		Opts:        opts,
-		IndexBufMgr: indexBufMgr,
-		MTBufMgr:    mutBufMgr,
-		TxnBufMgr:   txnBufMgr,
-		Fs:          fs,
-		Closed:      new(atomic.Value),
+		Dir:       dirname,
+		Opts:      opts,
+		MTBufMgr:  mutBufMgr,
+		TxnBufMgr: txnBufMgr,
+		Fs:        fs,
+		Closed:    new(atomic.Value),
 	}
 
 	switch opts.LogStoreT {
@@ -117,17 +115,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	// calibrationOp := newCalibrationOp(db)
-	// catalogCheckpointer := newCatalogCheckpointer(
-	// 	db,
-	// 	opts.CheckpointCfg.CatalogUnCkpLimit,
-	// 	time.Duration(opts.CheckpointCfg.CatalogCkpInterval)*time.Millisecond)
+	calibrationOp := newCalibrationOp(db)
 	gcCollector := newGarbageCollector(
 		db,
 		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
-	// scanner.RegisterOp(calibrationOp)
+	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(gcCollector)
-	// scanner.RegisterOp(catalogCheckpointer)
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(

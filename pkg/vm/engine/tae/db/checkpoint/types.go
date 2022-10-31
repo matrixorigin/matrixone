@@ -33,6 +33,7 @@ type Runner interface {
 	Stop()
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) (types.TS, error)
+	MaxLSN() uint64
 
 	MockCheckpoint(end types.TS)
 }

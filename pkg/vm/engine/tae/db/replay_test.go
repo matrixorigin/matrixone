@@ -91,8 +91,6 @@ func TestReplayCatalog1(t *testing.T) {
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
 	t.Logf("GetCheckpointed: %d", tae.Scheduler.GetCheckpointedLSN())
-	// ckpTs := tae.Catalog.GetCheckpointed().MaxTS
-	// ckpEntry := tae.Catalog.PrepareCheckpoint(0, ckpTs)
 	tae.Close()
 
 	tae2, err := Open(tae.Dir, nil)

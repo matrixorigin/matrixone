@@ -64,9 +64,7 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
-	scheduler   tasks.TaskScheduler
-	ckpmu       sync.RWMutex
-	checkpoints []*Checkpoint
+	scheduler tasks.TaskScheduler
 
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
@@ -91,13 +89,12 @@ func compareDBFn(a, b *DBEntry) int {
 
 func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
 	catalog := &Catalog{
-		RWMutex:     new(sync.RWMutex),
-		IDAlloctor:  NewIDAllocator(),
-		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:   make(map[string]*nodeList[*DBEntry]),
-		link:        common.NewGenericSortedDList(compareDBFn),
-		checkpoints: make([]*Checkpoint, 0),
-		scheduler:   scheduler,
+		RWMutex:    new(sync.RWMutex),
+		IDAlloctor: NewIDAllocator(),
+		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:  make(map[string]*nodeList[*DBEntry]),
+		link:       common.NewGenericSortedDList(compareDBFn),
+		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -105,25 +102,23 @@ func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
 
 func NewEmptyCatalog() *Catalog {
 	return &Catalog{
-		RWMutex:     new(sync.RWMutex),
-		IDAlloctor:  NewIDAllocator(),
-		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:   make(map[string]*nodeList[*DBEntry]),
-		link:        common.NewGenericSortedDList(compareDBFn),
-		checkpoints: make([]*Checkpoint, 0),
-		scheduler:   nil,
+		RWMutex:    new(sync.RWMutex),
+		IDAlloctor: NewIDAllocator(),
+		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:  make(map[string]*nodeList[*DBEntry]),
+		link:       common.NewGenericSortedDList(compareDBFn),
+		scheduler:  nil,
 	}
 }
 
 func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
 	catalog := &Catalog{
-		RWMutex:     new(sync.RWMutex),
-		IDAlloctor:  NewIDAllocator(),
-		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:   make(map[string]*nodeList[*DBEntry]),
-		link:        common.NewGenericSortedDList(compareDBFn),
-		checkpoints: make([]*Checkpoint, 0),
-		scheduler:   scheduler,
+		RWMutex:    new(sync.RWMutex),
+		IDAlloctor: NewIDAllocator(),
+		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:  make(map[string]*nodeList[*DBEntry]),
+		link:       common.NewGenericSortedDList(compareDBFn),
+		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -163,18 +158,6 @@ func (catalog *Catalog) ReplayCmd(
 			idx.CSN = uint32(i)
 			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
-	case CmdLogBlock:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayBlock(cmd, dataFactory)
-	case CmdLogSegment:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplaySegment(cmd, dataFactory)
-	case CmdLogTable:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayTable(cmd, dataFactory)
-	case CmdLogDatabase:
-		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
@@ -229,33 +212,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		return
 		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
-}
-
-func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
-	var err error
-	catalog.OnReplayDBID(cmd.DB.ID)
-
-	db, err := catalog.GetDatabaseByID(cmd.DB.ID)
-	if err != nil {
-		cmd.DB.RWMutex = new(sync.RWMutex)
-		cmd.DB.catalog = catalog
-		err = catalog.AddEntryLocked(cmd.DB, nil)
-		if err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-		un := n.GetPayload()
-		dbun := db.SearchNode(un)
-		if dbun == nil {
-			db.Insert(un) //TODO isvalid
-		} else {
-			dbun.Update(un)
-		}
-		return true
-	}, true)
 }
 
 func (catalog *Catalog) OnReplayDatabaseBatch(ins, insTxn, del, delTxn *containers.Batch) {
@@ -362,33 +318,6 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 
 }
 
-func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplayTableID(cmd.Table.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.Table.ID)
-	if err != nil {
-		cmd.Table.db = db
-		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		err = db.AddEntryLocked(cmd.Table, nil)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			node := rel.SearchNode(un)
-			if node == nil {
-				rel.Insert(un)
-			} else {
-				node.Update(un)
-			}
-			return true
-		}, true)
-	}
-}
 func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *containers.Batch, dataFactory DataFactory) {
 	schemaOffset := 0
 	for i := 0; i < ins.Length(); i++ {
@@ -524,34 +453,6 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		} else {
 			node.Update(un)
 		}
-	}
-}
-
-func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := rel.GetSegmentByID(cmd.Segment.ID)
-	if err != nil {
-		cmd.Segment.table = rel
-		rel.AddEntryLocked(cmd.Segment)
-	} else {
-		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			segun := seg.SearchNode(un)
-			if segun != nil {
-				segun.Update(un)
-			} else {
-				seg.Insert(un)
-			}
-			return true
-		}, true)
 	}
 }
 
@@ -694,37 +595,6 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		observer.OnTimeStamp(prepareTS)
 	}
 	seg.AddEntryLocked(cmd.Block)
-}
-
-func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory) {
-	catalog.OnReplayBlockID(cmd.Block.ID)
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := rel.GetSegmentByID(cmd.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
-	if blk == nil {
-		cmd.Block.segment = seg
-		seg.AddEntryLocked(cmd.Block)
-	} else {
-		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
-			un := n.GetPayload()
-			blkun := blk.SearchNode(un)
-			if blkun != nil {
-				blkun.Update(un)
-			}
-			blk.Insert(un)
-			return false
-		}, true)
-	}
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
@@ -986,14 +856,8 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 		it.Next()
 	}
 
-	var ckp *Checkpoint
-	catalog.ckpmu.RLock()
-	if len(catalog.checkpoints) > 0 {
-		ckp = catalog.checkpoints[len(catalog.checkpoints)-1]
-	}
-	catalog.ckpmu.RUnlock()
 	var w2 bytes.Buffer
-	_, _ = w2.WriteString(fmt.Sprintf("CATALOG[CNT=%d][%s]", cnt, ckp.String()))
+	_, _ = w2.WriteString(fmt.Sprintf("CATALOG[CNT=%d]", cnt))
 	_, _ = w2.WriteString(w.String())
 	return w2.String()
 }
@@ -1140,116 +1004,3 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	}
 	return err
 }
-
-func (catalog *Catalog) PrepareCheckpoint(startTs, endTs types.TS) *CheckpointEntry {
-	ckpEntry := NewCheckpointEntry(startTs, endTs)
-	processor := new(LoopProcessor)
-	processor.BlockFn = func(block *BlockEntry) (err error) {
-		CheckpointOp(ckpEntry, block, startTs, endTs)
-		return
-	}
-	processor.SegmentFn = func(segment *SegmentEntry) (err error) {
-		CheckpointOp(ckpEntry, segment, startTs, endTs)
-		return
-	}
-	processor.TableFn = func(table *TableEntry) (err error) {
-		if table.IsVirtual() {
-			err = moerr.GetOkStopCurrRecur()
-			return
-		}
-		CheckpointOp(ckpEntry, table, startTs, endTs)
-		return
-	}
-	processor.DatabaseFn = func(database *DBEntry) (err error) {
-		if database.IsSystemDB() {
-			// No need to checkpoint system db entry
-			return
-		}
-		CheckpointOp(ckpEntry, database, startTs, endTs)
-		return
-	}
-	if err := catalog.RecurLoop(processor); err != nil {
-		panic(err)
-	}
-	return ckpEntry
-}
-
-// func (catalog *Catalog) GetCheckpointed() *Checkpoint {
-// 	catalog.ckpmu.RLock()
-// 	defer catalog.ckpmu.RUnlock()
-// 	if len(catalog.checkpoints) == 0 {
-// 		return EmptyCheckpoint
-// 	}
-// 	return catalog.checkpoints[len(catalog.checkpoints)-1]
-// }
-
-// func (catalog *Catalog) CheckpointClosure(maxTs types.TS) tasks.FuncT {
-// 	return func() error {
-// 		return catalog.Checkpoint(maxTs)
-// 	}
-// }
-// func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, minTS types.TS, err error) {
-// 	catalog.ckpmu.RLock()
-// 	defer catalog.ckpmu.RUnlock()
-// 	if len(catalog.checkpoints) != 0 {
-// 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
-// 		if maxTS.Less(lastMax) {
-// 			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
-// 			return
-// 		}
-// 		if maxTS.Equal(lastMax) {
-// 			return
-// 		}
-// 		//minTs = lastMax + 1
-// 		minTS = lastMax.Next()
-// 	}
-// 	needCheckpoint = true
-// 	return
-// }
-
-// func (catalog *Catalog) Checkpoint(maxTs types.TS) (err error) {
-// 	now := time.Now()
-// 	var minTs types.TS
-// 	var needCheckpoint bool
-// 	if needCheckpoint, minTs, err = catalog.NeedCheckpoint(maxTs); !needCheckpoint {
-// 		return
-// 	}
-// 	entry := catalog.PrepareCheckpoint(minTs, maxTs)
-// 	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
-// 	if len(entry.LogIndexes) == 0 {
-// 		return
-// 	}
-// 	now = time.Now()
-// 	logEntry, err := entry.MakeLogEntry()
-// 	if err != nil {
-// 		return
-// 	}
-// 	logutil.Debugf("MakeLogEntry: %s", time.Since(now))
-// 	now = time.Now()
-// 	defer logEntry.Free()
-// 	checkpoint := new(Checkpoint)
-// 	checkpoint.MaxTS = maxTs
-// 	checkpoint.LSN = entry.MaxIndex.LSN
-// 	checkpoint.CommitId, err = catalog.store.Append(0, logEntry)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	if err = logEntry.WaitDone(); err != nil {
-// 		panic(err)
-// 	}
-// 	logutil.Debugf("SaveCheckpointed: %s", time.Since(now))
-// 	// for _, index := range entry.LogIndexes {
-// 	// 	logutil.Debugf("Ckp0Index %s", index.String())
-// 	// }
-// 	now = time.Now()
-// 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
-// 		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
-// 		return
-// 	}
-// 	logutil.Debugf("CheckpointWal: %s", time.Since(now))
-// 	catalog.ckpmu.Lock()
-// 	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
-// 	catalog.ckpmu.Unlock()
-// 	logutil.Debugf("Max LogIndex: %s", entry.MaxIndex.String())
-// 	return
-// }
