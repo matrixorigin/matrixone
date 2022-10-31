@@ -55,6 +55,11 @@ func handleFlush() handleFunc {
 			}
 			dId := database.GetDatabaseId(proc.Ctx)
 			tId := rel.GetTableID(proc.Ctx)
+			err = txnOp.Commit(proc.Ctx)
+			if err != nil {
+				txnOp = nil
+				return nil, err
+			}
 			dbId, err := strconv.Atoi(dId)
 			if err != nil {
 				return nil, err
