@@ -934,6 +934,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
+	logutil.Debugf("check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -950,11 +951,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
+	logutil.Debugf("check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+	if !execResultArrayHasData(rsset) {
 		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
 	}
 
@@ -969,13 +971,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
+	logutil.Debugf("check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+	if !execResultArrayHasData(rsset) {
 		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
 	}
 
@@ -1011,6 +1014,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
+		logutil.Debugf("check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
@@ -1018,17 +1022,18 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("there is no role %s", tenant.GetDefaultRole())
 		}
 
+		logutil.Debugf("check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
@@ -1039,13 +1044,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	} else {
+		logutil.Debugf("check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
 		if err != nil {
 			return nil, err
 		}
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("get the default role of the user %s failed", tenant.GetUser())
 		}
 
@@ -1698,7 +1704,9 @@ func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
 func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
+	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
+	logutil.Debugf("background exec sql done")
 	if err != nil {
 		return nil, err
 	}

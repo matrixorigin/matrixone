@@ -30,10 +30,10 @@ import (
 )
 
 const (
-	benchFlag        = true
+	benchFlag        = false
 	benchCardinality = 1024
 
-	benchTargetRows = 1_000_000
+	benchTargetRows = 5_000
 )
 
 var (

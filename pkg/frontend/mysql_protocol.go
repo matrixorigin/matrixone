@@ -56,14 +56,18 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 // DefaultClientConnStatus default server status
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
-var serverVersion = ""
+var serverVersion atomic.Value
+
+func init() {
+	serverVersion.Store("0.5.0")
+}
 
 func InitServerVersion(v string) {
 	if len(v) > 0 {
 		switch v[0] {
 		case 'v': // format 'v1.1.1'
 			v = v[1:]
-			serverVersion = v
+			serverVersion.Store(v)
 		default:
 			vv := []byte(v)
 			for i := 0; i < len(vv); i++ {
@@ -72,10 +76,10 @@ func InitServerVersion(v string) {
 					i--
 				}
 			}
-			serverVersion = string(vv)
+			serverVersion.Store(string(vv))
 		}
 	} else {
-		serverVersion = "0.5.0"
+		serverVersion.Store("0.5.0")
 	}
 }
 
@@ -643,6 +647,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				vars[i] = []byte(val)
 
 			case defines.MYSQL_TYPE_TIME:
+				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
+				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
@@ -651,15 +657,15 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				pos = newPos
 				switch length {
 				case 0:
-					vars[i] = "+00:00:00.000000"
-				case 5:
-					pos, vars[i] = mp.readTime(data, pos)
+					vars[i] = "0d 00:00:00"
+				case 8, 12:
+					pos, vars[i] = mp.readTime(data, pos, length)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
+				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
@@ -710,19 +716,35 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 	return pos, fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
+func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
+	var symbol byte
 	negate := data[pos]
 	pos++
+	if negate == 1 {
+		symbol = '-'
+	}
+	day, pos, _ := mp.io.ReadUint64(data, pos)
 	hour := data[pos]
 	pos++
 	minute := data[pos]
 	pos++
 	second := data[pos]
 	pos++
-	ms := data[pos]
-	pos++
+	// time with ms
+	if len == 12 {
+		ms, pos, _ := mp.io.ReadUint64(data, pos)
+		if day > 0 {
+			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
+		} else {
+			return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
+		}
+	}
 
-	return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", negate, hour, minute, second, ms)
+	if day > 0 {
+		return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d", symbol, day, hour, minute, second)
+	} else {
+		return pos, fmt.Sprintf("%c%02d:%02d:%02d", symbol, hour, minute, second)
+	}
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -1045,17 +1067,18 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 
 // the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
-	//TODO:check the user and the connection
-	//TODO:get the user's password
 	var psw []byte
 	var err error
+	var tenant *TenantInfo
 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
+		logutil.Debugf("authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
+		logutil.Debugf("authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
@@ -1064,8 +1087,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 			return moerr.NewInternalError("check password failed")
 		}
 	} else {
+		logutil.Debugf("skip authenticate user")
 		//Get tenant info
-		tenant, err := GetTenantInfo(mp.GetUserName())
+		tenant, err = GetTenantInfo(mp.GetUserName())
 		if err != nil {
 			return err
 		}
@@ -1090,6 +1114,7 @@ func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
 }
 
 func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
+	var err, err2 error
 	if len(payload) < 2 {
 		return false, moerr.NewInternalError("received a broken response packet")
 	}
@@ -1099,9 +1124,9 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		return false, moerr.NewInternalError("read capabilities from response packet failed")
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
-		var ok bool
-		var err error
-		if ok, resp41, err = mp.analyseHandshakeResponse41(payload); !ok {
+		var ok2 bool
+		logutil.Debugf("analyse handshake response")
+		if ok2, resp41, err = mp.analyseHandshakeResponse41(payload); !ok2 {
 			return false, err
 		}
 
@@ -1113,7 +1138,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		authResponse = resp41.authResponse
 		mp.capability = mp.capability & resp41.capabilities
 
-		if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
+		if nameAndCharset, ok3 := collationID2CharsetAndName[int(resp41.collationID)]; !ok3 {
 			return false, moerr.NewInternalError("get collationName and charset failed")
 		} else {
 			mp.collationID = int(resp41.collationID)
@@ -1126,9 +1151,8 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp41.database
 	} else {
 		var resp320 response320
-		var ok bool
-		var err error
-		if ok, resp320, err = mp.analyseHandshakeResponse320(payload); !ok {
+		var ok2 bool
+		if ok2, resp320, err = mp.analyseHandshakeResponse320(payload); !ok2 {
 			return false, err
 		}
 
@@ -1148,13 +1172,20 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp320.database
 	}
 
-	if err := mp.authenticateUser(authResponse); err != nil {
+	logutil.Debugf("authenticate user")
+	if err = mp.authenticateUser(authResponse); err != nil {
+		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-		_ = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
+		err2 = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
+		if err2 != nil {
+			logutil.Errorf("send err packet failed.error:%v", err2)
+			return false, err2
+		}
 		return false, err
 	}
 
-	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	logutil.Debugf("handle handshake end")
+	err = mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return false, err
 	}
@@ -1170,7 +1201,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
 	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, serverVersion)
+	pos = mp.writeStringNUL(data, pos, serverVersion.Load().(string))
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
@@ -2283,14 +2314,29 @@ func (mp *MysqlProtocolImpl) appendTime(data []byte, t types.Time) []byte {
 	if int64(t) == 0 {
 		data = mp.append(data, 0)
 	} else {
-		data = mp.append(data, 5)
-		h, m, s, ms, isNeg := t.ClockFormat()
-		if isNeg {
-			data = mp.append(data, byte('-'))
+		hour, minute, sec, msec, isNeg := t.ClockFormat()
+		day := uint64(hour / 24)
+		hour = hour % 24
+		if msec != 0 {
+			data = mp.append(data, 12)
+			if isNeg {
+				data = append(data, byte(1))
+			} else {
+				data = append(data, byte(0))
+			}
+			data = mp.appendUint64(data, day)
+			data = mp.append(data, uint8(hour), minute, sec)
+			data = mp.appendUint64(data, msec)
 		} else {
-			data = mp.append(data, byte('+'))
+			data = mp.append(data, 8)
+			if isNeg {
+				data = append(data, byte(1))
+			} else {
+				data = append(data, byte(0))
+			}
+			data = mp.appendUint64(data, day)
+			data = mp.append(data, uint8(hour), minute, sec)
 		}
-		data = mp.append(data, byte(h), byte(m), byte(s), byte(ms))
 	}
 	return data
 }

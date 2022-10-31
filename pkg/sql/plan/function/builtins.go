@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/debug"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 )
@@ -2378,6 +2379,20 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_time, types.T_time},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.TimeDiff[types.Time],
+			},
+		},
+	},
+	MO_DEBUG: {
+		Id:     MO_DEBUG,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        debug.Handler,
 			},
 		},
 	},

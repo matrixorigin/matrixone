@@ -31,11 +31,11 @@ import (
 )
 
 const (
-	benchFlag        = true
+	benchFlag        = false
 	benchCardinality = 1024
 
 	benchBuildTargetRows = 2_500
-	benchProbeTargetRows = 500_000
+	benchProbeTargetRows = 5_000
 )
 
 var (
