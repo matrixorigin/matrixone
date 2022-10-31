@@ -129,17 +129,17 @@ func (catalog *Catalog) InitSystemDB() {
 	dbTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_DATABASE_ID, SystemDBSchema)
 	tableTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_TABLES_ID, SystemTableSchema)
 	columnTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_COLUMNS_ID, SystemColumnSchema)
-	err := sysDB.AddEntryLocked(dbTables, nil)
+	err := sysDB.AddEntryLocked(dbTables, nil, false)
 	if err != nil {
 		panic(err)
 	}
-	if err = sysDB.AddEntryLocked(tableTables, nil); err != nil {
+	if err = sysDB.AddEntryLocked(tableTables, nil, false); err != nil {
 		panic(err)
 	}
-	if err = sysDB.AddEntryLocked(columnTables, nil); err != nil {
+	if err = sysDB.AddEntryLocked(columnTables, nil, false); err != nil {
 		panic(err)
 	}
-	if err = catalog.AddEntryLocked(sysDB, nil); err != nil {
+	if err = catalog.AddEntryLocked(sysDB, nil, false); err != nil {
 		panic(err)
 	}
 }
@@ -198,7 +198,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
 		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
-		err = catalog.AddEntryLocked(cmd.DB, un.GetTxn())
+		err = catalog.AddEntryLocked(cmd.DB, un.GetTxn(), false)
 		if err != nil {
 			panic(err)
 		}
@@ -242,7 +242,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.catalog = catalog
 	db.ID = dbid
 	db.name = name
-	_ = catalog.AddEntryLocked(db, nil)
+	_ = catalog.AddEntryLocked(db, nil, true)
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
@@ -300,7 +300,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if err != nil {
 		cmd.Table.db = db
 		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		err = db.AddEntryLocked(cmd.Table, un.GetTxn())
+		err = db.AddEntryLocked(cmd.Table, un.GetTxn(), false)
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
@@ -367,7 +367,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.db = db
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
-	_ = db.AddEntryLocked(tbl, nil)
+	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
@@ -803,7 +803,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	return
 }
 
-func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) error {
+func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader, skipDedup bool) error {
 	nn := catalog.nameNodes[database.GetFullName()]
 	if nn == nil {
 		n := catalog.link.Insert(database)
@@ -818,10 +818,12 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		nn.CreateNode(database.GetID())
 	} else {
 		node := nn.GetNode()
-		record := node.GetPayload()
-		err := record.PrepareAdd(txn)
-		if err != nil {
-			return err
+		if !skipDedup {
+			record := node.GetPayload()
+			err := record.PrepareAdd(txn)
+			if err != nil {
+				return err
+			}
 		}
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
@@ -952,7 +954,7 @@ func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry
 	catalog.Lock()
 	defer catalog.Unlock()
 	entry := NewDBEntry(catalog, name, txn)
-	err = catalog.AddEntryLocked(entry, txn)
+	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err
 }
@@ -965,14 +967,14 @@ func (catalog *Catalog) CreateDBEntryWithID(name string, id uint64, txn txnif.As
 		return nil, moerr.NewDuplicate()
 	}
 	entry := NewDBEntryWithID(catalog, name, id, txn)
-	err = catalog.AddEntryLocked(entry, txn)
+	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err
 }
 
 func (catalog *Catalog) CreateDBEntryByTS(name string, ts types.TS) (*DBEntry, error) {
 	entry := NewDBEntryByTS(catalog, name, ts)
-	err := catalog.AddEntryLocked(entry, nil)
+	err := catalog.AddEntryLocked(entry, nil, false)
 	return entry, err
 }
 

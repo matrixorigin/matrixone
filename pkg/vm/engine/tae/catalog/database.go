@@ -337,7 +337,7 @@ func (e *DBEntry) DropTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (newEntry
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.AddEntryLocked(created, txnCtx)
+	err = e.AddEntryLocked(created, txnCtx, false)
 	e.Unlock()
 
 	return created, err
@@ -350,7 +350,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.Async
 		return nil, moerr.NewDuplicate()
 	}
 	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
-	err = e.AddEntryLocked(created, txnCtx)
+	err = e.AddEntryLocked(created, txnCtx, false)
 	e.Unlock()
 
 	return created, err
@@ -392,7 +392,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 //
 // 2.2.2 Check duplicate/not found.
 // If the entry hasn't been dropped, return ErrDuplicate.
-func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader) (err error) {
+func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDedup bool) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)
@@ -414,10 +414,12 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader) (err er
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetNode()
-		record := node.GetPayload()
-		err = record.PrepareAdd(txn)
-		if err != nil {
-			return
+		if !skipDedup {
+			record := node.GetPayload()
+			err = record.PrepareAdd(txn)
+			if err != nil {
+				return
+			}
 		}
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
