@@ -1,38 +1,47 @@
-# Build a SpringBoot+Hibernate CRUD demo with MatrixOne
+# SpringBoot 和 Hibernate CRUD 示例
 
-This tutorial completes a simple Demo based on **SpringBoot+Hibernate+MatrixOne+Intellij IDEA** , and realizes the basic CRUD function.
+本篇文档将介绍一个基于 **SpringBoot + Hibernate + MatrixOne + Intellij IDEA** 的简单示例，并实现基本的 CRUD 功能 。
 
-## Before you start
+## 开始之前
 
-A brief introduction about these softwares concerned:
+本篇教程涉及到的软件介绍如下：
 
-* Hibernate: Hibernate ORM is an object–relational mapping tool for the Java programming language. It provides a framework for mapping an object-oriented domain model to a relational database.
-* Intellij IDEA: IntelliJ IDEA is a popular IDE for Java developers. It has a lot of plugins that can enhance our efficiency.
-* Maven: Maven is a powerful management tool in Java that can automatically download and import Jar file according to the configuration in the pom.xml file. This feature reduces the conflicts between different versions of Jar files.
-* Spring: Spring is one of the most popular frameworks in Java and more and more enterprise is using the Spring framework to build their project. Spring Boot is built on top of the conventional spring framework. So, it provides all the features of spring and is yet easier to use than spring.
-* Postman: Postman is an application used for API testing. It is an HTTP client that tests HTTP requests, utilizing a graphical user interface, through which we obtain different types of responses that need to be subsequently validated.
+* Hibernate: Hibernate 是一个 Java 对象映射关系的解决方案的ORM（Object-Relational Mapping）框架，是一个将面向对象的域模型映射到关系数据库的开源框架。
 
-## Set up environment
+* Intellij IDEA：IntelliJ IDEA是一种商业化销售的 Java 集成开发环境（Integrated Development Environment，IDE）工具软件。它所拥有诸多插件，可以提高我们的工作效率。
 
-### 1. Install and Launch MatrixOne
+* Maven：Maven是 Java 中功能强大的项目管理工具，可以根据 *pom.xml* 文件中的配置自动下载和导入 *Jar* 文件。这个特性减少了不同版本 Jar 文件之间的冲突。
 
-Follow the [installation instruction and launch MatrixOne 0.6](../../../Get-Started/install-standalone-matrixone.md). Create a database `test` by MySQL client.
+* Spring：Spring是 Java 中最流行的框架之一，越来越多的企业使用 Spring 框架来构建他们的项目。Spring Boot 构建在传统的 Spring 框架之上。因此，它提供了 Spring 的所有特性，而且比 Spring 更易用。
+
+* Postman: Postman 是一个用于 API 测试的应用程序。它是一个 HTTP 客户端，利用图形用户界面测试 HTTP 请求，以获得需要进行验证的不同类型的响应。
+
+## 配置环境
+
+### 1. 安装构建 MatrixOne
+
+按照步骤介绍完成[安装单机版 MatrixOne 0.6](../Get-Started/install-standalone-matrixone.md)，在 MySQL 客户端新建一个命名为 `test` 数据库。
 
 ```
 mysql> CREATE DATABASE test;
 ```
 
-### 2. Create a new Spring Boot Project Using IntelliJ IDEA
+### 2. 使用 IntelliJ IDEA 创建一个新的 Spring Boot 项目
 
-Choose **Spring Initializer**, and name the project as you want.
+选择 **Spring Initializer**，按需命名项目名称。
 
 ![image-20221027094625081](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027094625081.png)
 
-Choose **Spring Web**,  **JDBC API**,  **Spring Data JPA**, and **MySQL Driver** as dependencies for this project.
+选择如下依赖项：
+
+- **Spring Web**
+- **JDBC API**
+- **Spring Data JPA**
+- **MySQL Driver**
 
 ![image-20221027101504418](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027101504418.png)
 
-Click **Create**,  the project will be created. The dependencies are listed in the *pom.xml* file. Usually you don't need to modify anything.
+点击 **Create** 创建项目。依赖项列在 *pom.xml* 文件中。通常你无需修改任何东西。
 
 ```
 <?xml version="1.0" encoding="UTF-8"?>
@@ -130,9 +139,9 @@ Click **Create**,  the project will be created. The dependencies are listed in t
 </project>
 ```
 
-### 3. Modify the *application.properties* file
+### 3. 修改 *application.properties* 文件
 
-Under *resources* folder, the MatrixOne connection and Hibernate need to be configured in  *application.properties* file.
+进入到 *resources* 文件目录下，配置 *application.properties* 文件，完成 MatrixOne 连接。
 
 ```
 # Application Name
@@ -157,9 +166,9 @@ spring.jpa.properties.hibernate.format_sql = true
 spring.jpa.hibernate.ddl-auto = validate
 ```
 
-### 4. Create table and insert some data in MatrixOne
+### 4. 在 MatrixOne 中新建表并插入数据
 
-Connect to MatrixOne with MySQL client and execute the following SQL statements.
+使用 MySQL 客户端连接到 MatrixOne 并执行以下 SQL 语句：
 
 ```
 mysql> USE test;
@@ -179,9 +188,13 @@ mysql> INSERT INTO `book` (`id`, `author`, `category`, `name`, `pages`, `price`,
 (3, 'Lewis Carroll', 'Fantancy', 'Alice''s Adventures in Wonderland', 1500, 240, 'Amazon');
 ```
 
-## Write Code
+## 编写代码
 
-After setting up the environment, we write code to implement a simple CRUD application. After finishing coding, you'll have a project structure as below. You can create these packages and java class in advance. We will code the Create, Update, Insert, Delete, Select operations for this demo application.
+完成环境配置后，我们编写代码来实现一个简单的 CRUD 应用程序。
+
+在完成编写编码后，你将拥有一个如下所示的项目结构。你可以预先创建这些包和 java 类。
+
+我们将为这个演示应用程序编写创建、更新、插入、删除和选择操作。
 
 ![image-20221027105233860](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027105233860.png)
 
@@ -556,13 +569,13 @@ public class JpademoApplication {
 }
 ```
 
-## Test
+## 测试
 
-Build and test this project.
+构建并启动这个项目。
 
 ![image-20221027110133726](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027110133726.png)
 
-When you see the following messages, the application is well launched, we can call REST endpoints by using POSTMAN.
+当出现下面的消息时，表示应用程序已经正常启动，你可以使用 Postman 调用 REST 端口。
 
 ```
 2022-10-27 11:16:16.793  INFO 93488 --- [           main] com.example.jpademo.JpademoApplication   : Starting JpademoApplication on nandeng-macbookpro.local with PID 93488 (/Users/nandeng/IdeaProjects/jpademo/target/classes started by nandeng in /Users/nandeng/IdeaProjects/jpademo)
@@ -591,21 +604,21 @@ When you see the following messages, the application is well launched, we can ca
 2022-10-27 11:16:40.249  INFO 93488 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 66 ms
 ```
 
-### 1. To get list of books call following endpoint with GET Request
-
-```
- http://localhost:8080/bookservice/books
-```
-
-![image-20221027112426189](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027112426189.png)
-
-### 2. To Create New Book use following url with POST Request
+### 1. 获取 Book  列表，使用 GET 请求调用以下端口
 
 ```
 http://localhost:8080/bookservice/books
 ```
 
-Set content type as in header as `application/json`, set request body as raw with JSON payload
+![image-20221027112426189](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027112426189.png)
+
+### 2. 创建一个新 Book，使用 POST 请求调用以下端口
+
+```
+http://localhost:8080/bookservice/books
+```
+
+将 Header 中的内容类型设置为 `application/json`，将 Request Body 设置为原始 JSON 有效负载。
 
 ```
   {
@@ -620,7 +633,7 @@ Set content type as in header as `application/json`, set request body as raw wit
 
 ![image-20221027115733788](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027115733788.png)
 
-### 3. To get a particular book, use following url with `GET` request type in postman
+### 3. 如需获取特定 Book，使用 GET 请求调用以下端口
 
 ```
   http://localhost:8080/bookservice/books/<id>
@@ -628,15 +641,19 @@ Set content type as in header as `application/json`, set request body as raw wit
 
 ![image-20221027115844378](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027115844378.png)
 
-### 4. To update Book in database, use following url with `PUT` request type in postman
+### 4. 在数据库中升级 Book，使用 PUT 请求调用以下端口
 
 ```
 	http://localhost:8080/bookservice/books/<id>
 ```
 
-- Set content type as in header as `application/json`
+#### set content type as in header as `application/json`
 
-- Set request body as raw with JSON payload
+#### set request body as raw with JSON payload
+
+- 将 Header 中的内容类型设置为 `application/json`。
+
+- 将 Request Body 设置为原始 JSON 有效负载
 
 ```
  {
@@ -651,7 +668,7 @@ Set content type as in header as `application/json`, set request body as raw wit
 
 ![image-20221027120144112](https://github.com/matrixorigin/artwork/blob/main/docs/tutorial/hibernate/image-20221027120144112.png)
 
-### 5. To delete a particular Book from database, use following url with `DELETE` request type in postman
+### 5. 如需从数据库中删除特定的 Book，使用 DELETE 请求调用以下端口
 
 ```
   http://localhost:8080/bookservice/books/<id>
