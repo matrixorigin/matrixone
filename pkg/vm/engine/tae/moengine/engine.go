@@ -16,9 +16,10 @@ package moengine
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,13 +100,13 @@ func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle T
 }
 
 func (e *txnEngine) CreateDatabaseWithID(ctx context.Context,
-	name string, id uint64, txnHandle Txn) (err error) {
+	name, createSql string, id uint64, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabaseWithID(name, id)
+	_, err = txn.CreateDatabaseWithID(name, createSql, id)
 	return
 }
 

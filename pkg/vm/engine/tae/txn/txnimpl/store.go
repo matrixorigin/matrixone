@@ -292,8 +292,8 @@ func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error
 	return
 }
 
-func (store *txnStore) CreateDatabaseWithID(name string, id uint64) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntryWithID(name, id, store.txn)
+func (store *txnStore) CreateDatabaseWithID(name, createSql string, id uint64) (h handle.Database, err error) {
+	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, id, store.txn)
 	if err != nil {
 		return nil, err
 	}

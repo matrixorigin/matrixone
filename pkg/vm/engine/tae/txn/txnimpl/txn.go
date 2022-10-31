@@ -49,8 +49,8 @@ func (txn *txnImpl) CreateDatabase(name string) (db handle.Database, err error) 
 	return txn.Store.CreateDatabase(name)
 }
 
-func (txn *txnImpl) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
-	return txn.Store.CreateDatabaseWithID(name, id)
+func (txn *txnImpl) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
+	return txn.Store.CreateDatabaseWithID(name, createSql, id)
 }
 
 func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {
