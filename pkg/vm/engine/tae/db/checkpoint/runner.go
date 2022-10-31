@@ -56,19 +56,107 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 	return physical <= time.Now().UTC().UnixNano()-p.interval.Nanoseconds()
 }
 
+// Q: What does runner do?
+// A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
+//    does the following things:
+//    - Manage the life cycle of all checkpoints and provide some query interfaces.
+//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligibl dirty
+//      blocks to the remote storage
+//    - The cron job peridically test whether a new checkpoint can be created. If it is not
+//      satisfied, it will wait for next trigger. Otherwise, it will start the process of
+//      creating a checkpoint.
+
+// Q: How to collect dirty blocks?
+// A: There is a logtail manager maintains all transaction information that occurred over a
+//    period of time. When a checkpoint is generated, we clean up the data before the
+//    checkpoint timestamp in logtail.
+//
+//         |----to prune----|                                           Time
+//    -----+----------------+-------------------------------------+----------->
+//         t1         checkpoint-t10                             t100
+//
+//    For each transaction, it maintains a dirty block list.
+//
+//    [t1]: TB1-[1]
+//    [t2]: TB2-[2]
+//    [t3]: TB1-[1],TB2-[3]
+//    [t4]: []
+//    [t5]: TB2[3,4]
+//    .....
+//    .....
+//    When collecting the dirty blocks in [t1, t5], it will get 2 block list, which is represented
+//    with `common.Tree`
+//                  [t1,t5] - - - - - - - - - <DirtyTreeEntry>
+//                  /     \
+//               [TB1]   [TB2]
+//                 |       |
+//                [1]   [2,3,4] - - - - - - - leaf nodes are all dirty blocks
+//    We store the dirty tree entries into the internal storage. Over time, we'll see something like
+//    this inside the storage:
+//    - Entry[t1,  t5]
+//    - Entry[t6, t12]
+//    - Entry[t13,t29]
+//    - Entry[t30,t47]
+//    .....
+//    .....
+//    When collecting the dirty blocks in [t1, t20], it will get 3 dirty trees from [t1,t5],[t6,t12],
+//    [t13,t29] and merge the three trees into a tree with all the leaf nodes being dirty blocks.
+//
+//    In order to reduce the workload of scan, we have always been incremental scan. And also we will
+//    continue to clean up the entries in the storage.
+
+// Q: How to test whether a block need to be flushed?
+// A: It is an open question. There are a lot of options, just chose a simple strategy for now.
+//    Must:
+//    - The born transaction of the block was committed
+//    - No uncommitted transaction on the block
+//    Factors:
+//    - Max rows reached
+//    - Delete ratio
+//    - Max flush timeout
+
+// Q: How to do incremental checkpoint?
+// A: 1. Decide a checkpoint timestamp
+//    2. Wait all transactions before timestamp were committed
+//    3. Wait all dirty blocks before the timestamp were flushed
+//    4. Prepare checkpoint data
+//    5. Persist the checkpoint data
+//    6. Persist the checkpoint meta data
+//    7. Notify checkpoint events to all the observers
+//    8. Schedule to remove stale checkpoint meta objects
+
+// Q: How to boot from the checkpoints?
+// A: When a meta version is created, it contains all information of the previouse version. So we always
+//    delete the stale versions when a new version is created. Over time, the number of objects under
+//    `ckp/` is small.
+//    1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
+//       from the meta object.
+//    2. Apply the latest global checkpoint
+//    3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
+//       latest version.
 type runner struct {
 	options struct {
-		collectInterval        time.Duration
-		maxFlushInterval       time.Duration
+		// checkpoint scanner interval duration
+		collectInterval time.Duration
+
+		// maximum dirty block flush interval duration
+		maxFlushInterval time.Duration
+
+		// minimum incremental checkpoint interval duration
 		minIncrementalInterval time.Duration
-		minGlobalInterval      time.Duration
+
+		// minimum global checkpoint interval duration
+		minGlobalInterval time.Duration
+
+		// minimum count of uncheckpointed transactions allowed before the next checkpoint
+		minCount int
 
 		dirtyEntryQueueSize int
 		waitQueueSize       int
 		checkpointQueueSize int
-		minCount            int
 	}
 
+	// logtail sourcer
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	scheduler tasks.TaskScheduler
@@ -78,12 +166,14 @@ type runner struct {
 
 	stopper *stopper.Stopper
 
+	// memory storage of the checkpoint entries
 	storage struct {
 		sync.RWMutex
 		entries    *btree.BTreeG[*CheckpointEntry]
 		prevGlobal *CheckpointEntry
 	}
 
+	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *timeBasedPolicy
 
