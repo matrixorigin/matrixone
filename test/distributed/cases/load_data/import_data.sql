@@ -115,10 +115,8 @@ col3 timestamp,
 col4 bool
 );
 
--- @bvt:issue#5046
 import data infile '$resources/load_data/time_date_1.csv' into table t4;
 select * from t4;
--- @bvt:issue
 delete from t4;
 
 -- import data

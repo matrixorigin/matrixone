@@ -1284,7 +1284,7 @@ type privilege struct {
 	entries []privilegeEntry
 	special specialTag
 	//the statement writes the database or table directly like drop database and table
-	writeDBTableDirect bool
+	writeDatabaseAndTableDirectly bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -2998,7 +2998,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	special := specialTagNone
 	objType := objectTypeAccount
 	var extraEntries []privilegeEntry
-	writeDBTableDirect := false
+	writeDatabaseAndTableDirectly := false
 	dbName := ""
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
@@ -3077,7 +3077,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3089,26 +3089,26 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Table.SchemaName)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -3118,37 +3118,37 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Insert:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.Replace:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.Load:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.Import:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.Delete:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
-		writeDBTableDirect = true
+		writeDatabaseAndTableDirectly = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowCollation:
 		objType = objectTypeNone
@@ -3180,6 +3180,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.MoDump:
 		if st.Tables != nil {
 			objType = objectTypeTable
@@ -3198,7 +3202,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		entries[i].databaseName = dbName
 	}
 	entries = append(entries, extraEntries...)
-	return &privilege{kind, objType, entries, special, writeDBTableDirect}
+	return &privilege{kind, objType, entries, special, writeDatabaseAndTableDirectly}
 }
 
 // privilege will be done on the table
@@ -3276,6 +3280,15 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			PrivilegeTypeInsert,
 			ins.GetDbName(),
 			ins.GetTblName()})
+	} else if p.GetDdl() != nil {
+		truncateTable := p.GetDdl().GetTruncateTable()
+		if truncateTable != nil {
+			appendPot(privilegeTips{
+				typ:          PrivilegeTypeTruncate,
+				databaseName: truncateTable.GetDatabase(),
+				tableName:    truncateTable.GetTable(),
+			})
+		}
 	}
 	return pots
 }
@@ -3495,7 +3508,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				if err != nil {
 					return false, err
 				}
-				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDBTableDirect)
+				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDatabaseAndTableDirectly)
 				if operateCatalog {
 					yes = false
 				}
@@ -3546,7 +3559,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							if err != nil {
 								return false, err
 							}
-							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
+							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDatabaseAndTableDirectly)
 							if operateCatalog {
 								yes = false
 							}

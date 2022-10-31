@@ -253,6 +253,7 @@ delete from testdb4.table_1;
 select * from testdb4.table_1;
 internal error: do not have privilege to execute the statement
 truncate table testdb5.table_2;
+internal error: do not have privilege to execute the statement
 create user 'user_grant_9' identified by '123456';
 create role 'role_account_priv_8';
 grant ownership on table testdb5.table_2 to role_account_priv_8;

@@ -248,13 +248,11 @@ deallocate prepare st_18492;
 deallocate prepare st_18493;
 drop table t13;
 
--- @bvt:issue#4635
 select cast(a as DECIMAL(3,2))
  from (select 11.1233 as a
   UNION select 11.1234
   UNION select 12.1234
  ) t;
--- @bvt:issue
 
 
 drop table if exists t14;
