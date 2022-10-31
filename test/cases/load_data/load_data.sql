@@ -115,6 +115,7 @@ col3 timestamp,
 col4 bool
 );
 
+set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t4;
 select * from t4;
 delete from t4;
