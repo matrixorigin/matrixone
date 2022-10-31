@@ -14,9 +14,13 @@ select * from t;
 insert into t1 values (100);
 insert into t select * from t1;
 select * from t;
--- test Temporary tables can be seen in different databases
+drop database if exists test_temporary2;
 create database test_temporary2;
 use test_temporary2;
 create temporary table t (a int);
 create table t1 (a int);
 select * from t;
+drop table t;
+select * from test_temporary.t;
+drop database if exists test_temporary;
+drop database if exists test_temporary2;

@@ -161,7 +161,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 			if e != nil {
 				return e
 			}
-			rel, e = db.Relation(c.ctx, s.DataSource.RelationName)
+			rel, e = db.Relation(c.ctx, s.DataSource.SchemaName+"-"+s.DataSource.RelationName)
 			if e != nil {
 				return err
 			}

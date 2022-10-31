@@ -1191,7 +1191,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		if e != nil {
 			return nil, e
 		}
-		rel, e = db.Relation(c.ctx, n.TableDef.Name)
+		rel, e = db.Relation(c.ctx, n.ObjRef.SchemaName+"-"+n.TableDef.Name)
 		if e != nil {
 			return nil, err
 		}

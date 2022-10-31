@@ -271,7 +271,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 			if e != nil {
 				return nil, err
 			}
-			relation, e = dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
+			relation, e = dbSource.Relation(ctx, n.DeleteTablesCtx[i].DbName+"-"+n.DeleteTablesCtx[i].TblName)
 			if e != nil {
 				return nil, err
 			}
@@ -317,7 +317,7 @@ func constructInsert(n *plan.Node, eg engine.Engine,
 		if e != nil {
 			return nil, err
 		}
-		relation, e = db.Relation(ctx, n.TableDef.Name)
+		relation, e = db.Relation(ctx, n.ObjRef.SchemaName+"-"+n.TableDef.Name)
 		if e != nil {
 			return nil, err
 		}
@@ -366,7 +366,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 			if e != nil {
 				return nil, err
 			}
-			relation, e = dbSource.Relation(ctx, updateCtx.TblName)
+			relation, e = dbSource.Relation(ctx, updateCtx.DbName+"-"+updateCtx.TblName)
 			if e != nil {
 				return nil, err
 			}

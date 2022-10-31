@@ -65,17 +65,23 @@ type TxnHandler struct {
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
+	var s engine.Engine
+	if _, isEntire := storage.(*engine.EntireEngine); isEntire {
+		s = storage
+	} else {
+		s = &engine.EntireEngine{Engine: storage}
+	}
 	h := &TxnHandler{
-		storage:   &engine.EntireEngine{Engine: storage},
+		storage:   s,
 		txnClient: txnClient,
 	}
 	return h
 }
 
-func (txn *TxnHandler) SetTempEngine(te engine.Engine) {
-	txn.mu.Lock()
-	defer txn.mu.Unlock()
-	ee := txn.storage.(*engine.EntireEngine)
+func (th *TxnHandler) SetTempEngine(te engine.Engine) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	ee := th.storage.(*engine.EntireEngine)
 	ee.TempEngine = te
 }
 
@@ -193,6 +199,13 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	}
 
 	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
+	var storage engine.Engine
+	if _, isEntire := PU.StorageEngine.(*engine.EntireEngine); isEntire {
+		storage = PU.StorageEngine
+	} else {
+		storage = &engine.EntireEngine{Engine: PU.StorageEngine}
+	}
+
 	ses := &Session{
 		protocol: proto,
 		Mp:       mp,
@@ -205,7 +218,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         &engine.EntireEngine{Engine: PU.StorageEngine},
+		storage:         storage,
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -257,6 +270,12 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+
+func (ses *Session) IfNeedInitTempEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.InitTempEngine
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -642,6 +661,17 @@ func (ses *Session) IsTaeEngine() bool {
 	}
 }
 
+func (ses *Session) IsEntireEngine() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	_, isEntire := ses.storage.(*engine.EntireEngine)
+	if isEntire {
+		return true
+	} else {
+		return false
+	}
+}
+
 func (ses *Session) GetStorage() engine.Engine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -652,6 +682,7 @@ func (ses *Session) SetTempEngine(te engine.Engine) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ee := ses.storage.(*engine.EntireEngine)
+	ses.Pu.StorageEngine = ee
 	ee.TempEngine = te
 }
 
@@ -1415,7 +1446,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		tmpTable, e := tcc.getTmpRelation(ctx, tableName)
+		tmpTable, e := tcc.getTmpRelation(ctx, dbName+"-"+tableName)
 		if e != nil {
 			logutil.Errorf("get table %v error %v", tableName, err)
 			return nil, err
@@ -1429,7 +1460,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
 	e := tcc.ses.storage.(*engine.EntireEngine).TempEngine
 	if e == nil {
-		return nil, errors.New("temporary engine not init yet")
+		return nil, moerr.NewInternalError("temporary engine not init yet")
 	}
 	db, err := e.Database(ctx, "temp-db", tcc.txnHandler.GetTxn())
 	if err != nil {

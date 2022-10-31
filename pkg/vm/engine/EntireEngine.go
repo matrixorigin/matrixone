@@ -16,8 +16,8 @@ package engine
 
 import (
 	"context"
-	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -50,7 +50,7 @@ func (e *EntireEngine) Database(ctx context.Context, databaseName string, op cli
 		if e.TempEngine != nil {
 			return e.TempEngine.Database(ctx, "temp-db", op)
 		} else {
-			return nil, errors.New("temporary engine not init yet")
+			return nil, moerr.NewInternalError("temporary engine not init yet")
 		}
 	}
 	return e.Engine.Database(ctx, databaseName, op)

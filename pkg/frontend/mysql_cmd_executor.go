@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1234,6 +1233,8 @@ handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
+	var dbHandler engine.Database
+	var tableHandler engine.Relation
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1282,7 +1283,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	if ses.InMultiStmtTransactionMode() {
 		return moerr.NewInternalError("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
+	dbHandler, err = ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(loadDb)
@@ -1298,10 +1299,20 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
+	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
-		//echo client. no such table
-		return moerr.NewNoSuchTable(loadDb, loadTable)
+		dbHandler, err = ses.GetStorage().Database(requestCtx, "temp-db", txnHandler.GetTxn())
+		if err != nil {
+			return moerr.NewNoSuchTable(loadDb, loadTable)
+		}
+		loadTable = loadDb + "-" + loadTable
+		tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
+		if err != nil {
+			//echo client. no such table
+			return moerr.NewNoSuchTable(loadDb, loadTable)
+		}
+		loadDb = "temp-db"
+		load.Table.ObjectName = tree.Identifier(loadTable)
 	}
 
 	/*
@@ -2150,7 +2161,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 	// check if it is necessary to initialize the temporary engine
-	if cwft.compile.NeedInitTempEngine(cwft.ses.InitTempEngine) {
+	if cwft.compile.NeedInitTempEngine(cwft.ses.IfNeedInitTempEngine()) {
 		// 0. init memory-non-dist engine
 		ck := clock.DefaultClock()
 		if ck == nil {
@@ -2223,10 +2234,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		txn := cwft.ses.txnCompileCtx.txnHandler
 		txn.SetTempEngine(e.TempEngine)
 		cwft.ses.InitTempEngine = true
-		// Note : when TempEngine is inited, the message in cwft.ses.PU.storage will out of date.
-		// Since I did not find that the PU would be used after initialization,
-		// the information here is probably fine without modification.
-
 	}
 	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err

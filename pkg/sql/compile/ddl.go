@@ -90,7 +90,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
 	if err == nil {
-		if _, err := tmpDBSource.Relation(c.ctx, tblName); err == nil {
+		if _, err := tmpDBSource.Relation(c.ctx, dbName+"-"+tblName); err == nil {
 			if qry.GetIfNotExists() {
 				return nil
 			}
@@ -148,7 +148,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		return err
 	}
 	tblName := qry.GetTableDef().GetName()
-	if _, err := tmpDBSource.Relation(c.ctx, tblName); err == nil {
+	if _, err := tmpDBSource.Relation(c.ctx, dbName+"-"+tblName); err == nil {
 		if qry.GetIfNotExists() {
 			return nil
 		}
@@ -168,11 +168,11 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	// create temporary table
-	if err := tmpDBSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := tmpDBSource.Create(c.ctx, dbName+"-"+tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
-
-	return colexec.CreateAutoIncrCol(tmpDBSource, c.ctx, c.proc, tableCols, tblName)
+	entireEngine := c.e.(*engine.EntireEngine)
+	return colexec.CreateAutoIncrCol(entireEngine.TempEngine, c.ctx, tmpDBSource, c.proc, tableCols, "temp-db", dbName+"-"+tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -182,6 +182,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
+	var isTemp bool
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -194,17 +195,27 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if e != nil {
 			return err
 		}
-		rel, e = dbSource.Relation(c.ctx, tblName)
+		rel, e = dbSource.Relation(c.ctx, dbName+"-"+tblName)
 		if e != nil {
 			return err
 		}
+		isTemp = true
 	}
 	id := rel.GetTableID(c.ctx)
-	err = dbSource.Truncate(c.ctx, tblName)
-	if err != nil {
-		return err
+	entireEngine := c.e.(*engine.EntireEngine)
+	if isTemp {
+		err = dbSource.Truncate(c.ctx, dbName+"-"+tblName)
+		if err != nil {
+			return err
+		}
+		err = colexec.ResetAutoInsrCol(entireEngine.TempEngine, c.ctx, dbName+"-"+tblName, dbSource, c.proc, id, dbName)
+	} else {
+		err = dbSource.Truncate(c.ctx, tblName)
+		if err != nil {
+			return err
+		}
+		err = colexec.ResetAutoInsrCol(entireEngine.Engine, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	}
-	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	if err != nil {
 		return err
 	}
@@ -218,6 +229,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
+	var isTemp bool
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -229,10 +241,12 @@ func (s *Scope) DropTable(c *Compile) error {
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
-		if e != nil {
+		if dbSource == nil && qry.GetIfExists() {
+			return nil
+		} else if e != nil {
 			return err
 		}
-		rel, e = dbSource.Relation(c.ctx, tblName)
+		rel, e = dbSource.Relation(c.ctx, dbName+"-"+tblName)
 		if e != nil {
 			if qry.GetIfExists() {
 				return nil
@@ -240,16 +254,30 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
+		isTemp = true
 	}
-	if err := dbSource.Delete(c.ctx, tblName); err != nil {
-		return err
-	}
-	for _, name := range qry.IndexTableNames {
-		if err := dbSource.Delete(c.ctx, name); err != nil {
+	entireEngine := c.e.(*engine.EntireEngine)
+	if isTemp {
+		if err := dbSource.Delete(c.ctx, dbName+"-"+tblName); err != nil {
 			return err
 		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(entireEngine.TempEngine, c.ctx, rel, c.proc, "temp-db", rel.GetTableID(c.ctx))
+	} else {
+		if err := dbSource.Delete(c.ctx, tblName); err != nil {
+			return err
+		}
+		for _, name := range qry.IndexTableNames {
+			if err := dbSource.Delete(c.ctx, name); err != nil {
+				return err
+			}
+		}
+		return colexec.DeleteAutoIncrCol(entireEngine.Engine, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 	}
-	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
