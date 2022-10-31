@@ -244,8 +244,9 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.name = name
 	err := catalog.AddEntryLocked(db, nil)
 	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
+		logutil.Warnf("add db %v, err %v", db.fullName, err)
+		// logutil.Info(catalog.SimplePPString(common.PPL3))
+		// panic(err)
 	}
 	un := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -371,8 +372,9 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	err = db.AddEntryLocked(tbl, nil)
 	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
+		logutil.Infof("add table %v, err %v", tbl.schema.Name, err)
+		// logutil.Info(catalog.SimplePPString(common.PPL3))
+		// panic(err)
 	}
 	un := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -613,7 +615,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateBlock(dbid, tid, sid, blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
-	for i := 0; i < delTxn.GetVectorByName(SnapshotAttr_DBID).Length(); i++ {
+	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		sid := delTxn.GetVectorByName(SnapshotAttr_SegID).Get(i).(uint64)
