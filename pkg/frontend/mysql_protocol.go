@@ -658,8 +658,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				switch length {
 				case 0:
 					vars[i] = "0d 00:00:00"
-				case 5, 8:
-					pos, vars[i] = mp.readTime(data, pos)
+				case 8, 12:
+					pos, vars[i] = mp.readTime(data, pos, length)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
@@ -716,7 +716,7 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 	return pos, fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
+func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
 	var symbol byte
 	negate := data[pos]
 	pos++
@@ -730,13 +730,21 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int) (int, string) {
 	pos++
 	second := data[pos]
 	pos++
-	ms, pos, _ := mp.io.ReadUint64(data, pos)
-
-	if day > 0 {
-		return pos, fmt.Sprintf("%c%dd%02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
+	// time with ms
+	if len == 12 {
+		ms, pos, _ := mp.io.ReadUint64(data, pos)
+		if day > 0 {
+			return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d.%06d", symbol, day, hour, minute, second, ms)
+		} else {
+			return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
+		}
 	}
 
-	return pos, fmt.Sprintf("%c%02d:%02d:%02d.%06d", symbol, hour, minute, second, ms)
+	if day > 0 {
+		return pos, fmt.Sprintf("%c%dd %02d:%02d:%02d", symbol, day, hour, minute, second)
+	} else {
+		return pos, fmt.Sprintf("%c%02d:%02d:%02d", symbol, hour, minute, second)
+	}
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
