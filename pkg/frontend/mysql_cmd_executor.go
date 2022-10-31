@@ -689,8 +689,16 @@ func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
 	}
 	pow := math.Pow10(int(Typ.Precision))
 	t := math.Abs(float64(num))
-	t *= pow
-	t = math.Round(t)
+	upperLimit := math.Pow10(int(Typ.Width))
+	if t >= upperLimit {
+		t = upperLimit - 1
+	} else {
+		t *= pow
+		t = math.Round(t)
+	}
+	if t >= upperLimit {
+		t = upperLimit - 1
+	}
 	t /= pow
 	if num < 0 {
 		t = -1 * t
