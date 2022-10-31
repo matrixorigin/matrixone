@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -210,6 +211,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 	}()
+
+	if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
+		if ctr.groupVecs[0].vec.IsLowCardinality() {
+			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex).Dup()
+		}
+	}
 	if ctr.bat == nil {
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
@@ -240,6 +247,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		switch {
+		case ctr.idx != nil:
+			ctr.typ = HIndex
 		case size <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
@@ -257,8 +266,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	switch ctr.typ {
 	case H8:
 		err = ctr.processH8(bat, proc)
-	default:
+	case HStr:
 		err = ctr.processHStr(bat, proc)
+	default:
+		err = ctr.processHIndex(bat, proc)
 	}
 	if err != nil {
 		ctr.clean()
@@ -313,6 +324,51 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		}
 		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
+	mSels := make([][]int64, index.MaxLowCardinality+1)
+	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	for k, v := range poses {
+		if len(mSels[v]) == 0 {
+			mSels[v] = make([]int64, 0, 64)
+		}
+		mSels[v] = append(mSels[v], int64(k))
+	}
+	if len(mSels[0]) == 0 { // hasNotNull == true
+		mSels = mSels[1:]
+	}
+
+	var groups []int64
+	for i, sels := range mSels {
+		if len(sels) > 0 {
+			groups = append(groups, sels[0])
+			ctr.bat.Zs = append(ctr.bat.Zs, 0)
+			for _, k := range sels {
+				ctr.bat.Zs[i] += bat.Zs[k]
+			}
+		}
+	}
+
+	for _, ag := range ctr.bat.Aggs {
+		if err := ag.Grows(len(groups), proc.Mp()); err != nil {
+			return err
+		}
+	}
+	if err := vector.Union(ctr.bat.Vecs[0], ctr.vecs[0], groups, proc.Mp()); err != nil {
+		return err
+	}
+	for i, ag := range ctr.bat.Aggs {
+		aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
+		for j, sels := range mSels {
+			for _, sel := range sels {
+				if err := ag.Fill(int64(j), sel, 1, aggVecs); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
