@@ -392,7 +392,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 //
 // 2.2.2 Check duplicate/not found.
 // If the entry hasn't been dropped, return ErrDuplicate.
-func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err error) {
+func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)

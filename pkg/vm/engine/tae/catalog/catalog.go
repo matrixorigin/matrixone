@@ -198,7 +198,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
 		cmd.entry.GetLatestNodeLocked().SetLogIndex(idx)
-		err = catalog.AddEntryLocked(cmd.DB, nil)
+		err = catalog.AddEntryLocked(cmd.DB, un.GetTxn())
 		if err != nil {
 			panic(err)
 		}
@@ -259,6 +259,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNode) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
+		logutil.Infof("delete %d", dbid)
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
@@ -304,8 +305,9 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if err != nil {
 		cmd.Table.db = db
 		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		err = db.AddEntryLocked(cmd.Table, nil)
+		err = db.AddEntryLocked(cmd.Table, un.GetTxn())
 		if err != nil {
+			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
 		}
 		return
@@ -440,6 +442,8 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	tbl, err := db.GetTableEntryByID(cmd.TableID)
 	if err != nil {
+		logutil.Infof("tbl %d-%d", cmd.DBID, cmd.TableID)
+		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
 	seg, err := tbl.GetSegmentByID(cmd.Segment.ID)
