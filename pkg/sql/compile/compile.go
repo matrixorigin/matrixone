@@ -954,6 +954,11 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	rs := c.newScopeList(validScopeCount(ss))
 	j := 0
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			isEnd := ss[i].IsEnd
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i].IsEnd = isEnd
+		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
