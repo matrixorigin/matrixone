@@ -86,15 +86,15 @@ var (
 		return coalesceString(vs, proc, types.Type{Oid: types.T_char})
 	}
 
-	CoalesceJson= func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	CoalesceJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceString(vs, proc, types.Type{Oid: types.T_json.ToType().Oid})
 	}
 
-	CoalesceBlob= func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	CoalesceBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceString(vs, proc, types.Type{Oid: types.T_blob.ToType().Oid})
 	}
 
-	CoalesceText= func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	CoalesceText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceString(vs, proc, types.Type{Oid: types.T_text.ToType().Oid})
 	}
 
