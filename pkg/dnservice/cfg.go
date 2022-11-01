@@ -35,9 +35,9 @@ var (
 
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
-	defaultIncrementalInterval = time.Minute * 5
+	defaultIncrementalInterval = time.Minute
 	defaultGlobalInterval      = time.Minute * 60
-	defaultMinCount            = int64(10000)
+	defaultMinCount            = int64(100)
 	defaultLogBackend          = "batchstore"
 
 	storageDir     = "storage"
