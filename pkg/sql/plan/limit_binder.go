@@ -40,9 +40,23 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
+
 	if expr.Typ.Id == int32(types.T_decimal128) || expr.Typ.Id == int32(types.T_decimal64) {
 		return nil, moerr.NewSyntaxError("only int64 support in limit/offset clause")
 	}
+
+	// limit '10' / offset '2'
+	// the valid string should be cast to int64
+	if expr.Typ.Id == int32(types.T_varchar) {
+		targetType := types.T_int64.ToType()
+		planTargetType := makePlan2Type(&targetType)
+		var err error
+		expr, err = appendCastBeforeExpr(expr, planTargetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return expr, nil
 }
 

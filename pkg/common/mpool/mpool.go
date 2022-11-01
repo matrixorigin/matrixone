@@ -137,8 +137,19 @@ var ZeroSlice = make([]byte, 4096)
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
-	fixedPoolIdx int8
 	allocSz      int32
+	fixedPoolIdx int8
+	guard        [3]uint8
+}
+
+func (pHdr *memHdr) SetGuard() {
+	pHdr.guard[0] = 0xDE
+	pHdr.guard[1] = 0xAD
+	pHdr.guard[2] = 0xBF
+}
+
+func (pHdr *memHdr) CheckGuard() bool {
+	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
 }
 
 // pool for fixed elements.  Note that we preconfigure the pool size.
@@ -188,6 +199,8 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 		pHdr.poolId = poolid
 		pHdr.fixedPoolIdx = int8(idx)
 		pHdr.allocSz = -1
+		pHdr.SetGuard()
+
 		fp.flist.put(hdr)
 	}
 	return int64(nb), nil
@@ -531,6 +544,8 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	pHdr.poolId = mp.id
 	pHdr.fixedPoolIdx = NumFixedPool
 	pHdr.allocSz = int32(sz)
+	pHdr.SetGuard()
+
 	return unsafe.Slice((*byte)(unsafe.Add(hdr, kMemHdrSz)), sz), nil
 }
 
@@ -547,15 +562,20 @@ func (fp *fixedPool) free(hdr unsafe.Pointer) {
 }
 
 func (mp *MPool) Free(bs []byte) {
-	if bs == nil {
+	if bs == nil || cap(bs) == 0 {
 		// free nil is OK.
 		return
 	}
 
+	bs = bs[:1]
 	pb := (unsafe.Pointer)(&bs[0])
 	offset := -kMemHdrSz
 	hdr := unsafe.Add(pb, offset)
 	pHdr := (*memHdr)(hdr)
+
+	if !pHdr.CheckGuard() {
+		panic(moerr.NewInternalError("mp header corruption"))
+	}
 
 	if pHdr.poolId == mp.id {
 		if pHdr.fixedPoolIdx < NumFixedPool {
