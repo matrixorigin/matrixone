@@ -337,16 +337,28 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, an
 		return canCompute, nil
 	}
 	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
-	case *plan.Const_Ival:
-		return transferIval(val.Ival, oid)
+	case *plan.Const_I8Val:
+		return transferIval(val.I8Val, oid)
+	case *plan.Const_I16Val:
+		return transferIval(val.I16Val, oid)
+	case *plan.Const_I32Val:
+		return transferIval(val.I32Val, oid)
+	case *plan.Const_I64Val:
+		return transferIval(val.I64Val, oid)
 	case *plan.Const_Dval:
 		return transferDval(val.Dval, oid)
 	case *plan.Const_Sval:
 		return transferSval(val.Sval, oid)
 	case *plan.Const_Bval:
 		return transferBval(val.Bval, oid)
-	case *plan.Const_Uval:
-		return transferUval(val.Uval, oid)
+	case *plan.Const_U8Val:
+		return transferUval(val.U8Val, oid)
+	case *plan.Const_U16Val:
+		return transferUval(val.U16Val, oid)
+	case *plan.Const_U32Val:
+		return transferUval(val.U32Val, oid)
+	case *plan.Const_U64Val:
+		return transferUval(val.U64Val, oid)
 	case *plan.Const_Fval:
 		return transferFval(val.Fval, oid)
 	case *plan.Const_Dateval:
@@ -397,13 +409,25 @@ func computeRangeByIntPk(expr *plan.Expr, pkIdx int32, parentFun string) (bool, 
 
 	getConstant := func(e *plan.Expr_C) (bool, int64) {
 		switch val := e.C.Value.(type) {
-		case *plan.Const_Ival:
-			return true, val.Ival
-		case *plan.Const_Uval:
-			if val.Uval > uint64(math.MaxInt64) {
+		case *plan.Const_I8Val:
+			return true, int64(val.I8Val)
+		case *plan.Const_I16Val:
+			return true, int64(val.I16Val)
+		case *plan.Const_I32Val:
+			return true, int64(val.I32Val)
+		case *plan.Const_I64Val:
+			return true, val.I64Val
+		case *plan.Const_U8Val:
+			return true, int64(val.U8Val)
+		case *plan.Const_U16Val:
+			return true, int64(val.U16Val)
+		case *plan.Const_U32Val:
+			return true, int64(val.U32Val)
+		case *plan.Const_U64Val:
+			if val.U64Val > uint64(math.MaxInt64) {
 				return false, 0
 			}
-			return true, int64(val.Uval)
+			return true, int64(val.U64Val)
 		}
 		return false, 0
 	}

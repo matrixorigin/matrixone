@@ -566,14 +566,7 @@ func newIntConstVal(v any) *plan.Expr {
 	case uint64:
 		val = int64(x)
 	}
-	return &plan.Expr{
-		Typ: types.NewProtoType(types.T_int64),
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Ival{Ival: int64(val)},
-			},
-		},
-	}
+	return plantool.MakePlan2Int64ConstExprWithType(val)
 }
 
 func newStringConstVal(v string) *plan.Expr {
@@ -1156,7 +1149,7 @@ func genColumnIndexKey(id uint64) memtable.Tuple {
 	}
 }
 
-func transferIval(v int64, oid types.T) (bool, any) {
+func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_int8:
 		return true, int8(v)
@@ -1183,7 +1176,7 @@ func transferIval(v int64, oid types.T) (bool, any) {
 	}
 }
 
-func transferUval(v uint64, oid types.T) (bool, any) {
+func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_int8:
 		return true, int8(v)
