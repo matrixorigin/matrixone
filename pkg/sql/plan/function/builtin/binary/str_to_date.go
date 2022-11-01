@@ -25,15 +25,8 @@ import (
 )
 
 const (
-	// UnspecifiedFsp is the unspecified fractional seconds part.
-	UnspecifiedFsp = -1
 	// MaxFsp is the maximum digit of fractional seconds part.
 	MaxFsp = 6
-	// MinFsp is the minimum digit of fractional seconds part.
-	MinFsp = 0
-	// DefaultFsp is the default digit of fractional seconds part.
-	// MySQL use 0 as the default Fsp.
-	DefaultFsp = 0
 )
 
 // Convert the string to date type value according to the format string
@@ -54,8 +47,8 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	if dateVector.IsScalar() {
 		datestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
-		time := NewCoreTime()
-		success, _ := strToDate(time, datestr, formatMask, ctx)
+		time := NewGeneralTime()
+		success := strToDate(time, datestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
@@ -99,8 +92,8 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	if dateVector.IsScalar() {
 		datetimestr := dateVector.GetString(0)
 		ctx := make(map[string]int)
-		time := NewCoreTime()
-		success, _ := strToDate(time, datetimestr, formatMask, ctx)
+		time := NewGeneralTime()
+		success := strToDate(time, datetimestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
@@ -145,8 +138,8 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		timestr := dateVector.GetString(0)
 
 		ctx := make(map[string]int)
-		time := NewCoreTime()
-		success, _ := strToDate(time, timestr, formatMask, ctx)
+		time := NewGeneralTime()
+		success := strToDate(time, timestr, formatMask, ctx)
 		if !success {
 			// should be null
 			return proc.AllocScalarNullVector(resultType), nil
@@ -174,7 +167,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
 	res := make([]types.Datetime, len(timestrs))
-	time := NewCoreTime()
+	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
@@ -198,7 +191,7 @@ func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *
 
 func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
 	res := make([]types.Date, len(timestrs))
-	time := NewCoreTime()
+	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
@@ -222,7 +215,7 @@ func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 
 func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
 	res := make([]types.Time, len(timestrs))
-	time := NewCoreTime()
+	time := NewGeneralTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
@@ -244,9 +237,9 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 	return res, nil
 }
 
-func CoreStrToDate(t *CoreTime, date string, format string) bool {
+func CoreStrToDate(t *GeneralTime, date string, format string) bool {
 	ctx := make(map[string]int)
-	success, _ := strToDate(t, date, format, ctx)
+	success := strToDate(t, date, format, ctx)
 	if !success {
 		return false
 	}
@@ -257,42 +250,40 @@ func CoreStrToDate(t *CoreTime, date string, format string) bool {
 }
 
 // strToDate converts date string according to format,
-// the value will be stored in argument t or ctx.
-// The second return value is true when success but still need to append a warning.
-func strToDate(t *CoreTime, date string, format string, ctx map[string]int) (success bool, warning bool) {
-	date = skipWhiteSpace(date)
-	format = skipWhiteSpace(format)
+// the value will be stored in argument ctx. the second return value is true when success
+func strToDate(t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
+	date = trimWhiteSpace(date)
+	format = trimWhiteSpace(format)
 
-	token, formatRemain, succ := getFormatToken(format)
+	token, formatRemain, succ := nextFormatToken(format)
 	if !succ {
-		return false, false
+		return false
 	}
 
 	if token == "" {
 		if len(date) != 0 {
-			// Extra characters at the end of date are ignored, but a warning should be reported at this case.
-			return true, true
+			// Extra characters at the end of date are ignored
+			return true
 		}
 		// Normal case. Both token and date are empty now.
-		return true, false
+		return true
 	}
 
 	if len(date) == 0 {
 		ctx[token] = 0
-		return true, false
+		return true
 	}
 
 	dateRemain, succ := matchDateWithToken(t, date, token, ctx)
 	if !succ {
-		return false, false
+		return false
 	}
 
 	return strToDate(t, dateRemain, formatRemain, ctx)
 }
 
 // checkMysqlTime fixes the Time use the values in the context.
-func checkMysqlTime(t *CoreTime, ctx map[string]int) error {
-	// Key of the ctx is the format char, such as `%j` `%p` and so on.
+func checkMysqlTime(t *GeneralTime, ctx map[string]int) error {
 	if valueAMorPm, ok := ctx["%p"]; ok {
 		if _, ok := ctx["%H"]; ok {
 			return moerr.NewInternalError("Truncated incorrect %-.64s value: '%-.128s'", "time", t)
@@ -303,14 +294,14 @@ func checkMysqlTime(t *CoreTime, ctx map[string]int) error {
 		if t.getHour() == 12 {
 			// 12 is a special hour.
 			switch valueAMorPm {
-			case constForAM:
+			case timeOfAM:
 				t.setHour(0)
-			case constForPM:
+			case timeOfPM:
 				t.setHour(12)
 			}
 			return nil
 		}
-		if valueAMorPm == constForPM {
+		if valueAMorPm == timeOfPM {
 			t.setHour(t.getHour() + 12)
 		}
 	} else {
@@ -323,10 +314,10 @@ func checkMysqlTime(t *CoreTime, ctx map[string]int) error {
 
 // Judge the return value type of the str_to_date function according to the value of the fromat parameter
 func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
-	isDuration, isDate := GetFormatType(format)
-	if isDuration && !isDate {
+	isTime, isDate := GetTimeFormatType(format)
+	if isTime && !isDate {
 		tp = types.T_time
-	} else if !isDuration && isDate {
+	} else if !isTime && isDate {
 		tp = types.T_date
 	} else {
 		tp = types.T_datetime
@@ -337,37 +328,37 @@ func JudgmentToDateReturnType(format string) (tp types.T, fsp int) {
 	return tp, MaxFsp
 }
 
-// GetFormatType checks the type(Duration, Date or Datetime) of a format string.
-func GetFormatType(format string) (isDuration, isDate bool) {
-	format = skipWhiteSpace(format)
+// GetTimeFormatType checks the type(Time, Date or Datetime) of a format string.
+func GetTimeFormatType(format string) (isTime, isDate bool) {
+	format = trimWhiteSpace(format)
 	var token string
 	var succ bool
 	for {
-		token, format, succ = getFormatToken(format)
+		token, format, succ = nextFormatToken(format)
 		if len(token) == 0 {
 			break
 		}
 		if !succ {
-			isDuration, isDate = false, false
+			isTime, isDate = false, false
 			break
 		}
 		if len(token) >= 2 && token[0] == '%' {
 			switch token[1] {
 			case 'h', 'H', 'i', 'I', 's', 'S', 'k', 'l', 'f', 'r', 'T':
-				isDuration = true
+				isTime = true
 			case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e':
 				isDate = true
 			}
 		}
-		if isDuration && isDate {
+		if isTime && isDate {
 			break
 		}
 	}
 	return
 }
 
-// Skip spaces in strings
-func skipWhiteSpace(input string) string {
+// trim spaces in strings
+func trimWhiteSpace(input string) string {
 	for i, c := range input {
 		if !unicode.IsSpace(c) {
 			return input[i:]
@@ -376,9 +367,9 @@ func skipWhiteSpace(input string) string {
 	return ""
 }
 
-// getFormatToken takes one format control token from the string.
-// format "%d %H %m" will get token "%d" and the remain is " %H %m".
-func getFormatToken(format string) (token string, remain string, succ bool) {
+// nextFormatToken takes next one format control token from the string.
+// such as: format "%d %H %m" will get token "%d" and the remain is " %H %m".
+func nextFormatToken(format string) (token string, remain string, success bool) {
 	if len(format) == 0 {
 		return "", "", true
 	}

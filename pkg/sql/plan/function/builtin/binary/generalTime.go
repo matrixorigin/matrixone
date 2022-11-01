@@ -16,13 +16,12 @@ package binary
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode"
 )
 
-// CoreTime is the internal struct type for Time.
-type CoreTime struct {
+// GeneralTime is the internal struct type for Time.
+type GeneralTime struct {
 	year        uint16
 	month       uint8
 	day         uint8
@@ -32,12 +31,12 @@ type CoreTime struct {
 	microsecond uint32
 }
 
-func NewCoreTime() *CoreTime {
-	return &CoreTime{}
+func NewGeneralTime() *GeneralTime {
+	return &GeneralTime{}
 }
 
-func FromDate(year int, month int, day int, hour int, minute int, second int, microsecond int) CoreTime {
-	return CoreTime{
+func FromDate(year int, month int, day int, hour int, minute int, second int, microsecond int) GeneralTime {
+	return GeneralTime{
 		year:        uint16(year),
 		month:       uint8(month),
 		day:         uint8(day),
@@ -48,8 +47,8 @@ func FromDate(year int, month int, day int, hour int, minute int, second int, mi
 	}
 }
 
-// Reset CoreTime to initialization state
-func (t CoreTime) ResetTime() {
+// Reset GeneralTime to initialization state
+func (t GeneralTime) ResetTime() {
 	t.year = 0
 	t.month = 0
 	t.day = 0
@@ -61,72 +60,72 @@ func (t CoreTime) ResetTime() {
 }
 
 // String implements fmt.Stringer.
-func (t CoreTime) String() string {
+func (t GeneralTime) String() string {
 	return fmt.Sprintf("{%d %d %d %d %d %d %d}", t.getYear(), t.getMonth(), t.getDay(), t.getHour(), t.getMinute(), t.getSecond(), t.getMicrosecond())
 }
 
-func (t CoreTime) getYear() uint16 {
+func (t GeneralTime) getYear() uint16 {
 	return t.year
 }
 
-func (t *CoreTime) setYear(year uint16) {
+func (t *GeneralTime) setYear(year uint16) {
 	t.year = year
 }
 
-func (t CoreTime) getMonth() uint8 {
+func (t GeneralTime) getMonth() uint8 {
 	return t.month
 }
 
-func (t *CoreTime) setMonth(month uint8) {
+func (t *GeneralTime) setMonth(month uint8) {
 	t.month = month
 }
 
-func (t CoreTime) getDay() uint8 {
+func (t GeneralTime) getDay() uint8 {
 	return t.day
 }
 
-func (t *CoreTime) setDay(day uint8) {
+func (t *GeneralTime) setDay(day uint8) {
 	t.day = day
 }
 
-func (t CoreTime) getHour() uint8 {
+func (t GeneralTime) getHour() uint8 {
 	return t.hour
 }
 
-func (t *CoreTime) setHour(hour uint8) {
+func (t *GeneralTime) setHour(hour uint8) {
 	t.hour = hour
 }
 
-func (t CoreTime) getMinute() uint8 {
+func (t GeneralTime) getMinute() uint8 {
 	return t.minute
 }
 
-func (t *CoreTime) setMinute(minute uint8) {
+func (t *GeneralTime) setMinute(minute uint8) {
 	t.minute = minute
 }
 
 // Minute returns the minute value.
-func (t CoreTime) Minute() int {
+func (t GeneralTime) Minute() int {
 	return int(t.getMinute())
 }
 
-func (t CoreTime) getSecond() uint8 {
+func (t GeneralTime) getSecond() uint8 {
 	return t.second
 }
 
-func (t *CoreTime) setSecond(second uint8) {
+func (t *GeneralTime) setSecond(second uint8) {
 	t.second = second
 }
 
-func (t CoreTime) getMicrosecond() uint32 {
+func (t GeneralTime) getMicrosecond() uint32 {
 	return t.microsecond
 }
 
-func (t *CoreTime) setMicrosecond(microsecond uint32) {
+func (t *GeneralTime) setMicrosecond(microsecond uint32) {
 	t.microsecond = microsecond
 }
 
-// A Month specifies a month of the year (January = 1, ...).
+// The month represents one month of the year (January=1,...).
 type Month int
 
 const (
@@ -159,7 +158,7 @@ var monthAbbrev = map[string]Month{
 	"dec": December,
 }
 
-type dateFormatParser func(t *CoreTime, date string, ctx map[string]int) (remain string, succ bool)
+type dateFormatParser func(t *GeneralTime, date string, ctx map[string]int) (remain string, succ bool)
 
 var dateFormatParserTable = map[string]dateFormatParser{
 	"%b": abbreviatedMonth,      // Abbreviated month name (Jan..Dec)
@@ -185,9 +184,7 @@ var dateFormatParserTable = map[string]dateFormatParser{
 	"%#": skipAllNums,           // Skip all numbers
 	"%.": skipAllPunct,          // Skip all punctation characters
 	"%@": skipAllAlpha,          // Skip all alpha characters
-	// Deprecated since MySQL 5.7.5
-	"%y": yearNumericTwoDigits, // Year, numeric (two digits)
-	// TODO: Add the following...
+	"%y": yearNumericTwoDigits,  // Year, numeric (two digits)
 	// "%a": abbreviatedWeekday,         // Abbreviated weekday name (Sun..Sat)
 	// "%D": dayOfMonthWithSuffix,       // Day of the month with English suffix (0th, 1st, 2nd, 3rd)
 	// "%U": weekMode0,                  // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
@@ -200,7 +197,7 @@ var dateFormatParserTable = map[string]dateFormatParser{
 	// "%x": yearOfWeek,                 // Year for the week, where Monday is the first day of the week, numeric, four digits; used with %v
 }
 
-func matchDateWithToken(t *CoreTime, date string, token string, ctx map[string]int) (remain string, succ bool) {
+func matchDateWithToken(t *GeneralTime, date string, token string, ctx map[string]int) (remain string, succ bool) {
 	if parse, ok := dateFormatParserTable[token]; ok {
 		return parse(t, date, ctx)
 	}
@@ -228,7 +225,7 @@ func parseNDigits(input string, limit int) (number int, step int) {
 }
 
 // Seconds (00..59)
-func secondsNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func secondsNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2)
 	if step <= 0 || v >= 60 {
 		return input, false
@@ -238,7 +235,7 @@ func secondsNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) 
 }
 
 // Minutes, numeric (00..59)
-func minutesNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func minutesNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2)
 	if step <= 0 || v >= 60 {
 		return input, false
@@ -256,21 +253,21 @@ const (
 )
 
 func parseSep(input string) (string, parseState) {
-	input = skipWhiteSpace(input)
+	input = trimWhiteSpace(input)
 	if len(input) == 0 {
 		return input, parseStateEndOfLine
 	}
 	if input[0] != ':' {
 		return input, parseStateFail
 	}
-	if input = skipWhiteSpace(input[1:]); len(input) == 0 {
+	if input = trimWhiteSpace(input[1:]); len(input) == 0 {
 		return input, parseStateEndOfLine
 	}
 	return input, parseStateNormal
 }
 
 // Time, 12-hour (hh:mm:ss followed by AM or PM)
-func time12Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func time12Hour(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	tryParse := func(input string) (string, parseState) {
 		// hh:mm:ss AM
 		/// Note that we should update `t` as soon as possible, or we
@@ -310,7 +307,7 @@ func time12Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 		}
 		t.setSecond(uint8(second))
 
-		input = skipWhiteSpace(input[step:])
+		input = trimWhiteSpace(input[step:])
 		if len(input) == 0 {
 			// No "AM"/"PM" suffix, it is ok
 			return input, parseStateEndOfLine
@@ -339,7 +336,7 @@ func time12Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 // Time, 24-hour (hh:mm:ss)
-func time24Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func time24Hour(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	tryParse := func(input string) (string, parseState) {
 		// hh:mm:ss
 		/// Note that we should update `t` as soon as possible, or we
@@ -384,12 +381,12 @@ func time24Hour(t *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 const (
-	constForAM = 1 + iota
-	constForPM
+	timeOfAM = 1 + iota
+	timeOfPM
 )
 
 // judege AM or PM
-func isAMOrPM(_ *CoreTime, input string, ctx map[string]int) (string, bool) {
+func isAMOrPM(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	if len(input) < 2 {
 		return input, false
 	}
@@ -397,23 +394,17 @@ func isAMOrPM(_ *CoreTime, input string, ctx map[string]int) (string, bool) {
 	s := strings.ToLower(input[:2])
 	switch s {
 	case "am":
-		ctx["%p"] = constForAM
+		ctx["%p"] = timeOfAM
 	case "pm":
-		ctx["%p"] = constForPM
+		ctx["%p"] = timeOfPM
 	default:
 		return input, false
 	}
 	return input[2:], true
 }
 
-// oneToSixDigitRegex: it was just for [0, 999999]
-var oneToSixDigitRegex = regexp.MustCompile("^[0-9]{0,6}")
-
-// numericRegex: it was for any numeric characters
-var numericRegex = regexp.MustCompile("[0-9]+")
-
 // Day of the month, numeric (0..31)
-func dayOfMonthNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func dayOfMonthNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 0..31
 	if step <= 0 || v > 31 {
 		return input, false
@@ -423,7 +414,7 @@ func dayOfMonthNumeric(t *CoreTime, input string, _ map[string]int) (string, boo
 }
 
 // Hour (00..23)
-func hour24Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool) {
+func hour24Numeric(t *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 0..23
 	if step <= 0 || v > 23 {
 		return input, false
@@ -434,7 +425,7 @@ func hour24Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool)
 }
 
 // Hour result (01..12)
-func hour12Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool) {
+func hour12Numeric(t *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 1..12
 	if step <= 0 || v > 12 || v == 0 {
 		return input, false
@@ -445,7 +436,7 @@ func hour12Numeric(t *CoreTime, input string, ctx map[string]int) (string, bool)
 }
 
 // Microseconds (000000..999999)
-func microSeconds(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func microSeconds(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 6)
 	if step <= 0 {
 		t.setMicrosecond(0)
@@ -459,16 +450,16 @@ func microSeconds(t *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 // Year, numeric, four digits
-func yearNumericFourDigits(t *CoreTime, input string, ctx map[string]int) (string, bool) {
+func yearNumericFourDigits(t *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	return yearNumericNDigits(t, input, ctx, 4)
 }
 
 // Year, numeric (two digits)
-func yearNumericTwoDigits(t *CoreTime, input string, ctx map[string]int) (string, bool) {
+func yearNumericTwoDigits(t *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	return yearNumericNDigits(t, input, ctx, 2)
 }
 
-func yearNumericNDigits(t *CoreTime, input string, _ map[string]int, n int) (string, bool) {
+func yearNumericNDigits(t *GeneralTime, input string, _ map[string]int, n int) (string, bool) {
 	year, step := parseNDigits(input, n)
 	if step <= 0 {
 		return input, false
@@ -480,7 +471,7 @@ func yearNumericNDigits(t *CoreTime, input string, _ map[string]int, n int) (str
 }
 
 // adjustYear adjusts year according to y.
-// See https://dev.mysql.com/doc/refman/5.7/en/two-digit-years.html
+// link to: https://dev.mysql.com/doc/refman/8.0/en/two-digit-years.html
 func adjustYear(y int) int {
 	if y >= 0 && y <= 69 {
 		y = 2000 + y
@@ -491,7 +482,7 @@ func adjustYear(y int) int {
 }
 
 // Day of year (001..366)
-func dayOfYearNumeric(_ *CoreTime, input string, ctx map[string]int) (string, bool) {
+func dayOfYearNumeric(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	// MySQL declares that "%j" should be "Day of year (001..366)". But actually,
 	// it accepts a number that is up to three digits, which range is [1, 999].
 	v, step := parseNDigits(input, 3)
@@ -503,7 +494,7 @@ func dayOfYearNumeric(_ *CoreTime, input string, ctx map[string]int) (string, bo
 }
 
 // Abbreviated month name (Jan..Dec)
-func abbreviatedMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func abbreviatedMonth(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	if len(input) >= 3 {
 		monthName := strings.ToLower(input[:3])
 		if month, ok := monthAbbrev[monthName]; ok {
@@ -522,7 +513,7 @@ func hasCaseInsensitivePrefix(input, prefix string) bool {
 }
 
 // Month name (January..December)
-func fullNameMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func fullNameMonth(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	for i, month := range MonthNames {
 		if hasCaseInsensitivePrefix(input, month) {
 			t.setMonth(uint8(i + 1))
@@ -533,7 +524,7 @@ func fullNameMonth(t *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 // Month, numeric (0..12)
-func monthNumeric(t *CoreTime, input string, _ map[string]int) (string, bool) {
+func monthNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool) {
 	v, step := parseNDigits(input, 2) // 1..12
 	if step <= 0 || v > 12 {
 		return input, false
@@ -552,7 +543,7 @@ func DateFSP(date string) (fsp int) {
 }
 
 // Skip all numbers
-func skipAllNums(_ *CoreTime, input string, _ map[string]int) (string, bool) {
+func skipAllNums(_ *GeneralTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
 		if unicode.IsNumber(ch) {
@@ -565,7 +556,7 @@ func skipAllNums(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 // Skip all punctation characters
-func skipAllPunct(_ *CoreTime, input string, _ map[string]int) (string, bool) {
+func skipAllPunct(_ *GeneralTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
 		if unicode.IsPunct(ch) {
@@ -578,7 +569,7 @@ func skipAllPunct(_ *CoreTime, input string, _ map[string]int) (string, bool) {
 }
 
 // Skip all alpha characters
-func skipAllAlpha(_ *CoreTime, input string, _ map[string]int) (string, bool) {
+func skipAllAlpha(_ *GeneralTime, input string, _ map[string]int) (string, bool) {
 	retIdx := 0
 	for i, ch := range input {
 		if unicode.IsLetter(ch) {

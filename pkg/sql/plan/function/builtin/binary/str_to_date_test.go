@@ -375,7 +375,7 @@ func Test_CoreStrToDate(t *testing.T) {
 		name   string
 		date   string
 		format string
-		expect CoreTime
+		expect GeneralTime
 	}{
 		{`Test1`, `01,05,2013`, `%d,%m,%Y`, FromDate(2013, 5, 1, 0, 0, 0, 0)},
 		{`Test2`, `5 12 2021`, `%m%d%Y`, FromDate(2021, 5, 12, 0, 0, 0, 0)},
@@ -451,7 +451,7 @@ func Test_CoreStrToDate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			//ctx := make(map[string]int)
-			time := NewCoreTime()
+			time := NewGeneralTime()
 			gotSuccess := CoreStrToDate(time, tt.date, tt.format)
 
 			require.Truef(t, gotSuccess, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
@@ -493,7 +493,7 @@ func Test_CoreStrToDateErr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			//ctx := make(map[string]int)
-			time := NewCoreTime()
+			time := NewGeneralTime()
 			gotSuccess := CoreStrToDate(time, tt.date, tt.format)
 			require.Falsef(t, gotSuccess, "%s failed input=%s format=%s", tt.name, tt.date, tt.format)
 		})
