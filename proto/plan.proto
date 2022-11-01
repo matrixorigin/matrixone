@@ -201,6 +201,7 @@ message ColDef {
 	string comment		= 7;
 	bool is_cPkey 		= 8;
 	OnUpdate on_update  = 9;
+	bool low_cardinality = 10;
 }
 
 message Default {

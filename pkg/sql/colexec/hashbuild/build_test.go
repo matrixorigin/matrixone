@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -85,6 +87,37 @@ func TestBuild(t *testing.T) {
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestLowCardinalityBuild(t *testing.T) {
+	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()},
+		[]*plan.Expr{
+			newExpr(0, types.T_varchar.ToType()),
+		},
+	)
+	err := Prepare(tc.proc, tc.arg)
+	require.NoError(t, err)
+
+	values := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
+	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+	constructIndex(t, v, tc.proc.Mp())
+
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+
+	ok, err := Call(0, tc.proc, tc.arg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+	mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+	require.NotNil(t, mp.Index())
+
+	sels := mp.Sels()
+	require.Equal(t, []int64{0, 2, 6, 7}, sels[0])
+	require.Equal(t, []int64{1, 4}, sels[1])
+	require.Equal(t, []int64{3, 5}, sels[2])
+
+	mp.Free()
+	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 }
 
 func BenchmarkBuild(b *testing.B) {
@@ -155,4 +188,14 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
+	idx, err := index.New(v.Typ, m)
+	require.NoError(t, err)
+
+	err = idx.InsertBatch(v)
+	require.NoError(t, err)
+
+	v.SetIndex(idx)
 }

@@ -161,12 +161,17 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		// indexes
 		var indexes []memtable.Tuple
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opDelete),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -247,12 +252,17 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				primaryKey,
 			})
 		}
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opInsert),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
@@ -279,6 +289,37 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 		}
 	}
 
+	return nil
+}
+
+func (p *Partition) GC(ts timestamp.Timestamp) error {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	min := memtable.Tuple{
+		index_Time,
+		memtable.Min,
+	}
+	max := memtable.Tuple{
+		index_Time,
+		ts,
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		err := p.data.Delete(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(t); err != nil {
+		return err
+	}
 	return nil
 }
 

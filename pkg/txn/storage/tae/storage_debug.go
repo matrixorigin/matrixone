@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/debug"
@@ -30,6 +29,22 @@ func (s *taeStorage) Debug(ctx context.Context,
 	switch opCode {
 	case uint32(debug.CmdMethod_Ping):
 		return s.handlePing(data), nil
+	case uint32(debug.CmdMethod_Flush):
+		_, err := handleRead(
+			ctx, s,
+			txnMeta, data,
+			s.taeHandler.HandleFlushTable,
+		)
+		if err != nil {
+			resp := protoc.MustMarshal(&debug.DNStringResponse{
+				ReturnStr: "Failed",
+			})
+			return resp, err
+		}
+		resp := protoc.MustMarshal(&debug.DNStringResponse{
+			ReturnStr: "OK",
+		})
+		return resp, err
 	default:
 		return nil, moerr.NewNotSupported("TAEStorage not support debug method %d", opCode)
 	}
