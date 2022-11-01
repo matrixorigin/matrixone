@@ -1,6 +1,6 @@
 FROM  matrixorigin/tester:go1.19-java8
 
-ARG GOPROXY="https://proxy.golang.org,direct"
+ARG GOPROXY="https://proxy.golang.com.cn,direct"
 
 ENV UT_PARALLEL=1
 
