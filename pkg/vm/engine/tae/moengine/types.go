@@ -88,7 +88,7 @@ type Engine interface {
 	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
 	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
-	CreateDatabaseWithID(ctx context.Context, databaseName string, id uint64, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName, createSql string, id uint64, txn Txn) error
 
 	// DatabaseNames returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
