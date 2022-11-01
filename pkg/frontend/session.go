@@ -65,14 +65,8 @@ type TxnHandler struct {
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
-	var s engine.Engine
-	if _, isEntire := storage.(*engine.EntireEngine); isEntire {
-		s = storage
-	} else {
-		s = &engine.EntireEngine{Engine: storage}
-	}
 	h := &TxnHandler{
-		storage:   s,
+		storage:   &engine.EntireEngine{Engine: storage},
 		txnClient: txnClient,
 	}
 	return h
@@ -199,12 +193,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	}
 
 	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
-	var storage engine.Engine
-	if _, isEntire := PU.StorageEngine.(*engine.EntireEngine); isEntire {
-		storage = PU.StorageEngine
-	} else {
-		storage = &engine.EntireEngine{Engine: PU.StorageEngine}
-	}
 
 	ses := &Session{
 		protocol: proto,
@@ -218,7 +206,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         storage,
+		storage:         &engine.EntireEngine{Engine: PU.StorageEngine},
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -682,7 +670,6 @@ func (ses *Session) SetTempEngine(te engine.Engine) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ee := ses.storage.(*engine.EntireEngine)
-	ses.Pu.StorageEngine = ee
 	ee.TempEngine = te
 }
 

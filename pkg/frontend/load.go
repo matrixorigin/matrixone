@@ -1851,6 +1851,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				initSes := handler.ses
 				// XXX: Using initSes.Mp
 				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
+				if e, ok := initSes.storage.(*engine.EntireEngine); ok {
+					tmpSes.storage = e
+				}
 				defer tmpSes.Close()
 				var dbHandler engine.Database
 				if !handler.skipWriteBatch {
