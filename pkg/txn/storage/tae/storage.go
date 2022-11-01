@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,6 +30,7 @@ import (
 )
 
 type taeStorage struct {
+	shard      metadata.DNShard
 	taeHandler rpchandle.Handler
 }
 
@@ -52,6 +52,7 @@ func NewTAEStorage(
 		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
+		shard:      shard,
 		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil

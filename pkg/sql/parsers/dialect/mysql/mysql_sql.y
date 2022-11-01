@@ -279,7 +279,7 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
 
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
@@ -332,7 +332,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT
+%token <str> JSON_EXTRACT ARROW
 
 // JSON table function
 %token <str> UNNEST
@@ -4896,7 +4896,16 @@ partition_method:
 |   sub_partition_method
 
 sub_partition_method:
-    linear_opt KEY algorithm_opt '(' column_name_list ')'
+    linear_opt KEY algorithm_opt '(' ')'
+    {
+        $$ = &tree.PartitionBy{
+            PType: &tree.KeyType{
+                Linear: $1,
+                Algorithm: $3,
+            },
+        }
+    }
+|   linear_opt KEY algorithm_opt '(' column_name_list ')'
     {
         $$ = &tree.PartitionBy{
             PType: &tree.KeyType{
@@ -5450,6 +5459,10 @@ column_attribute_elem:
             Exprs: es,
         }
         $$ = tree.NewAttributeOnUpdate(expr)
+    }
+|   LOW_CARDINALITY
+    {
+	$$ = tree.NewAttributeLowCardinality()
     }
 
 enforce:
@@ -7944,7 +7957,8 @@ non_reserved_keyword:
 |   HASH
 |   ENGINES
 |   TRIGGERS
-|	HISTORY
+|   HISTORY
+|   LOW_CARDINALITY
 
 func_not_keyword:
     DATE_ADD

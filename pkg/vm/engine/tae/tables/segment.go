@@ -70,8 +70,8 @@ func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector
 
 func (segment *dataSegment) MutationInfo() string { return "" }
 
-func (segment *dataSegment) RunCalibration() int                      { return 0 }
-func (segment *dataSegment) EstimateScore(interval time.Duration) int { return 0 }
+func (segment *dataSegment) RunCalibration() int                                  { return 0 }
+func (segment *dataSegment) EstimateScore(interval time.Duration, force bool) int { return 0 }
 
 func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
 	if segment.meta.IsAppendable() {

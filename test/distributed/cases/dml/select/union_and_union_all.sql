@@ -179,12 +179,10 @@ select * from t8 union distinct select * from t9 union distinct select * from t1
 
 select * from (select * from t8 union distinct select * from t9 union all select * from t10) X;
 
--- @bvt:issue#4946
 select * from t8 union select * from t9 intersect select * from t10;
 select * from t8 union select * from t9 minus select * from t10;
 (select * from t8 union select * from t9) intersect select * from t10;
 (select * from t8 union select * from t9) minus select * from t10;
--- @bvt:issue
 drop table t8;
 drop table t9;
 drop table t10;
@@ -248,14 +246,11 @@ deallocate prepare st_18492;
 deallocate prepare st_18493;
 drop table t13;
 
--- @bvt:issue#4635
 select cast(a as DECIMAL(3,2))
- from (select 11.1233 as a
+ from (select 11.1234 as a
   UNION select 11.1234
-  UNION select 12.1234
+  UNION select 11.1234
  ) t;
--- @bvt:issue
-
 
 drop table if exists t14;
 CREATE TABLE t14 (

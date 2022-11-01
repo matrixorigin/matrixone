@@ -516,5 +516,6 @@ func init() {
 		"reference":                REFERENCE,
 		"modump":                   MODUMP,
 		"generate_series":          GENERATE_SERIES,
+		"low_cardinality":          LOW_CARDINALITY,
 	}
 }

@@ -1172,11 +1172,6 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memor
 			break
 		}
 
-		//TODO handle iter.Expr
-		if iter.Expr != nil {
-			panic(iter.Expr)
-		}
-
 		rows = append(rows, Row{
 			Value:       value,
 			PhysicalRow: item,

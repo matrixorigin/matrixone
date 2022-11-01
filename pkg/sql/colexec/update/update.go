@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var nullRowid [16]byte
+
 func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("update rows")
 }
@@ -159,7 +161,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 		delBat.Clean(proc.Mp())
 
-		if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+		if err := colexec.UpdateInsertBatch(p.Engine, ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
 			tmpBat.Clean(proc.Mp())
 			return false, err
 		}
@@ -351,6 +353,9 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 func appendTuples[T any](flg bool, cnt *uint64, vs []T, nsp *nulls.Nulls, rvec *vector.Vector,
 	proc *process.Process, m map[[16]byte]int, rows []types.Rowid) error {
 	for i, row := range rows {
+		if row == nullRowid {
+			continue
+		}
 		if _, ok := m[row]; ok {
 			continue
 		}
