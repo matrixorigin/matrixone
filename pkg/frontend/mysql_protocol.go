@@ -466,7 +466,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
