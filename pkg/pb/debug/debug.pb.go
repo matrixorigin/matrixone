@@ -30,14 +30,20 @@ type CmdMethod int32
 const (
 	// Ping ping the service.
 	CmdMethod_Ping CmdMethod = 0
+
+	// Flush is to force flush the table data.
+	// parameter should be "DbName.TableName"
+	CmdMethod_Flush CmdMethod = 1
 )
 
 var CmdMethod_name = map[int32]string{
 	0: "Ping",
+	1: "Flush",
 }
 
 var CmdMethod_value = map[string]int32{
-	"Ping": 0,
+	"Ping":  0,
+	"Flush": 1,
 }
 
 func (x CmdMethod) String() string {
