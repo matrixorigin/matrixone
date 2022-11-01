@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"io"
 	"path"
 	"path/filepath"
@@ -256,6 +257,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		vec := vector.NewOriginal(typ)
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
 		vec.SetOriginal(false)
+		vec.Nsp.Np = bitmap.New(param.batchSize)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
