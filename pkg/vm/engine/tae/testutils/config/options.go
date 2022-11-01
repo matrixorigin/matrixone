@@ -107,12 +107,8 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	}
 	opts.CheckpointCfg = new(options.CheckpointCfg)
 	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 5
-	opts.CheckpointCfg.ExecutionInterval = 1
-	opts.CheckpointCfg.FlushInterval = 10
-	opts.CheckpointCfg.CatalogCkpInterval = 5
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
 
+	opts.CheckpointCfg.FlushInterval = 10
 	opts.CheckpointCfg.ScanInterval = time.Millisecond * 5
 	opts.CheckpointCfg.MinCount = 1
 	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
@@ -127,13 +123,9 @@ func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
 		opts = in
 	}
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 1000 * int64(factor)
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 1000 * int64(factor)
-	opts.CheckpointCfg.CatalogCkpInterval = 1000 * int64(factor)
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
-	opts.CheckpointCfg.FlushInterval = 1000 * int64(factor)
+	opts.CheckpointCfg.ScannerInterval = time.Duration(factor)
 
+	opts.CheckpointCfg.FlushInterval = time.Duration(factor)
 	opts.CheckpointCfg.ScanInterval = time.Second * time.Duration(factor)
 	opts.CheckpointCfg.MinCount = 1 * int64(factor)
 	opts.CheckpointCfg.IncrementalInterval = time.Second * 2 * time.Duration(factor)
@@ -149,8 +141,6 @@ func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	}
 	opts.CheckpointCfg = new(options.CheckpointCfg)
 	opts.CheckpointCfg.ScannerInterval = 100000
-	opts.CheckpointCfg.ExecutionLevels = 20
-	opts.CheckpointCfg.ExecutionInterval = 200000
 
 	opts.CheckpointCfg.ScanInterval = time.Hour
 	opts.CheckpointCfg.MinCount = 100000000

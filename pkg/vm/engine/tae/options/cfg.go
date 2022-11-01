@@ -28,13 +28,9 @@ type StorageCfg struct {
 }
 
 type CheckpointCfg struct {
-	ScannerInterval    int64 `toml:"scanner-inerterval"`
-	ExecutionInterval  int64 `toml:"execution-inerterval"`
-	FlushInterval      int64 `toml:"flush-inerterval"`
-	ExecutionLevels    int16 `toml:"execution-levels"`
-	CatalogUnCkpLimit  int64 `toml:"catalog-unckp-limit"`
-	CatalogCkpInterval int64 `toml:"catalog-ckp-interval"`
+	ScannerInterval time.Duration `toml:"scanner-inerterval"`
 
+	FlushInterval       time.Duration `toml:"flush-inerterval"`
 	MinCount            int64         `toml:"checkpoint-min-count"`
 	ScanInterval        time.Duration `toml:"checkpoint-scan-interval"`
 	IncrementalInterval time.Duration `toml:"checkpoint-incremental-interval"`

@@ -83,7 +83,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg.ScannerInterval = DefaultScannerInterval
 	}
 	if o.CheckpointCfg.FlushInterval <= 0 {
-		o.CheckpointCfg.FlushInterval = DefaultFlushInterval
+		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
 	}
 	if o.CheckpointCfg.ScanInterval <= 0 {
 		o.CheckpointCfg.ScanInterval = DefaultCheckpointScanInterval

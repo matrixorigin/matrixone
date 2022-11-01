@@ -98,7 +98,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
-		checkpoint.WithFlushInterval(time.Duration(opts.CheckpointCfg.FlushInterval)*time.Millisecond),
+		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),
 		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),

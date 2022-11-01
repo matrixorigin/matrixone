@@ -75,8 +75,14 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type     EngineType           `toml:"type"`
-		Logstore options.LogstoreType `toml:"logstore"`
+		Type                EngineType           `toml:"type"`
+		Logstore            options.LogstoreType `toml:"logstore"`
+		ScannerInterval     toml.Duration        `toml:"scanner-interval"`
+		FlushInterval       toml.Duration        `toml:"flush-interval"`
+		MinCount            int64                `toml:"min-count"`
+		ScanInterval        toml.Duration        `toml:"scan-interval"`
+		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
+		GlobalInterval      toml.Duration        `toml:"global-interval"`
 	}
 
 	// parameters for cn-server related buffer.
