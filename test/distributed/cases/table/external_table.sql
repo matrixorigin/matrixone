@@ -176,7 +176,7 @@ create external table ex_table_log(char_1 char(20),char_2 varchar(10),date_1 dat
 select * from ex_table_log;
 -- @bvt:issue
 --gzip
-create external table ex_table_gzip(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='gzip'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_gzip(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='gzip'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_gzip;
 
 --bzip2
@@ -185,7 +185,7 @@ create external table ex_table_bzip2(char_1 char(20),char_2 varchar(10),date_1 d
 select * from ex_table_bzip2;
 -- @bvt:issue
 --lz4
-create external table ex_table_lz4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_lz4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_lz4;
 
 --zib
@@ -193,7 +193,7 @@ select * from ex_table_lz4;
 --flate
 
 --auto
-create external table ex_table_auto(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='auto'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_auto(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='auto'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_auto;
 
 --none

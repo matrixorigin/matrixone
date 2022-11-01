@@ -58,7 +58,8 @@ num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7
 60    -1000    8403    -10934535423423    200    1    673892    8374    73.98    9.0002    8345398234.9838234985858298432
 -128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -1.7976931348623157E308    9345.4535000000000000000
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    1.7976931348623157E308    883453.0999320000000000000
-null    null    null    null    null    null    null    null    null    null    nullcreate external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+null    null    null    null    null    null    null    null    null    null    null
+create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_1;
 internal error: the input value 'abc' is not int8 type for column 0
 create external table ex_table_2_2(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
@@ -203,14 +204,14 @@ create external table ex_table_12(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigin
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_9.csv'} fields terminated by ','  enclosed by '\"' ;
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_12;
 clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
--62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-09 23:59:59    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
-91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-12 23:59:59    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
+-62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-10 07:59:59    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
+91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-13 07:59:59    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
 create external table ex_table_13(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\r\n';
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_13;
 clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
--62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-09 23:59:59    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
-91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-12 23:59:59    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
+-62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-10 07:59:59    602.53    I,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI,G;KL/MN?OPQR.STU-_+=VWXYZa
+91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-13 07:59:59    878.09    HI,G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
 create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'};
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_14;
 clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
@@ -224,29 +225,32 @@ create external table ex_table_log(char_1 char(20),char_2 varchar(10),date_1 dat
 [unknown result because it is related to issue#5442]
 select * from ex_table_log;
 [unknown result because it is related to issue#5442]
-create external table ex_table_gzip(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='gzip'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_gzip(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='gzip'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_gzip;
 num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
 60    -1000    8403    -10934535423423    200    1    673892    8374    73.98    9.0002    8345398234.9838234985858298432
 -128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -1.7976931348623157E308    9345.4535000000000000000
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    1.7976931348623157E308    883453.0999320000000000000
-null    null    null    null    null    null    null    null    null    null    nullcreate external table ex_table_bzip2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2',"compression"='bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+null    null    null    null    null    null    null    null    null    null    null
+create external table ex_table_bzip2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2',"compression"='bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 [unknown result because it is related to issue#5442]
 select * from ex_table_bzip2;
 [unknown result because it is related to issue#5442]
-create external table ex_table_lz4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_lz4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_lz4;
 num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
 60    -1000    8403    -10934535423423    200    1    673892    8374    73.98    9.0002    8345398234.9838234985858298432
 -128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -1.7976931348623157E308    9345.4535000000000000000
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    1.7976931348623157E308    883453.0999320000000000000
-null    null    null    null    null    null    null    null    null    null    nullcreate external table ex_table_auto(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='auto'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+null    null    null    null    null    null    null    null    null    null    null
+create external table ex_table_auto(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='auto'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_auto;
 num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
 60    -1000    8403    -10934535423423    200    1    673892    8374    73.98    9.0002    8345398234.9838234985858298432
 -128    -32768    -2147483648    -9223372036854775808    0    0    0    0    null    -1.7976931348623157E308    9345.4535000000000000000
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615    null    1.7976931348623157E308    883453.0999320000000000000
-null    null    null    null    null    null    null    null    null    null    nullcreate external table ex_table_none(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
+null    null    null    null    null    null    null    null    null    null    null
+create external table ex_table_none(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255)) infile{"filepath"='$resources/external_table_file/ex_table_sep_8.csv',"compression"='none'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_none;
 clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
@@ -276,10 +280,10 @@ drop table ex_table_drop;
 create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '' lines terminated by '\n';
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_drop;
 clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
--62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-09 23:59:59    602.53    I|G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI|G;KL/MN?OPQR.STU-_+=VWXYZa
-91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-12 23:59:59    878.09    HI|G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
-33    104    3258037690    6316-02-16    3647-01-21 23:59:59    2034-02-10 00:00:00    439.95    EF|GHI|G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh    OPQR.STU-_+=VWXYZa
-121    141    849972079    9948-05-08    6216-12-30 00:00:00    2011-03-10 00:00:00    428.14    U-_+=VWXYZabcdefghigklmnopqrstuvwxy    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012
+-62    154    2658450361    4149-04-30    5732-08-07 00:00:00    1975-09-10 07:59:59    602.53    I|G;KL/MN?OPQR.STU-_+=VWXYZabcdefghi    HI|G;KL/MN?OPQR.STU-_+=VWXYZa
+91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-13 07:59:59    878.09    HI|G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
+33    104    3258037690    6316-02-16    3647-01-21 23:59:59    2034-02-10 08:00:00    439.95    EF|GHI|G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh    OPQR.STU-_+=VWXYZa
+121    141    849972079    9948-05-08    6216-12-30 00:00:00    2011-03-10 08:00:00    428.14    U-_+=VWXYZabcdefghigklmnopqrstuvwxy    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012
 show create table ex_table_15;
 [unknown result because it is related to issue#6102]
 select count(*) from ex_table_15,table_15 where ex_table_15.clo1=table_15.clo1;
