@@ -1090,7 +1090,7 @@ func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mpool.MPool) e
 	}
 	ws := types.DecodeSlice[T](data)
 	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
-	v.data = types.EncodeSlice(ws)
+	v.data = types.EncodeSliceWithCap(ws)
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 
 	m.Free(olddata)
