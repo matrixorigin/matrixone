@@ -130,7 +130,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(
-		time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond,
+		time.Duration(opts.CheckpointCfg.ScanInterval)*time.Millisecond,
 		scanner)
 	db.BGScanner.Start()
 

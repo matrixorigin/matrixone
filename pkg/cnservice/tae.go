@@ -66,9 +66,8 @@ func initTAE(
 	default:
 		return moerr.NewInternalError("invalid logstore type: %v", cfg.Engine.Logstore)
 	}
-	opts.CheckpointCfg=&options.CheckpointCfg{}
+	opts.CheckpointCfg = &options.CheckpointCfg{}
 	opts.CheckpointCfg.FlushInterval = cfg.Engine.FlushInterval.Duration
-	opts.CheckpointCfg.ScannerInterval = cfg.Engine.ScannerInterval.Duration
 	opts.CheckpointCfg.ScanInterval = cfg.Engine.ScanInterval.Duration
 	opts.CheckpointCfg.MinCount = cfg.Engine.MinCount
 	opts.CheckpointCfg.IncrementalInterval = cfg.Engine.IncrementalInterval.Duration

@@ -33,7 +33,6 @@ var (
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
 
-	defaultScannerInterval     = time.Second * 5
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
 	defaultIncrementalInterval = time.Minute * 5
@@ -79,7 +78,6 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		ScannerInterval     toml.Duration `toml:"scanner-interval"`
 		FlushInterval       toml.Duration `toml:"flush-interval"`
 		ScanInterval        toml.Duration `toml:"scan-interval"`
 		MinCount            int64         `toml:"min-count"`
@@ -150,14 +148,11 @@ func (c *Config) Validate() error {
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
 	}
-	if c.Ckp.ScannerInterval.Duration == 0 {
-		c.Ckp.ScannerInterval.Duration = defaultScannerInterval
+	if c.Ckp.ScanInterval.Duration == 0 {
+		c.Ckp.ScanInterval.Duration = defaultScanInterval
 	}
 	if c.Ckp.FlushInterval.Duration == 0 {
 		c.Ckp.FlushInterval.Duration = defaultFlushInterval
-	}
-	if c.Ckp.ScanInterval.Duration == 0 {
-		c.Ckp.ScanInterval.Duration = defaultScanInterval
 	}
 	if c.Ckp.MinCount == 0 {
 		c.Ckp.MinCount = defaultMinCount

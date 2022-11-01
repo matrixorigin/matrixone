@@ -77,7 +77,6 @@ type Config struct {
 	Engine struct {
 		Type                EngineType           `toml:"type"`
 		Logstore            options.LogstoreType `toml:"logstore"`
-		ScannerInterval     toml.Duration        `toml:"scanner-interval"`
 		FlushInterval       toml.Duration        `toml:"flush-interval"`
 		MinCount            int64                `toml:"min-count"`
 		ScanInterval        toml.Duration        `toml:"scan-interval"`

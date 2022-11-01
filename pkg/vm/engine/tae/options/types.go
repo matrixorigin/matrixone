@@ -36,11 +36,9 @@ const (
 	DefaultBlockMaxRows     = uint32(40000)
 	DefaultBlocksPerSegment = uint16(40)
 
-	DefaultScannerInterval = time.Second * 5
-
+	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
 	DefaultCheckpointMinCount           = int64(10000)
-	DefaultCheckpointScanInterval       = time.Second * 5
 	DefaultCheckpointIncremetalInterval = time.Minute * 5
 	DefaultCheckpointGlobalInterval     = time.Minute * 60
 

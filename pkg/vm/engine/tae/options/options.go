@@ -79,14 +79,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg == nil {
 		o.CheckpointCfg = new(CheckpointCfg)
 	}
-	if o.CheckpointCfg.ScannerInterval <= 0 {
-		o.CheckpointCfg.ScannerInterval = DefaultScannerInterval
+	if o.CheckpointCfg.ScanInterval <= 0 {
+		o.CheckpointCfg.ScanInterval = DefaultScannerInterval
 	}
 	if o.CheckpointCfg.FlushInterval <= 0 {
 		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
-	}
-	if o.CheckpointCfg.ScanInterval <= 0 {
-		o.CheckpointCfg.ScanInterval = DefaultCheckpointScanInterval
 	}
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval

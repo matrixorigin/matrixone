@@ -134,9 +134,8 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:            s.cfg.Ckp.MinCount,
-		ScannerInterval:     s.cfg.Ckp.ScannerInterval.Duration,
-		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
 		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,
+		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}

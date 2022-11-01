@@ -31,7 +31,6 @@ backend = "TAE"
 log-backend = "logservice"
 
 [dn.Ckp]
-scanner-interval = "5s"
 flush-interval = "60s"
 min-count = 10000
 scan-interval = "5s"

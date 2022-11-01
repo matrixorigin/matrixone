@@ -33,7 +33,6 @@ role = "TP"
 [cn.Engine]
 type = "tae"
 logstore = "logservice"
-scanner-interval = "5s"
 flush-interval = "60s"
 min-count = 10000
 scan-interval = "5s"

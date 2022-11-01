@@ -297,7 +297,7 @@ func TestDB1(t *testing.T) {
 		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			_, err = txn.CreateDatabase(name,"")
+			_, err = txn.CreateDatabase(name, "")
 			if err != nil {
 				return
 			}
