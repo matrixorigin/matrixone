@@ -383,11 +383,11 @@ func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
 	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
-func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabase(name, createSql string) (db handle.Database, err error) {
 	return
 }
 
-func (txn *Txn) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
 	return
 }
 

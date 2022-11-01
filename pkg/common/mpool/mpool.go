@@ -134,7 +134,7 @@ var PoolElemSize = []int{64, 128, 256, 512, 1024, 2048, 4096}
 // Zeros, enough for largest pool element
 var ZeroSlice = make([]byte, 4096)
 
-// Memory header, kMemHdrSz = 8
+// Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
 	fixedPoolIdx int8
@@ -187,7 +187,7 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 		pHdr := (*memHdr)(hdr)
 		pHdr.poolId = poolid
 		pHdr.fixedPoolIdx = int8(idx)
-		pHdr.allocSz = 0
+		pHdr.allocSz = -1
 		fp.flist.put(hdr)
 	}
 	return int64(nb), nil
@@ -488,8 +488,8 @@ func (fp *fixedPool) alloc(sz int) []byte {
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
-	if sz > GB {
-		return nil, moerr.NewInternalError("Alloc size %d too large", sz)
+	if sz < 0 || sz > GB {
+		return nil, moerr.NewInternalError("Invalid alloc size %d", sz)
 	}
 
 	if sz == 0 {
@@ -536,8 +536,13 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 
 func (fp *fixedPool) free(hdr unsafe.Pointer) {
 	pHdr := (*memHdr)(hdr)
-	pHdr.allocSz = 0
 	fp.stats.RecordFree("", int64(pHdr.allocSz))
+
+	if pHdr.allocSz == -1 {
+		// double free.
+		panic(moerr.NewInternalError("free size -1, possible double free"))
+	}
+	pHdr.allocSz = -1
 	fp.flist.put(hdr)
 }
 
@@ -556,11 +561,16 @@ func (mp *MPool) Free(bs []byte) {
 		if pHdr.fixedPoolIdx < NumFixedPool {
 			mp.pools[pHdr.fixedPoolIdx].free(hdr)
 		} else {
+			if pHdr.allocSz == -1 {
+				// double free.
+				panic(moerr.NewInternalError("free size -1, possible double free"))
+			}
 			if mp.details != nil {
 				mp.details.recordFree(int64(pHdr.allocSz))
 			}
 			mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
 			globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
+			pHdr.allocSz = -1
 		}
 	} else {
 		// cross pool free.
