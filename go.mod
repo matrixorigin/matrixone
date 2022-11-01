@@ -125,6 +125,10 @@ require (
 
 // required until memberlist issue 272 is resolved
 // see https://github.com/hashicorp/memberlist/pull/273 for progress
-replace github.com/hashicorp/memberlist => github.com/lni/memberlist v0.3.2-0.20220811084252-8a89d1ea99cb
+replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406
 
 replace github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20221026081827-193f8e8b5bb6
+
+replace github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
+
+replace github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4

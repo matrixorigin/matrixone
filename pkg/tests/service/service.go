@@ -17,10 +17,12 @@ package service
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -231,6 +233,7 @@ type ClusterWaitState interface {
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
 	t       *testing.T
+	testID  string
 	opt     Options
 	logger  *zap.Logger
 	stopper *stopper.Stopper
@@ -280,10 +283,12 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	c := &testCluster{
 		t:       t,
-		logger:  logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())),
+		testID:  uuid.New().String(),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}
+	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
+	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
 
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
@@ -292,17 +297,14 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
-
-	// build FileService instances
-	c.fileservices = c.buildFileServices()
-
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
-
+	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
+	// build FileService instances
+	c.fileservices = c.buildFileServices()
 
 	return c, nil
 }
@@ -1263,11 +1265,6 @@ func (c *testCluster) CloseNetworkPartition() {
 func (c *testCluster) buildServiceAddresses() serviceAddresses {
 	return newServiceAddresses(c.t, c.opt.initial.logServiceNum,
 		c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
-}
-
-// buildFileServices builds all file services.
-func (c *testCluster) buildFileServices() *fileServices {
-	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
 }
 
 // buildDNConfigs builds configurations for all dn services.
