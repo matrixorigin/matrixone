@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type nodeList[T any] struct {
@@ -135,11 +134,11 @@ func (n *nodeList[T]) GetNode() *common.GenericDLNode[T] {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList[T]) TxnGetNodeLocked(
-	txn txnif.TxnReader) (dn *common.GenericDLNode[T], err error) {
+func (n *nodeList[T]) TxnGetNodeLocked(ts types.TS) (
+	dn *common.GenericDLNode[T], err error) {
 	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
-		visible, dropped := n.visibilityFn(dlNode, txn.GetStartTS())
+		visible, dropped := n.visibilityFn(dlNode, ts)
 		if !visible {
 			return true
 		}

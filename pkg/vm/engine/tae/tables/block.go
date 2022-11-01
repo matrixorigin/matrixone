@@ -240,10 +240,13 @@ func (blk *dataBlock) MutationInfo() string {
 	return s
 }
 
-func (blk *dataBlock) EstimateScore(interval time.Duration) int {
+func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 	score, dropped := blk.estimateRawScore()
 	if dropped {
 		return 0
+	}
+	if force {
+		return 100
 	}
 	if score == 0 {
 		return 0

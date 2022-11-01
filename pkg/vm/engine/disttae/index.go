@@ -19,6 +19,7 @@ import "github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable
 const (
 	index_PrimaryKey      = memtable.Text("primary key")
 	index_BlockID_Time_OP = memtable.Text("block id, time, op")
+	index_Time            = memtable.Text("time")
 	index_Table           = memtable.Text("table")
 	index_Column          = memtable.Text("column")
 	index_Database        = memtable.Text("database")

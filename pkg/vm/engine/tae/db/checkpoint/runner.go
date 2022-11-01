@@ -153,6 +153,9 @@ type runner struct {
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
 
+		forceFlushTimeout       time.Duration
+		forceFlushCheckInterval time.Duration
+
 		dirtyEntryQueueSize int
 		waitQueueSize       int
 		checkpointQueueSize int
@@ -236,6 +239,13 @@ func NewRunner(
 	return r
 }
 
+// Only used in UT
+func (r *runner) DebugUpdateOptions(opts ...Option) {
+	for _, opt := range opts {
+		opt(r)
+	}
+}
+
 func (r *runner) onCheckpointEntries(items ...any) {
 	var err error
 	entry := r.MaxCheckpoint()
@@ -315,6 +325,68 @@ func (r *runner) MockCheckpoint(end types.TS) {
 		panic(err)
 	}
 	r.storage.Lock()
+	r.storage.entries.Set(entry)
+	r.storage.Unlock()
+	entry.SetState(ST_Finished)
+	r.storage.prevGlobal = entry
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
+}
+func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+	makeCtx := func() *DirtyCtx {
+		tree := r.source.ScanInRangePruned(types.TS{}, ts)
+		tree.GetTree().Compact()
+		tableTree := tree.GetTree().GetTable(tableID)
+		if tableTree == nil {
+			return nil
+		}
+		nTree := common.NewTree()
+		nTree.Tables[tableID] = tableTree
+		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
+		dirtyCtx := new(DirtyCtx)
+		dirtyCtx.tree = entry
+		dirtyCtx.force = true
+		return dirtyCtx
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), r.options.forceFlushTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
+	defer ticker.Stop()
+
+	dirtyCtx := makeCtx()
+	if dirtyCtx == nil {
+		return
+	}
+	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Warnf("Flush %d-%d timeout", dbID, tableID)
+			return
+		case <-ticker.C:
+			if dirtyCtx = makeCtx(); dirtyCtx == nil {
+				return
+			}
+			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
+	r.doIncrementalCheckpoint(entry)
 	r.storage.entries.Set(entry)
 	r.storage.Unlock()
 	entry.SetState(ST_Finished)
@@ -498,6 +570,12 @@ func (r *runner) tryScheduleCheckpoint() {
 }
 
 func (r *runner) fillDefaults() {
+	if r.options.forceFlushTimeout <= 0 {
+		r.options.forceFlushTimeout = time.Second * 10
+	}
+	if r.options.forceFlushCheckInterval <= 0 {
+		r.options.forceFlushCheckInterval = time.Millisecond * 400
+	}
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
@@ -522,7 +600,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -540,7 +618,7 @@ func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error
 		panic(err)
 	}
 	blkData := blk.GetBlockData()
-	score := blkData.EstimateScore(r.options.maxFlushInterval)
+	score := blkData.EstimateScore(r.options.maxFlushInterval, force)
 	logutil.Debugf("%s [SCORE=%d]", blk.String(), score)
 	if score < 100 {
 		return
@@ -574,21 +652,40 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
-func (r *runner) onDirtyEntries(entries ...any) {
-	merged := logtail.NewEmptyDirtyTreeEntry()
-	for _, entry := range entries {
-		e := entry.(*logtail.DirtyTreeEntry)
-		merged.Merge(e)
-	}
-	if merged.IsEmpty() {
+func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
+	if entry.IsEmpty() {
 		return
 	}
-	logutil.Debugf(merged.String())
+	logutil.Debugf(entry.String())
 	visitor := new(blockVisitor)
-	visitor.blockFn = r.tryCompactBlock
+	visitor.blockFn = func(force bool) func(uint64, uint64, uint64, uint64) error {
+		return func(dbID, tableID, segmentID, id uint64) (err error) {
+			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
+		}
+	}(force)
 
-	if err := merged.GetTree().Visit(visitor); err != nil {
+	if err := entry.GetTree().Visit(visitor); err != nil {
 		panic(err)
+	}
+}
+
+func (r *runner) onDirtyEntries(entries ...any) {
+	normal := logtail.NewEmptyDirtyTreeEntry()
+	force := logtail.NewEmptyDirtyTreeEntry()
+	for _, entry := range entries {
+		e := entry.(*DirtyCtx)
+		if e.force {
+			force.Merge(e.tree)
+		} else {
+			normal.Merge(e.tree)
+		}
+	}
+	if !force.IsEmpty() {
+		r.tryCompactTree(force, true)
+	}
+
+	if !normal.IsEmpty() {
+		r.tryCompactTree(normal, false)
 	}
 }
 
@@ -599,7 +696,9 @@ func (r *runner) crontask(ctx context.Context) {
 		if entry.IsEmpty() {
 			logutil.Debugf("No dirty block found")
 		} else {
-			r.dirtyEntryQueue.Enqueue(entry)
+			e := new(DirtyCtx)
+			e.tree = entry
+			r.dirtyEntryQueue.Enqueue(e)
 		}
 		r.tryScheduleCheckpoint()
 	}, nil)
