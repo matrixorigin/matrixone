@@ -16,13 +16,14 @@ package txnimpl
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math/rand"
 	"path"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -507,7 +508,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)

@@ -104,7 +104,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.NotNil(t, err)
 
 	_, err = txn2.DropDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 
 	txn3, _ := txnMgr.StartTxn(nil)
 	_, err = txn3.DropDatabase(name)
@@ -180,13 +180,13 @@ func TestTableEntry1(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	_, err = txn2.DropDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 
 	err = txn1.Commit()
 	assert.Nil(t, err)
 
 	_, err = txn2.DropDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 
 	txn3, _ := txnMgr.StartTxn(nil)
 	db, err := txn3.GetDatabase(name)
@@ -197,7 +197,7 @@ func TestTableEntry1(t *testing.T) {
 	t.Log(tb1.String())
 
 	_, err = db.GetRelationByName(schema.Name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 
 	txn4, _ := txnMgr.StartTxn(nil)
 	db, err = txn4.GetDatabase(name)
@@ -217,7 +217,7 @@ func TestTableEntry1(t *testing.T) {
 	db, err = txn5.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 }
 
 func TestTableEntry2(t *testing.T) {
@@ -296,8 +296,8 @@ func TestDB1(t *testing.T) {
 		defer wg.Done()
 		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
-		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-			_, err = txn.CreateDatabase(name, "")
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			_, err = txn.CreateDatabase(name,"")
 			if err != nil {
 				return
 			}
@@ -334,7 +334,7 @@ func TestTable1(t *testing.T) {
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
 		_, err = db.GetRelationByName(tbName)
-		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			schema := MockSchema(1, 0)
 			schema.Name = tbName
 			if _, err = db.CreateRelation(schema); err != nil {
