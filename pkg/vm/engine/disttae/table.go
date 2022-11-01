@@ -92,7 +92,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
-	if !ok {
+	if !ok && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
@@ -105,6 +105,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			return nil, err
 		}
 		tbl.meta = meta
+		tbl.updated = true
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
