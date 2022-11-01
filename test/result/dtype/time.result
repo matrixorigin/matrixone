@@ -99,7 +99,7 @@ select adddate(time'800:00:00', interval 1 hour);
 adddate(time(800:00:00), interval(1, hour))
 801:00:00
 select adddate(time'838:00:00', interval 1 hour);
-data out of range: data type time, 
+Data truncation: data out of range: data type time, 
 select adddate(time'100:00:00', interval -100 minute);
 adddate(time(100:00:00), interval(-100, minute))
 98:20:00

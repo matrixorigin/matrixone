@@ -454,49 +454,49 @@ truncated type TINYINT value 128 for column a, 1
 create table t2(a tinyint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a smallint);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-data out of range: data type int8, value '-129'
+Data truncation: data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a smallint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a int);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-data out of range: data type int8, value '-129'
+Data truncation: data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-data out of range: data type int8, value '-129'
+Data truncation: data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-data out of range: data type int8, value '128'
+Data truncation: data out of range: data type int8, value '128'
 drop table t1;
 create table t1(a tinyint unsigned);
 insert into t1 values(0), (255);
@@ -512,46 +512,46 @@ drop table t2;
 create table t2(a tinyint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-data out of range: data type uint, value '-1'
+Data truncation: data out of range: data type uint, value '-1'
 drop table t2;
 create table t2(a smallint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '-1'
+Data truncation: data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a smallint unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a int);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '-1'
+Data truncation: data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '-1'
+Data truncation: data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-data out of range: data type uint8, value '256'
+Data truncation: data out of range: data type uint8, value '256'
