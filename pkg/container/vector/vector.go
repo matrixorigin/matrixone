@@ -1090,7 +1090,7 @@ func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mpool.MPool) e
 	}
 	ws := types.DecodeSlice[T](data)
 	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
-	v.data = types.EncodeSlice(ws)
+	v.data = types.EncodeSliceWithCap(ws)
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 
 	m.Free(olddata)
@@ -1566,6 +1566,8 @@ func GetInitConstVal(typ types.Type) any {
 		return float64(0)
 	case types.T_date:
 		return types.Date(0)
+	case types.T_time:
+		return types.Time(0)
 	case types.T_datetime:
 		return types.Datetime(0)
 	case types.T_timestamp:

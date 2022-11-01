@@ -627,7 +627,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		if !IsTableFunctionValueScan(node) {
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ:  &plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
+				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
 			})
 		}
 
@@ -939,6 +939,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
+			}
+
+			if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					ctx.hasSingleRow = c.I64Val == 1
+				}
 			}
 		}
 	}
@@ -1271,8 +1277,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_Ival); ok {
-					ctx.hasSingleRow = c.Ival == 1
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
 		}
