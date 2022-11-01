@@ -255,8 +255,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		switch ex := arg.Expr.(type) {
 		case *plan.Expr_C:
 			switch value := ex.C.Value.(type) {
-			case *plan.Const_Ival:
-				if value.Ival == 0 {
+			case *plan.Const_I64Val:
+				if value.I64Val == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
 				} else {
 					ex.C.Value = &plan.Const_Bval{Bval: true}
