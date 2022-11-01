@@ -33,10 +33,10 @@ role = "TP"
 [cn.Engine]
 type = "tae"
 logstore = "logservice"
-flush-interval = "6s"
-min-count = 20
+flush-interval = "60s"
+min-count = 10000
 scan-interval = "5s"
-incremental-interval = "10s"
+incremental-interval = "300s"
 global-interval = "100000s"
 
 [cn.frontend]
