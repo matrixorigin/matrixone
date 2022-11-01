@@ -43,3 +43,7 @@ message DNPingResponse {
     uint64 logShardID     = 5;
 }
 
+// DNStringResponse string type response
+message DNStringResponse {
+    string returnStr = 1;
+}

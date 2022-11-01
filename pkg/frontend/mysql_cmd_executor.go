@@ -689,8 +689,16 @@ func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
 	}
 	pow := math.Pow10(int(Typ.Precision))
 	t := math.Abs(float64(num))
-	t *= pow
-	t = math.Round(t)
+	upperLimit := math.Pow10(int(Typ.Width))
+	if t >= upperLimit {
+		t = upperLimit - 1
+	} else {
+		t *= pow
+		t = math.Round(t)
+	}
+	if t >= upperLimit {
+		t = upperLimit - 1
+	}
 	t /= pow
 	if num < 0 {
 		t = -1 * t
@@ -2379,12 +2387,22 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:         ses.GetUserName(),
-		Host:         pu.SV.Host,
-		ConnectionID: uint64(proto.ConnectionID()),
-		Database:     ses.GetDatabaseName(),
-		Version:      serverVersion.Load().(string),
-		TimeZone:     ses.GetTimeZone(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+	}
+	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+	} else {
+		proc.SessionInfo.AccountId = sysAccountID
+		proc.SessionInfo.RoleId = moAdminRoleID
+		proc.SessionInfo.UserId = rootID
 	}
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
