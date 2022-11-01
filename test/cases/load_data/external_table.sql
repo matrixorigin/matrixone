@@ -1,0 +1,2 @@
+create external table ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/load_data/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from ex_table_1;
