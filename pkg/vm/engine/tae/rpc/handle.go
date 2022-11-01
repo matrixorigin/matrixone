@@ -178,6 +178,7 @@ func (h *Handle) HandlePreCommit(
 			for _, cmd := range cmds {
 				req := db.CreateDatabaseReq{
 					Name:       cmd.Name,
+					CreateSql:  cmd.CreateSql,
 					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Creator,
@@ -278,7 +279,7 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.DatabaseId, txn)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}
