@@ -255,7 +255,7 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	defer e.RUnlock()
 	node := e.entries[id]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	table = node.GetPayload()
 	return
@@ -268,7 +268,7 @@ func (e *DBEntry) txnGetNodeByName(name string,
 	fullName := genTblFullName(txnCtx.GetTenantID(), name)
 	node := e.nameNodes[fullName]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return node.TxnGetNodeLocked(txnCtx)
 }
@@ -290,7 +290,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (entry 
 	//check whether visible and dropped.
 	visible, dropped := entry.GetVisibility(txnCtx.GetStartTS())
 	if !visible || dropped {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return
 }
@@ -368,7 +368,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.GetOkExpectedEOB()
 	} else {
 		nn := e.nameNodes[table.GetFullName()]
 		nn.DeleteNode(table.GetID())
