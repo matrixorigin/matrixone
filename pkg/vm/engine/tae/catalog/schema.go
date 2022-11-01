@@ -482,6 +482,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 }
 
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+	var err error
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
 	tid := tidVec.Get(offset).(uint64)
@@ -500,18 +501,17 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		types.Decode(data, &def.Type)
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
-			pDefault := &plan.Default{
-				Expr: &plan.Expr{},
-			}
-			types.Decode(data, &pDefault)
-			expr, err := pDefault.Expr.Marshal()
-			if err != nil {
+			pDefault := new(plan.Default)
+			if err = types.Decode(data, pDefault); err != nil {
 				panic(err)
 			}
-			def.Default = Default{
-				Expr:         expr,
-				OriginString: pDefault.OriginString,
-				NullAbility:  pDefault.NullAbility,
+			def.Default.NullAbility = pDefault.NullAbility
+			def.Default.OriginString = pDefault.OriginString
+			def.Default.Expr = nil
+			if pDefault.Expr != nil {
+				if def.Default.Expr, err = pDefault.Expr.Marshal(); err != nil {
+					panic(err)
+				}
 			}
 		}
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
