@@ -217,7 +217,6 @@ SET
 paytime = TO_DATE('2099-01-01 00:00:01', '%Y-%m-%d %H-%i-%s'), processtime = TO_DATE('2088-01-01 :00:00:02', '%Y-%m-%d %H:%i:%s')
 WHERE
 t1.id = t2.id;
-[unknown result because it is related to issue#5204]
 UPDATE t1,t2
 SET
 paytime = DATE('2088-01-01'), processtime = DATE('9999-01-01')

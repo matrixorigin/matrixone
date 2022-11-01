@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
 
@@ -903,6 +904,24 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
 			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
+		}
+	case "str_to_date", "to_date":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
+		}
+
+		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
+				sval := exprC.C.Value.(*plan.Const_Sval)
+				tp, _ := binary.JudgmentToDateReturnType(sval.Sval)
+				args = append(args, makePlan2DateConstNullExpr(tp))
+			} else {
+				return nil, moerr.NewInvalidArg("to_date format", "not constant")
+			}
+		} else if args[1].Typ.Id == int32(types.T_any) {
+			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
+		} else {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 	}
 

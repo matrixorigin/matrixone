@@ -96,13 +96,11 @@ WHERE
 SELECT t1.paytime, t2.processtime FROM t1,t2;
 
 -- USE TO_DATE() function.
--- @bvt:issue#5204
 UPDATE t1,t2
 SET
     paytime = TO_DATE('2099-01-01 00:00:01', '%Y-%m-%d %H-%i-%s'), processtime = TO_DATE('2088-01-01 :00:00:02', '%Y-%m-%d %H:%i:%s')
 WHERE
     t1.id = t2.id;
--- @bvt:issue
 
 -- USE DATE() function
 UPDATE t1,t2
