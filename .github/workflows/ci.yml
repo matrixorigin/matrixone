@@ -109,7 +109,7 @@ jobs:
   bvt-linux-x86:
     runs-on: x86-runner
     name: BVT Test on Linux/x64
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -171,7 +171,6 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: linux_x86_ci_reports
@@ -182,7 +181,7 @@ jobs:
   bvt-linux-arm:
     runs-on: arm64-runner
     name: BVT Test on Linux/Arm
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -256,7 +255,7 @@ jobs:
   bvt-darwin-x86:
     runs-on: macos-12
     name: BVT Test on Darwin/x86
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
