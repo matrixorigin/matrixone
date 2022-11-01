@@ -563,15 +563,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if expr == nil {
 		return true
 	}
-	// return true anyway
-	// if expr != nil {
-	// 	return true
-	// }
 
 	// key = expr's ColPos,  value = tableDef's ColPos
 	columnMap, err := getColumnsByExpr(expr, tableDef)
 	if err != nil {
-		// xxx need to find out why err. that means we get an illegal expr
 		return true
 	}
 
