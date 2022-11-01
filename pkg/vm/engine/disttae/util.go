@@ -180,7 +180,6 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 	dataLength := len(columns)
 	datas := make([][2]any, dataLength)
 	dataTypes := make([]uint8, dataLength)
-	zonemapLength := len(meta.Zonemap)
 
 	for i := 0; i < dataLength; i++ {
 		idx := columns[i]
@@ -188,12 +187,6 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		typ := types.T(dataTypes[i]).ToType()
 
 		zm := index.NewZoneMap(typ)
-		if idx > zonemapLength {
-			errMsg := fmt.Sprintf("zonemap index %d > zonemap's length %d", idx, zonemapLength)
-			logutil.Error(errMsg)
-			return nil, nil, moerr.NewInternalError(errMsg)
-		}
-
 		err := zm.Unmarshal(meta.Zonemap[idx][:])
 		if err != nil {
 			return nil, nil, err

@@ -331,9 +331,6 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 		}), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
-		if vec == nil {
-			panic("ddddddd")
-		}
 		if vec.IsScalarNull() {
 			vec.Typ = types.T(expr.Typ.GetId()).ToType()
 		}
