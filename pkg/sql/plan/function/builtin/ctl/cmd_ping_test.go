@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debug
+package ctl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	"github.com/fagongzi/util/protoc"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
@@ -40,7 +41,7 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 			return nil, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.DebugResult{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
+	assert.Equal(t, pb.CtlResult{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
 		result)
 }
 
@@ -72,7 +73,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.DebugResult{
+	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.DNPingResponse{ShardID: shardID}},
 	}, result)
@@ -111,7 +112,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.DebugResult{
+	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}, pb.DNPingResponse{ShardID: 2}},
 	}, result)
@@ -147,7 +148,7 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.DebugResult{
+	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}},
 	}, result)

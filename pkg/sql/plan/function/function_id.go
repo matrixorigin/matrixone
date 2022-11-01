@@ -261,9 +261,9 @@ const (
 	MO_ENABLE_MEMORY_USAGE_DETAIL
 	MO_DISABLE_MEMORY_USAGE_DETAIL
 
-	// MO_DEBUG is used to check some internal status, and issue some debug commands to the service.
-	// see builtin.debug.debug.go to get detail.
-	MO_DEBUG
+	// MO_CTL is used to check some internal status, and issue some ctl commands to the service.
+	// see builtin.ctl.ctl.go to get detail.
+	MO_CTL
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -445,7 +445,7 @@ var functionIdRegister = map[string]int32{
 	"mo_memory_usage":                MO_MEMORY_USAGE,
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
-	"mo_debug":                       MO_DEBUG,
+	"mo_ctl":                         MO_CTL,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

@@ -15,8 +15,8 @@
  */
 
 syntax = "proto3";
-package debug; 
-option go_package = "github.com/matrixorigin/matrixone/pkg/pb/debug";
+package ctl; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/ctl";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
