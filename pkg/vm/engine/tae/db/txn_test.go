@@ -326,7 +326,7 @@ func (g *APP1Goods) String() string {
 func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	db, err := txn.GetDatabase(dbName)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-		if db, err = txn.CreateDatabase(dbName); err != nil {
+		if db, err = txn.CreateDatabase(dbName, ""); err != nil {
 			return
 		}
 	}
@@ -351,7 +351,7 @@ func GetWarehouseRelation(dbName string, txn txnif.AsyncTxn) (rel handle.Relatio
 func GetOrCreateDatabase(name string, txn txnif.AsyncTxn) handle.Database {
 	db, err := txn.GetDatabase(name)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-		if db, err = txn.CreateDatabase(name); err != nil {
+		if db, err = txn.CreateDatabase(name, ""); err != nil {
 			panic(err)
 		}
 	}
@@ -588,7 +588,7 @@ func TestTxn7(t *testing.T) {
 	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.NoError(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -672,7 +672,7 @@ func TestTxn9(t *testing.T) {
 	bats := bat.Split(5)
 
 	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
+	db, _ := txn.CreateDatabase("db", "")
 	_, _ = db.CreateRelation(schema)
 	assert.NoError(t, txn.Commit())
 

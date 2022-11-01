@@ -893,19 +893,34 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txn txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
+func (catalog *Catalog) txnGetNodeByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	fullName := genDBFullName(txn.GetTenantID(), name)
+	fullName := genDBFullName(tenantID, name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
 		return nil, moerr.NewBadDB(name)
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(ts)
+}
+
+func (catalog *Catalog) GetDBEntryByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (db *DBEntry, err error) {
+	n, err := catalog.txnGetNodeByName(tenantID, name, ts)
+	if err != nil {
+		return
+	}
+	db = n.GetPayload()
+	return
 }
 
 func (catalog *Catalog) TxnGetDBEntryByName(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
-	n, err := catalog.txnGetNodeByNameLocked(name, txn)
+	n, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
 	if err != nil {
 		return nil, err
 	}
@@ -924,12 +939,14 @@ func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEnt
 	return dbEntry, nil
 }
 
-func (catalog *Catalog) DropDBEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
+func (catalog *Catalog) DropDBEntry(
+	name string,
+	txn txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == pkgcatalog.MO_CATALOG {
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByNameLocked(name, txn)
+	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
 	if err != nil {
 		return
 	}
@@ -959,24 +976,24 @@ func (catalog *Catalog) DropDBEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry
 	return
 }
 
-func (catalog *Catalog) CreateDBEntry(name string, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntry(name, createSql string, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
-	entry := NewDBEntry(catalog, name, txn)
+	entry := NewDBEntry(catalog, name, createSql, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err
 }
 
-func (catalog *Catalog) CreateDBEntryWithID(name string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntryWithID(name, createSql string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()
 	if _, exist := catalog.entries[id]; exist {
 		return nil, moerr.NewDuplicate()
 	}
-	entry := NewDBEntryWithID(catalog, name, id, txn)
+	entry := NewDBEntryWithID(catalog, name, createSql, id, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)
 
 	return entry, err

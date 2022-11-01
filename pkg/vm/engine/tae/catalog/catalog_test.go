@@ -70,7 +70,7 @@ func TestCreateDB1(t *testing.T) {
 	txn1, _ := txnMgr.StartTxn(nil)
 
 	name := fmt.Sprintf("%s-%d", t.Name(), 1)
-	db1, err := txn1.CreateDatabase(name)
+	db1, err := txn1.CreateDatabase(name, "")
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
@@ -83,12 +83,12 @@ func TestCreateDB1(t *testing.T) {
 	}, true)
 	assert.Equal(t, 2, cnt)
 
-	_, err = txn1.CreateDatabase(name)
+	_, err = txn1.CreateDatabase(name, "")
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 
 	txn2, _ := txnMgr.StartTxn(nil)
 
-	_, err = txn2.CreateDatabase(name)
+	_, err = txn2.CreateDatabase(name, "")
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	_, err = txn1.GetDatabase(name)
@@ -100,7 +100,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.Nil(t, err)
 	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())
 
-	_, err = txn2.CreateDatabase(name)
+	_, err = txn2.CreateDatabase(name, "")
 	assert.NotNil(t, err)
 
 	_, err = txn2.DropDatabase(name)
@@ -111,7 +111,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.Nil(t, err)
 	// assert.True(t, db1.(*mcokDBHandle).entry.IsDroppedUncommitted())
 
-	_, err = txn3.CreateDatabase(name)
+	_, err = txn3.CreateDatabase(name, "")
 	assert.Nil(t, err)
 
 	cnt = 0
@@ -156,7 +156,7 @@ func TestTableEntry1(t *testing.T) {
 
 	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
-	db1, err := txn1.CreateDatabase(name)
+	db1, err := txn1.CreateDatabase(name, "")
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
@@ -176,7 +176,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = txn2.GetDatabase(schema.Name)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 
-	_, err = txn2.CreateDatabase(name)
+	_, err = txn2.CreateDatabase(name, "")
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	_, err = txn2.DropDatabase(name)
@@ -230,7 +230,7 @@ func TestTableEntry2(t *testing.T) {
 
 	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
-	db, err := txn1.CreateDatabase(name)
+	db, err := txn1.CreateDatabase(name, "")
 	assert.Nil(t, err)
 	schema := MockSchema(2, 0)
 	schema.Name = "tb1"
@@ -297,7 +297,7 @@ func TestDB1(t *testing.T) {
 		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
 		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-			_, err = txn.CreateDatabase(name)
+			_, err = txn.CreateDatabase(name, "")
 			if err != nil {
 				return
 			}
@@ -351,7 +351,7 @@ func TestTable1(t *testing.T) {
 	}
 	{
 		txn, _ := txnMgr.StartTxn(nil)
-		_, err := txn.CreateDatabase(name)
+		_, err := txn.CreateDatabase(name, "")
 		assert.Nil(t, err)
 		err = txn.Commit()
 		assert.Nil(t, err)
@@ -379,7 +379,7 @@ func TestSegment1(t *testing.T) {
 	name := "db"
 	tbName := "tb"
 	txn1, _ := txnMgr.StartTxn(nil)
-	db, err := catalog.CreateDBEntry(name, txn1)
+	db, err := catalog.CreateDBEntry(name, "", txn1)
 	assert.Nil(t, err)
 	schema := MockSchema(1, 0)
 	schema.Name = tbName
