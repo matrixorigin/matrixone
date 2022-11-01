@@ -124,13 +124,13 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	calibrationOp := newCalibrationOp(db)
 	gcCollector := newGarbageCollector(
 		db,
-		time.Duration(opts.CheckpointCfg.FlushInterval*2)*time.Millisecond)
+		opts.CheckpointCfg.FlushInterval)
 	scanner.RegisterOp(calibrationOp)
 	scanner.RegisterOp(gcCollector)
 	db.BGCheckpointRunner.Start()
 
 	db.BGScanner = w.NewHeartBeater(
-		time.Duration(opts.CheckpointCfg.ScanInterval)*time.Millisecond,
+		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
 
