@@ -3962,3 +3962,43 @@ func TestCompactDeltaBlk(t *testing.T) {
 	checkAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 }
+
+func TestFlushTable(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	tae.BGCheckpointRunner.DebugUpdateOptions(
+		checkpoint.WithForceFlushCheckInterval(time.Millisecond * 5))
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	_, rel := tae.getRelation()
+	db, err := rel.GetDB()
+	assert.Nil(t, err)
+	table, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	err = tae.FlushTable(
+		0,
+		db.GetID(),
+		table.ID(),
+		types.BuildTS(time.Now().UTC().UnixNano(), 0))
+	assert.NoError(t, err)
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
+	txn, rel := tae.getRelation()
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		assert.True(t, blk.HasPersistedData())
+		it.Next()
+	}
+	assert.NoError(t, txn.Commit())
+}

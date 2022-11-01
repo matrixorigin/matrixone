@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,6 +122,66 @@ func TestGroup(t *testing.T) {
 	}
 }
 
+func TestLowCardinalityGroup(t *testing.T) {
+	{
+		// SELECT COUNT(*) FROM t GROUP BY t.values
+		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_varchar}},
+			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 5, E: newExpression(0)}})
+		tc.arg.NeedEval = true
+
+		// a->4, b->3, c->3, d->2
+		values := []string{"a", "b", "b", "a", "c", "b", "c", "a", "a", "d", "c", "d"}
+		v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+		constructIndex(t, v, tc.proc.Mp())
+
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = nil
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+
+		rbat := tc.proc.Reg.InputBatch
+		require.Equal(t, []string{"a", "b", "c", "d"}, vector.GetStrVectorValues(rbat.Vecs[0]))
+		require.Equal(t, []int64{4, 3, 3, 2}, vector.MustTCols[int64](rbat.Vecs[1]))
+
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
+	}
+
+	{
+		// SELECT SUM(t.values) FROM t GROUP BY t.values
+		tc := newTestCase([]bool{false}, []types.Type{{Oid: types.T_int64}},
+			[]*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}})
+		tc.arg.NeedEval = true
+
+		// 16->32, 1->2, 4->8, 2->6, 8->16, 32->32
+		values := []int64{16, 16, 1, 4, 4, 2, 8, 8, 1, 32, 2, 2}
+		v := testutil.NewVector(len(values), types.T_int64.ToType(), tc.proc.Mp(), false, values)
+		constructIndex(t, v, tc.proc.Mp())
+
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+		tc.proc.Reg.InputBatch = nil
+		_, err = Call(0, tc.proc, tc.arg)
+		require.NoError(t, err)
+
+		rbat := tc.proc.Reg.InputBatch
+		require.Equal(t, []int64{16, 1, 4, 2, 8, 32}, vector.MustTCols[int64](rbat.Vecs[0]))
+		require.Equal(t, []int64{32, 2, 8, 6, 16, 32}, vector.MustTCols[int64](rbat.Vecs[1]))
+
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
+	}
+}
+
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
@@ -175,4 +237,14 @@ func newExpression(pos int32) *plan.Expr {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
+	idx, err := index.New(v.Typ, m)
+	require.NoError(t, err)
+
+	err = idx.InsertBatch(v)
+	require.NoError(t, err)
+
+	v.SetIndex(idx)
 }
