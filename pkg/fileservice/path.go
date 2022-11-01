@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"encoding/csv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,22 +24,24 @@ import (
 const ServiceNameSeparator = ":"
 
 type Path struct {
-	Full    string
-	Service string
-	File    string
+	Service          string
+	ServiceArguments []string
+	File             string
 }
 
 func ParsePath(s string) (path Path, err error) {
 	// split
-	parts := strings.SplitN(s, ServiceNameSeparator, 2)
-	switch len(parts) {
-	case 1:
-		// no service
-		path.File = parts[0]
-	case 2:
-		// with service
-		path.Service = parts[0]
-		path.File = parts[1]
+	i := strings.LastIndex(s, ServiceNameSeparator)
+	if i == -1 {
+		// no service part
+		path.File = s
+	} else {
+		// with service part
+		path.Service, path.ServiceArguments, err = parseService(s[:i])
+		if err != nil {
+			return
+		}
+		path.File = s[i+1:]
 	}
 
 	// validate
@@ -60,7 +63,21 @@ func ParsePath(s string) (path Path, err error) {
 
 	path.File = strings.TrimLeft(path.File, "/") // trim leading /
 
-	path.Full = joinPath(path.Service, path.File)
+	return
+}
+
+func parseService(str string) (service string, arguments []string, err error) {
+	r := csv.NewReader(strings.NewReader(str))
+	records, err := r.ReadAll()
+	if err != nil {
+		return
+	}
+	if len(records) != 1 {
+		err = moerr.NewInvalidInput("bad service: %v", str)
+		return
+	}
+	service = records[0][0]
+	arguments = records[0][1:]
 	return
 }
 

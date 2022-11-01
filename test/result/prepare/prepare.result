@@ -155,3 +155,19 @@ a    b
 2    22
 3    33
 deallocate prepare stmt1;
+create table bmsql_district ( d_w_id integer not null,
+d_id integer not null,
+d_ytd decimal(12,2),
+d_tax decimal(4,4),
+d_next_o_id integer,
+d_name varchar(10),
+d_street_1 varchar(20),
+d_street_2 varchar(20),
+d_city varchar(20),
+d_state char(2),
+d_zip char(9),
+primary key (d_w_id, d_id) ) PARTITION BY KEY(d_w_id);
+prepare __mo_stmt_id_1 from UPDATE bmsql_district  SET d_next_o_id = d_next_o_id + 1     WHERE d_w_id = ? AND d_id = ?;
+set @__mo_stmt_var_0=1, @__mo_stmt_var_1=7;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1;
+deallocate prepare __mo_stmt_id_1;

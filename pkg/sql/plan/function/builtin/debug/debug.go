@@ -46,7 +46,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		return nil, moerr.NewNotSupported("command %s not supported", command)
 	}
 
-	result, err := f(proc.Ctx,
+	result, err := f(proc,
 		service,
 		parameter,
 		// We use a transaction client to send debug requests with the following in mind.
@@ -86,8 +86,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 				responses = append(responses, *resp.CNOpResponse)
 			}
 			return responses, nil
-		},
-		proc.GetClusterDetails)
+		})
 	if err != nil {
 		return nil, err
 	}
