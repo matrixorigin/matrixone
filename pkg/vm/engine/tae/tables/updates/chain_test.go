@@ -49,7 +49,7 @@ func TestDeleteChain1(t *testing.T) {
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
 
-	db, _ := c.CreateDBEntry("db", nil)
+	db, _ := c.CreateDBEntry("db", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)

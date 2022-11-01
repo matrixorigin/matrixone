@@ -287,7 +287,13 @@ func (t Type) String() string {
 }
 
 func (t Type) Eq(b Type) bool {
-	return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+	switch t.Oid {
+	// XXX need to find out why these types have different size/width
+	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
+		return t.Oid == b.Oid
+	default:
+		return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+	}
 }
 
 func (t T) ToType() Type {
