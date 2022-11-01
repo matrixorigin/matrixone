@@ -175,13 +175,9 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 				return err
 			}
 		}
-		ws := m.GetSels()
-		if cap(ws) < len(bat.Zs) {
-			ws = make([]int64, len(bat.Zs))
-		}
-		ws = ws[:len(bat.Zs)]
-		bat.Zs = shuffle.Int64Shuffle(bat.Zs, ws, sels)
-		m.PutSels(ws)
+
+		ws := make([]int64, len(sels))
+		bat.Zs = shuffle.FixedLengthShuffle(bat.Zs, ws, sels)
 	}
 	return nil
 }
