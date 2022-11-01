@@ -1012,7 +1012,11 @@ func ShrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
 		vs[i] = vs[sel]
 	}
 	v.Col = vs[:len(sels)]
-	v.data = v.encodeColToByteSlice()
+	if len(sels) == 0 {
+		v.data = v.data[:0]
+	} else {
+		v.data = v.encodeColToByteSlice()
+	}
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 }
 func Shrink(v *Vector, sels []int64) {
@@ -1075,7 +1079,7 @@ func Shrink(v *Vector, sels []int64) {
 		v.Col = vs[:len(sels)]
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	default:
-		panic("vector shrink unknonw type")
+		panic("vector shrink unknown type")
 	}
 }
 
@@ -1285,7 +1289,7 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		return nil
 	}
 
-	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
+	if nulls.Contains(w.Nsp, uint64(sel)) {
 		pos := uint64(v.Length() - 1)
 		nulls.Add(v.Nsp, pos)
 	} else if v.GetType().IsVarlen() {
