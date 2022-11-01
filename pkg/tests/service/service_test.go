@@ -28,6 +28,8 @@ import (
 
 const (
 	defaultTimeout = 10 * time.Second
+
+	supportMultiDN = false
 )
 
 func TestClusterStart(t *testing.T) {
@@ -100,6 +102,11 @@ func TestClusterAwareness(t *testing.T) {
 		return
 	}
 
+	if !supportMultiDN {
+		t.Skip("skipping, multi db not support")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -161,6 +168,11 @@ func TestClusterAwareness(t *testing.T) {
 func TestClusterOperation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
+		return
+	}
+
+	if !supportMultiDN {
+		t.Skip("skipping, multi db not support")
 		return
 	}
 
@@ -323,6 +335,11 @@ func TestClusterState(t *testing.T) {
 		return
 	}
 
+	if !supportMultiDN {
+		t.Skip("skipping, multi db not support")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -452,6 +469,11 @@ func TestClusterWaitState(t *testing.T) {
 		return
 	}
 
+	if !supportMultiDN {
+		t.Skip("skipping, multi db not support")
+		return
+	}
+
 	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
@@ -530,9 +552,8 @@ func TestNetworkPartition(t *testing.T) {
 		return
 	}
 
-	// TODO: it's not worked with task service
-	t.Skip("it's not worked with task service")
-	if t.Skipped() {
+	if !supportMultiDN {
+		t.Skip("skipping, multi db not support")
 		return
 	}
 
