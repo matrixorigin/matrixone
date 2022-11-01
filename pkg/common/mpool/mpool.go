@@ -566,9 +566,6 @@ func (mp *MPool) Free(bs []byte) {
 		// free nil is OK.
 		return
 	}
-	if len(bs) == 0 {
-		bs = bs[:cap(bs)]
-	}
 
 	bs = bs[:1]
 	pb := (unsafe.Pointer)(&bs[0])
