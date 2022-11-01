@@ -80,7 +80,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	resultType := types.T_varchar.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewInvalidArg("to_date format", "not constant")
+		return nil, moerr.NewInvalidArg("date format format", "not constant")
 	}
 
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
