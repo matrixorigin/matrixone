@@ -74,7 +74,8 @@ DROP TABLE t;
 SELECT space(1073741824);
 invalid input: the space count is greater than max allowed value 8000
 SELECT TO_DATE(SPACE(2),'1');
-invalid argument date format, bad value 1
+to_date(space(2), 1)
+null
 drop table if exists t1;
 create table t1(a INT);
 insert into t1 values(1),(1),(2),(3);

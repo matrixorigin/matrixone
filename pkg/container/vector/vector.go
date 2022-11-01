@@ -1566,6 +1566,8 @@ func GetInitConstVal(typ types.Type) any {
 		return float64(0)
 	case types.T_date:
 		return types.Date(0)
+	case types.T_time:
+		return types.Time(0)
 	case types.T_datetime:
 		return types.Datetime(0)
 	case types.T_timestamp:
