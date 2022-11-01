@@ -4071,15 +4071,19 @@ account_auth_option:
     $$ = tree.AccountAuthOption{
         Equal:$2,
         AdminName:$3,
-                IdentifiedType:$4,
+        IdentifiedType:$4,
     }
     }
 
 account_admin_name:
     STRING
     {
-    $$ = $1
+    	$$ = $1
     }
+|	ident
+	{
+		$$ = $1
+	}
 
 account_identified:
     IDENTIFIED BY STRING

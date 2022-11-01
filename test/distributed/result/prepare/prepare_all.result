@@ -27,7 +27,7 @@ PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
 pk    ui    si
 EXECUTE s2 USING @ui_max;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 EXECUTE s2 USING @si_min;
 pk    ui    si
 0    0    -9223372036854775808
@@ -629,7 +629,7 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
