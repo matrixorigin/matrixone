@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"go.uber.org/zap"
@@ -139,10 +140,16 @@ func (l *store) hakeeperCheck() {
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
 		if state.TaskState == pb.TaskInitNotStart {
-			if err := l.setTaskTableUser(pb.TaskTableUser{
-				Username: uuid.NewString(),
-				Password: uuid.NewString(),
-			}); err != nil {
+			user, ok := getTaskTableUserFromEnv()
+			if !ok {
+				user = pb.TaskTableUser{
+					Username: uuid.NewString(),
+					Password: uuid.NewString(),
+				}
+			}
+
+			// TODO: rename TaskTableUser to moadmin
+			if err := l.setTaskTableUser(user); err != nil {
 				l.logger.Error("failed to set task table user", zap.Error(err))
 				return
 			}
@@ -302,4 +309,24 @@ func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
 		l.logger.Error("task user info already set")
 	}
 	return nil
+}
+
+const (
+	moAdminUser     = "mo_admin_user"
+	moAdminPassword = "mo_admin_password"
+)
+
+func getTaskTableUserFromEnv() (pb.TaskTableUser, bool) {
+	username, ok := os.LookupEnv(moAdminUser)
+	if !ok {
+		return pb.TaskTableUser{}, false
+	}
+	password, ok := os.LookupEnv(moAdminPassword)
+	if !ok {
+		return pb.TaskTableUser{}, false
+	}
+	if username == "" || password == "" {
+		return pb.TaskTableUser{}, false
+	}
+	return pb.TaskTableUser{Username: username, Password: password}, true
 }

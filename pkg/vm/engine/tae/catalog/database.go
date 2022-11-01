@@ -68,11 +68,12 @@ func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) 
 
 type DBEntry struct {
 	*DBBaseEntry
-	catalog  *Catalog
-	acInfo   accessInfo
-	name     string
-	fullName string
-	isSys    bool
+	catalog   *Catalog
+	acInfo    accessInfo
+	name      string
+	createSql string
+	fullName  string
+	isSys     bool
 
 	entries   map[uint64]*common.GenericDLNode[*TableEntry]
 	nameNodes map[string]*nodeList[*TableEntry]
@@ -85,44 +86,46 @@ func compareTableFn(a, b *TableEntry) int {
 	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
-func NewDBEntryWithID(catalog *Catalog, name string, id uint64, txnCtx txnif.AsyncTxn) *DBEntry {
+func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64, txn txnif.AsyncTxn) *DBEntry {
 	//id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
 	}
-	if txnCtx != nil {
-		// Only in unit test, txnCtx can be nil
-		e.acInfo.TenantID = txnCtx.GetTenantID()
-		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
+	if txn != nil {
+		// Only in unit test, txn can be nil
+		e.acInfo.TenantID = txn.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txnCtx)
+	e.CreateWithTxn(txn)
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
 
-func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
+func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
 	}
-	if txnCtx != nil {
-		// Only in unit test, txnCtx can be nil
-		e.acInfo.TenantID = txnCtx.GetTenantID()
-		e.acInfo.UserID, e.acInfo.RoleID = txnCtx.GetUserAndRoleID()
+	if txn != nil {
+		// Only in unit test, txn can be nil
+		e.acInfo.TenantID = txn.GetTenantID()
+		e.acInfo.UserID, e.acInfo.RoleID = txn.GetUserAndRoleID()
 	}
-	e.CreateWithTxn(txnCtx)
+	e.CreateWithTxn(txn)
 	e.acInfo.CreateAt = types.CurrentTimestamp()
 	return e
 }
@@ -148,6 +151,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		DBBaseEntry: NewDBBaseEntry(pkgcatalog.MO_CATALOG_ID),
 		catalog:     catalog,
 		name:        pkgcatalog.MO_CATALOG,
+		createSql:   "create database " + pkgcatalog.MO_CATALOG,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
@@ -179,6 +183,7 @@ func (e *DBEntry) GetUserID() uint32            { return e.acInfo.UserID }
 func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
 func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
 func (e *DBEntry) GetName() string              { return e.name }
+func (e *DBEntry) GetCreateSql() string         { return e.createSql }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
 		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
@@ -261,20 +266,22 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByName(name string,
-	txnCtx txnif.AsyncTxn) (*common.GenericDLNode[*TableEntry], error) {
+func (e *DBEntry) txnGetNodeByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (*common.GenericDLNode[*TableEntry], error) {
 	e.RLock()
 	defer e.RUnlock()
-	fullName := genTblFullName(txnCtx.GetTenantID(), name)
+	fullName := genTblFullName(tenantID, name)
 	node := e.nameNodes[fullName]
 	if node == nil {
 		return nil, moerr.NewNotFound()
 	}
-	return node.TxnGetNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(ts)
 }
 
-func (e *DBEntry) TxnGetTableEntryByName(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
-	n, err := e.txnGetNodeByName(name, txnCtx)
+func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
+	n, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
 	if err != nil {
 		return
 	}
@@ -282,13 +289,25 @@ func (e *DBEntry) TxnGetTableEntryByName(name string, txnCtx txnif.AsyncTxn) (en
 	return
 }
 
-func (e *DBEntry) TxnGetTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
+func (e *DBEntry) GetTableEntryByName(
+	tenantID uint32,
+	name string,
+	ts types.TS) (entry *TableEntry, err error) {
+	n, err := e.txnGetNodeByName(tenantID, name, ts)
+	if err != nil {
+		return
+	}
+	entry = n.GetPayload()
+	return
+}
+
+func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
 	entry, err = e.GetTableEntryByID(id)
 	if err != nil {
 		return
 	}
 	//check whether visible and dropped.
-	visible, dropped := entry.GetVisibility(txnCtx.GetStartTS())
+	visible, dropped := entry.GetVisibility(txn.GetStartTS())
 	if !visible || dropped {
 		return nil, moerr.NewNotFound()
 	}
@@ -304,22 +323,22 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (entry 
 //
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
-func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
-	dn, err := e.txnGetNodeByName(name, txnCtx)
+func (e *DBEntry) DropTableEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
+	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn.GetStartTS())
 	if err != nil {
 		return
 	}
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	newEntry, err = entry.DropEntryLocked(txnCtx)
+	newEntry, err = entry.DropEntryLocked(txn)
 	if err == nil {
 		deleted = entry
 	}
 	return
 }
 
-func (e *DBEntry) DropTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
+func (e *DBEntry) DropTableEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
 	entry, err := e.GetTableEntryByID(id)
 	if err != nil {
 		return
@@ -327,30 +346,30 @@ func (e *DBEntry) DropTableEntryByID(id uint64, txnCtx txnif.AsyncTxn) (newEntry
 
 	entry.Lock()
 	defer entry.Unlock()
-	newEntry, err = entry.DropEntryLocked(txnCtx)
+	newEntry, err = entry.DropEntryLocked(txn)
 	if err == nil {
 		deleted = entry
 	}
 	return
 }
 
-func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
+func (e *DBEntry) CreateTableEntry(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
-	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.AddEntryLocked(created, txnCtx)
+	created = NewTableEntry(e, schema, txn, dataFactory)
+	err = e.AddEntryLocked(created, txn)
 	e.Unlock()
 
 	return created, err
 }
 
-func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
+func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
 	e.Lock()
 	//Deduplicate for tableId
 	if _, exist := e.entries[tableId]; exist {
 		return nil, moerr.NewDuplicate()
 	}
-	created = NewTableEntryWithTableId(e, schema, txnCtx, dataFactory, tableId)
-	err = e.AddEntryLocked(created, txnCtx)
+	created = NewTableEntryWithTableId(e, schema, txn, dataFactory, tableId)
+	err = e.AddEntryLocked(created, txn)
 	e.Unlock()
 
 	return created, err
@@ -491,6 +510,14 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	var sn int
 	sn, err = w.Write([]byte(e.name))
+	if err != nil {
+		return
+	}
+	n += int64(sn) + 2
+	if err = binary.Write(w, binary.BigEndian, uint16(len(e.createSql))); err != nil {
+		return
+	}
+	sn, err = w.Write([]byte(e.createSql))
 	n += int64(sn) + 2
 	return
 }
@@ -515,6 +542,17 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(size)
 	e.name = string(buf)
+
+	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
+		return
+	}
+	n += 2
+	buf = make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n += int64(size)
+	e.createSql = string(buf)
 	return
 }
 
@@ -530,6 +568,7 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 	return &DBEntry{
 		DBBaseEntry: ret.(*DBBaseEntry),
 		acInfo:      e.acInfo,
+		createSql:   e.createSql,
 		name:        e.name,
 		catalog:     e.catalog,
 	}
