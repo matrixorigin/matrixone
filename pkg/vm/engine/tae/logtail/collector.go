@@ -52,6 +52,14 @@ func NewEmptyDirtyTreeEntry() *DirtyTreeEntry {
 	}
 }
 
+func NewDirtyTreeEntry(start, end types.TS, tree *common.Tree) *DirtyTreeEntry {
+	entry := NewEmptyDirtyTreeEntry()
+	entry.start = start
+	entry.end = end
+	entry.tree = tree
+	return entry
+}
+
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
 	if entry.start.Greater(o.start) {
 		entry.start = o.start

@@ -15,7 +15,7 @@
 package debug
 
 import (
-	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
@@ -23,7 +23,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func handlePing() handleFunc {
@@ -39,8 +38,8 @@ func handlePing() handleFunc {
 			}
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string) []byte {
-			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter})
+		func(dnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
+			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter}), nil
 		},
 		func(data []byte) (interface{}, error) {
 			pong := pb.DNPingResponse{}
@@ -56,13 +55,12 @@ func handlePing() handleFunc {
 // repsonseUnmarshaler: used to unmarshal response
 func getDNHandlerFunc(method pb.CmdMethod,
 	whichDN func(parameter string) ([]uint64, error),
-	payload func(dnShardID uint64, parameter string) []byte,
+	payload func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
 	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
-	return func(ctx context.Context,
+	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender,
-		clusterDetailsGetter engine.GetClusterDetailsFunc) (pb.DebugResult, error) {
+		sender requestSender) (pb.DebugResult, error) {
 		if service != dn {
 			return pb.DebugResult{}, moerr.NewNotSupported("service %s not supported", service)
 		}
@@ -80,7 +78,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 			return false
 		}
 
-		detail, err := clusterDetailsGetter()
+		detail, err := proc.GetClusterDetails()
 		if err != nil {
 			return pb.DebugResult{}, err
 		}
@@ -88,6 +86,10 @@ func getDNHandlerFunc(method pb.CmdMethod,
 		for _, store := range detail.GetDNStores() {
 			for _, shard := range store.Shards {
 				if len(targetDNs) == 0 || containsDN(shard.ShardID) {
+					payLoad, err := payload(shard.ShardID, parameter, proc)
+					if err != nil {
+						return pb.DebugResult{}, err
+					}
 					requests = append(requests, txn.CNOpRequest{
 						OpCode: uint32(method),
 						Target: metadata.DNShard{
@@ -97,14 +99,14 @@ func getDNHandlerFunc(method pb.CmdMethod,
 							ReplicaID: shard.ReplicaID,
 							Address:   store.ServiceAddress,
 						},
-						Payload: payload(shard.ShardID, parameter),
+						Payload: payLoad,
 					})
 				}
 			}
 		}
 		results := make([]interface{}, 0, len(requests))
 		if len(requests) > 0 {
-			responses, err := sender(ctx, requests)
+			responses, err := sender(proc.Ctx, requests)
 			if err != nil {
 				return pb.DebugResult{}, err
 			}
