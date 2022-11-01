@@ -325,6 +325,18 @@ func (r *runner) MockCheckpoint(end types.TS) {
 		panic(err)
 	}
 	r.storage.Lock()
+	r.storage.entries.Set(entry)
+	r.storage.Unlock()
+	entry.SetState(ST_Finished)
+	r.storage.prevGlobal = entry
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 }
 func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {

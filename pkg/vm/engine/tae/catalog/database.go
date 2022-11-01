@@ -356,7 +356,7 @@ func (e *DBEntry) DropTableEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bo
 func (e *DBEntry) CreateTableEntry(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txn, dataFactory)
-	err = e.AddEntryLocked(created, txn,false)
+	err = e.AddEntryLocked(created, txn, false)
 	e.Unlock()
 
 	return created, err
@@ -369,7 +369,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 		return nil, moerr.NewDuplicate()
 	}
 	created = NewTableEntryWithTableId(e, schema, txn, dataFactory, tableId)
-	err = e.AddEntryLocked(created, txn,false)
+	err = e.AddEntryLocked(created, txn, false)
 	e.Unlock()
 
 	return created, err
