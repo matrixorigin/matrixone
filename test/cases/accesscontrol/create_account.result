@@ -20,6 +20,8 @@ drop account if exists `test%`;
 drop account if exists `非常`;
 drop account if exists user_strip_01;
 drop account if exists account_1;
+drop account if exists aaa;
+drop account if exists account;
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='test@123456';
 account_name
@@ -140,10 +142,9 @@ internal error: the name "test:account" is invalid
 create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " default ADMIN_NAME 'root' IDENTIFIED BY '123456';";
 create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " account ADMIN_NAME 'root' IDENTIFIED BY '123456';";
 select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
 count(*)
-0
+1
 create account account_1 admin_name='admin' identified by '123456';
 show databases;
 Database
@@ -241,3 +242,5 @@ drop account if exists `test%`;
 drop account if exists `非常`;
 drop account if exists user_strip_01;
 drop account if exists account_1;
+drop account if exists aaa;
+drop account if exists account;
