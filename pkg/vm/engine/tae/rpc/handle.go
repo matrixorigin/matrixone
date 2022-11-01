@@ -146,6 +146,19 @@ func (h *Handle) HandleGetLogTail(
 	return nil
 }
 
+func (h *Handle) HandleFlushTable(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+	err = h.eng.FlushTable(ctx,
+		req.AccessInfo.AccountID,
+		req.DatabaseID,
+		req.TableID,
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	return err
+}
+
 // TODO:: need to handle resp.
 func (h *Handle) HandlePreCommit(
 	ctx context.Context,
