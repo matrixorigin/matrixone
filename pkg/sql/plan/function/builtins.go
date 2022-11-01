@@ -1539,9 +1539,16 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Args:      []types.T{types.T_varchar},
+				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.UnixTimestampVarchar,
+				Fn:        multi.UnixTimestampVarcharToInt64,
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.UnixTimestampVarcharToFloat64,
 			},
 		},
 	},
