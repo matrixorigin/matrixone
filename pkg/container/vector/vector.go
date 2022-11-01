@@ -997,7 +997,11 @@ func ShrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
 		vs[i] = vs[sel]
 	}
 	v.Col = vs[:len(sels)]
-	v.data = v.data[:len(sels)*v.GetType().TypeSize()]
+	if len(sels) == 0 {
+		v.data = v.data[:len(sels)*v.GetType().TypeSize()]
+	} else {
+		v.data = v.encodeColToByteSlice()
+	}
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 }
 func Shrink(v *Vector, sels []int64) {
