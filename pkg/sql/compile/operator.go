@@ -433,14 +433,10 @@ func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series
 	}
 }
 
-func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
+func constructTop(n *plan.Node, topN int64) *top.Argument {
 	return &top.Argument{
 		Fs:    n.OrderBy,
-		Limit: vec.Col.([]int64)[0],
+		Limit: topN,
 	}
 }
 
@@ -651,14 +647,10 @@ func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
 	}
 }
 
-func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
+func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
 	return &mergetop.Argument{
 		Fs:    n.OrderBy,
-		Limit: vec.Col.([]int64)[0],
+		Limit: topN,
 	}
 }
 

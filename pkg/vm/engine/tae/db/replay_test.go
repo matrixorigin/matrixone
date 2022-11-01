@@ -40,7 +40,7 @@ func TestReplayCatalog1(t *testing.T) {
 	}
 
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db")
+	_, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	createTable := func(schema *catalog.Schema, wg *sync.WaitGroup, forceCkp bool) func() {
@@ -114,12 +114,12 @@ func TestReplayCatalog2(t *testing.T) {
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db2")
+	_, err := txn.CreateDatabase("db2", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -194,12 +194,12 @@ func TestReplayCatalog3(t *testing.T) {
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db2")
+	_, err := txn.CreateDatabase("db2", "")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -283,7 +283,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -388,7 +388,7 @@ func TestReplay2(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -525,7 +525,7 @@ func TestReplay3(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	tbl, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -597,7 +597,7 @@ func TestReplayTableRows(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	tbl, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -1245,7 +1245,7 @@ func TestReplaySnapshots(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)

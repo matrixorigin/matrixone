@@ -55,7 +55,7 @@ drop table if exists table_15;
 drop table if exists ex_table_yccs;
 
 --覆盖各数值类型正常值,极值，空值
-create external table ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from  ex_table_1;
 
 --覆盖各数值类型异常值：非法值中文字符特殊字符，超出范围的值
@@ -159,9 +159,11 @@ select * from ex_table_11;
 --缺省换行符
 create external table ex_table_12(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_9.csv'} fields terminated by ','  enclosed by '\"' ;
+select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_12;
 --换行符为\r
 create external table ex_table_13(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\r\n';
+select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_13;
 --缺省fields terminated ，terminated，ENCLOSED(默认分隔符，封闭符"")
 create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'};
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_14;

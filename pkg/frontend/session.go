@@ -1391,7 +1391,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
 	return table, nil

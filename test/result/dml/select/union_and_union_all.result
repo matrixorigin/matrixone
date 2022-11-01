@@ -361,13 +361,18 @@ a
 3
 3
 select * from t8 union select * from t9 intersect select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select * from t10' at line 1
+a
+1
 select * from t8 union select * from t9 minus select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select * from t10' at line 1
+a
+1
+2
 (select * from t8 union select * from t9) intersect select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'intersect select * from t10' at line 1
+a
 (select * from t8 union select * from t9) minus select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'minus select * from t10' at line 1
+a
+1
+2
 drop table t8;
 drop table t9;
 drop table t10;

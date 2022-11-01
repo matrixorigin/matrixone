@@ -44,7 +44,11 @@ func init() {
 }
 
 func (ht *Int64HashMap) Free(m *mpool.MPool) {
-	m.Free(ht.rawData)
+	if len(ht.rawData) > 0 {
+		m.Free(unsafe.Slice((*byte)(unsafe.Pointer(&ht.cells[0])), ht.cellCnt*uint64(intCellSize)))
+		ht.cells = nil
+	}
+	ht.rawData = nil
 }
 
 func (ht *Int64HashMap) Init(m *mpool.MPool) (err error) {
