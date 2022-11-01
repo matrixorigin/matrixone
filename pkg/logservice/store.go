@@ -98,6 +98,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			AdvertiseAddress: cfg.GossipAddress,
 			Seed:             cfg.GossipSeedAddresses,
 			Meta:             meta.marshal(),
+			CanUseSelfAsSeed: cfg.GossipAllowSelfAsSeed,
 		},
 	}
 }
