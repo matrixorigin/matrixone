@@ -79,7 +79,6 @@ jobs:
           retention-days: 7
           
   ut-linux-arm:
-    if: ${{ github.event.pull_request.base.repo.full_name == matrixorigin/matrixone}}
     runs-on: arm64-runner
     name: UT Test on Linux/Arm
 
@@ -108,7 +107,6 @@ jobs:
           retention-days: 7
 
   bvt-linux-x86:
-    if: ${{ github.event.pull_request.base.repo.full_name == matrixorigin/matrixone}}
     runs-on: x86-runner
     name: BVT Test on Linux/x64
     timeout-minutes: 60
@@ -181,7 +179,6 @@ jobs:
           retention-days: 7
           
   bvt-linux-arm:
-    if: ${{ github.event.pull_request.base.repo.full_name == matrixorigin/matrixone}}
     runs-on: arm64-runner
     name: BVT Test on Linux/Arm
     timeout-minutes: 60
