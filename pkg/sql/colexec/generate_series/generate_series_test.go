@@ -538,8 +538,8 @@ func makeInt64Expr(val int64) *plan.Expr {
 		},
 		Expr: &plan2.Expr_C{
 			C: &plan.Const{
-				Value: &plan2.Const_Ival{
-					Ival: val,
+				Value: &plan2.Const_I64Val{
+					I64Val: val,
 				},
 			},
 		},
