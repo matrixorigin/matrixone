@@ -523,17 +523,16 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
-			pUpdate := &plan.OnUpdate{
-				Expr: &plan.Expr{},
-			}
-			types.Decode(data, pUpdate)
-			expr, err := pUpdate.Expr.Marshal()
-			if err != nil {
+			pUpdate := &plan.OnUpdate{}
+			if err = types.Decode(data, pUpdate); err != nil {
 				panic(err)
 			}
-			def.OnUpdate = OnUpdate{
-				Expr:         expr,
-				OriginString: pUpdate.OriginString,
+			def.OnUpdate.OriginString = pUpdate.OriginString
+			def.OnUpdate.Expr = nil
+			if pUpdate.Expr != nil {
+				if def.OnUpdate.Expr, err = pUpdate.Expr.Marshal(); err != nil {
+					panic(err)
+				}
 			}
 		}
 		idx := bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)
