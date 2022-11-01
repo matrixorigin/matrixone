@@ -39,23 +39,29 @@ message Type {
 message Const {
 	bool isnull			= 1;
 	oneof value {
-		int64 ival		= 2;
-		double dval 	= 3;
-		string sval		= 4;
-		bool bval 		= 5;
-		uint64 uval 	= 6;
-		float fval		= 7;
-		int32 dateval 		= 8;
-		int64 timeval = 9;
-		int64 datetimeval		= 10;
-		decimal64 decimal64val = 11;
-		decimal128 decimal128val = 12;
-		int64 timestampval = 13;
-		string jsonval = 14;
-		bool defaultval = 15;
-		bool updateVal = 16;
+		int32 i8val		= 2;  // pb have no int8
+		int32 i16val	= 3;  // pb have no int16
+		int32 i32val	= 4;
+		int64 i64val	= 5;
+		uint32 u8val 	= 6;  // pb have no uint8
+		uint32 u16val 	= 7;  // pb have no uint16
+		uint32 u32val 	= 8;
+		uint64 u64val 	= 9;
+		double dval 	= 10;
+		string sval		= 11;
+		bool bval 		= 12;
+		float fval		= 13;
+		int32 dateval 	= 14;
+		int64 timeval 	= 15;
+		int64 datetimeval			= 16;
+		decimal64 decimal64val 		= 17;
+		decimal128 decimal128val 	= 18;
+		int64 timestampval 			= 19;
+		string jsonval 				= 20;
+		bool defaultval 			= 21;
+		bool updateVal 				= 22;
 	}
-	bool isBin = 17;
+	bool isBin = 23;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
