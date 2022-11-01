@@ -1698,6 +1698,49 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	STR_TO_DATE: {
+		Id:     STR_TO_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_char, types.T_char, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_char, types.T_char, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_char, types.T_char, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
+			},
+		},
+	},
 	ATAN: {
 		Id:     ATAN,
 		Flag:   plan.Function_STRICT,
