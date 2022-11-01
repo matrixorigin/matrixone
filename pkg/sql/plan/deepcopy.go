@@ -256,8 +256,8 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
 	// }
 
-	for table.CompositePkey != nil {
-		table.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	if table.CompositePkey != nil {
+		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
 	}
 	for idx, indexInfo := range table.IndexInfos {
 		newTable.IndexInfos[idx] = &IndexInfo{

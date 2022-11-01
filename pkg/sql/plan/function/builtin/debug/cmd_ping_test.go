@@ -16,6 +16,7 @@ package debug
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/fagongzi/util/protoc"
@@ -28,14 +29,15 @@ import (
 
 func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing()(ctx,
+	clusterDetails := func() (logservice.ClusterDetails, error) {
+		return logservice.ClusterDetails{}, nil
+	}
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	result, err := handlePing()(proc,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
-		},
-		func() (logservice.ClusterDetails, error) {
-			return logservice.ClusterDetails{}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.DebugResult{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
@@ -45,26 +47,27 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 func TestCmdPingDNWithSingleDN(t *testing.T) {
 	shardID := uint64(1)
 	ctx := context.Background()
-	result, err := handlePing()(ctx,
+	clusterDetails := func() (logservice.ClusterDetails, error) {
+		return logservice.ClusterDetails{
+			DNStores: []logservice.DNStore{
+				{
+					Shards: []logservice.DNShardInfo{
+						{
+							ShardID: 1,
+						},
+					},
+				},
+			},
+		}, nil
+	}
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	result, err := handlePing()(proc,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
 					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: shardID}),
-				},
-			}, nil
-		},
-		func() (logservice.ClusterDetails, error) {
-			return logservice.ClusterDetails{
-				DNStores: []logservice.DNStore{
-					{
-						Shards: []logservice.DNShardInfo{
-							{
-								ShardID: 1,
-							},
-						},
-					},
 				},
 			}, nil
 		})
@@ -77,7 +80,24 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 
 func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing()(ctx,
+	clusterDetails := func() (logservice.ClusterDetails, error) {
+		return logservice.ClusterDetails{
+			DNStores: []logservice.DNStore{
+				{
+					Shards: []logservice.DNShardInfo{
+						{
+							ShardID: 1,
+						},
+						{
+							ShardID: 2,
+						},
+					},
+				},
+			},
+		}, nil
+	}
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	result, err := handlePing()(proc,
 		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
@@ -87,22 +107,6 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 				},
 				{
 					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 2}),
-				},
-			}, nil
-		},
-		func() (logservice.ClusterDetails, error) {
-			return logservice.ClusterDetails{
-				DNStores: []logservice.DNStore{
-					{
-						Shards: []logservice.DNShardInfo{
-							{
-								ShardID: 1,
-							},
-							{
-								ShardID: 2,
-							},
-						},
-					},
 				},
 			}, nil
 		})
@@ -115,29 +119,30 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 
 func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
-	result, err := handlePing()(ctx,
+	clusterDetails := func() (logservice.ClusterDetails, error) {
+		return logservice.ClusterDetails{
+			DNStores: []logservice.DNStore{
+				{
+					Shards: []logservice.DNShardInfo{
+						{
+							ShardID: 1,
+						},
+						{
+							ShardID: 2,
+						},
+					},
+				},
+			},
+		}, nil
+	}
+	proc := process.New(ctx, nil, nil, nil, nil, clusterDetails)
+	result, err := handlePing()(proc,
 		dn,
 		"1",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
 					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 1}),
-				},
-			}, nil
-		},
-		func() (logservice.ClusterDetails, error) {
-			return logservice.ClusterDetails{
-				DNStores: []logservice.DNStore{
-					{
-						Shards: []logservice.DNShardInfo{
-							{
-								ShardID: 1,
-							},
-							{
-								ShardID: 2,
-							},
-						},
-					},
 				},
 			}, nil
 		})
