@@ -15,7 +15,7 @@
 package debug
 
 import (
-	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 	"testing"
 
@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -65,17 +64,15 @@ func TestHandler(t *testing.T) {
 
 	vec3 := vector.New(types.New(types.T_varchar, 0, 0, 0))
 	require.NoError(t, vec3.Append([]byte(""), false, mpool.MustNewZero()))
-
-	supportedCmds[strings.ToUpper("test_cmd")] = func(ctx context.Context,
+	proc := testutil.NewProcess()
+	supportedCmds[strings.ToUpper("test_cmd")] = func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender,
-		clusterDetailsGetter engine.GetClusterDetailsFunc) (pb.DebugResult, error) {
+		sender requestSender) (pb.DebugResult, error) {
 		return pb.DebugResult{}, nil
 	}
 
-	vec, err := Handler([]*vector.Vector{vec1, vec2, vec3},
-		process.New(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil))
+	vec, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)
 	require.NoError(t, err)
 	require.NotNil(t, vec)
 }

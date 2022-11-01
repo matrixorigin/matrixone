@@ -34,6 +34,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultSystemInitTimeout = time.Minute * 5
+)
+
 func (s *service) adjustSQLAddress() {
 	if s.cfg.SQLAddress == "" {
 		ip := "127.0.0.1"
@@ -133,6 +137,7 @@ func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
 }
 
 func (s *service) waitSystemInitCompleted(ctx context.Context) {
+	startAt := time.Now()
 	s.logger.Debug("wait all init task completed task started")
 	wait := func() {
 		time.Sleep(time.Second)
@@ -165,6 +170,9 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 			}
 		}
 		wait()
+		if time.Since(startAt) > defaultSystemInitTimeout {
+			panic("wait system init timeout")
+		}
 	}
 }
 
