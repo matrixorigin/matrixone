@@ -174,11 +174,11 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Datetime, error) {
 	res := make([]types.Datetime, len(timestrs))
+	time := NewCoreTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		time := NewCoreTime()
 		success := CoreStrToDate(time, timestr, format)
 		if !success {
 			// should be null
@@ -191,17 +191,18 @@ func CalcStrToDatetime(timestrs []string, format string, ns *nulls.Nulls, rNsp *
 				nulls.Add(rNsp, uint64(idx))
 			}
 		}
+		time.ResetTime()
 	}
 	return res, nil
 }
 
 func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Date, error) {
 	res := make([]types.Date, len(timestrs))
+	time := NewCoreTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		time := NewCoreTime()
 		success := CoreStrToDate(time, timestr, format)
 		if !success {
 			// should be null
@@ -214,17 +215,18 @@ func CalcStrToDate(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 				nulls.Add(rNsp, uint64(idx))
 			}
 		}
+		time.ResetTime()
 	}
 	return res, nil
 }
 
 func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *nulls.Nulls) ([]types.Time, error) {
 	res := make([]types.Time, len(timestrs))
+	time := NewCoreTime()
 	for idx, timestr := range timestrs {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		time := NewCoreTime()
 		success := CoreStrToDate(time, timestr, format)
 		if !success {
 			// should be null
@@ -237,6 +239,7 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 				nulls.Add(rNsp, uint64(idx))
 			}
 		}
+		time.ResetTime()
 	}
 	return res, nil
 }

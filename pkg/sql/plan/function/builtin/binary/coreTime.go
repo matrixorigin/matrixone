@@ -48,6 +48,18 @@ func FromDate(year int, month int, day int, hour int, minute int, second int, mi
 	}
 }
 
+// Reset CoreTime to initialization state
+func (t CoreTime) ResetTime() {
+	t.year = 0
+	t.month = 0
+	t.day = 0
+	t.hour = 0
+	t.minute = 0
+	t.second = 0
+	t.microsecond = 0
+	return
+}
+
 // String implements fmt.Stringer.
 func (t CoreTime) String() string {
 	return fmt.Sprintf("{%d %d %d %d %d %d %d}", t.getYear(), t.getMonth(), t.getDay(), t.getHour(), t.getMinute(), t.getSecond(), t.getMicrosecond())
@@ -175,6 +187,17 @@ var dateFormatParserTable = map[string]dateFormatParser{
 	"%@": skipAllAlpha,          // Skip all alpha characters
 	// Deprecated since MySQL 5.7.5
 	"%y": yearNumericTwoDigits, // Year, numeric (two digits)
+	// TODO: Add the following...
+	// "%a": abbreviatedWeekday,         // Abbreviated weekday name (Sun..Sat)
+	// "%D": dayOfMonthWithSuffix,       // Day of the month with English suffix (0th, 1st, 2nd, 3rd)
+	// "%U": weekMode0,                  // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
+	// "%u": weekMode1,                  // Week (00..53), where Monday is the first day of the week; WEEK() mode 1
+	// "%V": weekMode2,                  // Week (01..53), where Sunday is the first day of the week; WEEK() mode 2; used with %X
+	// "%v": weekMode3,                  // Week (01..53), where Monday is the first day of the week; WEEK() mode 3; used with %x
+	// "%W": weekdayName,                // Weekday name (Sunday..Saturday)
+	// "%w": dayOfWeek,                  // Day of the week (0=Sunday..6=Saturday)
+	// "%X": yearOfWeek,                 // Year for the week where Sunday is the first day of the week, numeric, four digits; used with %V
+	// "%x": yearOfWeek,                 // Year for the week, where Monday is the first day of the week, numeric, four digits; used with %v
 }
 
 func matchDateWithToken(t *CoreTime, date string, token string, ctx map[string]int) (remain string, succ bool) {
