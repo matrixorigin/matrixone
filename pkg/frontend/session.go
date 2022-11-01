@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/entireclient"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -77,6 +79,13 @@ func (th *TxnHandler) SetTempEngine(te engine.Engine) {
 	defer th.mu.Unlock()
 	ee := th.storage.(*engine.EntireEngine)
 	ee.TempEngine = te
+}
+
+func (th *TxnHandler) SetTempClient(tc client.TxnClient) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	ec := th.txnClient.(*entireclient.EntireClient)
+	ec.TempClient = tc
 }
 
 type Session struct {
@@ -192,7 +201,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		}
 	}
 
-	txnHandler := InitTxnHandler(PU.StorageEngine, PU.TxnClient)
+	txnHandler := InitTxnHandler(PU.StorageEngine, entireclient.NewEntireClient(PU.TxnClient, nil))
 
 	ses := &Session{
 		protocol: proto,

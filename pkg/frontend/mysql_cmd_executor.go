@@ -2233,7 +2233,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		txn := cwft.ses.txnCompileCtx.txnHandler
 		txn.SetTempEngine(e.TempEngine)
+		txn.SetTempClient(mc)
 		cwft.ses.InitTempEngine = true
+
 	}
 	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
