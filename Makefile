@@ -115,7 +115,7 @@ BUILD_NAME=binary
 .PHONY: build
 build: config cgo cmd/mo-service/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
-	$(GO) build $(RACE_OPT) $(DEBUG_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
 
 .PHONY: modump
 modump:
