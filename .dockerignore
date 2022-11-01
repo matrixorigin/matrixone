@@ -19,3 +19,6 @@ store/
 # cgo compiler files linked system lib, so ignore it
 **/*.o
 **/*.a
+
+# go 
+vendor/
