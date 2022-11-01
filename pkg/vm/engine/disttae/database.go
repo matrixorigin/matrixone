@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +132,10 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 		}
 	}
 	return nil
+}
+
+func (db *database) GetDatabaseId(ctx context.Context) string {
+	return strconv.FormatUint(db.databaseId, 10)
 }
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {

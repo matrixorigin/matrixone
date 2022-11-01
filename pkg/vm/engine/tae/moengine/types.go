@@ -17,7 +17,6 @@ package moengine
 import (
 	"bytes"
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -89,7 +88,7 @@ type Engine interface {
 	DropDatabaseByID(ctx context.Context, id uint64, txn Txn) error
 
 	CreateDatabase(ctx context.Context, databaseName string, txn Txn) error
-	CreateDatabaseWithID(ctx context.Context, databaseName string, id uint64, txn Txn) error
+	CreateDatabaseWithID(ctx context.Context, databaseName, createSql string, id uint64, txn Txn) error
 
 	// DatabaseNames returns all database names
 	DatabaseNames(ctx context.Context, txn Txn) (databaseNames []string, err error)
@@ -100,6 +99,8 @@ type Engine interface {
 
 	// GetTAE returns tae db struct
 	GetTAE(ctx context.Context) *db.DB
+
+	FlushTable(ctx context.Context, tenantID uint32, databaseId, tableId uint64, ts types.TS) error
 }
 
 type TxnEngine interface {

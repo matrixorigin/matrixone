@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type State int8
@@ -32,9 +33,16 @@ type Runner interface {
 	Start()
 	Stop()
 	EnqueueWait(any) error
+	FlushTable(dbID, tableID uint64, ts types.TS) error
 
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
+	DebugUpdateOptions(opts ...Option)
+}
+
+type DirtyCtx struct {
+	force bool
+	tree  *logtail.DirtyTreeEntry
 }
 
 type Observer interface {

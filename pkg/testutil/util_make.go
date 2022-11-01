@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -374,4 +375,33 @@ func MakeDecimal128ArrByFloat64Arr(input []float64) []types.Decimal128 {
 	}
 
 	return ret
+}
+
+func MakeRandomStrings(cardinality, targetRows int) []string {
+	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
+	charsLen := len(chars)
+
+	// mock random strings
+	dataset := make([][]byte, cardinality)
+	for i := range dataset {
+		randLen := rand.Intn(charsLen) + 1
+		dataset[i] = make([]byte, randLen)
+		for j := range dataset[i] {
+			dataset[i][j] = chars[rand.Intn(charsLen)]
+		}
+	}
+
+	data := make([]string, 0)
+	for {
+		for i := range dataset {
+			n := rand.Intn(10) + 1
+			for j := 0; j < n; j++ {
+				data = append(data, string(append([]byte{}, dataset[i]...)))
+			}
+		}
+		if len(data) >= targetRows {
+			break
+		}
+	}
+	return data
 }

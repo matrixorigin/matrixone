@@ -469,6 +469,18 @@ func NewAttributeGeneratedAlways(e Expr, s bool) *AttributeGeneratedAlways {
 	}
 }
 
+type AttributeLowCardinality struct {
+	columnAttributeImpl
+}
+
+func (node *AttributeLowCardinality) Format(ctx *FmtCtx) {
+	ctx.WriteString("low_cardinality")
+}
+
+func NewAttributeLowCardinality() *AttributeLowCardinality {
+	return &AttributeLowCardinality{}
+}
+
 type KeyPart struct {
 	columnAttributeImpl
 	ColName   *UnresolvedName
