@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,9 @@ type ExternalFileparam struct {
 
 type Argument struct {
 	Es *ExternalParam
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type ParseLineHandler struct {

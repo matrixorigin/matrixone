@@ -15,18 +15,19 @@
 package top
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
 	Build = iota
 	Eval
-	End
 )
 
-type Container struct {
+type container struct {
 	n     int // result vector number
 	state int
 	sels  []int64
@@ -38,11 +39,26 @@ type Container struct {
 
 type Argument struct {
 	Limit int64
-	ctr   *Container
+	ctr   *container
 	Fs    []*plan.OrderBySpec
 }
 
-func (ctr *Container) compare(vi, vj int, i, j int64) int {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		mp := proc.Mp()
+		ctr.cleanBatch(mp)
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
+}
+
+func (ctr *container) compare(vi, vj int, i, j int64) int {
 	for _, pos := range ctr.poses {
 		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r
@@ -51,23 +67,23 @@ func (ctr *Container) compare(vi, vj int, i, j int64) int {
 	return 0
 }
 
-func (ctr *Container) Len() int {
+func (ctr *container) Len() int {
 	return len(ctr.sels)
 }
 
-func (ctr *Container) Less(i, j int) bool {
+func (ctr *container) Less(i, j int) bool {
 	return ctr.compare(0, 0, ctr.sels[i], ctr.sels[j]) > 0
 }
 
-func (ctr *Container) Swap(i, j int) {
+func (ctr *container) Swap(i, j int) {
 	ctr.sels[i], ctr.sels[j] = ctr.sels[j], ctr.sels[i]
 }
 
-func (ctr *Container) Push(x interface{}) {
+func (ctr *container) Push(x interface{}) {
 	ctr.sels = append(ctr.sels, x.(int64))
 }
 
-func (ctr *Container) Pop() interface{} {
+func (ctr *container) Pop() interface{} {
 	n := len(ctr.sels) - 1
 	x := ctr.sels[n]
 	ctr.sels = ctr.sels[:n]

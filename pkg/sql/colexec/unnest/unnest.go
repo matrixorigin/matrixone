@@ -62,16 +62,29 @@ func Prepare(_ *process.Process, arg any) error {
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
-	param := arg.(*Argument).Es
+	var end bool
+	var err error
+	ap := arg.(*Argument)
+	param := ap.Es
 	if param.isCol {
-		return callByCol(param, proc)
+		end, err = callByCol(param, proc)
+	} else {
+		end, err = callByStr(param, proc)
 	}
-	return callByStr(param, proc)
+	if err != nil {
+		ap.Free(proc, true)
+		return false, err
+	}
+	if end {
+		ap.Free(proc, false)
+	}
+	return end, nil
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	json, err := types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
@@ -87,6 +100,7 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 		return false, err
 	}
 	rbat := batch.New(false, param.Attrs)
+	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
@@ -102,9 +116,11 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 func callByCol(param *Param, proc *process.Process) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if len(bat.Vecs) != 1 {
+		bat.Clean(proc.Mp())
 		return false, moerr.NewInvalidArg("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
 	}
 	vec := bat.GetVector(0)
@@ -129,6 +145,7 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 		}
 		rbat, err = makeBatch(rbat, ures, param, proc)
 		if err != nil {
+			rbat.Clean(proc.Mp())
 			return false, err
 		}
 		rows += len(ures)
@@ -170,11 +187,12 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 	param.seq += 1
 	return bat, nil
 }
+
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:       types.T(typ.Id),
-		Width:     typ.Width,
-		Size:      typ.Size,
-		Precision: typ.Precision,
-	}
+	return types.New(
+		types.T(typ.Id),
+		typ.Width,
+		typ.Size,
+		typ.Precision,
+	)
 }

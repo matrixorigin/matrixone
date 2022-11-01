@@ -39,25 +39,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	for {
-		switch ap.ctr.state {
-		case Eval:
-			ok, err := ap.ctr.eval(ap, proc, anal)
-			if err != nil {
-				return ok, err
-			}
-			if ok {
-				ap.ctr.state = End
-			}
-			return ok, err
-		default:
-			proc.SetInputBatch(nil)
-			return true, nil
-		}
-	}
-}
 
-func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
 		bat := <-reg.Ch
@@ -75,9 +57,8 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 		}
 		anal.Input(bat)
 		if ap.ctr.seen >= ap.Limit {
-			proc.SetInputBatch(nil)
 			bat.Clean(proc.Mp())
-			return true, nil
+			break
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())
 		if newSeen < ap.Limit {
@@ -90,10 +71,11 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 			batch.SetLength(bat, bat.Length()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat)
-			proc.Reg.InputBatch = bat
+			proc.SetInputBatch(bat)
 			return false, nil
 		}
 	}
+	proc.SetInputBatch(nil)
+	ap.Free(proc, false)
 	return true, nil
-
 }
