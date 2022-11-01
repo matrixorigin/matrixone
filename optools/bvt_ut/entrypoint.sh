@@ -11,23 +11,44 @@ function packLog() {
     echo "$(($duration / 60)) minutes and $(($duration % 60)) seconds elapsed."
 }
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
-echo `locale`
+function prepare() {
+  mkdir /root/scratch
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
+  echo `locale`
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> clone mo-tester"
-git clone --depth=1 https://github.com/matrixorigin/mo-tester.git
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> clone mo-tester"
+  git clone --depth=1 https://github.com/matrixorigin/mo-tester.git
+}
 
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> run unit test"
-make ut UT_PARALLEL=${UT_PARALLEL}
+function run_ut() {
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> run unit test"
+  make ut UT_PARALLEL=${UT_PARALLEL}
+}
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> build mo service"
-make build 
+function run_bvt() {
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> build mo service"
+  make build
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> start mo service"
- ./optools/run_bvt.sh ./ ${LAUNCH}
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> start mo service"
+   ./optools/run_bvt.sh ./ ${LAUNCH}
 
-echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
-cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
+  cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+}
 
+function bvt_ut() {
+  prepare
+
+  if [[ "$ENABLE_UT" == "true" ]]; then
+    echo ">>>>>>>>>>>>>>>>>>>>>>>> enabled ut"
+    run_ut
+  else
+    echo ">>>>>>>>>>>>>>>>>>>>>>>> disabled ut"
+  fi
+
+  run_bvt
+}
+
+bvt_ut
 trap "packLog" EXIT

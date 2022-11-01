@@ -47,6 +47,8 @@ BIN_NAME := mo-service
 MO_DUMP := mo-dump
 BUILD_CFG := gen_config
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+ENABLE_UT=$(UT_ENABLE:-"false")
+GOPROXY=$(GOPROXY:-"")
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
@@ -151,12 +153,14 @@ endif
 .PHONY: ci
 ci: 
 	@rm -rf $(ROOT_DIR)/tester-log
+	@docker image prune -f
 	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci
-	@docker run -it --name tester -e UT_PARALLEL=$(UT_PARALLEL) --rm -v $(ROOT_DIR)/tester-log:/matrixone-test/tester-log matrixorigin/matrixone:local-ci
+	@docker run --name tester -it -e UT_PARALLEL=$(UT_PARALLEL) -e ENABLE_UT=$(ENABLE_UT)\
+ 			--rm -v $(ROOT_DIR)/tester-log:/matrixone-test/tester-log matrixorigin/matrixone:local-ci
 
 .PHONY: ci-clean
 ci-clean:
-	@docker rmi matirxorigin/matrixone:local-ci
+	@docker rmi matrixorigin/matrixone:local-ci
 	@docker image prune -f
 
 ###############################################################################
