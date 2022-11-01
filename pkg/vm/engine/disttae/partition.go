@@ -547,7 +547,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step:],
+				blks:     blks[(i-1)*step:],
 				sels:     make([]int64, 0, 1024),
 			}
 		} else {
@@ -556,7 +556,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step : (i+1)*step],
+				blks:     blks[(i-1)*step : i*step],
 				sels:     make([]int64, 0, 1024),
 			}
 		}
