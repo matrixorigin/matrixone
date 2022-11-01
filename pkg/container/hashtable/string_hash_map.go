@@ -50,7 +50,11 @@ func init() {
 }
 
 func (ht *StringHashMap) Free(m *mpool.MPool) {
-	m.Free(unsafe.Slice((*byte)(unsafe.Pointer(&ht.cells[0])), ht.cellCnt*uint64(strCellSize)))
+	if len(ht.rawData) > 0 {
+		m.Free(unsafe.Slice((*byte)(unsafe.Pointer(&ht.cells[0])), ht.cellCnt*uint64(strCellSize)))
+		ht.cells = nil
+	}
+	ht.rawData = nil
 }
 
 func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {

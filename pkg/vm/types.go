@@ -78,3 +78,19 @@ type Instruction struct {
 }
 
 type Instructions []Instruction
+
+func (ins *Instruction) IsBrokenNode() bool {
+	switch ins.Op {
+	case Order, MergeOrder:
+		return true
+	case Limit, MergeLimit:
+		return true
+	case Offset, MergeOffset:
+		return true
+	case Group, MergeGroup:
+		return true
+	case Top, MergeTop:
+		return true
+	}
+	return false
+}
