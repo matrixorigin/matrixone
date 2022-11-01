@@ -179,12 +179,10 @@ select * from t8 union distinct select * from t9 union distinct select * from t1
 
 select * from (select * from t8 union distinct select * from t9 union all select * from t10) X;
 
--- @bvt:issue#4946
 select * from t8 union select * from t9 intersect select * from t10;
 select * from t8 union select * from t9 minus select * from t10;
 (select * from t8 union select * from t9) intersect select * from t10;
 (select * from t8 union select * from t9) minus select * from t10;
--- @bvt:issue
 drop table t8;
 drop table t9;
 drop table t10;

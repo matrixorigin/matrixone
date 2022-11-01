@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -815,4 +816,21 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		t.Fatalf("failed to reschedule expired tasks")
 	}
 	runHakeeperTaskServiceTest(t, fn)
+}
+
+func TestGetTaskTableUserFromEnv(t *testing.T) {
+	os.Setenv(moAdminUser, "root")
+	user, ok := getTaskTableUserFromEnv()
+	require.False(t, ok)
+	require.Equal(t, pb.TaskTableUser{}, user)
+
+	os.Setenv(moAdminPassword, "")
+	user, ok = getTaskTableUserFromEnv()
+	require.False(t, ok)
+	require.Equal(t, pb.TaskTableUser{}, user)
+
+	os.Setenv(moAdminPassword, "root")
+	user, ok = getTaskTableUserFromEnv()
+	require.True(t, ok)
+	require.Equal(t, pb.TaskTableUser{Username: "root", Password: "root"}, user)
 }

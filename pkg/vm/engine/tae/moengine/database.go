@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -101,6 +102,10 @@ func (db *txnDatabase) GetRelationByID(_ context.Context, id uint64) (Relation, 
 	}
 	rel = newRelation(h)
 	return rel, nil
+}
+
+func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
+	return fmt.Sprintf("%d", db.GetDatabaseID(ctx))
 }
 
 func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.TableDef) error {

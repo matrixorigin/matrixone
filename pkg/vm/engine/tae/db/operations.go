@@ -98,8 +98,15 @@ type AccessInfo struct {
 type CreateDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
+	CreateSql  string
 	//Global unique, allocated by CN .
 	DatabaseId uint64
+}
+
+type FlushTable struct {
+	AccessInfo AccessInfo
+	DatabaseID uint64
+	TableID    uint64
 }
 
 type CreateDatabaseResp struct {

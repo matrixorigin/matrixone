@@ -433,7 +433,7 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 		vector := IOVector{
-			FilePath: joinPath(fsName, "a:b:c"),
+			FilePath: joinPath(fsName, "a#b#c"),
 			Entries: []IOEntry{
 				{Size: 1, Data: []byte("a")},
 			},
