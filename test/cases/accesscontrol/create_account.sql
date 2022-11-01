@@ -21,7 +21,8 @@ drop account if exists `test%`;
 drop account if exists `非常`;
 drop account if exists user_strip_01;
 drop account if exists account_1;
-
+drop account if exists aaa;
+drop account if exists account;
 --2.account name字符，数字，特殊字符混合 ,admin_name/auth_string数字英文中文特殊符号组合，特殊字符打头，大小写不敏感，auth_string大小写敏感,覆盖"",'',``
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='test@123456';
@@ -93,10 +94,8 @@ create account 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create account "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create account `test:account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
--- @bvt:issue#6053
 create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
 select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
--- @bvt:issue
 -- 7.account初始accountamdin权限验证：查询系统表;创建db，user，table;sys租户下root看不到account下的系统表数据
 create account account_1 admin_name='admin' identified by '123456';
 -- @session:id=2&user=account_1:admin:accountadmin&password=123456
@@ -146,3 +145,5 @@ drop account if exists `test%`;
 drop account if exists `非常`;
 drop account if exists user_strip_01;
 drop account if exists account_1;
+drop account if exists aaa;
+drop account if exists account;
