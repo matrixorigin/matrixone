@@ -16,9 +16,11 @@ package moengine
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -84,7 +86,11 @@ func (e *txnEngine) Create(ctx context.Context, name string, txnOp client.TxnOpe
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name)
+	createSql := "todosql"
+	if ctx != nil {
+		createSql, _ = ctx.Value(defines.SqlKey{}).(string)
+	}
+	_, err = txn.CreateDatabase(name, createSql)
 	return
 }
 
@@ -94,18 +100,18 @@ func (e *txnEngine) CreateDatabase(ctx context.Context, name string, txnHandle T
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabase(name)
+	_, err = txn.CreateDatabase(name, "todosql")
 	return
 }
 
 func (e *txnEngine) CreateDatabaseWithID(ctx context.Context,
-	name string, id uint64, txnHandle Txn) (err error) {
+	name, createSql string, id uint64, txnHandle Txn) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxn(txnHandle.GetID()); err != nil {
 		panic(err)
 	}
 	txnBindAccessInfoFromCtx(txn, ctx)
-	_, err = txn.CreateDatabaseWithID(name, id)
+	_, err = txn.CreateDatabaseWithID(name, createSql, id)
 	return
 }
 
