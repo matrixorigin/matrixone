@@ -68,11 +68,12 @@ func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) 
 
 type DBEntry struct {
 	*DBBaseEntry
-	catalog  *Catalog
-	acInfo   accessInfo
-	name     string
-	fullName string
-	isSys    bool
+	catalog   *Catalog
+	acInfo    accessInfo
+	name      string
+	createSql string
+	fullName  string
+	isSys     bool
 
 	entries   map[uint64]*common.GenericDLNode[*TableEntry]
 	nameNodes map[string]*nodeList[*TableEntry]
@@ -85,13 +86,14 @@ func compareTableFn(a, b *TableEntry) int {
 	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
-func NewDBEntryWithID(catalog *Catalog, name string, id uint64, txn txnif.AsyncTxn) *DBEntry {
+func NewDBEntryWithID(catalog *Catalog, name string, createSql string, id uint64, txn txnif.AsyncTxn) *DBEntry {
 	//id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
@@ -106,13 +108,14 @@ func NewDBEntryWithID(catalog *Catalog, name string, id uint64, txn txnif.AsyncT
 	return e
 }
 
-func NewDBEntry(catalog *Catalog, name string, txn txnif.AsyncTxn) *DBEntry {
+func NewDBEntry(catalog *Catalog, name, createSql string, txn txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
 		DBBaseEntry: NewDBBaseEntry(id),
 		catalog:     catalog,
 		name:        name,
+		createSql:   createSql,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
@@ -148,6 +151,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		DBBaseEntry: NewDBBaseEntry(pkgcatalog.MO_CATALOG_ID),
 		catalog:     catalog,
 		name:        pkgcatalog.MO_CATALOG,
+		createSql:   "create database " + pkgcatalog.MO_CATALOG,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),
@@ -179,6 +183,7 @@ func (e *DBEntry) GetUserID() uint32            { return e.acInfo.UserID }
 func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }
 func (e *DBEntry) GetCreateAt() types.Timestamp { return e.acInfo.CreateAt }
 func (e *DBEntry) GetName() string              { return e.name }
+func (e *DBEntry) GetCreateSql() string         { return e.createSql }
 func (e *DBEntry) GetFullName() string {
 	if len(e.fullName) == 0 {
 		e.fullName = genDBFullName(e.acInfo.TenantID, e.name)
@@ -505,6 +510,14 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	var sn int
 	sn, err = w.Write([]byte(e.name))
+	if err != nil {
+		return
+	}
+	n += int64(sn) + 2
+	if err = binary.Write(w, binary.BigEndian, uint16(len(e.createSql))); err != nil {
+		return
+	}
+	sn, err = w.Write([]byte(e.createSql))
 	n += int64(sn) + 2
 	return
 }
@@ -529,6 +542,17 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(size)
 	e.name = string(buf)
+
+	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
+		return
+	}
+	n += 2
+	buf = make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n += int64(size)
+	e.createSql = string(buf)
 	return
 }
 
@@ -544,6 +568,7 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 	return &DBEntry{
 		DBBaseEntry: ret.(*DBBaseEntry),
 		acInfo:      e.acInfo,
+		createSql:   e.createSql,
 		name:        e.name,
 		catalog:     e.catalog,
 	}
