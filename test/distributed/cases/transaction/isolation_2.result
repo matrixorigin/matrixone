@@ -108,7 +108,7 @@ insert into dis_table_04 values (4);
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 drop database dis_db_01;
-ExpectedEOB
+Can't drop database 'dis_db_01'; database doesn't exist
 delete from dis_table_04 where a=4;
 select * from dis_table_04;
 a
@@ -116,7 +116,7 @@ rollback ;
 select * from dis_db_01.dis_table_04;
 SQL parser error: table "dis_table_04" does not exist
 drop database dis_db_01;
-ExpectedEOB
+Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
 begin;
 use isolation_2;

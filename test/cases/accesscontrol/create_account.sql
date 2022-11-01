@@ -52,10 +52,8 @@ create account `非常` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='非常';
 
 --3.account name,admin_name,auth_string长度180字符, "",'',``前后空格清除
--- @bvt:issue#6038
 create account `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
-select account_name from mo_catalog.mo_account where account_name=`abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
--- @bvt:issue
+select account_name from mo_catalog.mo_account where account_name='abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
 create account ` user_strip_01 ` ADMIN_NAME " admin " IDENTIFIED BY " 123456 ";
 select account_name from mo_catalog.mo_account where account_name='user_strip_01';
 
