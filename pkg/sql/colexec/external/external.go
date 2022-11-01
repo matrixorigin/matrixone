@@ -255,7 +255,6 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler, mp *mpool.MPool) *ba
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.NewWithNspSize(typ, int64(param.batchSize))
 		vector.PreAlloc(vec, batchSize, batchSize, mp)
-		vec.SetOriginal(false)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
