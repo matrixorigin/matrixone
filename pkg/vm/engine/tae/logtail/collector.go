@@ -389,6 +389,11 @@ func (d *dirtyCollector) tryCompactTree(
 					return
 				}
 				if blk.GetBlockData().RunCalibration() == 0 {
+					// TODO: may be put it to post replay process
+					// FIXME
+					if blk.HasPersistedData() {
+						blk.GetBlockData().FreeData()
+					}
 					dirtySeg.Shrink(id)
 					continue
 				}
