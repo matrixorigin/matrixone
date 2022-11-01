@@ -1626,6 +1626,10 @@ var (
 			output: `select * from generate_series(1, 10, 1) as g`,
 		},
 		{
+			input:  `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
+			output: `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
+		},
+		{
 			input:  `modump database t into 'a.sql'`,
 			output: `modump database t into a.sql`,
 		},

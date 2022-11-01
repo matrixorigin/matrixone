@@ -16,11 +16,11 @@ package debug
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type serviceType string
@@ -36,14 +36,14 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		strings.ToUpper(pb.CmdMethod_Ping.String()): handlePing(),
+		strings.ToUpper(pb.CmdMethod_Ping.String()):  handlePing(),
+		strings.ToUpper(pb.CmdMethod_Flush.String()): handleFlush(),
 	}
 )
 
 type requestSender = func(context.Context, []txn.CNOpRequest) ([]txn.CNOpResponse, error)
 
-type handleFunc func(ctx context.Context,
+type handleFunc func(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender,
-	clusterDetailsGetter engine.GetClusterDetailsFunc) (pb.DebugResult, error)
+	sender requestSender) (pb.DebugResult, error)
