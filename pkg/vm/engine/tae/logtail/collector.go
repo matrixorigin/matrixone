@@ -341,7 +341,7 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		if db, err = d.catalog.GetDatabaseByID(dirtyTable.DbID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
 				err = nil
 				continue
@@ -349,7 +349,7 @@ func (d *dirtyCollector) tryCompactTree(
 			break
 		}
 		if tbl, err = db.GetTableEntryByID(dirtyTable.ID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
 				err = nil
 				continue
@@ -364,7 +364,7 @@ func (d *dirtyCollector) tryCompactTree(
 				continue
 			}
 			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
 					err = nil
 					continue
@@ -373,7 +373,7 @@ func (d *dirtyCollector) tryCompactTree(
 			}
 			for id := range dirtySeg.Blks {
 				if blk, err = seg.GetBlockEntryByID(id); err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 						dirtySeg.Shrink(id)
 						err = nil
 						continue

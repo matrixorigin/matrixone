@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -103,13 +104,18 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
+
+	now := time.Now()
 	ts, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
+	logutil.Infof("replay checkpoint takes %s", time.Since(now))
 
+	now = time.Now()
 	db.Replay(dataFactory, ts)
 	db.Catalog.ReplayTableRows()
+	logutil.Infof("replay wal takes %s", time.Since(now))
 
 	db.DBLocker, dbLocker = dbLocker, nil
 

@@ -116,7 +116,7 @@ func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err er
 func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
-		err = moerr.NewNotFound()
+		err = moerr.GetOkExpectedEOB()
 		return
 	}
 	blk = node.GetPayload()
@@ -292,7 +292,7 @@ func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData 
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	if n, ok := entry.entries[block.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())
