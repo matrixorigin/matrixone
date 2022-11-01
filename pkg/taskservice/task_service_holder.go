@@ -74,9 +74,6 @@ func (h *taskServiceHolder) Close() error {
 	if h.mu.store == nil {
 		return nil
 	}
-	if err := h.mu.store.Close(); err != nil {
-		return err
-	}
 	return h.mu.service.Close()
 }
 
@@ -301,6 +298,9 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case lastAddress := <-s.refreshC:
+			s.mu.Lock()
+			_ = s.mu.store.Close()
+			s.mu.Unlock()
 			s.refresh(lastAddress)
 		}
 	}

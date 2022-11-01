@@ -484,7 +484,6 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			}
 			if completed {
 				for _, s := range services[:3] {
-					s.store.taskScheduler.StopScheduleCronTask()
 					_ = s.task.holder.Close()
 				}
 				return
