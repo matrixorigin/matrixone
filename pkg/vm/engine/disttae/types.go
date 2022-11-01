@@ -224,6 +224,7 @@ type table struct {
 	createSql  string
 
 	// use for skip rows
+	updated    bool
 	skipBlocks map[uint64]uint8
 }
 
