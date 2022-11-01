@@ -167,7 +167,7 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	defer entry.RUnlock()
 	node := entry.entries[id]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return node.GetPayload(), nil
 }
@@ -206,7 +206,7 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	if n, ok := entry.entries[segment.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())

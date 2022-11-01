@@ -331,7 +331,7 @@ func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 		}
 	}
 	rel, err := db.GetRelationByName(wareHouse.Name)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+	if err == moerr.GetOkExpectedEOB() {
 		if rel, err = db.CreateRelation(wareHouse); err != nil {
 			return
 		}

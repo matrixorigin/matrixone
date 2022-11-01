@@ -806,7 +806,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	defer catalog.RUnlock()
 	node := catalog.entries[id]
 	if node == nil {
-		err = moerr.NewNotFound()
+		err = moerr.GetOkExpectedEOB()
 		return
 	}
 	db = node.GetPayload()
@@ -919,7 +919,7 @@ func (catalog *Catalog) TxnGetDBEntryByID(id uint64, txn txnif.AsyncTxn) (*DBEnt
 	}
 	visiable, dropped := dbEntry.GetVisibility(txn.GetStartTS())
 	if !visiable || dropped {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return dbEntry, nil
 }
