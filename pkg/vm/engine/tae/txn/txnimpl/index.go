@@ -213,7 +213,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			for i := start; i < start+count; i++ {
 				v := string(vs.GetVarValueAt(i))
 				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(colType, v)
+					entry := common.TypeStringValue(colType, []byte(v))
 					return moerr.NewDuplicateEntry(entry, attr)
 				}
 				set[v] = true
@@ -223,7 +223,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		for i := start; i < start+count; i++ {
 			v := string(vs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, v)
+				entry := common.TypeStringValue(colType, []byte(v))
 				return moerr.NewDuplicateEntry(entry, attr)
 			}
 			idx.tree[v] = row
@@ -283,7 +283,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(colType, v)
+				entry := common.TypeStringValue(colType, []byte(v))
 				return moerr.NewDuplicateEntry(entry, attr)
 			}
 		}
