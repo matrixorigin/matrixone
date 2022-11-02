@@ -93,7 +93,7 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
-		logutil.Errorf("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
+		logutil.Infof("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
 	}
 
 	return &MOServer{
