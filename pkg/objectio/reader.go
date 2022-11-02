@@ -55,8 +55,8 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 			Size:   int64(extent.originSize),
 		}
 	}
-	err = r.allocDatas(metas.Entries, m)
-	defer r.freeData(metas.Entries, m)
+	err = r.allocDataEntries(metas.Entries, m)
+	defer r.freeDataEntries(metas.Entries, m)
 	if err != nil {
 		return nil, err
 	}
@@ -97,31 +97,17 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
 		}
-		err = r.allocData(&entry, m)
+		entry.Object, err = r.allocData(int64(col.GetMeta().location.OriginSize()), m)
 		if err != nil {
-			r.freeData(data.Entries, m)
+			r.freeDataEntries(data.Entries, m)
 			return nil, err
 		}
-		entry.ToObject = func(r io.Reader) (any, int64, error) {
-			if m != nil {
-				entry.Object, err = m.Alloc(int(col.GetMeta().location.OriginSize()))
-				if err != nil {
-					return nil, 0, err
-				}
-			} else {
-				entry.Object = make([]byte, col.GetMeta().location.Length())
-			}
-			entry.Object, err = compress.Decompress(entry.Data, entry.Object.([]byte), compress.Lz4)
-			if err != nil {
-				return nil, 0, err
-			}
-			return entry.Data, 1, nil
-		}
+		entry.ToObject = r.newDecompressToObject(&entry, m)
 		data.Entries = append(data.Entries, entry)
 	}
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
-		r.freeData(data.Entries, m)
+		r.freeDataEntries(data.Entries, m)
 		return nil, err
 	}
 	return data, nil
@@ -192,11 +178,11 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 		Offset: fileSize - size,
 		Size:   size,
 	}
-	err = r.allocDatas(data.Entries, m)
+	err = r.allocDataEntries(data.Entries, m)
 	if err != nil {
 		return nil, err
 	}
-	defer r.freeData(data.Entries, m)
+	defer r.freeDataEntries(data.Entries, m)
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
@@ -209,17 +195,48 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 	return footer, err
 }
 
-func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
+type ToObjectFunc = func(r io.Reader) (any, int64, error)
+
+func (r *ObjectReader) newDecompressToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectFunc {
+	return func(read io.Reader) (any, int64, error) {
+		var err error
+		entry.Data, err = r.allocData(entry.Size, m)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer r.freeData(entry.Data, m)
+		_, err = read.Read(entry.Data)
+		if err != nil {
+			return nil, 0, err
+		}
+		entry.Object, err = compress.Decompress(entry.Data, entry.Object.([]byte), compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		return entry.Object, 1, nil
+	}
+}
+
+func (r *ObjectReader) newToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectFunc {
+	return func(read io.Reader) (any, int64, error) {
+		return entry.Data, 1, nil
+	}
+}
+
+func (r *ObjectReader) freeDataEntries(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
 		for i := range Entries {
 			if Entries[i].Data != nil {
 				m.Free(Entries[i].Data)
 			}
+			if Entries[i].Object != nil {
+				m.Free(Entries[i].Object.([]byte))
+			}
 		}
 	}
 }
 
-func (r *ObjectReader) allocDatas(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
+func (r *ObjectReader) allocDataEntries(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
 		for i := range Entries {
 			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
@@ -231,12 +248,18 @@ func (r *ObjectReader) allocDatas(Entries []fileservice.IOEntry, m *mpool.MPool)
 	return nil
 }
 
-func (r *ObjectReader) allocData(Entrie *fileservice.IOEntry, m *mpool.MPool) (err error) {
+func (r *ObjectReader) allocData(size int64, m *mpool.MPool) (data []byte, err error) {
 	if m != nil {
-		Entrie.Data, err = m.Alloc(int(Entrie.Size))
+		data, err = m.Alloc(int(size))
 		if err != nil {
 			return
 		}
 	}
-	return nil
+	return data, nil
+}
+
+func (r *ObjectReader) freeData(data []byte, m *mpool.MPool) {
+	if m != nil {
+		m.Free(data)
+	}
 }
