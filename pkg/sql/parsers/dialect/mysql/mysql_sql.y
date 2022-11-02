@@ -422,7 +422,7 @@ import (
 %type <groupBy> group_by_opt
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
-%type <parenTableExpr> derived_table
+%type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
@@ -3651,13 +3651,13 @@ table_factor:
     {
         $$ = $1
     }
-|   derived_table as_opt ident column_list_opt
+|   table_subquery as_opt_id column_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
-                Alias: tree.Identifier($3),
-                Cols: $4,
+                Alias: tree.Identifier($2),
+                Cols: $3,
             },
         }
     }
@@ -3679,10 +3679,10 @@ table_factor:
 		$$ = $2
 	}
 
-derived_table:
-    '(' select_no_parens ')'
+table_subquery:
+    select_with_parens %prec SUBQUERY_AS_EXPR
     {
-        $$ = &tree.ParenTableExpr{Expr: $2}
+    	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
 
 table_function:
@@ -3859,11 +3859,6 @@ table_function:
 	    },
 	}
     }
-
-
-as_opt:
-    {}
-|   AS {}
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
