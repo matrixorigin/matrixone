@@ -368,14 +368,13 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
+		name := blockio.EncodeObjectName()
 		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
 		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeBlkMetaLocWithObject(
-			dataBlk.GetID(),
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
