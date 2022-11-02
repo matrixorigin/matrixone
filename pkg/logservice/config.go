@@ -91,6 +91,8 @@ type Config struct {
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
 	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
+	// GossipAllowSelfAsSeed allow use self as gossip seed
+	GossipAllowSelfAsSeed bool `toml:"gossip-allow-self-as-seed"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
