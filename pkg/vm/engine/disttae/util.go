@@ -14,6 +14,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -769,9 +770,16 @@ func findRowByPkValue(vec *vector.Vector, v any) int {
 			return rows[idx].Ge(val)
 		})
 	case types.T_char, types.T_text, types.T_varchar, types.T_json, types.T_blob:
-		rows := vector.MustStrCols(vec)
-		val := string(v.([]byte))
-		return sort.SearchStrings(rows, val)
+		// rows := vector.MustStrCols(vec)
+		// val := string(v.([]byte))
+		// return sort.SearchStrings(rows, val)
+		val := v.([]byte)
+		area := vec.GetArea()
+		varlenas := vector.MustTCols[types.Varlena](vec)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			colVal := varlenas[idx].GetByteSlice(area)
+			return bytes.Compare(colVal, val) >= 0
+		})
 	}
 
 	return -1
