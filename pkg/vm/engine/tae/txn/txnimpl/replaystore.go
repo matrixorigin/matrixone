@@ -140,10 +140,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if observer != nil {
-			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
-		}
-		if !blk.GetBlockData().GetMaxCheckpointTS().IsEmpty() {
+		if blk.GetMetaLoc() != "" {
 			continue
 		}
 		hasActive = true
@@ -190,10 +187,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if observer != nil {
-			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
-		}
-		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
+		if blk.GetMetaLoc() != "" {
 			continue
 		}
 		start := info.GetSrcOff()
@@ -265,7 +259,7 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.In
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if appendNode.GetCommitTS().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
+	if blk.GetMetaLoc() != "" {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
