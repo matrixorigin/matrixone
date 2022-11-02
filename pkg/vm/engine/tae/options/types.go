@@ -15,6 +15,8 @@
 package options
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -34,12 +36,11 @@ const (
 	DefaultBlockMaxRows     = uint32(40000)
 	DefaultBlocksPerSegment = uint16(40)
 
-	DefaultScannerInterval    = int64(5000)          // millisecond
-	DefaultExecutionInterval  = int64(2000)          // millisecond
-	DefaultFlushInterval      = int64(1 * 60 * 1000) // millisecond
-	DefaultExecutionLevels    = int16(30)
-	DefaultCatalogCkpInterval = int64(30000) // millisecond
-	DefaultCatalogUnCkpLimit  = int64(10)
+	DefaultScannerInterval              = time.Second * 5
+	DefaultCheckpointFlushInterval      = time.Minute
+	DefaultCheckpointMinCount           = int64(100)
+	DefaultCheckpointIncremetalInterval = time.Minute
+	DefaultCheckpointGlobalInterval     = time.Minute * 60
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)

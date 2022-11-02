@@ -16,13 +16,14 @@ package txnimpl
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math/rand"
 	"path"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -407,7 +408,7 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	c := catalog.MockCatalog(nil)
 	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
@@ -507,7 +508,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)

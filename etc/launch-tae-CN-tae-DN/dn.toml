@@ -31,9 +31,8 @@ backend = "TAE"
 log-backend = "logservice"
 
 [dn.Ckp]
-scanner-interval = "10000s"
-execution-levels = 20000
-execution-interval = "10000s"
-catalog-ckp-interval = "10000s"
-catalog-unckp-limit = 10000
-flush-interval = "10000s"
+flush-interval = "100000s"
+min-count = 2000000
+scan-interval = "100000s"
+incremental-interval = "100000s"
+global-interval = "100000s"

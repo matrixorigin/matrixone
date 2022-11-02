@@ -709,8 +709,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	time.Sleep(time.Millisecond * 2)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -827,8 +826,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -3814,68 +3812,6 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
-}
-
-func TestSnapshotBatch(t *testing.T) {
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := newTestEngine(t, opts)
-	defer tae.Close()
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, 30)
-	tae.createRelAndAppend(bat, true)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs := types.BuildTS(0, 0)
-	txn, _ := tae.StartTxn(nil)
-	maxTs := txn.GetStartTS()
-
-	runner := tae.DB.BGCheckpointRunner
-	entry := checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg := catalog.NewEmptyCatalog()
-	r := checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
-
-	txn, relation := tae.getRelation()
-	blkIt := relation.MakeBlockIt()
-	for blkIt.Valid() {
-		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
-		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
-		blkIt.Next()
-	}
-	segIt := relation.MakeSegmentIt()
-	for segIt.Valid() {
-		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
-		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
-		segIt.Next()
-	}
-	db, err := txn.GetDatabase("db")
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName("test")
-	assert.NoError(t, err)
-	_, err = txn.DropDatabase("db")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs = maxTs.Next()
-	txn, _ = tae.StartTxn(nil)
-	maxTs = txn.GetStartTS()
-	runner = tae.DB.BGCheckpointRunner
-	entry = checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg = catalog.NewEmptyCatalog()
-	r = checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
