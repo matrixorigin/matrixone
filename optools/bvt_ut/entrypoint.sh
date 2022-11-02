@@ -16,6 +16,9 @@ function prepare() {
   echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
   echo `locale`
 
+  echo ">>>>>>>>>>>>>>>>>>>>>>> show go env"
+  echo `go env`
+
   echo ">>>>>>>>>>>>>>>>>>>>>>>> clone mo-tester"
   git clone --depth=1 https://github.com/matrixorigin/mo-tester.git
 }
