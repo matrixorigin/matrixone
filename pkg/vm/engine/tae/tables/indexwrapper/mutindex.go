@@ -101,7 +101,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 		return nil
 	}
 	if err = keys.ForeachWindow(0, keys.Length(), op, keyselects); err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrDuplicate) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {
 			panic(err)

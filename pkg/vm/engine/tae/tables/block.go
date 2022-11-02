@@ -671,14 +671,14 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		err = sortKey.Foreach(func(v any, offset int) error {
 			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
 				row = uint32(offset)
-				return moerr.NewDuplicate()
+				return moerr.GetOkExpectedDup()
 			}
 			return nil
 		}, nil)
 		if err == nil {
 			return 0, moerr.NewNotFound()
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 			return
 		}
 
@@ -744,7 +744,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
 		if deleteNode == nil {
 			*dupRow = row
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 		needWait, txn = deleteNode.NeedWaitCommitting(ts)
 		if needWait {
@@ -753,7 +753,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 			blk.mvcc.RLock()
 		}
 		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 		if err = appendnode.CheckConflict(ts); err != nil {
 			return
@@ -802,7 +802,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 				}, nil)
 			}
 			err = pks.Foreach(deduplicate, keyselects)
-		} else if moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+		} else if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 			v := blk.node.data.Vecs[pkDef.Idx].Get(int(dupRow))
 			entry := common.TypeStringValue(pks.GetType(), v)
 			return moerr.NewDuplicateEntry(entry, pkDef.Name)

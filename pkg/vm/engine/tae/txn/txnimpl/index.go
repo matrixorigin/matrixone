@@ -125,7 +125,7 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	defer idx.Unlock()
 	_, ok := idx.tree[v]
 	if ok {
-		return moerr.NewDuplicate()
+		return moerr.GetOkExpectedDup()
 	}
 	idx.tree[v] = row
 	return nil
@@ -142,7 +142,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	}
 	_, ok := idx.tree[v]
 	if !ok {
-		return moerr.NewDuplicate()
+		return moerr.GetOkExpectedDup()
 	}
 	delete(idx.tree, v)
 	return nil
