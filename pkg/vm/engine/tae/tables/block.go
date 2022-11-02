@@ -120,6 +120,17 @@ func (blk *dataBlock) FreezeAppend() {
 	blk.appendFrozen = true
 }
 
+func (blk *dataBlock) PrepareCompact() bool {
+	if blk.RefCount() > 0 {
+		return false
+	}
+	blk.FreezeAppend()
+	if !blk.meta.PrepareCompact() {
+		return false
+	}
+	return blk.RefCount() == 0
+}
+
 func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -280,21 +291,11 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
-	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.FreezeAppend()
-	blk.meta.RLock()
-	dropped := blk.meta.HasDropCommittedLocked()
-	inTxn := blk.meta.IsCreating()
-	anyCommitted := blk.meta.HasCommittedNode()
-	blk.meta.RUnlock()
-	if dropped || inTxn || !anyCommitted {
+
+	if !blk.PrepareCompact() {
 		return
 	}
-	// Make sure no appender use this block to compact
-	if blk.RefCount() > 0 {
-		// logutil.Infof("blk.RefCount() != 0 : %v, rows: %d", blk.meta.String(), blk.node.rows)
-		return
-	}
+
 	//logutil.Infof("CompactBlockTaskFactory blk: %d, rows: %d", blk.meta.ID, blk.node.rows)
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
@@ -824,6 +825,13 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		return nil
 	}
 	err = pks.Foreach(deduplicate, keyselects)
+	return
+}
+
+func (blk *dataBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
 }
 
