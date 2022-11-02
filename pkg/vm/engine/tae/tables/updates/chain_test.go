@@ -45,8 +45,7 @@ func commitTxn(txn *txnbase.Txn) {
 func TestDeleteChain1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	c := catalog.MockCatalog(nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", nil)
