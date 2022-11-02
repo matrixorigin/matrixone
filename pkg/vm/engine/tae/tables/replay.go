@@ -17,8 +17,6 @@ package tables
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -30,18 +28,13 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
+	an := updates.NewCommittedAppendNode(types.TS{}, 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
 	deletes := &roaring.Bitmap{}
 	if err != nil || deletes == nil {
 		return
 	}
-	logutil.Info("[Start]", common.TimestampField(blk.ckpTs.Load().(types.TS)),
-		common.OperationField("install-del"),
-		common.OperandNameSpace(),
-		common.AnyField("rows", blk.node.rows),
-		common.CountField(int(deletes.GetCardinality())))
-	deleteNode := updates.NewMergedNode(blk.ckpTs.Load().(types.TS))
+	deleteNode := updates.NewMergedNode(types.TS{})
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
 	return

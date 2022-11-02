@@ -15,6 +15,7 @@
 package service
 
 import (
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -38,31 +39,40 @@ type fileServices struct {
 }
 
 // newFileServices constructs an instance of fileServices.
-func newFileServices(t *testing.T, dnServiceNum int, cnServiceNum int) *fileServices {
+func (c *testCluster) buildFileServices() *fileServices {
+	dnServiceNum := c.opt.initial.dnServiceNum
+	cnServiceNum := c.opt.initial.cnServiceNum
+
+	factory := func(dir string, name string) fileservice.FileService {
+		fs, err := fileservice.NewMemoryFS(name)
+		require.NoError(c.t, err)
+		return fs
+	}
+	if c.opt.keepData {
+		factory = func(dir string, name string) fileservice.FileService {
+			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), 0)
+			require.NoError(c.t, err)
+			return fs
+		}
+	}
+
 	dnLocals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {
-		fs, err := fileservice.NewMemoryFS("LOCAL")
-		require.NoError(t, err)
-		dnLocals = append(dnLocals, fs)
+		dnLocals = append(dnLocals, factory(c.dn.cfgs[i].DataDir, "LOCAL"))
 	}
 
 	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)
 	for i := 0; i < cnServiceNum; i++ {
-		fs, err := fileservice.NewMemoryFS("LOCAL")
-		require.NoError(t, err)
-		cnLocals = append(cnLocals, fs)
+		cnLocals = append(cnLocals, factory(filepath.Join(c.opt.rootDataDir, c.cn.cfgs[i].UUID), "LOCAL"))
 	}
 
-	s3fs, err := fileservice.NewMemoryFS("S3")
-	require.NoError(t, err)
-
 	return &fileServices{
-		t:            t,
+		t:            c.t,
 		dnServiceNum: dnServiceNum,
 		cnServiceNum: cnServiceNum,
 		dnLocalFSs:   dnLocals,
 		cnLocalFSs:   cnLocals,
-		s3FS:         s3fs,
+		s3FS:         factory(c.opt.rootDataDir, "S3"),
 	}
 }
 

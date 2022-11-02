@@ -38,15 +38,15 @@ space(-4294967297)
 select space(4294967297);
 invalid input: the space count is greater than max allowed value 8000
 select space(-18446744073709551615);
-data out of range: data type uint64, value '-18446744073709551615'
+Data truncation: data out of range: data type uint64, value '-18446744073709551615'
 select space(18446744073709551615);
 invalid input: the space count is greater than max allowed value 8000
 select space(-18446744073709551616);
-data out of range: data type uint64, value '-18446744073709551616'
+Data truncation: data out of range: data type uint64, value '-18446744073709551616'
 select space(18446744073709551616);
 the space count exceeds maxallowedCount 8000
 select space(-18446744073709551617);
-data out of range: data type uint64, value '-18446744073709551617'
+Data truncation: data out of range: data type uint64, value '-18446744073709551617'
 select space(18446744073709551617);
 the space count exceeds maxallowedCount 8000
 SELECT space(9223372036854775808);
