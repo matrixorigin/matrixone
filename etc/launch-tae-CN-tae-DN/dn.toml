@@ -2,13 +2,13 @@ service-type = "DN"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "error"
 format = "json"
 max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-    "127.0.0.1:32001",
+  "127.0.0.1:32001",
 ]
 
 [[fileservice]]
@@ -24,15 +24,15 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [dn]
-uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+uuid = "dn1"
 
 [dn.Txn.Storage]
 backend = "TAE"
 log-backend = "logservice"
 
 [dn.Ckp]
-flush-interval = "100000s"
-min-count = 2000000
-scan-interval = "100000s"
-incremental-interval = "100000s"
+flush-interval = "60s"
+min-count = 100
+scan-interval = "5s"
+incremental-interval = "60s"
 global-interval = "100000s"
