@@ -140,6 +140,8 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
+	defer logutil.LogClose(s.logger, "cnservice")()
+
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
@@ -151,6 +153,8 @@ func (s *service) Close() error {
 }
 
 func (s *service) stopFrontend() error {
+	defer logutil.LogClose(s.logger, "cnservice/frontend")()
+
 	if err := s.serverShutdown(true); err != nil {
 		return err
 	}
