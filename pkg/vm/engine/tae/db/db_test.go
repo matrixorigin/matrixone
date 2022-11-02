@@ -304,7 +304,7 @@ func TestTableHandle(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	txn, _ := db.StartTxn(nil)
-	database, _ := txn.CreateDatabase("db")
+	database, _ := txn.CreateDatabase("db", "")
 	rel, _ := database.CreateRelation(schema)
 
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
@@ -323,7 +323,7 @@ func TestCreateBlock(t *testing.T) {
 	defer db.Close()
 
 	txn, _ := db.StartTxn(nil)
-	database, _ := txn.CreateDatabase("db")
+	database, _ := txn.CreateDatabase("db", "")
 	schema := catalog.MockSchemaAll(13, 12)
 	rel, err := database.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -425,7 +425,7 @@ func TestCreateSegment(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	txn, _ := tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -709,8 +709,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	time.Sleep(time.Millisecond * 2)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -749,7 +748,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 	schema2.SegmentMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db")
+		database, err := txn.CreateDatabase("db", "")
 		assert.Nil(t, err)
 		_, err = database.CreateRelation(schema1)
 		assert.Nil(t, err)
@@ -827,8 +826,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -1088,7 +1086,7 @@ func TestUnload2(t *testing.T) {
 	schema2.SegmentMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db")
+		database, err := txn.CreateDatabase("db", "")
 		assert.Nil(t, err)
 		_, err = database.CreateRelation(schema1)
 		assert.Nil(t, err)
@@ -1310,9 +1308,9 @@ func TestCrossDBTxn(t *testing.T) {
 	defer tae.Close()
 
 	txn, _ := tae.StartTxn(nil)
-	db1, err := txn.CreateDatabase("db1")
+	db1, err := txn.CreateDatabase("db1", "")
 	assert.Nil(t, err)
-	db2, err := txn.CreateDatabase("db2")
+	db2, err := txn.CreateDatabase("db2", "")
 	assert.Nil(t, err)
 	assert.NotNil(t, db1)
 	assert.NotNil(t, db2)
@@ -1370,17 +1368,17 @@ func TestSystemDB1(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase(pkgcatalog.MO_CATALOG)
+	_, err := txn.CreateDatabase(pkgcatalog.MO_CATALOG, "")
 	assert.NotNil(t, err)
 	_, err = txn.DropDatabase(pkgcatalog.MO_CATALOG)
 	assert.NotNil(t, err)
 
-	db1, err := txn.CreateDatabase("db1")
+	db1, err := txn.CreateDatabase("db1", "")
 	assert.Nil(t, err)
 	_, err = db1.CreateRelation(schema)
 	assert.Nil(t, err)
 
-	_, err = txn.CreateDatabase("db2")
+	_, err = txn.CreateDatabase("db2", "")
 	assert.Nil(t, err)
 
 	db, _ := txn.GetDatabase(pkgcatalog.MO_CATALOG)
@@ -2799,7 +2797,7 @@ func TestDropCreated1(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	_, err = txn.CreateDatabase("db")
+	_, err = txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	db, err := txn.DropDatabase("db")
 	assert.Nil(t, err)
@@ -2819,7 +2817,7 @@ func TestDropCreated2(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -2945,14 +2943,14 @@ func TestMultiTenantDBOps(t *testing.T) {
 	defer tae.Close()
 
 	txn11 := mustStartTxn(t, tae, 1)
-	_, err = txn11.CreateDatabase("db")
+	_, err = txn11.CreateDatabase("db", "")
 	assert.NoError(t, err)
 	txn12 := mustStartTxn(t, tae, 1)
-	_, err = txn11.CreateDatabase("db")
+	_, err = txn11.CreateDatabase("db", "")
 	assert.Error(t, err)
 
 	txn21 := mustStartTxn(t, tae, 2)
-	_, err = txn21.CreateDatabase("db")
+	_, err = txn21.CreateDatabase("db", "")
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn11.Commit())
@@ -2960,7 +2958,7 @@ func TestMultiTenantDBOps(t *testing.T) {
 	assert.NoError(t, txn21.Commit())
 
 	txn22 := mustStartTxn(t, tae, 2)
-	_, _ = txn22.CreateDatabase("db2")
+	_, _ = txn22.CreateDatabase("db2", "")
 
 	txn23 := mustStartTxn(t, tae, 2)
 	// [mo_catalog, db]
@@ -3123,7 +3121,7 @@ func TestUpdateAttr(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -3170,9 +3168,9 @@ func TestLogtailBasic(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	// craete 2 db and 2 tables
 	txn, _ := tae.StartTxn(nil)
-	todropdb, _ := txn.CreateDatabase("todrop")
+	todropdb, _ := txn.CreateDatabase("todrop", "")
 	todropdb.CreateRelation(schema)
-	db, _ := txn.CreateDatabase("db")
+	db, _ := txn.CreateDatabase("db", "")
 	tbl, _ := db.CreateRelation(schema)
 	dbID := db.GetID()
 	tableID := tbl.ID()
@@ -3814,68 +3812,6 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
-}
-
-func TestSnapshotBatch(t *testing.T) {
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := newTestEngine(t, opts)
-	defer tae.Close()
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, 30)
-	tae.createRelAndAppend(bat, true)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs := types.BuildTS(0, 0)
-	txn, _ := tae.StartTxn(nil)
-	maxTs := txn.GetStartTS()
-
-	runner := tae.DB.BGCheckpointRunner
-	entry := checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg := catalog.NewEmptyCatalog()
-	r := checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
-
-	txn, relation := tae.getRelation()
-	blkIt := relation.MakeBlockIt()
-	for blkIt.Valid() {
-		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
-		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
-		blkIt.Next()
-	}
-	segIt := relation.MakeSegmentIt()
-	for segIt.Valid() {
-		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
-		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
-		segIt.Next()
-	}
-	db, err := txn.GetDatabase("db")
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName("test")
-	assert.NoError(t, err)
-	_, err = txn.DropDatabase("db")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs = maxTs.Next()
-	txn, _ = tae.StartTxn(nil)
-	maxTs = txn.GetStartTS()
-	runner = tae.DB.BGCheckpointRunner
-	entry = checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg = catalog.NewEmptyCatalog()
-	r = checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
 }
 
 func TestCompactDeltaBlk(t *testing.T) {

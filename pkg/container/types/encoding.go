@@ -39,6 +39,15 @@ const (
 	UuidSize       int = 16
 )
 
+func EncodeSliceWithCap[T any](v []T) []byte {
+	var t T
+	sz := int(unsafe.Sizeof(t))
+	if cap(v) > 0 {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
+	}
+	return nil
+}
+
 func EncodeSlice[T any](v []T) []byte {
 	var t T
 	sz := int(unsafe.Sizeof(t))

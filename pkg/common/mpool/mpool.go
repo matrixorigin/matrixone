@@ -134,11 +134,22 @@ var PoolElemSize = []int{64, 128, 256, 512, 1024, 2048, 4096}
 // Zeros, enough for largest pool element
 var ZeroSlice = make([]byte, 4096)
 
-// Memory header, kMemHdrSz = 8
+// Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
-	fixedPoolIdx int8
 	allocSz      int32
+	fixedPoolIdx int8
+	guard        [3]uint8
+}
+
+func (pHdr *memHdr) SetGuard() {
+	pHdr.guard[0] = 0xDE
+	pHdr.guard[1] = 0xAD
+	pHdr.guard[2] = 0xBF
+}
+
+func (pHdr *memHdr) CheckGuard() bool {
+	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
 }
 
 // pool for fixed elements.  Note that we preconfigure the pool size.
@@ -187,7 +198,9 @@ func (fp *fixedPool) initPool(tag string, poolid int64, idx int, eleCnt int, cap
 		pHdr := (*memHdr)(hdr)
 		pHdr.poolId = poolid
 		pHdr.fixedPoolIdx = int8(idx)
-		pHdr.allocSz = 0
+		pHdr.allocSz = -1
+		pHdr.SetGuard()
+
 		fp.flist.put(hdr)
 	}
 	return int64(nb), nil
@@ -488,8 +501,8 @@ func (fp *fixedPool) alloc(sz int) []byte {
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
-	if sz > GB {
-		return nil, moerr.NewInternalError("Alloc size %d too large", sz)
+	if sz < 0 || sz > GB {
+		return nil, moerr.NewInternalError("Invalid alloc size %d", sz)
 	}
 
 	if sz == 0 {
@@ -531,36 +544,53 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	pHdr.poolId = mp.id
 	pHdr.fixedPoolIdx = NumFixedPool
 	pHdr.allocSz = int32(sz)
+	pHdr.SetGuard()
+
 	return unsafe.Slice((*byte)(unsafe.Add(hdr, kMemHdrSz)), sz), nil
 }
 
 func (fp *fixedPool) free(hdr unsafe.Pointer) {
 	pHdr := (*memHdr)(hdr)
-	pHdr.allocSz = 0
 	fp.stats.RecordFree("", int64(pHdr.allocSz))
+
+	if pHdr.allocSz == -1 {
+		// double free.
+		panic(moerr.NewInternalError("free size -1, possible double free"))
+	}
+	pHdr.allocSz = -1
 	fp.flist.put(hdr)
 }
 
 func (mp *MPool) Free(bs []byte) {
-	if bs == nil {
+	if bs == nil || cap(bs) == 0 {
 		// free nil is OK.
 		return
 	}
 
+	bs = bs[:1]
 	pb := (unsafe.Pointer)(&bs[0])
 	offset := -kMemHdrSz
 	hdr := unsafe.Add(pb, offset)
 	pHdr := (*memHdr)(hdr)
 
+	if !pHdr.CheckGuard() {
+		panic(moerr.NewInternalError("mp header corruption"))
+	}
+
 	if pHdr.poolId == mp.id {
 		if pHdr.fixedPoolIdx < NumFixedPool {
 			mp.pools[pHdr.fixedPoolIdx].free(hdr)
 		} else {
+			if pHdr.allocSz == -1 {
+				// double free.
+				panic(moerr.NewInternalError("free size -1, possible double free"))
+			}
 			if mp.details != nil {
 				mp.details.recordFree(int64(pHdr.allocSz))
 			}
 			mp.stats.RecordFree(mp.tag, int64(pHdr.allocSz))
 			globalStats.RecordFree(mp.tag, int64(pHdr.allocSz))
+			pHdr.allocSz = -1
 		}
 	} else {
 		// cross pool free.

@@ -49,9 +49,8 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexBufMgr base.INodeManager
-	MTBufMgr    base.INodeManager
-	TxnBufMgr   base.INodeManager
+	MTBufMgr  base.INodeManager
+	TxnBufMgr base.INodeManager
 
 	TxnMgr     *txnbase.TxnManager
 	LogtailMgr *logtail.LogtailMgr
@@ -113,9 +112,9 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback()
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory) {
-	maxTs := db.Catalog.GetCheckpointed().MaxTS
-	replayer := newReplayer(dataFactory, db)
+func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
+	// maxTs := db.Catalog.GetCheckpointed().MaxTS
+	replayer := newReplayer(dataFactory, db, maxTs)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 

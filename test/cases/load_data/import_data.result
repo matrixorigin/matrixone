@@ -288,7 +288,7 @@ null    null    null    null
 null    null    null    null
 delete from t4;
 import data infile '$resources/load_data/time_date_5.csv' into table t4;
-data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
+Data truncation: data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
 
 select * from t4;
 col1    col2    col3    col4

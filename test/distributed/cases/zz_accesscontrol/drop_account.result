@@ -1,0 +1,44 @@
+drop account if exists drop_account_01;
+drop account if exists drop_account_02;
+drop account if exists drop_account_03;
+drop account if exists drop_account_04;
+drop account if exists drop_account_05;
+drop database if exists drop_acc_db_1;
+create account drop_account_01 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
+select account_name from mo_catalog.mo_account where account_name='drop_account_01';
+account_name
+drop_account_01
+drop account drop_account_01;
+drop account drop_account_02;
+internal error: there is no account drop_account_02
+select account_name from mo_catalog.mo_account where account_name='drop_account_01';
+account_name
+create account if not exists drop_account_03 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
+drop account drop_account_03;
+drop account if exists drop_account_03;
+select account_name from mo_catalog.mo_account where account_name='drop_account_03';
+account_name
+create account drop_account_04 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
+drop account `drop_account_04`;
+drop account sys;
+drop accout abc;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " accout abc;";
+drop account if not exists abc;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 19 near " not exists abc;";
+drop account exists abc;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 19 near " exists abc;";
+drop account '';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " '';";
+create account drop_account_05 ADMIN_NAME 'admin' IDENTIFIED BY '12345';
+create role drop_acc_role_1;
+create database drop_acc_db_1;
+create table drop_acc_db_1.drop_acc_tb_1(a int);
+insert into drop_acc_db_1.drop_acc_tb_1 values (20);
+create user drop_acc_user_1 identified by '1111' default role drop_acc_role_1;
+grant select ,insert ,update on table drop_acc_db_1.* to drop_acc_role_1 with grant option;
+drop account if exists drop_account_01;
+drop account if exists drop_account_02;
+drop account if exists drop_account_03;
+drop account if exists drop_account_04;
+drop account if exists drop_account_05;
+drop database if exists drop_acc_db_1;
