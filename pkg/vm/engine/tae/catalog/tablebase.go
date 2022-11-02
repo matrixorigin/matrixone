@@ -198,7 +198,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode boo
 		return
 	}
 	if be.HasDropCommittedLocked() {
-		return false, moerr.NewNotFound()
+		return false, moerr.GetOkExpectedEOB()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
 	return
