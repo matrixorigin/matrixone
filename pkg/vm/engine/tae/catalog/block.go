@@ -187,22 +187,6 @@ func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *BlockEntry) MakeLogEntry() *EntryCommand {
-	return newBlockCmd(0, CmdLogBlock, entry)
-}
-
-func (entry *BlockEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &BlockEntry{
-		MetaBaseEntry: ret.(*MetaBaseEntry),
-		state:         entry.state,
-		segment:       entry.segment,
-	}
-}
-
 func (entry *BlockEntry) DestroyData() (err error) {
 	if entry.blkData == nil {
 		return

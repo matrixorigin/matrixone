@@ -88,10 +88,6 @@ type Block interface {
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
-	SetMaxCheckpointTS(ts types.TS)
-	GetMaxCheckpointTS() types.TS
-
-	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	ReplayImmutIndex() error
