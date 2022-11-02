@@ -128,14 +128,6 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *DBBaseEntry) IsCreating() bool {
-	un := be.GetLatestNodeLocked()
-	if un == nil {
-		return true
-	}
-	return un.IsActive()
-}
-
 func (be *DBBaseEntry) HasDropCommitted() bool {
 	be.RLock()
 	defer be.RUnlock()
