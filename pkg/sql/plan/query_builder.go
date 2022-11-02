@@ -16,7 +16,7 @@ package plan
 
 import (
 	"encoding/json"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1814,6 +1814,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
+		tag := subCtx.rootTag()
 		headings := subCtx.headings
 		projects := subCtx.projects
 
@@ -1825,14 +1826,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if len(alias.Alias) > 0 {
 			table = string(alias.Alias)
 		}
+		if len(table) == 0 {
+			table = fmt.Sprintf("mo_table_subquery_alias_%d", tag)
+		}
 		if _, ok := ctx.bindingByTable[table]; ok {
 			return moerr.NewSyntaxError("table name %q specified more than once", table)
 		}
 
 		cols = make([]string, len(headings))
 		types = make([]*plan.Type, len(headings))
-
-		tag := builder.ctxByNode[nodeID].rootTag()
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
