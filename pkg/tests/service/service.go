@@ -360,6 +360,8 @@ func (c *testCluster) Options() Options {
 }
 
 func (c *testCluster) Close() error {
+	defer logutil.LogClose(c.logger, "tests-framework")()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1490,7 +1492,7 @@ func (c *testCluster) closeDNServices() error {
 
 // closeLogServices closes all log services.
 func (c *testCluster) closeLogServices() error {
-	c.logger.Info("start to close log services")
+	defer logutil.LogClose(c.logger, "tests-framework/logservices")()
 
 	for i, ls := range c.log.svcs {
 		c.logger.Info("close log service", zap.Int("index", i))
@@ -1504,7 +1506,7 @@ func (c *testCluster) closeLogServices() error {
 }
 
 func (c *testCluster) closeCNServices() error {
-	c.logger.Info("start to close cn services")
+	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
 
 	for i, cs := range c.cn.svcs {
 		c.logger.Info("close cn service", zap.Int("index", i))

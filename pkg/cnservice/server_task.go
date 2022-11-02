@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -112,7 +113,7 @@ func (s *service) startTaskRunner() {
 		),
 	)
 
-	s.registerExecutors()
+	s.registerExecutorsLocked()
 	if err := s.task.runner.Start(); err != nil {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
@@ -137,6 +138,8 @@ func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
 }
 
 func (s *service) waitSystemInitCompleted(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
+
 	startAt := time.Now()
 	s.logger.Debug("wait all init task completed task started")
 	wait := func() {
@@ -177,6 +180,8 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 }
 
 func (s *service) stopTask() error {
+	defer logutil.LogClose(s.logger, "cnservice/task")()
+
 	s.task.Lock()
 	defer s.task.Unlock()
 	if err := s.task.holder.Close(); err != nil {
@@ -188,7 +193,7 @@ func (s *service) stopTask() error {
 	return nil
 }
 
-func (s *service) registerExecutors() {
+func (s *service) registerExecutorsLocked() {
 	if s.task.runner == nil {
 		return
 	}
@@ -209,6 +214,10 @@ func (s *service) registerExecutors() {
 		return frontend.NewInternalExecutor(pu)
 	}
 
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		panic(moerr.NewInternalError("task Service not ok"))
+	}
 	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
 		func(ctx context.Context, t task.Task) error {
 			if err := frontend.InitSysTenant(moServerCtx); err != nil {
@@ -222,11 +231,6 @@ func (s *service) registerExecutors() {
 			}
 			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
-			}
-
-			ts, ok := s.GetTaskService()
-			if !ok {
-				panic(moerr.NewInternalError("task Service not ok"))
 			}
 
 			// init metric/log merge task cron rule
