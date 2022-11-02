@@ -214,6 +214,29 @@ func (chain *DeleteChain) CollectDeletesInRange(
 	return
 }
 
+// any uncommited node, return true
+// any committed node with prepare ts within [from, to], return true
+func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found bool) {
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
+		n := vn.(*DeleteNode)
+		if n.IsMerged() {
+			found, _ = n.PreparedIn(from, to)
+			return false
+		}
+
+		if n.IsActive() {
+			return true
+		}
+
+		found, _ = n.PreparedIn(from, to)
+		if n.IsAborted() {
+			found = false
+		}
+		return !found
+	})
+	return
+}
+
 func (chain *DeleteChain) CollectDeletesLocked(
 	ts types.TS,
 	collectIndex bool,
