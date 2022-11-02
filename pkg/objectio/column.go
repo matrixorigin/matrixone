@@ -19,9 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/compress"
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -58,33 +55,13 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 	}
 	data.Entries[0] = fileservice.IOEntry{
 		Offset: int64(cb.meta.location.Offset()),
-		Size:   int64(cb.meta.location.OriginSize()),
+		Size:   int64(cb.meta.location.Length()),
 	}
-	err = cb.allocData(&data.Entries[0], m)
+	data.Entries[0].Object, err = allocData(int64(cb.meta.location.OriginSize()), m)
 	if err != nil {
 		return nil, err
 	}
-	data.Entries[0].ToObject = func(r io.Reader) (any, int64, error) {
-		var buf []byte
-		if m != nil {
-			buf, err = m.Alloc(int(cb.meta.location.Length()))
-			if err != nil {
-				return nil, 0, err
-			}
-			defer m.Free(buf)
-		} else {
-			buf = make([]byte, cb.meta.location.Length())
-		}
-		_, err := r.Read(buf)
-		if err != nil {
-			return nil, 0, err
-		}
-		data.Entries[0].Data, err = compress.Decompress(buf, data.Entries[0].Data, compress.Lz4)
-		if err != nil {
-			return nil, 0, err
-		}
-		return data.Entries[0].Data, 1, nil
-	}
+	data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0], m)
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		cb.freeData(data.Entries, m)
@@ -106,16 +83,17 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
-		err = cb.allocData(&data.Entries[0], m)
+		data.Entries[0].Object, err = allocData(int64(cb.meta.bloomFilter.OriginSize()), m)
 		if err != nil {
 			return nil, err
 		}
+		data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0], m)
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			cb.freeData(data.Entries, m)
 			return nil, err
 		}
-		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Data), nil
+		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object.([]byte)), nil
 	}
 	return nil, nil
 }
