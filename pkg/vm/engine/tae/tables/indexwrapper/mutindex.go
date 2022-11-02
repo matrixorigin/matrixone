@@ -88,10 +88,6 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	if !exist {
 		return
 	}
-	ctx := new(index.KeysCtx)
-	ctx.Keys = keys
-	ctx.Selects = keyselects
-	ctx.SelectAll()
 	op := func(v any, _ int) error {
 		rows, err := idx.art.Search(v)
 		if err == index.ErrNotFound {

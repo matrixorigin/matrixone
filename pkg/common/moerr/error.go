@@ -70,6 +70,7 @@ const (
 	ErrConstraintViolation uint16 = 20304
 	ErrDuplicate           uint16 = 20305
 	ErrRoleGrantedToSelf   uint16 = 20306
+	ErrDuplicateEntry      uint16 = 20307
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -206,6 +207,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -815,6 +817,10 @@ func NewNotFound() *Error {
 
 func NewDuplicate() *Error {
 	return newWithDepth(Context(), ErrDuplicate)
+}
+
+func NewDuplicateEntry(entry string, key string) *Error {
+	return newWithDepth(Context(), ErrDuplicateEntry, entry, key)
 }
 
 func NewRoleGrantedToSelf(from, to string) *Error {
