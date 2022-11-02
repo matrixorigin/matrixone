@@ -140,13 +140,13 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 
 // GetLogger get default zap logger
 func GetLogger(options ...zap.Option) *zap.Logger {
-	return GetLoggerWithOptions(zapcore.InfoLevel, nil, nil, options...)
+	return GetLoggerWithOptions(zapcore.DebugLevel, nil, nil, options...)
 }
 
 // GetPanicLogger returns a zap logger which will panic on Fatal(). The
 // returned zap logger should only be used in tests.
 func GetPanicLogger(options ...zap.Option) *zap.Logger {
-	return GetPanicLoggerWithLevel(zapcore.InfoLevel, options...)
+	return GetPanicLoggerWithLevel(zapcore.DebugLevel, options...)
 }
 
 // GetPanicLoggerWithLevel returns a zap logger which will panic on Fatal(). The
