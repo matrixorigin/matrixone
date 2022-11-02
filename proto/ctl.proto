@@ -15,8 +15,8 @@
  */
 
 syntax = "proto3";
-package debug; 
-option go_package = "github.com/matrixorigin/matrixone/pkg/pb/debug";
+package ctl; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/ctl";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
@@ -26,7 +26,10 @@ option (gogoproto.goproto_enum_prefix_all) = true;
 // CmdMethod debug command method
 enum CmdMethod {
     // Ping ping the service.
-    Ping   = 0;   
+    Ping   = 0;
+    // Flush is to force flush the table data.
+    // parameter should be "DbName.TableName"
+    Flush  = 1;
 }
 
 // DNPingRequest ping request

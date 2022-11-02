@@ -71,11 +71,11 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
@@ -113,7 +113,7 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
 invalid input: invalid datatime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
@@ -178,11 +178,11 @@ select date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY);
 date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY)
 2271-10-17 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 MONTH);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 QUARTER);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL -100000 YEAR);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND)
 1997-12-31 23:58:59
@@ -334,7 +334,7 @@ SELECT "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR;
 "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR
 null
 SELECT "1900-01-01 00:00:00" + INTERVAL "1000000000:214748364700" MINUTE_SECOND;
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 SELECT "1997-12-31 23:59:59" + INTERVAL 1 SECOND;
 "1997-12-31 23:59:59" + INTERVAL 1 SECOND
 1998-01-01 00:00:00
@@ -572,15 +572,15 @@ CAST('2006-09-26' AS DATE) + INTERVAL 1 WEEK
 drop table if exists t1;
 create table t1 (d date);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 select * from t1;

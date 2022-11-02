@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debug
+package ctl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 
-	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -46,4 +47,4 @@ type requestSender = func(context.Context, []txn.CNOpRequest) ([]txn.CNOpRespons
 type handleFunc func(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.DebugResult, error)
+	sender requestSender) (pb.CtlResult, error)
