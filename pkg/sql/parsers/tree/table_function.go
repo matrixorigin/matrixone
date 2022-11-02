@@ -16,11 +16,14 @@ package tree
 
 type TableFunction struct {
 	statementImpl
-	Func *FuncExpr
+	Func       *FuncExpr
+	SelectStmt *Select
 }
 
 func (t *TableFunction) Format(ctx *FmtCtx) {
-	t.Func.Format(ctx)
+	if t.Func != nil {
+		t.Func.Format(ctx)
+	}
 }
 
 func (t TableFunction) Id() string {

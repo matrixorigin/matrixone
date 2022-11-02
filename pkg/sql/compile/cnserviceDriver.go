@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"time"
@@ -31,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -749,22 +747,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
-		var (
-			dt  []byte
-			err error
-		)
-		if dt, err = json.Marshal(t.Es.Extern); err != nil {
-			return ctxId, nil, err
-		}
-		in.Unnest = &pipeline.Unnest{
-			Attrs:  t.Es.Attrs,
-			Cols:   t.Es.Cols,
-			Extern: dt,
-		}
-	case *generate_series.Argument:
-		in.GenerateSeries = &pipeline.GenerateSeries{
+		in.TableFunction = &pipeline.TableFunction{
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
+			Exprs: t.Es.ExprList,
+			Param: []byte(t.Es.ColName),
+		}
+	case *generate_series.Argument:
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs: t.Es.Attrs,
+			Exprs: t.Es.ExprList,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -985,23 +977,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.Unnest:
-		param := &unnest.ExternalParam{}
-		if err := json.Unmarshal(opr.Unnest.Extern, param); err != nil {
-			return v, err
-		}
-		logutil.Infof("unnest unmarshal %+v", param)
 		v.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  opr.Unnest.Attrs,
-				Cols:   opr.Unnest.Cols,
-				Extern: param,
+				Attrs:    opr.TableFunction.Attrs,
+				Cols:     opr.TableFunction.Cols,
+				ExprList: opr.TableFunction.Exprs,
+				ColName:  string(opr.TableFunction.Param),
 			},
 		}
 	case vm.GenerateSeries:
 		v.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
-				Attrs: opr.GenerateSeries.Attrs,
-				Cols:  opr.GenerateSeries.Cols,
+				Attrs:    opr.TableFunction.Attrs,
+				ExprList: opr.TableFunction.Exprs,
 			},
 		}
 	case vm.HashBuild:
