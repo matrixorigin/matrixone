@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,41 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debug
+package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/fagongzi/util/format"
-	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func handlePing() handleFunc {
-	return getDNHandlerFunc(
-		pb.CmdMethod_Ping,
-		func(parameter string) ([]uint64, error) {
-			if len(parameter) > 0 {
-				id, err := format.ParseStringUint64(parameter)
-				if err != nil {
-					return nil, err
-				}
-				return []uint64{id}, nil
-			}
-			return nil, nil
-		},
-		func(dnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
-			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter}), nil
-		},
-		func(data []byte) (interface{}, error) {
-			pong := pb.DNPingResponse{}
-			protoc.MustUnmarshal(&pong, data)
-			return pong, nil
-		})
-}
 
 // getDNHandlerFunc used to handle dn's debug command handle func.
 // method: debug command type.
@@ -60,13 +34,13 @@ func getDNHandlerFunc(method pb.CmdMethod,
 	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender) (pb.DebugResult, error) {
+		sender requestSender) (pb.CtlResult, error) {
 		if service != dn {
-			return pb.DebugResult{}, moerr.NewNotSupported("service %s not supported", service)
+			return pb.CtlResult{}, moerr.NewNotSupported("service %s not supported", service)
 		}
 		targetDNs, err := whichDN(parameter)
 		if err != nil {
-			return pb.DebugResult{}, moerr.ConvertGoError(err)
+			return pb.CtlResult{}, moerr.ConvertGoError(err)
 		}
 
 		containsDN := func(id uint64) bool {
@@ -80,7 +54,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 
 		detail, err := proc.GetClusterDetails()
 		if err != nil {
-			return pb.DebugResult{}, err
+			return pb.CtlResult{}, err
 		}
 		var requests []txn.CNOpRequest
 		for _, store := range detail.GetDNStores() {
@@ -88,7 +62,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 				if len(targetDNs) == 0 || containsDN(shard.ShardID) {
 					payLoad, err := payload(shard.ShardID, parameter, proc)
 					if err != nil {
-						return pb.DebugResult{}, err
+						return pb.CtlResult{}, err
 					}
 					requests = append(requests, txn.CNOpRequest{
 						OpCode: uint32(method),
@@ -108,7 +82,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 		if len(requests) > 0 {
 			responses, err := sender(proc.Ctx, requests)
 			if err != nil {
-				return pb.DebugResult{}, err
+				return pb.CtlResult{}, err
 			}
 			if len(responses) != len(requests) {
 				panic("requests and response not match")
@@ -117,11 +91,11 @@ func getDNHandlerFunc(method pb.CmdMethod,
 			for _, resp := range responses {
 				r, err := repsonseUnmarshaler(resp.Payload)
 				if err != nil {
-					return pb.DebugResult{}, err
+					return pb.CtlResult{}, err
 				}
 				results = append(results, r)
 			}
 		}
-		return pb.DebugResult{Method: method.String(), Data: results}, nil
+		return pb.CtlResult{Method: method.String(), Data: results}, nil
 	}
 }

@@ -260,7 +260,7 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	defer e.RUnlock()
 	node := e.entries[id]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	table = node.GetPayload()
 	return
@@ -275,7 +275,7 @@ func (e *DBEntry) txnGetNodeByName(
 	fullName := genTblFullName(tenantID, name)
 	node := e.nameNodes[fullName]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return node.TxnGetNodeLocked(ts)
 }
@@ -309,7 +309,7 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 	//check whether visible and dropped.
 	visible, dropped := entry.GetVisibility(txn.GetStartTS())
 	if !visible || dropped {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return
 }
@@ -356,7 +356,7 @@ func (e *DBEntry) DropTableEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bo
 func (e *DBEntry) CreateTableEntry(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txn, dataFactory)
-	err = e.AddEntryLocked(created, txn)
+	err = e.AddEntryLocked(created, txn, false)
 	e.Unlock()
 
 	return created, err
@@ -369,7 +369,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 		return nil, moerr.NewDuplicate()
 	}
 	created = NewTableEntryWithTableId(e, schema, txn, dataFactory, tableId)
-	err = e.AddEntryLocked(created, txn)
+	err = e.AddEntryLocked(created, txn, false)
 	e.Unlock()
 
 	return created, err
@@ -387,7 +387,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.GetOkExpectedEOB()
 	} else {
 		nn := e.nameNodes[table.GetFullName()]
 		nn.DeleteNode(table.GetID())
@@ -411,7 +411,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 //
 // 2.2.2 Check duplicate/not found.
 // If the entry hasn't been dropped, return ErrDuplicate.
-func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err error) {
+func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDedup bool) (err error) {
 	defer func() {
 		if err == nil {
 			e.catalog.AddTableCnt(1)
@@ -433,10 +433,12 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetNode()
-		record := node.GetPayload()
-		err = record.PrepareAdd(txn)
-		if err != nil {
-			return
+		if !skipDedup {
+			record := node.GetPayload()
+			err = record.PrepareAdd(txn)
+			if err != nil {
+				return
+			}
 		}
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
@@ -554,24 +556,6 @@ func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	n += int64(size)
 	e.createSql = string(buf)
 	return
-}
-
-func (e *DBEntry) MakeLogEntry() *EntryCommand {
-	return newDBCmd(0, CmdLogDatabase, e)
-}
-
-func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := e.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &DBEntry{
-		DBBaseEntry: ret.(*DBBaseEntry),
-		acInfo:      e.acInfo,
-		createSql:   e.createSql,
-		name:        e.name,
-		catalog:     e.catalog,
-	}
 }
 
 // IsActive is coarse API: no consistency check
