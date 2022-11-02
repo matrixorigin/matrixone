@@ -216,8 +216,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
-	ses.txnCompileCtx.SetSession(ses)
-	ses.txnHandler.SetSession(ses)
+	ses.GetTxnCompileCtx().SetSession(ses)
+	ses.GetTxnHandler().SetSession(ses)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Dispose()
@@ -447,6 +447,12 @@ func (ses *Session) GetUUID() []byte {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.uuid[:]
+}
+
+func (ses *Session) GetUUIDString() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.uuid.String()
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {

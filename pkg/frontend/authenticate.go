@@ -53,7 +53,7 @@ type TenantInfo struct {
 }
 
 func (ti *TenantInfo) String() string {
-	return fmt.Sprintf("{tenantInfo %s:%s:%s -- %d:%d:%d}", ti.Tenant, ti.User, ti.DefaultRole, ti.TenantID, ti.UserID, ti.DefaultRoleID)
+	return fmt.Sprintf("{account %s:%s:%s -- %d:%d:%d}", ti.Tenant, ti.User, ti.DefaultRole, ti.TenantID, ti.UserID, ti.DefaultRoleID)
 }
 
 func (ti *TenantInfo) GetTenant() string {

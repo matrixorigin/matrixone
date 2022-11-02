@@ -155,6 +155,8 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		ses.SetRequestContext(tenantCtx)
 		executor.PrepareSessionBeforeExecRequest(routine.GetSession())
+		debug := makeSessionInfo(ses)
+		executor.(*MysqlCmdExecutor).setDebugInfoPrefix(debug)
 
 		if resp, err = executor.ExecRequest(tenantCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)

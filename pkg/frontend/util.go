@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 	"runtime"
 	"strconv"
@@ -471,10 +472,68 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		logInfo(makeSessionInfo(ses), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
-		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		logError(makeSessionInfo(ses), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
+}
+
+func logInfo(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Info(msg, fields...)
+}
+
+func logError(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Error(msg, fields...)
+}
+
+func logInfof(info string, msg string, fields ...interface{}) {
+	logutil.Infof(msg+" %s", fields, info)
+}
+
+func logErrorf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Errorf(msg, fields...)
+}
+
+func makeSessionInfo(ses *Session) string {
+	if ses == nil {
+		return ""
+	}
+	sb := bytes.Buffer{}
+	proto := ses.GetMysqlProtocol()
+	if proto != nil {
+		sb.WriteString(" ")
+		sb.WriteString(makeProtocolInfo(proto))
+		sb.WriteString(" ")
+	}
+
+	sb.WriteString("session ")
+	sb.WriteString(ses.GetUUIDString())
+	account := ses.GetTenantInfo()
+	if account != nil {
+		sb.WriteString(" ")
+		sb.WriteString(account.String())
+	}
+
+	return sb.String()
+}
+
+func makeProtocolInfo(proto Protocol) string {
+	if proto == nil {
+		return ""
+	}
+	sb := bytes.Buffer{}
+	remoteHost, remotePort, _, _ := proto.Peer()
+	connId := proto.ConnectionID()
+	sb.WriteString("connection id ")
+	sb.WriteString(fmt.Sprintf("%d", connId))
+	sb.WriteString(" from ")
+	sb.WriteString(remoteHost)
+	sb.WriteString(" ")
+	sb.WriteString(remotePort)
+	return sb.String()
 }
 
 func fileExists(path string) (bool, error) {

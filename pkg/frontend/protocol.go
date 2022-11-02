@@ -150,8 +150,8 @@ type Protocol interface {
 	// ConnectionID the identity of the client
 	ConnectionID() uint32
 
-	// Peer gets the address [Host:Port] of the client
-	Peer() (string, string)
+	// Peer gets the address [Host:Port,Host:Port] of the client and the server
+	Peer() (string, string, string, string)
 
 	GetDatabaseName() string
 
@@ -226,7 +226,6 @@ func (cpi *ProtocolImpl) Quit() {
 	defer cpi.lock.Unlock()
 	if cpi.tcpConn != nil {
 		if !cpi.tcpConn.Connected() {
-			logutil.Warn("close tcp meet conn not Connected")
 			return
 		}
 		err := cpi.tcpConn.Close()
@@ -246,14 +245,25 @@ func (cpi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
 	return cpi.tcpConn
 }
 
-func (cpi *ProtocolImpl) Peer() (string, string) {
-	addr := cpi.GetTcpConnection().RemoteAddress()
+func (cpi *ProtocolImpl) Peer() (string, string, string, string) {
+	tcp := cpi.GetTcpConnection()
+	addr := tcp.RemoteAddress()
+	rawConn := tcp.RawConn()
+	var local net.Addr
+	if rawConn != nil {
+		local = rawConn.LocalAddr()
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		logutil.Errorf("get peer host:port failed. error:%v ", err)
-		return "failed", "0"
+		return "failed", "0", "", ""
 	}
-	return host, port
+	localHost, localPort, err := net.SplitHostPort(local.String())
+	if err != nil {
+		logutil.Errorf("get peer host:port failed. error:%v ", err)
+		return "failed", "0", "failed", "0"
+	}
+	return host, port, localHost, localPort
 }
 
 func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
@@ -375,8 +385,8 @@ func (fp *FakeProtocol) ConnectionID() uint32 {
 	return fakeConnectionID
 }
 
-func (fp *FakeProtocol) Peer() (string, string) {
-	return "", ""
+func (fp *FakeProtocol) Peer() (string, string, string, string) {
+	return "", "", "", ""
 }
 
 func (fp *FakeProtocol) GetDatabaseName() string {

@@ -204,7 +204,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 }
 
 // Peer gets the address [Host:Port] of the client
-func (ip *internalProtocol) Peer() (string, string) {
+func (ip *internalProtocol) Peer() (string, string, string, string) {
 	panic("not impl")
 }
 
