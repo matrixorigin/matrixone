@@ -17,6 +17,8 @@ package objectio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -53,7 +55,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 			Size:   int64(extent.originSize),
 		}
 	}
-	err = r.allocData(metas.Entries, m)
+	err = r.allocDatas(metas.Entries, m)
 	defer r.freeData(metas.Entries, m)
 	if err != nil {
 		return nil, err
@@ -95,12 +97,27 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
 		}
+		err = r.allocData(&entry, m)
+		if err != nil {
+			r.freeData(data.Entries, m)
+			return nil, err
+		}
+		entry.ToObject = func(r io.Reader) (any, int64, error) {
+			if m != nil {
+				entry.Object, err = m.Alloc(int(col.GetMeta().location.OriginSize()))
+				if err != nil {
+					return nil, 0, err
+				}
+			} else {
+				entry.Object = make([]byte, col.GetMeta().location.Length())
+			}
+			entry.Object, err = compress.Decompress(entry.Data, entry.Object.([]byte), compress.Lz4)
+			if err != nil {
+				return nil, 0, err
+			}
+			return entry.Data, 1, nil
+		}
 		data.Entries = append(data.Entries, entry)
-	}
-	err = r.allocData(data.Entries, m)
-	if err != nil {
-		r.freeData(data.Entries, m)
-		return nil, err
 	}
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
@@ -175,7 +192,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 		Offset: fileSize - size,
 		Size:   size,
 	}
-	err = r.allocData(data.Entries, m)
+	err = r.allocDatas(data.Entries, m)
 	if err != nil {
 		return nil, err
 	}
@@ -202,13 +219,23 @@ func (r *ObjectReader) freeData(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	}
 }
 
-func (r *ObjectReader) allocData(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
+func (r *ObjectReader) allocDatas(Entries []fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
 		for i := range Entries {
 			Entries[i].Data, err = m.Alloc(int(Entries[i].Size))
 			if err != nil {
 				return
 			}
+		}
+	}
+	return nil
+}
+
+func (r *ObjectReader) allocData(Entrie *fileservice.IOEntry, m *mpool.MPool) (err error) {
+	if m != nil {
+		Entrie.Data, err = m.Alloc(int(Entrie.Size))
+		if err != nil {
+			return
 		}
 	}
 	return nil

@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -56,11 +58,32 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 	}
 	data.Entries[0] = fileservice.IOEntry{
 		Offset: int64(cb.meta.location.Offset()),
-		Size:   int64(cb.meta.location.Length()),
+		Size:   int64(cb.meta.location.OriginSize()),
 	}
-	err = cb.allocData(data.Entries, m)
+	err = cb.allocData(&data.Entries[0], m)
 	if err != nil {
 		return nil, err
+	}
+	data.Entries[0].ToObject = func(r io.Reader) (any, int64, error) {
+		var buf []byte
+		if m != nil {
+			buf, err = m.Alloc(int(cb.meta.location.Length()))
+			if err != nil {
+				return nil, 0, err
+			}
+			defer m.Free(buf)
+		} else {
+			buf = make([]byte, cb.meta.location.Length())
+		}
+		_, err := r.Read(buf)
+		if err != nil {
+			return nil, 0, err
+		}
+		data.Entries[0].Data, err = compress.Decompress(buf, data.Entries[0].Data, compress.Lz4)
+		if err != nil {
+			return nil, 0, err
+		}
+		return data.Entries[0].Data, 1, nil
 	}
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
@@ -83,7 +106,7 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
-		err = cb.allocData(data.Entries, m)
+		err = cb.allocData(&data.Entries[0], m)
 		if err != nil {
 			return nil, err
 		}
@@ -201,12 +224,14 @@ func (cb *ColumnBlock) freeData(entry []fileservice.IOEntry, m *mpool.MPool) {
 	}
 }
 
-func (cb *ColumnBlock) allocData(entry []fileservice.IOEntry, m *mpool.MPool) (err error) {
+func (r *ColumnBlock) allocData(Entrie *fileservice.IOEntry, m *mpool.MPool) (err error) {
 	if m != nil {
-		entry[0].Data, err = m.Alloc(int(entry[0].Size))
+		Entrie.Data, err = m.Alloc(int(Entrie.Size))
 		if err != nil {
 			return
 		}
+	} else {
+		Entrie.Data = make([]byte, Entrie.Size)
 	}
 	return nil
 }
