@@ -48,7 +48,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		return err
+		return moerr.NewErrDropNonExistsDB(dbName)
 	}
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }

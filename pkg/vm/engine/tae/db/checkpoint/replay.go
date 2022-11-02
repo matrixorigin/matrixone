@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -32,10 +33,13 @@ type metaFile struct {
 	end   types.TS
 }
 
-func (r *runner) Replay() {
+func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
 	dirs, err := r.fs.ListDir(CheckpointDir)
 	if err != nil {
-		panic(err)
+		return
+	}
+	if len(dirs) == 0 {
+		return
 	}
 	metaFiles := make([]*metaFile, 0)
 	for i, dir := range dirs {
@@ -53,13 +57,14 @@ func (r *runner) Replay() {
 	dir := dirs[targetIdx]
 	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.Service)
 	if err != nil {
-		panic(err)
+		return
 	}
 	bs, err := reader.ReadAllMeta(context.Background(), dir.Size, common.DefaultAllocator)
 	if err != nil {
-		panic(err)
+		return
 	}
 	bat := containers.NewBatch()
+	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	nullables := CheckpointSchema.Nullables()
@@ -67,17 +72,17 @@ func (r *runner) Replay() {
 		if bs[0].GetExtent().End() == 0 {
 			continue
 		}
-		col, err := bs[0].GetColumn(uint16(i))
-		if err != nil {
-			panic(err)
+		col, err2 := bs[0].GetColumn(uint16(i))
+		if err2 != nil {
+			return types.TS{}, err2
 		}
-		data, err := col.GetData(context.Background(), nil)
-		if err != nil {
-			panic(err)
+		data, err2 := col.GetData(context.Background(), nil)
+		if err2 != nil {
+			return types.TS{}, err2
 		}
 		pkgVec := vector.New(colTypes[i])
 		if err = pkgVec.Read(data.Entries[0].Data); err != nil {
-			panic(err)
+			return
 		}
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
@@ -97,7 +102,14 @@ func (r *runner) Replay() {
 			location: metaloc,
 			state:    ST_Finished,
 		}
-		r.storage.entries.Set(checkpointEntry)
-		checkpointEntry.Replay(r.catalog, r.fs)
+		r.tryAddNewCheckpointEntry(checkpointEntry)
+		if err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
+			return
+		}
+		if maxTs.Less(checkpointEntry.end) {
+			maxTs = checkpointEntry.end
+		}
 	}
+	r.source.Init(maxTs)
+	return
 }
