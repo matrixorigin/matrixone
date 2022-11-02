@@ -43,7 +43,9 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	logutil.Infof("Server Listening on : %s ", mo.uaddr)
+	if mo.app_unix != nil {
+		logutil.Infof("Server Listening on : %s ", mo.uaddr)
+	}
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -51,7 +53,9 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 
-	mo.app_unix.Start()
+	if mo.app_unix != nil {
+		mo.app_unix.Start()
+	}
 	return mo.app.Start()
 }
 
