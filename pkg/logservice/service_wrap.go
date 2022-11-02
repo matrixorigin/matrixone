@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
