@@ -81,11 +81,15 @@ func (s *StatementInfo) Size() int64 {
 }
 
 func (s *StatementInfo) Free() {
-	s.Statement = ""
-	s.StatementFingerprint = ""
-	s.StatementTag = ""
-	s.ExecPlan = nil
-	s.Error = nil
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if s.end { // cooperate with s.mux
+		s.Statement = ""
+		s.StatementFingerprint = ""
+		s.StatementTag = ""
+		s.ExecPlan = nil
+		s.Error = nil
+	}
 }
 
 func (s *StatementInfo) GetRow() *export.Row { return SingleStatementTable.GetRow() }
@@ -194,10 +198,10 @@ var EndStatement = func(ctx context.Context, err error) {
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	if !s.end {
 		// do report
-		s.mux.Lock()
-		defer s.mux.Unlock()
 		s.end = true
 		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)

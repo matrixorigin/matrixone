@@ -209,6 +209,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
 	}
+	if !stm.IsZeroTxnID() {
+		stm.Report(ctx)
+	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
@@ -269,6 +272,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 			}
 
 		}
+		stm.Report(ctx)
 	}
 }
 
