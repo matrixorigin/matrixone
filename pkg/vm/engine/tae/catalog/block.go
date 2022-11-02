@@ -198,6 +198,26 @@ func (entry *BlockEntry) MakeKey() []byte {
 	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
 }
 
+// PrepareCompact is performance insensitive
+// a block can be compacted:
+// 1. no uncommited node
+// 2. at least one committed node
+// 3. not compacted
+func (entry *BlockEntry) PrepareCompact() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.HasUncommittedNode() {
+		return false
+	}
+	if !entry.HasCommittedNode() {
+		return false
+	}
+	if entry.HasDropCommittedLocked() {
+		return false
+	}
+	return true
+}
+
 // IsActive is coarse API: no consistency check
 func (entry *BlockEntry) IsActive() bool {
 	segment := entry.GetSegment()
