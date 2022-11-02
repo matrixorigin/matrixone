@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -1208,13 +1209,32 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	// TODO: allocate the memory from process may suitable.
+func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
 	bat := new(batch.Batch)
+	mp := proc.Mp()
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process then.
+	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i].SetOriginal(true)
+		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+	}
+	// allocated memory of aggVec from mPool.
+	for i, ag := range bat.Aggs {
+		err = ag.WildAggReAlloc(mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Aggs[j].Free(mp)
+			}
+			for j := range bat.Vecs {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
 	}
 	return bat, err
 }

@@ -16,6 +16,9 @@ function prepare() {
   echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
   echo `locale`
 
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> show launch"
+  echo "$LAUNCH"
+
   echo ">>>>>>>>>>>>>>>>>>>>>>> show go env"
   echo `go env`
 
@@ -34,10 +37,19 @@ function run_bvt() {
   make build
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start mo service"
-   ./optools/run_bvt.sh ./ ${LAUNCH}
+   ./optools/run_bvt.sh ./ "${LAUNCH}"
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
-  cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+  if [[ "$LAUNCH" == "launch-tae-logservice" ]]; then
+    echo "> test case: test/cases"
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+  elif [[ "$LAUNCH" == "launch-tae-CN-tae-DN" ]]; then
+    echo "> test case: test/distributed/cases"
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases 2>&1
+  else
+    echo ">>>>>>>>>>>>>>>>>>>>>>>> please choose a launch way"
+    exit 1
+  fi
 }
 
 function bvt_ut() {
