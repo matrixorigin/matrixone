@@ -36,8 +36,10 @@ go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
-UT_TIMEOUT=30
+
 LOG="$G_TS-$TEST_TYPE.log"
+UT_TIMEOUT=${UT_TIMEOUT:-"30"}
+UT_PARALLEL=${UT_PARALLEL:-"1"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
@@ -81,6 +83,7 @@ function run_tests(){
     echo "#  UT REPORT:       $UT_REPORT"
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
+    echo "#  UT PARALLEL:     $UT_PARALLEL"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -93,11 +96,11 @@ function run_tests(){
     make cgo
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
 
     else
         logger "INF" "Run UT with race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  $UT_REPORT > $UT_FILTER

@@ -15,7 +15,11 @@ mo-service
 mo-server
 gen_config
 store/
+mo-data/
 
 # cgo compiler files linked system lib, so ignore it
 **/*.o
 **/*.a
+
+# go 
+vendor/
