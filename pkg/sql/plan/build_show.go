@@ -76,7 +76,12 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// logutil.Info(sql)
 
-	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	var createStr string
+	if tableDef.TableType == catalog.SystemOrdinaryRel {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemExternalRel {
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	}
 	rowCount := 0
 	var pkDefs []string
 
@@ -168,6 +173,42 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += comment
 	createStr += partition
+
+	if tableDef.TableType == catalog.SystemExternalRel {
+		param := tree.ExternParam{}
+		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
+		if err != nil {
+			return nil, err
+		}
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
+
+		escapedby := ""
+		if param.Tail.Fields.EscapedBy != byte(0) {
+			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		}
+
+		line := ""
+		if param.Tail.Lines.StartingBy != "" {
+			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+		}
+		lineEnd := ""
+		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
+			lineEnd = " TERMINATED BY '\\\\n'"
+		} else {
+			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+		}
+		if len(line) > 0 {
+			line += lineEnd
+		} else {
+			line = " LINES" + lineEnd
+		}
+
+		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
+		createStr += line
+		if param.Tail.IgnoredLines > 0 {
+			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
+		}
+	}
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
 	var buf bytes.Buffer
