@@ -83,17 +83,17 @@ func TestUnixTimestampVarcharToFloat64(t *testing.T) {
 		date   string
 		expect float64
 	}{
-		{`Test1`, `2000-01-01 12:00:00.159`, 946699200.159},
-		{`Test2`, `2015-11-13 10:20:19.012`, 1447381219.012},
-		{"Test3", `2012-11-13 10:20:19.0123456`, 1352773219.012346},
-		{"Test3", `2022-11-13 10:20:19.9999999`, 1668306020},
+		{`Test1`, `2000-01-01 12:00:00.159`, 946728000.159},
+		{`Test2`, `2015-11-13 10:20:19.012`, 1447410019.012},
+		{"Test3", `2012-11-13 10:20:19.0123456`, 1352802019.012346},
+		{"Test3", `2022-11-13 10:20:19.9999999`, 1668334820},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			scalarVec := testutil.MakeScalarVarchar(tt.date, 1)
 			newProcess := testutil.NewProcess()
 			newProcess.SessionInfo.TimeZone = time.UTC
-			resVec, err := UnixTimestampVarcharToFloat64([]*vector.Vector{scalarVec}, testutil.NewProcess())
+			resVec, err := UnixTimestampVarcharToFloat64([]*vector.Vector{scalarVec}, newProcess)
 			if err != nil {
 				t.Fatal(err)
 			}
