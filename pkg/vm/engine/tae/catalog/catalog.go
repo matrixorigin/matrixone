@@ -177,13 +177,6 @@ func (catalog *Catalog) ReplayCmd(
 
 func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 	var err error
 	un := cmd.entry.GetLatestNodeLocked().(*DBMVCCNode)
 	un.SetLogIndex(idx)
@@ -320,8 +313,6 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	tblun := tbl.SearchNode(un)
 	if tblun == nil {
 		tbl.Insert(un) //TODO isvalid
-		// } else {
-		// 	panic(fmt.Sprintf("duplicate node %v and %v", tblun, un))
 	}
 
 }
@@ -421,13 +412,6 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	idx *wal.Index,
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 
 	un := cmd.entry.GetLatestNodeLocked().(*MetadataMVCCNode)
 	un.SetLogIndex(idx)
@@ -559,12 +543,6 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	observer wal.ReplayObserver) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -764,9 +742,6 @@ func (catalog *Catalog) ReplayTableRows() {
 	}
 }
 func (catalog *Catalog) Close() error {
-	// if catalog.store != nil {
-	// 	catalog.store.Close()
-	// }
 	return nil
 }
 
