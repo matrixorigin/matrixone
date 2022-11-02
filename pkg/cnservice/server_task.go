@@ -113,7 +113,7 @@ func (s *service) startTaskRunner() {
 		),
 	)
 
-	s.registerExecutors()
+	s.registerExecutorsLocked()
 	if err := s.task.runner.Start(); err != nil {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
@@ -193,7 +193,7 @@ func (s *service) stopTask() error {
 	return nil
 }
 
-func (s *service) registerExecutors() {
+func (s *service) registerExecutorsLocked() {
 	if s.task.runner == nil {
 		return
 	}
@@ -214,6 +214,10 @@ func (s *service) registerExecutors() {
 		return frontend.NewInternalExecutor(pu)
 	}
 
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		panic(moerr.NewInternalError("task Service not ok"))
+	}
 	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
 		func(ctx context.Context, t task.Task) error {
 			if err := frontend.InitSysTenant(moServerCtx); err != nil {
@@ -227,11 +231,6 @@ func (s *service) registerExecutors() {
 			}
 			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
-			}
-
-			ts, ok := s.GetTaskService()
-			if !ok {
-				panic(moerr.NewInternalError("task Service not ok"))
 			}
 
 			// init metric/log merge task cron rule
