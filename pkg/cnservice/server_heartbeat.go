@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
@@ -33,15 +34,14 @@ func (s *service) startCNStoreHeartbeat() error {
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "cnservice/heartbeat-task")()
+
 	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
 	defer ticker.Stop()
-
-	s.logger.Info("CNStore heartbeat started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Info("CNStore heartbeat stopped")
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
