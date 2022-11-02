@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -77,12 +78,8 @@ func (entry *compactBlockEntry) Set1PC()     {}
 func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-	if view == nil || err != nil {
-		return
-	}
-	if view.DeleteMask != nil && !view.DeleteMask.IsEmpty() {
-		return moerr.NewTxnWWConflict()
+	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS(), types.MaxTs()) {
+		err = moerr.NewTxnWWConflict()
 	}
 	return
 }
