@@ -312,6 +312,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 
 func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
+		m.Free(a.da)
 		a.da = nil
 		a.vs = nil
 		a.es = nil
@@ -342,6 +343,17 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		return vec, nil
 	}
 	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+}
+
+func (a *UnaryDistAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
+	d, err := m.Alloc(len(a.da))
+	if err != nil {
+		return err
+	}
+	copy(d, a.da)
+	a.da = d
+	setDistAggValues[T1, T2](a, a.otyp)
+	return nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {

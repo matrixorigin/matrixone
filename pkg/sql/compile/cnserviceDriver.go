@@ -1220,13 +1220,21 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
+func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
 	// TODO: allocate the memory from process may suitable.
 	bat := new(batch.Batch)
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process then.
+	// the batch didn't alloc from mPool.
+	// set all vectors to be origin, avoid they were freed from mPool.
 	for i := range bat.Vecs {
 		bat.Vecs[i].SetOriginal(true)
+	}
+	// allocated memory from mPool to batch.
+	for _, ag := range bat.Aggs {
+		err = ag.WildAggReAlloc(proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return bat, err
 }
