@@ -35,12 +35,14 @@ const (
 )
 
 const (
-	SnapshotAttr_SegID   = catalog.SnapshotAttr_SegID
-	SnapshotAttr_TID     = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID    = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID       = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt = catalog.SegmentAttr_CreateAt
-	SegmentAttr_State    = catalog.SegmentAttr_State
+	SnapshotAttr_SegID           = catalog.SnapshotAttr_SegID
+	SnapshotAttr_TID             = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID            = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID               = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt         = catalog.SegmentAttr_CreateAt
+	SegmentAttr_State            = catalog.SegmentAttr_State
+	SnapshotAttr_BlockMaxRow     = catalog.SnapshotAttr_BlockMaxRow
+	SnapshotAttr_SegmentMaxBlock = catalog.SnapshotAttr_SegmentMaxBlock
 )
 
 var (
@@ -111,6 +113,8 @@ var (
 		txnbase.SnapshotAttr_LogIndex_Size,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
+		SnapshotAttr_BlockMaxRow,
+		SnapshotAttr_SegmentMaxBlock,
 	}
 	TblDNSchemaType = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
@@ -121,6 +125,8 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_uint32, 0, 0, 0),
+		types.New(types.T_uint16, 0, 0, 0),
 	}
 	SegmentDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -152,6 +158,8 @@ var (
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 		SnapshotAttr_SegID,
+		pkgcatalog.BlockMeta_MetaLoc,
+		pkgcatalog.BlockMeta_DeltaLoc,
 	}
 	BlockDNSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),
@@ -163,6 +171,8 @@ var (
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
 		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_varchar, 0, 0, 0),
+		types.New(types.T_varchar, 0, 0, 0),
 	}
 	BaseAttr = []string{
 		catalog.AttrRowID,
