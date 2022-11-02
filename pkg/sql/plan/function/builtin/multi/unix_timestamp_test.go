@@ -91,6 +91,8 @@ func TestUnixTimestampVarcharToFloat64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			scalarVec := testutil.MakeScalarVarchar(tt.date, 1)
+			newProcess := testutil.NewProcess()
+			newProcess.SessionInfo.TimeZone = time.UTC
 			resVec, err := UnixTimestampVarcharToFloat64([]*vector.Vector{scalarVec}, testutil.NewProcess())
 			if err != nil {
 				t.Fatal(err)
@@ -109,27 +111,27 @@ func TestUnixTimestampVarchar(t *testing.T) {
 		}{
 			{
 				datestr: "2013-01-02 08:10:02.123456",
-				expect:  1357085402.123456,
+				expect:  1357114202.123456,
 			},
 			{
 				datestr: "2006-01-02 12:19:02.123456",
-				expect:  1136175542.123456,
+				expect:  1136204342.123456,
 			},
 			{
 				datestr: "2022-01-02 15:21:02.123456",
-				expect:  1641108062.123456,
+				expect:  1641136862.123456,
 			},
 			{
 				datestr: "2006-01-02 12:19:02.666456",
-				expect:  1136175542.666456,
+				expect:  1136204342.666456,
 			},
 			{
 				datestr: "2011-01-02 19:31:02.121111",
-				expect:  1293967862.121111,
+				expect:  1293996662.121111,
 			},
 			{
 				datestr: "2002-01-02 01:41:02.123459",
-				expect:  1009906862.123459,
+				expect:  1009935662.123459,
 			},
 		}
 
@@ -143,7 +145,9 @@ func TestUnixTimestampVarchar(t *testing.T) {
 		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
 		expectVector := testutil.MakeFloat64Vector(expects, nil)
 
-		result, err := UnixTimestampVarcharToFloat64([]*vector.Vector{datestrVector}, testutil.NewProc())
+		newProc := testutil.NewProc()
+		newProc.SessionInfo.TimeZone = time.UTC
+		result, err := UnixTimestampVarcharToFloat64([]*vector.Vector{datestrVector}, newProc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,27 +163,27 @@ func TestUnixTimestampVarchar(t *testing.T) {
 		}{
 			{
 				datestr: "2013-01-02 08:10:02",
-				expect:  1357085402,
+				expect:  1357114202,
 			},
 			{
 				datestr: "2006-01-02 12:19:02",
-				expect:  1136175542,
+				expect:  1136204342,
 			},
 			{
 				datestr: "2022-01-02 15:21:02",
-				expect:  1641108062,
+				expect:  1641136862,
 			},
 			{
 				datestr: "2006-01-02 12:19:02",
-				expect:  1136175542,
+				expect:  1136204342,
 			},
 			{
 				datestr: "2011-01-02 19:31:02",
-				expect:  1293967862,
+				expect:  1293996662,
 			},
 			{
 				datestr: "2002-01-02 01:41:02",
-				expect:  1009906862,
+				expect:  1009935662,
 			},
 		}
 
@@ -193,7 +197,9 @@ func TestUnixTimestampVarchar(t *testing.T) {
 		datestrVector := testutil.MakeVarcharVector(datestrs, nil)
 		expectVector := testutil.MakeInt64Vector(expects, nil)
 
-		result, err := UnixTimestampVarcharToInt64([]*vector.Vector{datestrVector}, testutil.NewProc())
+		newProc := testutil.NewProc()
+		newProc.SessionInfo.TimeZone = time.UTC
+		result, err := UnixTimestampVarcharToInt64([]*vector.Vector{datestrVector}, newProc)
 		if err != nil {
 			t.Fatal(err)
 		}
