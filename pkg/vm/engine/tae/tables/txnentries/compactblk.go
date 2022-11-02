@@ -19,7 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -66,26 +66,9 @@ func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 	if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
 		return
 	}
-	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
-		// TODO:
-		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
-		// We'll ensure the schduler can only be stopped after txn manager being stopped.
-		logutil.Warnf("Schedule checkpoint task failed: %v", err)
-		err = nil
-	}
-	return entry.PostCommit()
-}
-func (entry *compactBlockEntry) PostCommit() (err error) {
-	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	if _, err = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS())); err != nil {
-		// TODO:
-		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
-		// We'll ensure the schduler can only be stopped after txn manager being stopped.
-		logutil.Warnf("Schedule checkpoint task failed: %v", err)
-		err = nil
-	}
 	return
 }
+
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()), entry.txn, csn)
 	return
@@ -95,12 +78,8 @@ func (entry *compactBlockEntry) Set1PC()     {}
 func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-	if view == nil || err != nil {
-		return
-	}
-	if view.DeleteMask != nil && !view.DeleteMask.IsEmpty() {
-		return moerr.NewTxnWWConflict()
+	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS(), types.MaxTs()) {
+		err = moerr.NewTxnWWConflict()
 	}
 	return
 }

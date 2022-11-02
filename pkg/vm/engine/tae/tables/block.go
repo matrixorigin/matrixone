@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -64,15 +63,13 @@ type dataBlock struct {
 	pkIndex      indexwrapper.Index // a shortcut, nil if no pk column
 	mvcc         *updates.MVCCHandle
 	score        *statBlock
-	ckpTs        atomic.Value
-	appendFrozen bool
 	fs           *objectio.ObjectFS
+	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	schema := meta.GetSchema()
 	var node *appendableNode
-	//var zeroV types.TS
 	block := &dataBlock{
 		RWMutex:   new(sync.RWMutex),
 		meta:      meta,
@@ -82,7 +79,6 @@ func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INode
 		bufMgr:    bufMgr,
 		fs:        fs,
 	}
-	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -124,19 +120,21 @@ func (blk *dataBlock) FreezeAppend() {
 	blk.appendFrozen = true
 }
 
+func (blk *dataBlock) PrepareCompact() bool {
+	if blk.RefCount() > 0 {
+		return false
+	}
+	blk.FreezeAppend()
+	if !blk.meta.PrepareCompact() {
+		return false
+	}
+	return blk.RefCount() == 0
+}
+
 func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
 	return blk.appendFrozen
-}
-
-func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
-	blk.ckpTs.Store(ts)
-}
-
-func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
-	ts := blk.ckpTs.Load().(types.TS)
-	return ts
 }
 
 func (blk *dataBlock) FreeData() {
@@ -179,6 +177,12 @@ func (blk *dataBlock) RunCalibration() (score int) {
 }
 
 func (blk *dataBlock) estimateABlkRawScore() (score int) {
+	blk.meta.RLock()
+	hasAnyCommitted := blk.meta.HasCommittedNode()
+	blk.meta.RUnlock()
+	if !hasAnyCommitted {
+		return 1
+	}
 	// Max row appended
 	rows := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
@@ -255,6 +259,9 @@ func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 	if force {
 		return 100
 	}
+	if score == 0 {
+		return 0
+	}
 	if score > 1 {
 		return score
 	}
@@ -284,21 +291,11 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
-	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.FreezeAppend()
-	blk.meta.RLock()
-	dropped := blk.meta.HasDropCommittedLocked()
-	inTxn := blk.meta.IsCreating()
-	anyCommitted := blk.meta.HasCommittedNode()
-	blk.meta.RUnlock()
-	if dropped || inTxn || !anyCommitted {
+
+	if !blk.PrepareCompact() {
 		return
 	}
-	// Make sure no appender use this block to compact
-	if blk.RefCount() > 0 {
-		// logutil.Infof("blk.RefCount() != 0 : %v, rows: %d", blk.meta.String(), blk.node.rows)
-		return
-	}
+
 	//logutil.Infof("CompactBlockTaskFactory blk: %d, rows: %d", blk.meta.ID, blk.node.rows)
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
@@ -828,6 +825,13 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		return nil
 	}
 	err = pks.Foreach(deduplicate, keyselects)
+	return
+}
+
+func (blk *dataBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
 }
 
