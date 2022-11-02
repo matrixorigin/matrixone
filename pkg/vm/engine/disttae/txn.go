@@ -565,10 +565,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	}
 
 	// key = expr's ColPos,  value = tableDef's ColPos
-	columnMap, err := getColumnsByExpr(expr, tableDef)
-	if err != nil {
-		return true
-	}
+	columnMap := getColumnsByExpr(expr, tableDef)
 
 	// if expr match no columns, just eval expr
 	if len(columnMap) == 0 {
