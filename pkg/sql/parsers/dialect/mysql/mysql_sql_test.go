@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "drop table if exists history",
+		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
+		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
 	}
 )
 
@@ -51,6 +52,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
+		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+	}, {
+		input:  "create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';",
+		output: "create account account admin_name 'root' identified by '123456'",
+	}, {
 		input: "drop table if exists history",
 	}, {
 		input: "create user daisy@192.168.1.10 identified by '123456'",

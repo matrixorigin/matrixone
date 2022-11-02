@@ -20,7 +20,7 @@ SELECT BIN(~1);
 bin(~1)
 1111111111111111111111111111111111111111111111111111111111111110
 SELECT 3 & ~8;
-data out of range: data type int64,
+Data truncation: data out of range: data type int64,
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 tiny TINYINT NOT NULL,
@@ -100,7 +100,7 @@ d1 DECIMAL NOT NULL
 INSERT INTO t1() VALUES(1, 0.000001, 1.00000000000000000000000001);
 INSERT INTO t1() VALUES(YEAR('2022-02-02'), SIN(1), LENGTH('abcdefghijk') - MONTH('2022-09-09'));
 SELECT ~float_32 & float_32 FROM t1;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 str1 CHAR(10),

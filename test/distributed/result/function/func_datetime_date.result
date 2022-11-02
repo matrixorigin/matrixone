@@ -1,7 +1,7 @@
 SELECT DATE(0.0124);
 invalid argument operator cast, bad value [DECIMAL128 DATE]
 SELECT DATE("2112123");
-data out of range: data type date, '2112123'
+Data truncation: data out of range: data type date, '2112123'
 SELECT DATE(1231241.4513);
 invalid argument operator cast, bad value [DECIMAL128 DATE]
 SELECT DATE("2017-06-15");
@@ -11,7 +11,7 @@ SELECT DATE("2017-06-15 09:34:21");
 DATE("2017-06-15 09:34:21")
 2017-06-15
 SELECT DATE("The date is 2017-06-15");
-data out of range: data type date, 'The date is 2017-06-15'
+Data truncation: data out of range: data type date, 'The date is 2017-06-15'
 SELECT DATE('2008-05-17 11:31:31') as required_DATE;
 required_DATE
 2008-05-17
@@ -37,11 +37,11 @@ select date("1997-12-31 23:59:59.000001");
 date("1997-12-31 23:59:59.000001")
 1997-12-31
 select date("1997-13-31 23:59:59.000001");
-data out of range: data type date, '1997-13-31 23:59:59.000001'
+Data truncation: data out of range: data type date, '1997-13-31 23:59:59.000001'
 SELECT DATE(20110512154559.6 + 0e0);
 invalid argument operator cast, bad value [DOUBLE DATE]
 SELECT DATE(concat_ws('a', 0));
-data out of range: data type date, '0'
+Data truncation: data out of range: data type date, '0'
 CREATE TABLE t1 (a timestamp);
 INSERT INTO t1 VALUES ("2020-12-31 12:01:32");
 SELECT DATE(MIN(a)) FROM t1;
