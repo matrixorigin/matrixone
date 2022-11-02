@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -137,6 +138,8 @@ func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
 }
 
 func (s *service) waitSystemInitCompleted(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
+
 	startAt := time.Now()
 	s.logger.Debug("wait all init task completed task started")
 	wait := func() {
@@ -177,6 +180,8 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 }
 
 func (s *service) stopTask() error {
+	defer logutil.LogClose(s.logger, "cnservice/task")()
+
 	s.task.Lock()
 	defer s.task.Unlock()
 	if err := s.task.holder.Close(); err != nil {
