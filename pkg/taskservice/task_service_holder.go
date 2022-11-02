@@ -299,7 +299,9 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 			return
 		case lastAddress := <-s.refreshC:
 			s.mu.Lock()
-			_ = s.mu.store.Close()
+			if s.mu.store != nil {
+				_ = s.mu.store.Close()
+			}
 			s.mu.Unlock()
 			s.refresh(lastAddress)
 		}

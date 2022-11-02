@@ -751,7 +751,7 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 	if _, err := db.Exec("use " + m.dbname); err != nil {
 		me, ok := err.(*mysql.MySQLError)
-		if !ok || me.Number != moerr.ErrBadDB {
+		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
 			return err
 		}
 		for _, s := range initSqls {
