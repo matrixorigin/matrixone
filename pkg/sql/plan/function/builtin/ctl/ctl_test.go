@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debug
+package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/debug"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -68,8 +69,8 @@ func TestHandler(t *testing.T) {
 	supportedCmds[strings.ToUpper("test_cmd")] = func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender) (pb.DebugResult, error) {
-		return pb.DebugResult{}, nil
+		sender requestSender) (pb.CtlResult, error) {
+		return pb.CtlResult{}, nil
 	}
 
 	vec, err := Handler([]*vector.Vector{vec1, vec2, vec3}, proc)

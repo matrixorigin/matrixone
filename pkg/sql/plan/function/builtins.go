@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/debug"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 )
@@ -1698,6 +1698,49 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	STR_TO_DATE: {
+		Id:     STR_TO_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_char, types.T_char, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_char, types.T_char, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_char, types.T_char, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
+			},
+		},
+	},
 	ATAN: {
 		Id:     ATAN,
 		Flag:   plan.Function_STRICT,
@@ -2382,8 +2425,8 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	MO_DEBUG: {
-		Id:     MO_DEBUG,
+	MO_CTL: {
+		Id:     MO_CTL,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
@@ -2392,7 +2435,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
-				Fn:        debug.Handler,
+				Fn:        ctl.Handler,
 			},
 		},
 	},

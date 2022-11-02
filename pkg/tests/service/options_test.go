@@ -139,16 +139,12 @@ func TestWithHKCheckInterval(t *testing.T) {
 
 func TestGossipSeedNum(t *testing.T) {
 	require.Equal(t, 1, gossipSeedNum(1))
-	require.Equal(t, 2, gossipSeedNum(2))
-	require.Equal(t, 3, gossipSeedNum(3))
-	require.Equal(t, 3, gossipSeedNum(4))
+	require.Equal(t, 1, gossipSeedNum(2))
 }
 
 func TestHaKeeperNum(t *testing.T) {
 	require.Equal(t, 1, haKeeperNum(1))
 	require.Equal(t, 1, haKeeperNum(2))
-	require.Equal(t, 3, haKeeperNum(3))
-	require.Equal(t, 3, haKeeperNum(4))
 }
 
 func TestBuildHAKeeperConfig(t *testing.T) {

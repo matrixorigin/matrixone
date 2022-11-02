@@ -126,11 +126,10 @@ func TryExpand(n *Nulls, size int) {
 
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
-	if n.Any() {
-		if row >= uint64(n.Np.Len()) {
-			return false
+	if n != nil && n.Np != nil {
+		if row < uint64(n.Np.Len()) {
+			return n.Np.Contains(row)
 		}
-		return n.Np.Contains(row)
 	}
 	return false
 }
@@ -278,7 +277,7 @@ func (n *Nulls) Set(row uint64) {
 }
 
 func (n *Nulls) Contains(row uint64) bool {
-	if n.Any() {
+	if n != nil && n.Np != nil {
 		return n.Np.Contains(row)
 	}
 	return false

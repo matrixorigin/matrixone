@@ -217,7 +217,7 @@ null    null    null    null
 1.0E-10    1.0E-10    0.00    0.00000
 delete from t3;
 import data infile '$resources/load_data/float_3.csv' into table t3;
-data truncated: data type DECIMAL64, value '1000.001' for column 'col3' at row '1'
+Data truncation: data truncated: data type DECIMAL64, value '1000.001' for column 'col3' at row '1'
 
 drop table t3;
 drop table if exists t4;
@@ -288,7 +288,7 @@ null    null    null    null
 null    null    null    null
 delete from t4;
 import data infile '$resources/load_data/time_date_5.csv' into table t4;
-data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
+Data truncation: data truncated: data type DATETIME, value '9999-12-31 23:59:59.999999' for column 'col2' at row '1'
 
 select * from t4;
 col1    col2    col3    col4

@@ -33,7 +33,7 @@ INSERT INTO source VALUES
 (1,0,0,-9223372036854775808), (1,0,18446744073709551615,9223372036854775807);
 SELECT IF(bt,i8u,i8s) AS u, IF(bf,i8u,i8s) AS s
 FROM source;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 DROP TABLE source;
 create table t1 (num  double(12,2));
 insert into t1 values (144.54);
@@ -46,11 +46,11 @@ i	c	co
 1111111111111111111	1111111111111111111	1111111111111111111
 create table t1 (a bigint unsigned);
 insert into t1 select (if(1, 9223372036854775808, 1));
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 insert into t1 select (case when 1 then 9223372036854775808 else 1 end);
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 insert into t1 select (coalesce(9223372036854775808, 1));
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select * from t1;
 a
 drop table t1;
@@ -186,7 +186,7 @@ DROP TABLE t1;
 CREATE TABLE t1 (c varchar(255));
 INSERT INTO t1 VALUES(1), (2), (3), (4), ('12345678901234567890');
 SELECT * FROM (SELECT MAX(IF(1, CAST(c AS UNSIGNED), 0)) FROM t1) AS te;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 DROP TABLE t1;
 CREATE TABLE t1 (a int, b DOUBLE);
 INSERT INTO t1 VALUES (NULL, 0), (NULL, 1);
