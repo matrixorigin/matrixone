@@ -49,6 +49,7 @@ func TypeStringValue(t types.Type, v any) string {
 		for _, c := range buf {
 			if !strconv.IsPrint(rune(c)) {
 				printable = false
+				break
 			}
 		}
 		if printable {
