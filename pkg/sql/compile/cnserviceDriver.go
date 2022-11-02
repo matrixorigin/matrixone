@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -1221,18 +1222,29 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 }
 
 func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	// TODO: allocate the memory from process may suitable.
 	bat := new(batch.Batch)
+	mp := proc.Mp()
 	err := types.Decode(msg.GetData(), bat)
-	// the batch didn't alloc from mPool.
-	// set all vectors to be origin, avoid they were freed from mPool.
+	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i].SetOriginal(true)
-	}
-	// allocated memory from mPool to batch.
-	for _, ag := range bat.Aggs {
-		err = ag.WildAggReAlloc(proc.Mp())
+		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
 		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+	}
+	// allocated memory of aggVec from mPool.
+	for i, ag := range bat.Aggs {
+		err = ag.WildAggReAlloc(mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Aggs[j].Free(mp)
+			}
+			for j := range bat.Vecs {
+				bat.Vecs[j].Free(mp)
+			}
 			return nil, err
 		}
 	}
