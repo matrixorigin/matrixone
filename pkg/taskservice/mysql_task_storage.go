@@ -57,6 +57,7 @@ var (
 			trigger_times				int,
 			create_at					bigint,
 			update_at					bigint)`,
+		`use `,
 	}
 
 	insertAsyncTask = `insert into %s.sys_async_task(
@@ -163,15 +164,7 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 	}
 
 	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(0)
-
-	// TODO: Can not init here. Consider how many CNs are started and how many times they will be executed,
-	// the initialization logic needs to be moved to the initialization of HaKeeper
-	for _, s := range initSqls {
-		if _, err = db.Exec(fmt.Sprintf(s, dbname)); err != nil {
-			return nil, multierr.Append(err, db.Close())
-		}
-	}
+	db.SetMaxIdleConns(1)
 
 	_, ok := os.LookupEnv(forceNewConn)
 	return &mysqlTaskStorage{
@@ -757,7 +750,15 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 	if _, err := db.Exec("use " + m.dbname); err != nil {
-		return err
+		me, ok := err.(*mysql.MySQLError)
+		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
+			return err
+		}
+		for _, s := range initSqls {
+			if _, err = db.Exec(fmt.Sprintf(s, m.dbname)); err != nil {
+				return multierr.Append(err, db.Close())
+			}
+		}
 	}
 	return nil
 }
@@ -784,15 +785,13 @@ func removeDuplicateTasks(err error, tasks []task.Task) ([]task.Task, error) {
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	i := 0
+	b := tasks[:0]
 	for _, t := range tasks {
 		if !strings.Contains(me.Message, t.Metadata.ID) {
-			tasks[i] = t
-			i++
+			b = append(b, t)
 		}
 	}
-	tasks = tasks[:i]
-	return tasks, nil
+	return b, nil
 }
 
 func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask, error) {
@@ -803,13 +802,11 @@ func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	i := 0
+	b := tasks[:0]
 	for _, t := range tasks {
 		if !strings.Contains(me.Message, t.Metadata.ID) {
-			tasks[i] = t
-			i++
+			b = append(b, t)
 		}
 	}
-	tasks = tasks[:i]
-	return tasks, nil
+	return b, nil
 }
