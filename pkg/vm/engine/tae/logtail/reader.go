@@ -41,7 +41,16 @@ func (v *LogtailReader) GetDirty() (tree *common.Tree, count int) {
 	v.readTxnInBetween(v.start, v.end, readOp)
 	return
 }
-
+func (v *LogtailReader) GetMaxLSN() (maxLsn uint64) {
+	v.readTxnInBetween(v.start, v.end, func(txn txnif.AsyncTxn) (moveOn bool) {
+		lsn := txn.GetLSN()
+		if lsn > maxLsn {
+			maxLsn = lsn
+		}
+		return true
+	})
+	return
+}
 func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree) {
 	tree = common.NewTableTree(dbID, id)
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {

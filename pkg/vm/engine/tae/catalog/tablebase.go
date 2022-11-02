@@ -128,14 +128,6 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *TableBaseEntry) IsCreating() bool {
-	un := be.GetLatestNodeLocked()
-	if un == nil {
-		return true
-	}
-	return un.IsActive()
-}
-
 func (be *TableBaseEntry) HasDropCommitted() bool {
 	be.RLock()
 	defer be.RUnlock()
@@ -198,7 +190,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode boo
 		return
 	}
 	if be.HasDropCommittedLocked() {
-		return false, moerr.NewNotFound()
+		return false, moerr.GetOkExpectedEOB()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
 	return
