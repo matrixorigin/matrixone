@@ -594,7 +594,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 		err = moerr.NewNotFound()
 		return
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
 	}
 	err = nil
@@ -659,7 +659,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 			err = moerr.NewNotFound()
 			return
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			return
 		}
 		err = nil
@@ -777,7 +777,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			return
 		}
 		pkDef := blk.meta.GetSchema().GetSingleSortKey()
-		if moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			if keyselects == nil {
 				panic("unexpected error")
 			}

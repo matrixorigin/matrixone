@@ -153,15 +153,18 @@ func (idx *nonPkMutIndex) Dedup(key any) (err error) {
 	if !exist {
 		return
 	}
-	return moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
+	return
 }
 
-func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
+func (idx *nonPkMutIndex) BatchDedup(
+	keys containers.Vector,
+	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
 	}
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }

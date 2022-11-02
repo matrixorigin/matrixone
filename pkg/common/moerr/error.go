@@ -36,7 +36,11 @@ const (
 	OkStopCurrRecur uint16 = 1
 	OkExpectedEOF   uint16 = 2 // Expected End Of File
 	OkExpectedEOB   uint16 = 3 // Expected End of Batch
-	OkMax           uint16 = 99
+	OkExpectedDup   uint16 = 4 // Expected Duplicate
+
+	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
+
+	OkMax uint16 = 99
 
 	// 100 - 200 is Info
 	ErrInfo     uint16 = 100
@@ -442,6 +446,8 @@ func (e *Error) Succeeded() bool {
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
 var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
+var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
+var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -462,6 +468,14 @@ func GetOkExpectedEOF() *Error {
 
 func GetOkExpectedEOB() *Error {
 	return &errOkExptededEOB
+}
+
+func GetOkExpectedDup() *Error {
+	return &errOkExpectedDup
+}
+
+func GetOkExpectedPossibleDup() *Error {
+	return &errOkExpectedPossibleDup
 }
 
 func NewInfo(msg string) *Error {
