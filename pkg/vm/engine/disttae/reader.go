@@ -41,8 +41,7 @@ func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) (*bat
 	}
 	defer func() { r.blks = r.blks[1:] }()
 	info := &r.blks[0].Info
-	return blockio.BlockRead(r.ctx, info.BlockID, info.SegmentID, cols, r.tableDef,
-		info.MetaLoc, info.DeltaLoc, r.ts, r.fs, m)
+	return blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
 }
 
 func (r *blockMergeReader) Close() error {
@@ -55,8 +54,7 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 	}
 	defer func() { r.blks = r.blks[1:] }()
 	info := &r.blks[0].meta.Info
-	bat, err := blockio.BlockRead(r.ctx, info.BlockID, info.SegmentID, cols, r.tableDef,
-		info.MetaLoc, info.DeltaLoc, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
