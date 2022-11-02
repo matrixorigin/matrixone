@@ -68,7 +68,7 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
-	FreezeAppend()
+	PrepareCompact() bool
 
 	Rows() int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
@@ -94,11 +94,12 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	ReplayImmutIndex() error
-	Close()
 	FreeData()
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
+
+	Close()
 }

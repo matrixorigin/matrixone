@@ -192,6 +192,21 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	return un.NeedWaitCommitting(ts)
 }
 
+func (be *MVCCChain) HasUncommittedNode() bool {
+	var found bool
+	be.LoopChain(func(n txnif.MVCCNode) bool {
+		if n.IsCommitted() {
+			return false
+		} else {
+			if !n.IsAborted() {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 func (be *MVCCChain) HasCommittedNode() bool {
 	var found bool
 	be.LoopChain(func(n txnif.MVCCNode) bool {
