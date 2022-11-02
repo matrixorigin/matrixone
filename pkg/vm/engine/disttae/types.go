@@ -225,7 +225,6 @@ type table struct {
 
 	updated bool
 	// use for skip rows
-	updated    bool
 	skipBlocks map[uint64]uint8
 }
 
