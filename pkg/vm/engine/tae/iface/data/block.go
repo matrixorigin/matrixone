@@ -83,6 +83,9 @@ type Block interface {
 	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
 	CollectAppendLogIndexes(startTs, endTs types.TS) ([]*wal.Index, error)
 
+	// check wether any delete intents with prepared ts within [from, to]
+	HasDeleteIntentsPreparedIn(from, to types.TS) bool
+
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)

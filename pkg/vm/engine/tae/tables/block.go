@@ -831,6 +831,13 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	return
 }
 
+func (blk *dataBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	return
+}
+
 func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
