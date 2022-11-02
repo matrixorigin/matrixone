@@ -25,6 +25,11 @@ func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
 	return
 }
 
+func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
+	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
+	return
+}
+
 func (driver *walDriver) checkpointTicker() {
 	defer driver.wg.Done()
 	ticker := time.NewTicker(driver.ckpDuration)

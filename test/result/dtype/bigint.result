@@ -8,9 +8,9 @@ select +9999999999999999999,-9999999999999999999;
 9999999999999999999	-9999999999999999999
 9999999999999999999	-9999999999999999999
 select cast(9223372036854775808 as unsigned)+1;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select 9223372036854775808+1;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select -(0-3),round(-(0-3)), round(9999999999999999999);
 -(0 - 3)	round(-(0 - 3))	round(9999999999999999999)
 3	3	9999999999999999999
@@ -72,9 +72,9 @@ a	big
 1	18446744073709551613
 1	18446744073709551614
 select min(big),max(big),max(big)-1 from t1;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select min(big),max(big),max(big)-1 from t1 group by a;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 drop table t1;
 create table t1 (id bigint primary key, a int);
 insert into t1 values (1,1);
@@ -133,11 +133,11 @@ bigint_col
 17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select cast(19999999999999999999 as signed);
-data out of range: data type int64, value '19999999999999999999'
+Data truncation: data out of range: data type int64, value '19999999999999999999'
 select cast(-19999999999999999999 as signed);
-data out of range: data type int64, value '-19999999999999999999'
+Data truncation: data out of range: data type int64, value '-19999999999999999999'
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));
@@ -214,13 +214,13 @@ insert into t values(8894754949779693579,2);
 insert into t values(17790886498483827171,3);
 select count(*) from t
 where id>=8894754949779693574 and id =17790886498483827171 order by 1 asc;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select count(*) from t
 where id between 8894754949779693574 and 17790886498483827171;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 drop table t;
 SELECT (184467440737095 BETWEEN 0 AND 18446744073709551500);
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 SELECT 184467440737095 >= 0;
 184467440737095 >= 0
 true
@@ -240,13 +240,13 @@ SELECT ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808
 ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808 )
 true
 SELECT ( 9223372036854775807 BETWEEN 9223372036854775808 AND 1 );
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 SELECT ( -1 BETWEEN 9223372036854775808 AND 1 );
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 SELECT ( 0 BETWEEN 9223372036854775808 AND 1 );
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 SELECT ( 1 BETWEEN 9223372036854775808 AND 1 );
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -470,7 +470,7 @@ insert into t2 values(9223372036854775807);
 insert into t1 select * from t2;
 insert into t2 values(9223372036854775808);
 insert into t1 select * from t2;
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 drop table t1;
 drop table t2;
 create table t1(a bigint unsigned);
@@ -487,10 +487,10 @@ insert into t2 values(0), (18446744073709551615);
 insert into t1 select * from t2;
 insert into t2 values(18446744073709551616);
 insert into t1 select * from t2;
-data out of range: data type uint64, value '18446744073709551616'
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
 delete from t2;
 insert into t2 values(-1);
 insert into t1 select * from t2;
-data out of range: data type uint64, value '-1'
+Data truncation: data out of range: data type uint64, value '-1'
 drop table t1;
 drop table t2;

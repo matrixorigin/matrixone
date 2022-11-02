@@ -482,33 +482,36 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 }
 
 func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
+	var err error
+	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
+	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
+	tid := tidVec.Get(offset).(uint64)
 	for {
-		nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 		if offset >= nameVec.Length() {
 			break
 		}
 		name := string(nameVec.Get(offset).([]byte))
-		if name != s.Name {
+		id := tidVec.Get(offset).(uint64)
+		if name != s.Name || id != tid {
 			break
 		}
 		def := new(ColDef)
 		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
-		types.Decode(data, def.Type)
+		types.Decode(data, &def.Type)
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
-			pDefault := &plan.Default{
-				Expr: &plan.Expr{},
-			}
-			types.Decode(data, pDefault)
-			expr, err := pDefault.Expr.Marshal()
-			if err != nil {
+			pDefault := new(plan.Default)
+			if err = types.Decode(data, pDefault); err != nil {
 				panic(err)
 			}
-			def.Default = Default{
-				Expr:         expr,
-				OriginString: pDefault.OriginString,
-				NullAbility:  pDefault.NullAbility,
+			def.Default.NullAbility = pDefault.NullAbility
+			def.Default.OriginString = pDefault.OriginString
+			def.Default.Expr = nil
+			if pDefault.Expr != nil {
+				if def.Default.Expr, err = pDefault.Expr.Marshal(); err != nil {
+					panic(err)
+				}
 			}
 		}
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
@@ -520,22 +523,38 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int) (next int) {
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
 		data = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
 		if len(data) != len([]byte("")) {
-			pUpdate := &plan.OnUpdate{
-				Expr: &plan.Expr{},
-			}
-			types.Decode(data, pUpdate)
-			expr, err := pUpdate.Expr.Marshal()
-			if err != nil {
+			pUpdate := &plan.OnUpdate{}
+			if err = types.Decode(data, pUpdate); err != nil {
 				panic(err)
 			}
-			def.OnUpdate = OnUpdate{
-				Expr:         expr,
-				OriginString: pUpdate.OriginString,
+			def.OnUpdate.OriginString = pUpdate.OriginString
+			def.OnUpdate.Expr = nil
+			if pUpdate.Expr != nil {
+				if def.OnUpdate.Expr, err = pUpdate.Expr.Marshal(); err != nil {
+					panic(err)
+				}
 			}
+		}
+		idx := bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)
+		s.NameIndex[def.Name] = int(idx - 1)
+		def.Idx = int(idx - 1)
+		s.ColDefs = append(s.ColDefs, def)
+		if def.Name == PhyAddrColumnName {
+			def.PhyAddr = true
+			s.PhyAddrKey = def
+		}
+		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
+		if constraint == "p" {
+			def.SortKey = true
+			def.Primary = true
+			if s.SortKey == nil {
+				s.SortKey = NewSortKey()
+			}
+			s.SortKey.AddDef(def)
 		}
 		offset++
 	}
-	return offset + 1
+	return offset
 }
 
 func (s *Schema) AppendColDef(def *ColDef) (err error) {

@@ -203,8 +203,24 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				Properties: &plan.PropertiesDef{
 					Properties: properties,
 				},
+			}})
+	} else {
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemOrdinaryRel,
 			},
-		})
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: ctx.GetRootSql(),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)

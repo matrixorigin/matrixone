@@ -43,9 +43,6 @@ func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObje
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.writer.Write(bat)
-	if err != nil {
-		return
-	}
 	return
 }
 

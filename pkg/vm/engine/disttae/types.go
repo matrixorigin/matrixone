@@ -223,6 +223,7 @@ type table struct {
 	relKind    string
 	createSql  string
 
+	updated bool
 	// use for skip rows
 	updated    bool
 	skipBlocks map[uint64]uint8
