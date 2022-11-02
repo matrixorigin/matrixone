@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debug
+package ctl
 
-// DebugResult debug result
-type DebugResult struct {
+// CtlResult ctl result
+type CtlResult struct {
 	Method string      `json:"method"`
 	Data   interface{} `json:"result"`
 }

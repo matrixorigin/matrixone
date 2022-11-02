@@ -272,7 +272,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, e
 		return
 	}
 	if be.HasDropCommittedLocked() {
-		return false, moerr.NewNotFound()
+		return false, moerr.GetOkExpectedEOB()
 	}
 	isNewNode, err = be.DeleteLocked(txn)
 	return
