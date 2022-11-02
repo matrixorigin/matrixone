@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
-		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
+		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}
 )
 
@@ -52,6 +52,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
+		output: "select * from (select * from (select 1, 2, 3)) as t1",
+	}, {
+		input:  "SELECT count(*) AS low_stock FROM (\nSELECT s_w_id, s_i_id, s_quantity\nFROM bmsql_stock\nWHERE s_w_id = 1 AND s_quantity < 1000 AND s_i_id IN (\nSELECT ol_i_id\nFROM bmsql_district\nJOIN bmsql_order_line ON ol_w_id = d_w_id\nAND ol_d_id = d_id\nAND ol_o_id >= d_next_o_id - 20\nAND ol_o_id < d_next_o_id\nWHERE d_w_id = 1 AND d_id = 1\n)\n);",
+		output: "select count(*) as low_stock from (select s_w_id, s_i_id, s_quantity from bmsql_stock where s_w_id = 1 and s_quantity < 1000 and s_i_id in (select ol_i_id from bmsql_district inner join bmsql_order_line on ol_w_id = d_w_id and ol_d_id = d_id and ol_o_id >= d_next_o_id - 20 and ol_o_id < d_next_o_id where d_w_id = 1 and d_id = 1))",
+	}, {
 		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
 		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
 	}, {
