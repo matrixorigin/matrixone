@@ -16,12 +16,11 @@ package frontend
 
 import (
 	"context"
-	"sync/atomic"
-	"syscall"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"sync/atomic"
+	"syscall"
 )
 
 // RelationName counter for the new connection
@@ -57,7 +56,10 @@ func (mo *MOServer) Start() error {
 }
 
 func (mo *MOServer) Stop() error {
-	mo.app_unix.Stop()
+	if mo.app_unix != nil {
+		mo.app_unix.Stop()
+		syscall.Unlink(mo.uaddr)
+	}
 	return mo.app.Stop()
 }
 
@@ -83,7 +85,6 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 		logutil.Panicf("start server failed with %+v", err)
 	}
 
-	syscall.Unlink(pu.SV.UAddr)
 	app_unix, err := goetty.NewApplication("unix://"+pu.SV.UAddr, rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),
 		goetty.WithAppSessionOptions(
@@ -92,7 +93,7 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
-		logutil.Panicf("start server failed with %+v", err)
+		logutil.Errorf("start server on unix domain socket %v failed with %+v", pu.SV.UAddr, err)
 	}
 
 	return &MOServer{
