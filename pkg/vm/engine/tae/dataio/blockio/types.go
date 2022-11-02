@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -33,42 +32,10 @@ func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) s
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
-func EncodeCheckpointName(prefix string, start, end types.TS) (name string) {
-	name = fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
-	return
-}
-
+// EncodeObjectName Generate uuid as the file name of the block&segment
 func EncodeObjectName() (name string) {
 	name = uuid.NewString()
 	return name
-}
-
-func DecodeName(name string) []string {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "-")
-	return info
-}
-
-func DecodeBlkName(name string) (id *common.ID, err error) {
-	info := DecodeName(name)
-	tid, err := strconv.ParseUint(info[0], 10, 32)
-	if err != nil {
-		return
-	}
-	sid, err := strconv.ParseUint(info[1], 10, 32)
-	if err != nil {
-		return
-	}
-	bid, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return
-	}
-	id = &common.ID{
-		TableID:   tid,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return
 }
 
 func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
@@ -79,6 +46,7 @@ func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	return
 }
 
+// EncodeMetaLocWithObject Generate a metaloc from an object file
 func EncodeMetaLocWithObject(
 	extent objectio.Extent,
 	rows uint32,
