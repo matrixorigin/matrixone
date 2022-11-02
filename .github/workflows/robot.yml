@@ -3,7 +3,7 @@ name: WeWork Robot
 # Controls when the workflow will run
 on:
   issues:
-    types: [closed, assigned]
+    types: [closed, assigned, opened]
   schedule:
     - cron: '30 8 * * *'
   workflow_dispatch:
@@ -23,6 +23,26 @@ jobs:
           msgtype: markdown
           mentioned_list: '["@all"]'
           content: "New Issue Opened or Assigned: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
+
+  add-projects-milestone:
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Issue Add Projects
+        if: contains(github.event.issue.labels.*.name, 'kind/bug')
+        uses: actions/add-to-project@v0.3.0
+        with:
+          project-url: https://github.com/orgs/matrixorigin/projects/13
+          github-token: ${{ secrets.TOKEN_ACTION }}
+          labeled: kind/bug
+          label-operator: OR
+
+      - name: Issue Add  Milestone
+        if: contains(github.event.issue.labels.*.name, 'kind/bug')
+        uses: cgetc/automatically-set-milestone-to-issue@v0.1.2
+        with:
+          github-token: ${{ secrets.TOKEN_ACTION }}
+          version-prefix: "v0.6.0"
 
   check-bvt-issue:
     if: github.event.action == 'closed'

@@ -286,11 +286,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	id := &common.ID{
-		TableID:   task.toSegEntry.GetTable().GetID(),
-		SegmentID: task.toSegEntry.GetID(),
-	}
-	name := blockio.EncodeSegName(id)
+	name := blockio.EncodeObjectName()
 	writer := blockio.NewWriter(context.Background(), task.mergedBlks[0].GetBlockData().GetFs(), name)
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
@@ -314,7 +310,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	var metaLoc string
 	for i, block := range blocks {
-		metaLoc, err = blockio.EncodeSegMetaLocWithObject(id, block.GetExtent(), uint32(batchs[i].Length()), blocks)
+		metaLoc, err = blockio.EncodeMetaLocWithObject(block.GetExtent(), uint32(batchs[i].Length()), blocks)
 		if err != nil {
 			return
 		}
