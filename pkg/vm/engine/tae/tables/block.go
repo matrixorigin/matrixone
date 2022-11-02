@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
@@ -671,6 +672,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		err = sortKey.Foreach(func(v any, offset int) error {
 			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
 				row = uint32(offset)
+				logutil.Infof("table %d-%v,val %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, v, blk.pkIndex)
 				return moerr.NewDuplicate()
 			}
 			return nil
@@ -740,6 +742,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
 		if deleteNode == nil {
+			logutil.Infof("table %d-%v,row %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, row, blk.pkIndex)
 			return moerr.NewDuplicate()
 		}
 		needWait, txn = deleteNode.NeedWaitCommitting(ts)
@@ -749,6 +752,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 			blk.mvcc.RLock()
 		}
 		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+			logutil.Infof("table %d-%v,row %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, row, blk.pkIndex)
 			return moerr.NewDuplicate()
 		}
 		if err = appendnode.CheckConflict(ts); err != nil {
@@ -789,6 +793,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
+						logutil.Infof("table %d-%v,val %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, v1, blk.pkIndex)
 						return moerr.NewDuplicate()
 					}
 					return nil
@@ -820,6 +825,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
+			logutil.Infof("table %d-%v,val %v pk %v", blk.meta.GetSegment().GetTable().ID, blk.meta.GetSchema().Name, v, blk.pkIndex)
 			return moerr.NewDuplicate()
 		}
 		return nil
