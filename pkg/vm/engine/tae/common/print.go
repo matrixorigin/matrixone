@@ -16,6 +16,7 @@ package common
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -43,7 +44,18 @@ func TypeStringValue(t types.Type, v any) string {
 		types.T_uint64, types.T_float32, types.T_float64:
 		return fmt.Sprintf("%v", v)
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
-		return fmt.Sprintf("%s", v)
+		buf := v.([]byte)
+		printable := true
+		for _, c := range buf {
+			if !strconv.IsPrint(rune(c)) {
+				printable = false
+			}
+		}
+		if printable {
+			return fmt.Sprintf("%s", buf)
+		} else {
+			return fmt.Sprintf("%x", buf)
+		}
 	case types.T_decimal64:
 		val := v.(types.Decimal64)
 		return val.String()
