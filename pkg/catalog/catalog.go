@@ -133,6 +133,7 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
+		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(uint64)
 	}
 	return infos
 }

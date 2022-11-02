@@ -3760,6 +3760,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NotEmpty(t, metaloc)
 	assert.NotEmpty(t, deltaloc)
 
+	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
@@ -3776,20 +3777,35 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
+	b1, err := blockio.BlockReadInner(
+		context.Background(), bid, sid,
+		columns, colIdxs, colTyps, colNulls,
+		metaloc, deltaloc,
+		beforeDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b1.Close()
 	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
-	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterFirstDel, fs, pool)
+	b2, err := blockio.BlockReadInner(
+		context.Background(), bid, sid,
+		columns, colIdxs, colTyps, colNulls,
+		metaloc, deltaloc,
+		afterFirstDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b2.Close()
 	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
-	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterSecondDel, fs, pool)
+	b3, err := blockio.BlockReadInner(
+		context.Background(), bid, sid,
+		columns, colIdxs, colTyps, colNulls,
+		metaloc, deltaloc,
+		afterSecondDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b3.Close()
 	assert.Equal(t, columns, b2.Attrs)
@@ -3798,7 +3814,7 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(),
+		context.Background(), bid, sid,
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
