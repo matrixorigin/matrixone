@@ -224,7 +224,6 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps [
 
 func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
-		m.Free(a.da)
 		a.da = nil
 		a.vs = nil
 		a.es = nil
