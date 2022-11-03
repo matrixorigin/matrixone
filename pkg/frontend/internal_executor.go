@@ -180,6 +180,14 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) makeProfile(profileTyp profileType) {
+
+}
+
+func (ip *internalProtocol) getProfile(profileTyp profileType) string {
+	return ""
+}
+
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }

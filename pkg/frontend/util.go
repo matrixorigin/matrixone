@@ -472,9 +472,9 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logInfo(makeSessionInfo(ses), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
-		logError(makeSessionInfo(ses), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
 }
 
@@ -483,57 +483,29 @@ func logInfo(info string, msg string, fields ...zap.Field) {
 	logutil.Info(msg, fields...)
 }
 
+func logDebug(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Debug(msg, fields...)
+}
+
 func logError(info string, msg string, fields ...zap.Field) {
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
 
 func logInfof(info string, msg string, fields ...interface{}) {
-	logutil.Infof(msg+" %s", fields, info)
+	fields = append(fields, info)
+	logutil.Infof(msg+" %s", fields...)
+}
+
+func logDebugf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Debugf(msg+" %s", fields...)
 }
 
 func logErrorf(info string, msg string, fields ...interface{}) {
 	fields = append(fields, info)
-	logutil.Errorf(msg, fields...)
-}
-
-func makeSessionInfo(ses *Session) string {
-	if ses == nil {
-		return ""
-	}
-	sb := bytes.Buffer{}
-	proto := ses.GetMysqlProtocol()
-	if proto != nil {
-		sb.WriteString(" ")
-		sb.WriteString(makeProtocolInfo(proto))
-		sb.WriteString(" ")
-	}
-
-	sb.WriteString("session ")
-	sb.WriteString(ses.GetUUIDString())
-	account := ses.GetTenantInfo()
-	if account != nil {
-		sb.WriteString(" ")
-		sb.WriteString(account.String())
-	}
-
-	return sb.String()
-}
-
-func makeProtocolInfo(proto Protocol) string {
-	if proto == nil {
-		return ""
-	}
-	sb := bytes.Buffer{}
-	remoteHost, remotePort, _, _ := proto.Peer()
-	connId := proto.ConnectionID()
-	sb.WriteString("connection id ")
-	sb.WriteString(fmt.Sprintf("%d", connId))
-	sb.WriteString(" from ")
-	sb.WriteString(remoteHost)
-	sb.WriteString(" ")
-	sb.WriteString(remotePort)
-	return sb.String()
+	logutil.Errorf(msg+" %s", fields...)
 }
 
 func fileExists(path string) (bool, error) {

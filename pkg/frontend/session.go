@@ -15,7 +15,9 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -72,6 +74,21 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
 	return h
 }
 
+type profileType uint8
+
+const (
+	profileTypeAccountWithName  profileType = 1 << 0
+	profileTypeAccountWithId                = 1 << 1
+	profileTypeSessionId                    = 1 << 2
+	profileTypeConnectionWithId             = 1 << 3
+	profileTypeConnectionWithIp             = 1 << 4
+
+	profileTypeAll = profileTypeAccountWithName | profileTypeAccountWithId |
+		profileTypeSessionId | profileTypeConnectionWithId | profileTypeConnectionWithIp
+
+	profileTypeConcise = profileTypeConnectionWithId
+)
+
 type Session struct {
 	// account id
 	accountId uint32
@@ -80,7 +97,7 @@ type Session struct {
 	protocol Protocol
 
 	//cmd from the client
-	Cmd int
+	Cmd CommandType
 
 	//for test
 	Mrs *MysqlResultSet
@@ -137,6 +154,8 @@ type Session struct {
 	fromRealUser bool
 
 	cache *privilegeCache
+
+	profiles [8]string
 
 	mu sync.Mutex
 }
@@ -248,6 +267,71 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+
+func (ses *Session) makeProfile(profileTyp profileType) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	var mask profileType
+	var profile string
+	var account *TenantInfo
+	account = ses.tenant
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		switch mask & profileTyp {
+		case profileTypeAccountWithName:
+			if account != nil {
+				profile = fmt.Sprintf("account: %s user: %s role: %s", account.GetTenant(), account.GetUser(), account.GetDefaultRole())
+			}
+		case profileTypeAccountWithId:
+			if account != nil {
+				profile = fmt.Sprintf("accountId: %d userId: %d roleId: %d", account.GetTenantID(), account.GetUserID(), account.GetDefaultRoleID())
+			}
+		case profileTypeSessionId:
+			profile = "sessionId " + ses.uuid.String()
+		case profileTypeConnectionWithId:
+			if ses.protocol != nil {
+				profile = fmt.Sprintf("connectionId %d", ses.protocol.ConnectionID())
+			}
+		case profileTypeConnectionWithIp:
+			if ses.protocol != nil {
+				h, p, _, _ := ses.protocol.Peer()
+				profile = "client " + h + ":" + p
+			}
+		default:
+			profile = ""
+		}
+		ses.profiles[i] = profile
+	}
+}
+
+func (ses *Session) MakeProfile() {
+	ses.makeProfile(profileTypeAll)
+}
+
+func (ses *Session) getProfile(profileTyp profileType) string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	var mask profileType
+	sb := bytes.Buffer{}
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		if mask&profileTyp != 0 {
+			if sb.Len() != 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(ses.profiles[i])
+		}
+	}
+	return sb.String()
+}
+
+func (ses *Session) GetConciseProfile() string {
+	return ses.getProfile(profileTypeConcise)
+}
+
+func (ses *Session) GetCompleteProfile() string {
+	return ses.getProfile(profileTypeAll)
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -382,13 +466,13 @@ func (ses *Session) GetTimeZone() *time.Location {
 	return ses.timeZone
 }
 
-func (ses *Session) SetCmd(cmd int) {
+func (ses *Session) SetCmd(cmd CommandType) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.Cmd = cmd
 }
 
-func (ses *Session) GetCmd() int {
+func (ses *Session) GetCmd() CommandType {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.Cmd
@@ -940,7 +1024,11 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
-	logutil.Debugf("check special user")
+	ses.SetTenantInfo(tenant)
+	ses.MakeProfile()
+	sessionProfile := ses.GetConciseProfile()
+
+	logDebugf(sessionProfile, "check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -957,7 +1045,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
-	logutil.Debugf("check tenant %s exists", tenant)
+	logDebugf(sessionProfile, "check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
@@ -977,7 +1065,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
-	logutil.Debugf("check user of %s exists", tenant)
+	logDebugf(sessionProfile, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
@@ -1020,7 +1108,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
-		logutil.Debugf("check default role of user %s.", tenant)
+		logDebugf(sessionProfile, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
@@ -1032,7 +1120,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, moerr.NewInternalError("there is no role %s", tenant.GetDefaultRole())
 		}
 
-		logutil.Debugf("check granted role of user %s.", tenant)
+		logDebugf(sessionProfile, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
@@ -1050,7 +1138,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	} else {
-		logutil.Debugf("check designated role of user %s.", tenant)
+		logDebugf(sessionProfile, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
@@ -1068,7 +1156,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 
-	logutil.Info(tenant.String())
+	logInfo(sessionProfile, tenant.String())
 
 	return []byte(pwd), nil
 }
@@ -1186,7 +1274,9 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.GetSession().GetRequestContext()
+	ses := th.GetSession()
+	sessionProfile := ses.GetConciseProfile()
+	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
@@ -1199,15 +1289,15 @@ func (th *TxnHandler) CommitTxn() error {
 	var err, err2 error
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
-		logutil.Errorf("CommitTxn: txn operator is null")
+		logErrorf(sessionProfile, "CommitTxn: txn operator is null")
 	}
 	if err = storage.Commit(ctx, txnOp); err != nil {
 		th.SetInvalid()
-		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		logErrorf(sessionProfile, "CommitTxn: storage commit failed. error:%v", err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx)
 			if err2 != nil {
-				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+				logErrorf(sessionProfile, "CommitTxn: txn operator rollback failed. error:%v", err2)
 			}
 		}
 		return err
@@ -1215,7 +1305,7 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp != nil {
 		err = txnOp.Commit(ctx)
 		if err != nil {
-			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+			logErrorf(sessionProfile, "CommitTxn: txn operator commit failed. error:%v", err)
 		}
 	}
 	th.SetInvalid()
@@ -1228,7 +1318,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	ctx := th.GetSession().GetRequestContext()
+	ses := th.GetSession()
+	sessionProfile := ses.GetConciseProfile()
+	ctx := ses.GetRequestContext()
 	if ctx == nil {
 		panic("context should not be nil")
 	}
@@ -1241,15 +1333,15 @@ func (th *TxnHandler) RollbackTxn() error {
 	var err, err2 error
 	txnOp := th.GetTxnOperator()
 	if txnOp == nil {
-		logutil.Errorf("RollbackTxn: txn operator is null")
+		logErrorf(sessionProfile, "RollbackTxn: txn operator is null")
 	}
 	if err = storage.Rollback(ctx, txnOp); err != nil {
 		th.SetInvalid()
-		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		logErrorf(sessionProfile, "RollbackTxn: storage rollback failed. error:%v", err)
 		if txnOp != nil {
 			err2 = txnOp.Rollback(ctx)
 			if err2 != nil {
-				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+				logErrorf(sessionProfile, "RollbackTxn: txn operator rollback failed. error:%v", err2)
 			}
 		}
 		return err
@@ -1257,7 +1349,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	if txnOp != nil {
 		err = txnOp.Rollback(ctx)
 		if err != nil {
-			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+			logErrorf(sessionProfile, "RollbackTxn: txn operator commit failed. error:%v", err)
 		}
 	}
 	th.SetInvalid()
@@ -1365,9 +1457,10 @@ func (tcc *TxnCompilerContext) GetAccountId() uint32 {
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	var err error
 	//open database
-	_, err = tcc.GetTxnHandler().GetStorage().Database(tcc.GetSession().GetRequestContext(), name, tcc.GetTxnHandler().GetTxn())
+	ses := tcc.GetSession()
+	_, err = tcc.GetTxnHandler().GetStorage().Database(ses.GetRequestContext(), name, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
-		logutil.Errorf("get database %v failed. error %v", name, err)
+		logErrorf(ses.GetConciseProfile(), "get database %v failed. error %v", name, err)
 		return false
 	}
 
@@ -1380,11 +1473,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 
-	ctx := tcc.GetSession().GetRequestContext()
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, tcc.GetTxnHandler().GetTxn())
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
+		logErrorf(ses.GetConciseProfile(), "get database %v error %v", dbName, err)
 		return nil, err
 	}
 
@@ -1392,7 +1486,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	if err != nil {
 		return nil, err
 	}
-	logutil.Debugf("dbName %v tableNames %v", dbName, tableNames)
+	logDebugf(ses.GetConciseProfile(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
