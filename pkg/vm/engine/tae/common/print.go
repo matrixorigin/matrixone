@@ -53,7 +53,7 @@ func TypeStringValue(t types.Type, v any) string {
 			}
 		}
 		if printable {
-			return fmt.Sprintf("%s", buf)
+			return string(buf)
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
