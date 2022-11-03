@@ -40,8 +40,9 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	bat, err := blockio.BlockRead(r.ctx, cols, r.tableDef, r.blks[0].Info.MetaLoc,
-		r.blks[0].Info.DeltaLoc, r.ts, r.fs, m)
+
+	info := &r.blks[0].Info
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +74,8 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	bat, err := blockio.BlockRead(r.ctx, cols, r.tableDef,
-		r.blks[0].meta.Info.MetaLoc, r.blks[0].meta.Info.DeltaLoc, r.ts, r.fs, m)
+	info := &r.blks[0].meta.Info
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
