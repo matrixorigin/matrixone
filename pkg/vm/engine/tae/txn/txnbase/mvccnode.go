@@ -405,7 +405,7 @@ func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 	return
 }
 
-func (un *TxnMVCCNode) FillTxnRows(bat *containers.Batch) {
+func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
 	bat.GetVectorByName(SnapshotAttr_StartTS).Append(un.Start)
 	bat.GetVectorByName(SnapshotAttr_PrepareTS).Append(un.Prepare)
 	bat.GetVectorByName(SnapshotAttr_CommitTS).Append(un.End)
@@ -420,17 +420,28 @@ func (un *TxnMVCCNode) FillTxnRows(bat *containers.Batch) {
 	}
 }
 
-func GetFromBatch(bat *containers.Batch, row int) (start, prepare, end types.TS, logIndex *wal.Index) {
-	end = bat.GetVectorByName(SnapshotAttr_CommitTS).Get(row).(types.TS)
-	start = bat.GetVectorByName(SnapshotAttr_StartTS).Get(row).(types.TS)
-	prepare = bat.GetVectorByName(SnapshotAttr_PrepareTS).Get(row).(types.TS)
+func (un *TxnMVCCNode) ReadTuple(bat *containers.Batch, offset int) {
+	// TODO
+}
+
+func ReadTuple(bat *containers.Batch, row int) (un *TxnMVCCNode) {
+	end := bat.GetVectorByName(SnapshotAttr_CommitTS).Get(row).(types.TS)
+	start := bat.GetVectorByName(SnapshotAttr_StartTS).Get(row).(types.TS)
+	prepare := bat.GetVectorByName(SnapshotAttr_PrepareTS).Get(row).(types.TS)
 	lsn := bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Get(row).(uint64)
+	var logIndex *wal.Index
 	if lsn != 0 {
 		logIndex = &wal.Index{
 			LSN:  lsn,
 			CSN:  bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Get(row).(uint32),
 			Size: bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Get(row).(uint32),
 		}
+	}
+	un = &TxnMVCCNode{
+		Start:    start,
+		Prepare:  prepare,
+		End:      end,
+		LogIndex: logIndex,
 	}
 	return
 }

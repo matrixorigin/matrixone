@@ -292,3 +292,27 @@ insert into t12(a) values (20);
 (select b from t12 ) minus (select b from t12);
 
 drop table t12;
+
+drop table if exists t2;
+create table t2(
+col1 date,
+col2 datetime,
+col3 timestamp
+);
+
+insert into t2 values ();
+insert into t2 values('2022-01-01', '2022-01-01', '2022-01-01');
+insert into t2 values('2022-01-01', '2022-01-01 00:00:00.99999', '2022-01-01 00:00:00.000000');
+insert into t2 values('2022-01-01', '2022-01-01 00:00:00.999999', '2022-01-01 23:59:59.999999');
+select * from t2;
+
+(select col1 from t2) minus (select col2 from t2 limit 0);
+(select col1 from t2) minus (select col3 from t2 limit 0);
+
+(select col2 from t2) minus (select col1 from t2 limit 0);
+(select col2 from t2) minus (select col3 from t2 limit 0);
+
+(select col3 from t2) minus (select col1 from t2 limit 0);
+(select col3 from t2) minus (select col2 from t2 limit 0);
+
+drop table t2;

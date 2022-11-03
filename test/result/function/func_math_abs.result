@@ -17,9 +17,9 @@ select abs(-9999999999999999999999);
 abs(-9999999999999999999999)
 9999999999999999999999
 select abs(10/0);
-division by zero
+Data truncation: division by zero
 select abs(cast(-2 as unsigned)), abs(18446744073709551614), abs(-2);
-data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, 
 CREATE TABLE t(u TINYINT UNSIGNED NOT NULL);
 INSERT INTO t VALUES (0), (3), (255);
 SELECT * FROM t WHERE ABS(u=256)=0;

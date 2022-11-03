@@ -8,9 +8,8 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:32000",
+    "127.0.0.1:32001",
 ]
-
 
 [[fileservice]]
 name = "LOCAL"
@@ -25,16 +24,15 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [dn]
-uuid = "dn1"
+uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
 [dn.Txn.Storage]
 backend = "TAE"
 log-backend = "logservice"
 
 [dn.Ckp]
-scanner-interval = "10000s"
-execution-levels = 20000
-execution-interval = "10000s"
-catalog-ckp-interval = "10000s"
-catalog-unckp-limit = 10000
-flush-interval = "10000s"
+flush-interval = "100000s"
+min-count = 2000000
+scan-interval = "100000s"
+incremental-interval = "100000s"
+global-interval = "100000s"

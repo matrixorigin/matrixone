@@ -15,6 +15,7 @@
 package blockio
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,15 +80,15 @@ func DecodeMetaLocToMeta(metaLoc string) (*Meta, error) {
 }
 
 func EncodeMetalocFromMetas(name string, blks []objectio.BlockObject) string {
-	str := name
+	var buf bytes.Buffer
+	_, _ = buf.WriteString(name)
 	for _, blk := range blks {
-		str = fmt.Sprintf("%s:%d_%d_%d",
-			str,
+		_, _ = buf.WriteString(fmt.Sprintf(":%d_%d_%d",
 			blk.GetExtent().Offset(),
 			blk.GetExtent().Length(),
-			blk.GetExtent().OriginSize())
+			blk.GetExtent().OriginSize()))
 	}
-	return str
+	return buf.String()
 }
 
 func DecodeMetaLocToMetas(metaLoc string) (string, []objectio.Extent, error) {
