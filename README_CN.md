@@ -151,9 +151,7 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 
 **步骤 1.** 搭建Go语言环境（至少需要1.19版本）
 
-**步骤 2.** 安装部署 [MySQL 客户端 8.0.30 版本](https://dev.mysql.com/downloads/installer/)
-
-**步骤 3.** 获取MatrixOne源码，搭建MatrixOne
+**步骤 2.** 获取MatrixOne源码，搭建MatrixOne
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
@@ -250,14 +248,19 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
 ### 🌟 连接 MatrixOne 服务
 
-1. 安装MySQL客户端
+1. 安装 MySQL 客户端
 
   MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。  
   目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。  
 
+  安装部署 MySQL 客户端请进入到 [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) 页面下载：
+
+     - 根据你的系统，下拉选择 **Select Operating System**。
+     - 下拉选择 **Select OS Version**，建议选择 8.0.30 版本及以上。
+
 2. 连接MatrixOne服务
 
-你可以使用MySQL命令行客户端来连接MatrixOne服务。  
+你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，使用MySQL命令行客户端来连接MatrixOne服务。  
 
 ```
 $ mysql -h IP -P PORT -uUsername -p
