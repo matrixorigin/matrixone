@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -162,6 +163,13 @@ func buildDNConfig(
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.heartbeat.dn
 	cfg.Txn.Storage.Backend = opt.storage.dnStorage
+
+	// FIXME: disable tae flush
+	cfg.Ckp.MinCount = 2000000
+	cfg.Ckp.FlushInterval.Duration = time.Second * 100000
+	cfg.Ckp.ScanInterval.Duration = time.Second * 100000
+	cfg.Ckp.IncrementalInterval.Duration = time.Second * 100000
+	cfg.Ckp.GlobalInterval.Duration = time.Second * 100000
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

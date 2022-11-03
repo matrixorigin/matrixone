@@ -27,7 +27,7 @@ PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
 pk    ui    si
 EXECUTE s2 USING @ui_max;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64,
 EXECUTE s2 USING @si_min;
 pk    ui    si
 0    0    -9223372036854775808
@@ -48,7 +48,7 @@ set @double_num1=1.223344556677889900;
 set @double_num2=1.223344556677889900;
 INSERT INTO test_table VALUES(0, @float1_num, @double_num1), (1, @float2_num, @double_num2);
 INSERT INTO test_table VALUES(0, 1.2345678, 1.223344556677889900), (1, 1.876599999432, 1.223344556677889900);
-tae data: duplicate
+Duplicate entry '0' for key 'pk'
 select * from test_table;
 pk    fl    dou
 0    1.23457    1.22334455667789
@@ -629,7 +629,7 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64,
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;

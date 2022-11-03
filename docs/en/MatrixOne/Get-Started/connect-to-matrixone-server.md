@@ -10,6 +10,8 @@ MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers 
 
 Currently, MatrixOne is only compatible with the Oracle MySQL client. This means that some features might not work with the MariaDB client or Percona client.
 
+If you have installed MySQL client, see the following steps.
+
 ## **2. Connect to MatrixOne server**
 
 You can use the MySQL command-line client to connect to MatrixOne server:
