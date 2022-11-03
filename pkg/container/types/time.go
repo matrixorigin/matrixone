@@ -94,6 +94,11 @@ func ParseTime(s string, precision int32) (Time, error) {
 		}
 		return dt.ToTime(precision), nil
 	} else {
+		// empty string equals to 00:00:00
+		if len(timeString) == 0 {
+			return Time(0), nil
+		}
+
 		// if length is less than 14 it must be format:
 		// (-)hh:mm:ss(.msec) / (-)hhh:mm:ss(.msec)
 		// (-)hhmmss(.msec) / (-)hhhmmss(.msec)
@@ -131,7 +136,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 			return -1, moerr.NewInvalidInput("invalid time value %s", s)
 		}
 
-	case 2: // hh:ss/ hhh:ss
+	case 2: // hh:mm/ hhh:mm
 		if hour, err = strconv.ParseUint(timeArr[0], 10, 32); err != nil {
 			return -1, moerr.NewInvalidInput("invalid time value %s", s)
 		}
