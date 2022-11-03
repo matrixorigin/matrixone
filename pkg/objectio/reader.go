@@ -103,6 +103,7 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
 		}
+		// IOEntry.Data&IOEntry.Object needs to allocate memory in advance
 		entry.Object, err = allocData(int64(col.GetMeta().location.OriginSize()), m)
 		if err != nil {
 			r.freeDataEntries(data.Entries, m)
@@ -115,7 +116,7 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			r.freeObjectEntries(data.Entries, m)
 			return nil, err
 		}
-		entry.ToObject = newDecompressToObject(&entry, m)
+		entry.ToObject = newDecompressToObject(&entry)
 		data.Entries = append(data.Entries, entry)
 	}
 	// Temp data needs to be free
@@ -211,19 +212,19 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 	return footer, err
 }
 
-type ToObjectFunc = func(r io.Reader) (any, int64, error)
+type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
 
-func newDecompressToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectFunc {
-	return func(read io.Reader) (any, int64, error) {
+// newDecompressToObject the decompression function passed to fileservice
+func newDecompressToObject(entry *fileservice.IOEntry) ToObjectFunc {
+	return func(read io.Reader, buf []byte) (any, int64, error) {
 		var err error
-		data, err := allocData(entry.Size, m)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer freeData(data, m)
-		_, err = read.Read(data)
-		if err != nil {
-			return nil, 0, err
+		var data []byte
+		data = buf
+		if len(buf) == 0 {
+			data, err = io.ReadAll(read)
+			if err != nil {
+				return nil, 0, err
+			}
 		}
 		entry.Object, err = compress.Decompress(data, entry.Object.([]byte), compress.Lz4)
 		if err != nil {
@@ -233,6 +234,8 @@ func newDecompressToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectF
 	}
 }
 
+// newToObject Because the caller needs to use IOEntry.Object,
+// it needs to be passed to the fileservice ToObject function
 func newToObject(read io.Reader, buf []byte) (any, int64, error) {
 	var err error
 	if len(buf) > 0 {
@@ -242,6 +245,7 @@ func newToObject(read io.Reader, buf []byte) (any, int64, error) {
 	return data, int64(len(data)), err
 }
 
+// freeDataEntries free all IOEntry.Data in Entries
 func (r *ObjectReader) freeDataEntries(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
 		for i := range Entries {
@@ -252,6 +256,7 @@ func (r *ObjectReader) freeDataEntries(Entries []fileservice.IOEntry, m *mpool.M
 	}
 }
 
+// freeObjectEntries free all IOEntry.Object in Entries
 func (r *ObjectReader) freeObjectEntries(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
 		for i := range Entries {
@@ -269,13 +274,8 @@ func allocData(size int64, m *mpool.MPool) (data []byte, err error) {
 			return
 		}
 	} else {
+		// Because the external caller may not use mpool
 		data = make([]byte, size)
 	}
 	return data, nil
-}
-
-func freeData(data []byte, m *mpool.MPool) {
-	if m != nil {
-		m.Free(data)
-	}
 }

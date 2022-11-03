@@ -61,7 +61,7 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 	if err != nil {
 		return nil, err
 	}
-	data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0], m)
+	data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0])
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
 		cb.freeData(data.Entries, m)
@@ -87,7 +87,7 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 		if err != nil {
 			return nil, err
 		}
-		data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0], m)
+		data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0])
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
 			cb.freeData(data.Entries, m)
@@ -200,16 +200,4 @@ func (cb *ColumnBlock) freeData(entry []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
 		m.Free(entry[0].Data)
 	}
-}
-
-func (r *ColumnBlock) allocData(Entrie *fileservice.IOEntry, m *mpool.MPool) (err error) {
-	if m != nil {
-		Entrie.Data, err = m.Alloc(int(Entrie.Size))
-		if err != nil {
-			return
-		}
-	} else {
-		Entrie.Data = make([]byte, Entrie.Size)
-	}
-	return nil
 }
