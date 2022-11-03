@@ -6,9 +6,9 @@
 
 本篇教程涉及到的软件介绍如下：
 
-* MyBatisMyBatis 是一款优秀的持久层框架，它支持自定义 SQL、存储过程以及高级映射。我们只需要关注项目中的 SQL 本身。
+* MyBatis：MyBatis 是一款优秀的持久层框架，它支持自定义 SQL、存储过程以及高级映射。我们只需要关注项目中的 SQL 本身。
 
-* Intellij IDEA：IntelliJ IDEA是一种商业化销售的 Java 集成开发环境（Integrated Development Environment，IDE）工具软件。它所拥有诸多插件，可以提高我们的工作效率。
+* Intellij IDEA：IntelliJ IDEA 是一种商业化销售的 Java 集成开发环境（Integrated Development Environment，IDE）工具软件。它所拥有诸多插件，可以提高我们的工作效率。
 
 * Maven：Maven是 Java 中功能强大的项目管理工具，可以根据 *pom.xml* 文件中的配置自动下载和导入 *Jar* 文件。这个特性减少了不同版本 Jar 文件之间的冲突。
 
