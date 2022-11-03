@@ -169,7 +169,8 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Pk:
 			exeDefs[i] = &engine.PrimaryIndexDef{
-				Names: defVal.Pk.GetNames(),
+				Name:  defVal.Pk.Name,
+				Field: defVal.Pk.Field.ColNames,
 			}
 		case *plan.TableDef_DefType_Idx:
 			indexDef := &engine.ComputeIndexDef{}

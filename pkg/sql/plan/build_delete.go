@@ -279,13 +279,15 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	// make true we can get all the index col data before update, so we can delete index info.
 	indexColNameMap := make(map[string]bool)
 	for _, info := range tableDef.IndexInfos {
-		if info.Cols[0].IsCPkey {
-			colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-			for _, colName := range colNames {
-				indexColNameMap[colName] = true
+		if info.Unique {
+			if info.Cols[0].IsCPkey {
+				colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
+				for _, colName := range colNames {
+					indexColNameMap[colName] = true
+				}
+			} else {
+				indexColNameMap[info.Cols[0].Name] = true
 			}
-		} else {
-			indexColNameMap[info.Cols[0].Name] = true
 		}
 	}
 	indexAttrs := make([]string, 0)

@@ -61,7 +61,8 @@ type Attribute struct {
 }
 
 type PrimaryIndexDef struct {
-	Names []string
+	Name  string
+	Field []string
 }
 
 type PropertiesDef struct {

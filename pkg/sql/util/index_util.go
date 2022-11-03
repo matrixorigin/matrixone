@@ -264,7 +264,7 @@ func compactUniqueKeyBatch(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewWithFixed(v.Typ, ns, nsp, proc.Mp())
+		vec = vector.NewWithStrings(v.Typ, ns, nsp, proc.Mp())
 	}
 	return vec, true
 }

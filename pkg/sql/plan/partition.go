@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -859,10 +858,10 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 	if hasPrimaryKey {
 		var pkcols []string
-		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
-			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
+		if len(primaryKey.Field.ColNames) > 1 {
+			pkcols = primaryKey.Field.ColNames
 		} else {
-			pkcols = primaryKey.Names
+			pkcols = []string{primaryKey.Name}
 		}
 
 		if partitionInfo.PartitionColumns != nil {
@@ -1041,8 +1040,8 @@ func handleEmptyKeyPartition(tableDef *TableDef, partitionInfo *plan.PartitionIn
 		//  Any columns used as the partitioning key must comprise part or all of the table's primary key, if the table has one.
 		// Where no column name is specified as the partitioning key, the table's primary key is used, if there is one.
 		var pkcols []string
-		if len(primaryKey.Names) > 0 && util.JudgeIsCompositePrimaryKeyColumn(primaryKey.Names[0]) {
-			pkcols = util.SplitCompositePrimaryKeyColumnName(primaryKey.Names[0])
+		if len(primaryKey.Field.ColNames) > 0 {
+			pkcols = primaryKey.Field.ColNames
 		}
 
 		if hasUniqueKey {

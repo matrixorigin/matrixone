@@ -222,7 +222,8 @@ message OnUpdate {
 }
 
 message PrimaryKeyDef {
-	repeated string names = 1;
+	string name = 1;
+	Field field = 2;
 }
 
 message Property {
@@ -288,6 +289,8 @@ message IndexInfo {
 	repeated string col_names = 2;
 	repeated ColDef cols = 3;
 	Field field = 4;
+	bool unique = 5;
+	string index_name = 6;
 }
 
 message TableDef {

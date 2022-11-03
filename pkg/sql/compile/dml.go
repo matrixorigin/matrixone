@@ -154,17 +154,19 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		}
 	}
 	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
-		if err != nil {
-			return 0, err
-		}
-		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
-		if rowNum != 0 {
-			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
+		if indexInfo.Unique {
+			indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
+			if err != nil {
 				return 0, err
 			}
+			indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
+			if rowNum != 0 {
+				if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
+					return 0, err
+				}
+			}
+			indexBatch.Clean(c.proc.Mp())
 		}
-		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {

@@ -167,17 +167,19 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 
 		for i, info := range updateCtx.IndexInfos {
-			rel := updateCtx.IndexTables[i]
-			b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
-			if rowNum != 0 {
-				err = rel.Write(ctx, b)
-				if err != nil {
-					b.Clean(proc.Mp())
-					tmpBat.Clean(proc.Mp())
-					return false, err
+			if info.Unique {
+				rel := updateCtx.IndexTables[i]
+				b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
+				if rowNum != 0 {
+					err = rel.Write(ctx, b)
+					if err != nil {
+						b.Clean(proc.Mp())
+						tmpBat.Clean(proc.Mp())
+						return false, err
+					}
 				}
+				b.Clean(proc.Mp())
 			}
-			b.Clean(proc.Mp())
 		}
 
 		//fill cpkey column

@@ -707,7 +707,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	defs = append(defs, numAttr)
 	defs = append(defs, stepAttr)
 	defs = append(defs, &engine.PrimaryIndexDef{
-		Names: []string{AUTO_INCR_TABLE_COLNAME[1]},
+		Name: AUTO_INCR_TABLE_COLNAME[1],
 	})
 
 	return defs

@@ -281,9 +281,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		switch defImpl := def.Def.(type) {
 		case *plan.TableDef_DefType_Pk:
 			pkDef := &plan.PrimaryKeyDef{
-				Names: make([]string, len(defImpl.Pk.Names)),
+				Name: defImpl.Pk.Name,
+				Field: &plan.Field{
+					ColNames: defImpl.Pk.Field.ColNames,
+				},
 			}
-			copy(pkDef.Names, defImpl.Pk.Names)
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: pkDef,

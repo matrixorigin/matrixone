@@ -375,13 +375,19 @@ func BuildIndexInfos(ctx CompilerContext, dbName string, defs []*plan.TableDef_D
 			idx := idxDef.Idx
 
 			for i := range idx.IndexNames {
-				_, tableDef := ctx.Resolve(dbName, idx.TableNames[i])
 				info := &plan.IndexInfo{
 					TableName: idx.TableNames[i],
 					Cols:      make([]*plan.ColDef, 0),
 					ColNames:  make([]string, 0),
-					Field:     &plan.Field{ColNames: idx.Fields[i].ColNames},
+					Unique:    idx.Uniques[i],
+					Field:     idx.Fields[i],
+					IndexName: idx.IndexNames[i],
 				}
+				if !idx.Uniques[i] {
+					infos = append(infos, info)
+					continue
+				}
+				_, tableDef := ctx.Resolve(dbName, idx.TableNames[i])
 				if tableDef.CompositePkey != nil {
 					info.Cols = append(info.Cols, tableDef.CompositePkey)
 					info.ColNames = append(info.ColNames, tableDef.CompositePkey.Name)

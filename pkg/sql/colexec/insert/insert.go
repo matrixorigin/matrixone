@@ -61,14 +61,16 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
 	for idx, info := range n.IndexInfos {
-		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
-		if rowNum != 0 {
-			err := n.IndexTables[idx].Write(ctx, b)
-			if err != nil {
-				return err
+		if info.Unique {
+			b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
+			if rowNum != 0 {
+				err := n.IndexTables[idx].Write(ctx, b)
+				if err != nil {
+					return err
+				}
 			}
+			b.Clean(proc.Mp())
 		}
-		b.Clean(proc.Mp())
 	}
 	err := n.TargetTable.Write(ctx, bat)
 	bat.Clean(proc.Mp())

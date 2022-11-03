@@ -159,9 +159,8 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	}
 	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
 		pk := new(engine.PrimaryIndexDef)
-		for _, def := range schema.SortKey.Defs {
-			pk.Names = append(pk.Names, def.Name)
-		}
+		pk.Name = schema.SortKey.Defs[0].Name
+		pk.Field = append(pk.Field, schema.Field...)
 		defs = append(defs, pk)
 	}
 	pro := new(engine.PropertiesDef)
@@ -185,9 +184,8 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	pkMap := make(map[string]int)
 	for _, def := range defs {
 		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
-			for i, name := range pkDef.Names {
-				pkMap[name] = i
-			}
+			pkMap[pkDef.Name] = 0
+			schema.Field = append(schema.Field, pkDef.Field...)
 			break
 		}
 	}

@@ -279,7 +279,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
-	indexInfos := make([]*tree.UniqueIndex, 0)
+	indexInfos := make([]*tree.Index, 0)
+	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	for _, item := range defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -380,8 +381,18 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				nameMap[name] = true
 				indexs = append(indexs, name)
 			}
-		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
+		case *tree.UniqueIndex:
+			nameMap := map[string]bool{}
+			for _, key := range def.KeyParts {
+				name := key.ColName.Parts[0] // name of index column
+				if _, ok := nameMap[name]; ok {
+					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
+				}
+				nameMap[name] = true
+				indexs = append(indexs, name)
+			}
+			uniqueIndexInfos = append(uniqueIndexInfos, def)
 		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
 			return moerr.NewNYI("table def: '%v'", def)
@@ -402,7 +413,10 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
-						Names: primaryKeys,
+						Name: primaryKeys[0],
+						Field: &plan.Field{
+							ColNames: primaryKeys,
+						},
 					},
 				},
 			})
@@ -424,7 +438,10 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
-						Names: []string{pkeyName},
+						Name: pkeyName,
+						Field: &plan.Field{
+							ColNames: primaryKeys,
+						},
 					},
 				},
 			})
@@ -434,20 +451,24 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported("blob type in index")
-		}
-		if colMap[str].Typ.Id == int32(types.T_text) {
-			return moerr.NewNotSupported("text type in index")
-		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		if c, ok := colMap[str]; !ok {
+			return moerr.NewInvalidInput("column '%s' is not exist", str)
+		} else {
+			if c.Typ.Id == int32(types.T_blob) {
+				return moerr.NewNotSupported("blob type in index")
+			}
+			if c.Typ.Id == int32(types.T_text) {
+				return moerr.NewNotSupported("text type in index")
+			}
+			if c.Typ.Id == int32(types.T_json) {
+				return moerr.NewNotSupported(fmt.Sprintf("JSON column '%s' cannot be in index", str))
+			}
 		}
 	}
 
 	// build index table
-	if len(indexInfos) != 0 {
-		err := buildUniqueIndexTable(createTable, indexInfos, colMap, pkeyName)
+	if len(uniqueIndexInfos) != 0 || len(indexInfos) != 0 {
+		err := buildIndexTable(createTable, uniqueIndexInfos, indexInfos, colMap, pkeyName)
 		if err != nil {
 			return err
 		}
@@ -455,13 +476,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 	return nil
 }
 
-func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string) error {
+func buildIndexTable(createTable *plan.CreateTable, uniqueIndexInfos []*tree.UniqueIndex, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string) error {
 	indexNumber := 0
 	def := &plan.IndexDef{
 		Fields: make([]*plan.Field, 0),
 	}
 
-	for _, indexInfo := range indexInfos {
+	for _, indexInfo := range uniqueIndexInfos {
 		indexTableName, err := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
 		if err != nil {
 			return err
@@ -474,9 +495,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		}
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput("column '%s' is not exist", name)
-			}
 			field.ColNames = append(field.ColNames, name)
 		}
 
@@ -499,7 +517,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
+						Name: keyName,
+						Field: &plan.Field{
+							ColNames: field.ColNames,
+						},
 					},
 				},
 			})
@@ -521,7 +542,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Pk{
 					Pk: &plan.PrimaryKeyDef{
-						Names: []string{keyName},
+						Name: keyName,
+						Field: &plan.Field{
+							ColNames: field.ColNames,
+						},
 					},
 				},
 			})
@@ -532,6 +556,25 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		def.Fields = append(def.Fields, field)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 	}
+
+	for _, indexInfo := range indexInfos {
+		indexTableName, err := util.BuildIndexTableName(false, indexNumber, indexInfo.Name)
+		if err != nil {
+			return err
+		}
+		field := &plan.Field{
+			ColNames: make([]string, 0),
+		}
+		for _, keyPart := range indexInfo.KeyParts {
+			name := keyPart.ColName.Parts[0]
+			field.ColNames = append(field.ColNames, name)
+		}
+		def.IndexNames = append(def.IndexNames, indexInfo.Name)
+		def.TableNames = append(def.TableNames, indexTableName)
+		def.Uniques = append(def.Uniques, false)
+		def.Fields = append(def.Fields, field)
+	}
+
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Idx{
 			Idx: def,
@@ -610,9 +653,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			dropTable.Table = ""
 		}
 		indexInfos := BuildIndexInfos(ctx, dropTable.Database, tableDef.Defs)
-		dropTable.IndexTableNames = make([]string, len(indexInfos))
+		dropTable.IndexTableNames = make([]string, 0, len(indexInfos))
 		for i := range indexInfos {
-			dropTable.IndexTableNames[i] = indexInfos[i].TableName
+			if indexInfos[i].Unique {
+				dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexInfos[i].TableName)
+			}
 		}
 	}
 	return &Plan{

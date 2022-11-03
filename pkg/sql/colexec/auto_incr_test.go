@@ -60,6 +60,6 @@ func Test_getAutoIncrTableDef(t *testing.T) {
 
 		pri, ok := def[3].(*engine.PrimaryIndexDef)
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(pri.Names, convey.ShouldResemble, []string{AUTO_INCR_TABLE_COLNAME[1]})
+		convey.So(pri.Name, convey.ShouldResemble, AUTO_INCR_TABLE_COLNAME[1])
 	})
 }

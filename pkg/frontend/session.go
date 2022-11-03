@@ -1505,6 +1505,17 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if primaryKeyDef, ok := def.(*engine.PrimaryIndexDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Pk{
+					Pk: &plan2.PrimaryKeyDef{
+						Name: primaryKeyDef.Name,
+						Field: &plan.Field{
+							ColNames: primaryKeyDef.Field,
+						},
+					},
+				},
+			})
 		}
 	}
 	if len(properties) > 0 {

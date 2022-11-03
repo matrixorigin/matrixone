@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -137,10 +138,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			pkDefs = append(pkDefs, colName)
 		}
 	}
+	if tableDef.CompositePkey != nil {
+		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
+	}
 	if len(pkDefs) != 0 {
 		pkStr := "PRIMARY KEY ("
-		for _, def := range pkDefs {
-			pkStr += fmt.Sprintf("`%s`", def)
+		for i, def := range pkDefs {
+			if i == len(pkDefs)-1 {
+				pkStr += fmt.Sprintf("`%s`", def)
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", def)
+			}
 		}
 		pkStr += ")"
 		if rowCount != 0 {
@@ -148,7 +156,28 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		createStr += pkStr
 	}
-
+	infos := BuildIndexInfos(ctx, dbName, tableDef.Defs)
+	for _, info := range infos {
+		var pkStr string
+		if info.Unique {
+			pkStr = "UNIQUE KEY "
+		} else {
+			pkStr = "KEY "
+		}
+		pkStr += fmt.Sprintf("`%s` (", info.IndexName)
+		for i, colName := range info.Field.ColNames {
+			if i == len(info.Field.ColNames)-1 {
+				pkStr += fmt.Sprintf("`%s`", colName)
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", colName)
+			}
+		}
+		pkStr += ")"
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += pkStr
+	}
 	if rowCount != 0 {
 		createStr += "\n"
 	}

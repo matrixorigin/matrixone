@@ -56,7 +56,7 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 func (node *PrimaryIndexDef) Format(buf *bytes.Buffer) {
 	buf.WriteString("PRIMARY KEY")
 	prefix := " ("
-	for _, n := range node.Names {
+	for _, n := range node.Field {
 		buf.WriteString(prefix)
 		buf.WriteString("`")
 		buf.WriteString(n)

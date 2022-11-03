@@ -141,3 +141,8 @@ insert into t1 values(2, '3');
 insert into t1 values(null, '1');
 insert into t1 values(null, '2');
 insert into t1 values(null, '2');
+
+drop table if exists t1;
+create table t1 (pk INT PRIMARY KEY, int_key INT, varchar_key VARCHAR(5) UNIQUE, varchar_nokey VARCHAR(5));
+insert into t1 values(1, 1, NULL, NULL),(2, 2, 'p', 'p');
+select * from t1;

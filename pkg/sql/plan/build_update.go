@@ -261,13 +261,15 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		// make true we can get all the index col data before update, so we can delete index info.
 		indexColNameMap := make(map[string]bool)
 		for _, info := range tblRefs[k].IndexInfos {
-			if info.Cols[0].IsCPkey {
-				colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
-				for _, colName := range colNames {
-					indexColNameMap[colName] = true
+			if info.Unique {
+				if info.Cols[0].IsCPkey {
+					colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
+					for _, colName := range colNames {
+						indexColNameMap[colName] = true
+					}
+				} else {
+					indexColNameMap[info.Cols[0].Name] = true
 				}
-			} else {
-				indexColNameMap[info.Cols[0].Name] = true
 			}
 		}
 		for _, col := range tblRefs[k].Cols {

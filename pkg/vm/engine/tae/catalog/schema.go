@@ -146,6 +146,7 @@ type Schema struct {
 	Createsql        string
 	View             string
 	IndexInfos       []*ComputeIndexInfo
+	Field            []string
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -157,6 +158,7 @@ func NewEmptySchema(name string) *Schema {
 		ColDefs:    make([]*ColDef, 0),
 		NameIndex:  make(map[string]int),
 		IndexInfos: make([]*ComputeIndexInfo, 0),
+		Field:      make([]string, 0),
 	}
 }
 

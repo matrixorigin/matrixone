@@ -241,11 +241,8 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			tx, req.TableID,
 			func(_ ID, row *AttributeRow) error {
 				isPrimary := false
-				for _, name := range def.Names {
-					if name == row.Name {
-						isPrimary = true
-						break
-					}
+				if def.Name == row.Name {
+					isPrimary = true
 				}
 				if isPrimary == row.Primary {
 					return nil
@@ -389,7 +386,7 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			}
 
 		case *engine.PrimaryIndexDef:
-			primaryColumnNames = def.Names
+			primaryColumnNames = []string{def.Name}
 
 		default:
 			panic(fmt.Sprintf("unknown table def: %T", def))
@@ -955,7 +952,7 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 
 		if len(primaryAttrNames) > 0 {
 			resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
-				Names: primaryAttrNames,
+				Name: primaryAttrNames[0],
 			})
 		}
 		sort.Slice(attrRows, func(i, j int) bool {
