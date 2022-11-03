@@ -247,3 +247,48 @@ a	a
 1	4
 drop table t1;
 drop table t2;
+SELECT COALESCE(NULL, NULL, NULL, CAST('{"_id":"192312412512"}' AS JSON), NULL, CAST('{"_id":"192312412513"}' AS JSON));
+coalesce(null, null, null, cast({"_id":"192312412512"} as json), null, cast({"_id":"192312412513"} as json))
+{"_id": "192312412512"}
+create table t1(a INT,  b json);
+create table t2(a INT,  b json);
+insert into t1 values(1, CAST('{"_id":"192312412512"}' AS JSON)), (3, CAST('{"_id":"192312412513"}' AS JSON));
+insert into t2 values(2, CAST('{"_id":"192312412514"}' AS JSON)), (4, CAST('{"_id":"192312412515"}' AS JSON));
+select * from t1 union all select * from t2;
+a    b
+1    {"_id": "192312412512"}
+3    {"_id": "192312412513"}
+2    {"_id": "192312412514"}
+4    {"_id": "192312412515"}
+drop table t1;
+drop table t2;
+SELECT COALESCE(NULL, NULL, NULL, CAST('test' AS BLOB), NULL, CAST('1234589002' AS BLOB));
+coalesce(null, null, null, cast(test as blob), null, cast(1234589002 as blob))
+test
+DROP table if exists t1;
+DROP table if exists t2;
+CREATE TABLE t1 (a INT, s BLOB);
+INSERT INTO t1 VALUES (1, 'test');
+CREATE TABLE t2 (b INT, s BLOB);
+INSERT INTO t2 VALUES (2, '1234589002');
+select * from t1 union all select * from t2;
+a    s
+1    test
+2    1234589002
+drop table t1;
+drop table t2;
+SELECT COALESCE(NULL, NULL, NULL, CAST('abcdef' AS text), NULL, CAST('1234589002' AS text));
+coalesce(null, null, null, cast(abcdef as text), null, cast(1234589002 as text))
+abcdef
+DROP table if exists t1;
+DROP table if exists t2;
+CREATE TABLE t1 (a INT, s text);
+INSERT INTO t1 VALUES (1, 'abcdef');
+CREATE TABLE t2 (b INT, s text);
+INSERT INTO t2 VALUES (2, 'abcdefgh');
+select * from t1 union all select * from t2;
+a    s
+1    abcdef
+2    abcdefgh
+drop table t1;
+drop table t2;
