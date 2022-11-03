@@ -16,16 +16,13 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -344,16 +341,8 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsTableFunctionValueScan(n) {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-			bat.Vecs[0].Col = make([]int64, 1)
-		}
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
 		bat.InitZsOne(1)
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
@@ -548,7 +537,7 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
-		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+		return c.compileUnnest(n, ss)
 	case "generate_series":
 		return c.compileGenerateSeries(n, ss)
 	default:
@@ -556,16 +545,12 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
-	externParam := &unnest.ExternalParam{}
-	if err := json.Unmarshal(dt, externParam); err != nil {
-		return nil, err
-	}
+func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, externParam),
+			Arg: constructUnnest(n, c.ctx),
 		})
 	}
 	return ss, nil
