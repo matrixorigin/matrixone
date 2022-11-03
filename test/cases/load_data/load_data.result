@@ -70,10 +70,10 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa",aa    bb",bb    cc",cc    dd",dd
 aa"",aa    bb"",bb    cc"",cc    dd"",dd
-            
-            
+
+
 null    null    null    null
-            
+
 "    "    "    "
 ""    ""    ""    ""
 select * from t2 into outfile '$resources/into_outfile/outfile_char_varchar_1.csv';
@@ -145,9 +145,9 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa"|aa    bb"|bb    cc"|cc    dd"|dd
 aa""|aa    bb""|bb    cc""|cc    dd""|dd
-            
-            
-            
+
+
+
 "    "    "    "
 ""    ""    ""    ""
 delete from t2;
@@ -169,9 +169,9 @@ aa""aa    bb""bb    cc""cc    dd""dd
 aa""aa    bb""bb    cc""cc    dd""dd
 aa"?aa    bb"?bb    cc"?cc    dd"?dd
 aa""?aa    bb""?bb    cc""?cc    dd""?dd
-            
-            
-            
+
+
+
 "    "    "    "
 ""    ""    ""    ""
 delete from t2;
@@ -304,7 +304,7 @@ col3 int
 );
 insert into t5 values (1,1,1);
 load data infile '$resources/load_data/auto_increment_1.csv' into table t5;
-tae data: duplicate
+Duplicate entry '1' for key 'col1'
 select * from t5;
 col1    col2    col3
 1    1    1
@@ -316,7 +316,7 @@ col2 int,
 col3 int
 );
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
-tae data: duplicate
+Duplicate entry '4' for key 'col1'
 select * from t6;
 col1    col2    col3
 drop table t6;

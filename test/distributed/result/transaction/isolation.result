@@ -117,7 +117,7 @@ c    d
 2    2
 1    1
 commit;
-tae data: duplicate
+Duplicate entry '1' for key 'c'
 select * from test_11;
 SQL parser error: table "test_11" does not exist
 select * from test_11;
