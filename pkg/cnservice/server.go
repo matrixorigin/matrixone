@@ -142,13 +142,13 @@ func (s *service) Start() error {
 func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
+	s.stopper.Stop()
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
 	if err := s.stopTask(); err != nil {
 		return err
 	}
-	s.stopper.Stop()
 	return s.server.Close()
 }
 

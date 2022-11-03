@@ -44,6 +44,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
+		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -173,6 +174,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		if node.RowsetData.Schema != nil {
 			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
+	}
+	for idx, expr := range node.TblFuncExprList {
+		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
 	}
 
 	return newNode

@@ -497,6 +497,8 @@ message Node {
 	repeated int32 binding_tags = 23;
 
     AnalyzeInfo analyze_info = 24;
+
+	repeated Expr tbl_func_expr_list = 25;
 }
 
 message DeleteTableCtx {

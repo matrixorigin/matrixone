@@ -16,21 +16,20 @@ package generate_series
 
 import (
 	"bytes"
-	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"math"
 	"strings"
 	"testing"
 )
 
-type Kase[T Number] struct {
+type Kase[T int32 | int64] struct {
 	start T
 	end   T
 	step  T
@@ -387,7 +386,11 @@ func TestGenerateTimestamp(t *testing.T) {
 		} else {
 			precision = p2
 		}
-		res, err := generateDatetime(kase.start, kase.end, kase.step, precision)
+		start, err := types.ParseDatetime(kase.start, precision)
+		require.Nil(t, err)
+		end, err := types.ParseDatetime(kase.end, precision)
+		require.Nil(t, err)
+		res, err := generateDatetime(start, end, kase.step, precision)
 		if kase.err {
 			require.NotNil(t, err)
 			continue
@@ -446,12 +449,6 @@ func TestCall(t *testing.T) {
 	arg := &Argument{
 		Es: &Param{
 			Attrs: []string{"result"},
-			Cols: []*plan.ColDef{
-				{
-					Name: "result",
-					Typ:  &plan.Type{},
-				},
-			},
 		},
 	}
 	param := arg.Es
@@ -460,58 +457,122 @@ func TestCall(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, true, end)
 
-	param.Cols[0].Typ.Id = int32(types.T_int32)
-	bat := makeBatch([]string{"1", "10"}, proc)
+	param.ExprList = makeInt64List(1, 3, 1)
+
+	bat := makeBatch()
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
-	require.Equal(t, 10, proc.InputBatch().GetVector(0).Length())
+	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
-	bat.Clean(proc.Mp())
 
-	param.Cols[0].Typ.Id = int32(types.T_int64)
-	bat = makeBatch([]string{"654345676543", "654345676549"}, proc)
-	proc.SetInputBatch(bat)
-	end, err = Call(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, false, end)
-	require.Equal(t, 7, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
-	bat.Clean(proc.Mp())
-
-	param.Cols[0].Typ.Id = int32(types.T_datetime)
-	param.Cols[0].Typ.Precision = 0
-	bat = makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second"}, proc)
+	param.ExprList = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
-	bat.Clean(proc.Mp())
 
-	bat = makeBatch([]string{"2020-01-01 00:00:-1", "2020-01-01 00:00:59", "1 second"}, proc)
+	param.ExprList = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	proc.SetInputBatch(bat)
 	end, err = Call(0, proc, arg)
-	require.NotNil(t, err)
+	require.Nil(t, err)
 	require.Equal(t, false, end)
+	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
 	proc.InputBatch().Clean(proc.Mp())
 
+	param.ExprList = makeVarcharList("1", "10", "3")
+	proc.SetInputBatch(bat)
+	end, err = Call(0, proc, arg)
+	require.Nil(t, err)
+	require.Equal(t, false, end)
+	require.Equal(t, 4, proc.InputBatch().GetVector(0).Length())
+	proc.InputBatch().Clean(proc.Mp())
+
+	param.ExprList = param.ExprList[:2]
+	proc.SetInputBatch(bat)
+	_, err = Call(0, proc, arg)
+	require.NotNil(t, err)
+	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())
 
 }
 
-func makeBatch(arg []string, proc *process.Process) *batch.Batch {
-	dt, _ := json.Marshal(arg)
-	b := batch.New(true, []string{"result"})
-	b.Cnt = 1
-	b.InitZsOne(1)
-	b.Vecs[0] = vector.New(types.Type{Oid: types.T_varchar})
-	err := b.Vecs[0].Append(dt, false, proc.Mp())
-	if err != nil {
-		b.Clean(proc.Mp())
-		logutil.Errorf("set bytes at failed, err: %v", err)
+func makeBatch() *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+	bat.Vecs[0].Col = make([]int64, 1)
+	bat.InitZsOne(1)
+	return bat
+}
+
+func makeInt64List(start, end, step int64) []*plan.Expr {
+	ret := make([]*plan.Expr, 3)
+	ret[0] = makeInt64Expr(start)
+	ret[1] = makeInt64Expr(end)
+	ret[2] = makeInt64Expr(step)
+	return ret
+}
+
+func makeDatetimeList(start, end, step string, precision int32) []*plan.Expr {
+	ret := make([]*plan.Expr, 3)
+	ret[0] = makeDatetimeExpr(start, precision)
+	ret[1] = makeDatetimeExpr(end, precision)
+	ret[2] = makeVarcharExpr(step)
+	return ret
+}
+func makeVarcharList(start, end, step string) []*plan.Expr {
+	ret := make([]*plan.Expr, 3)
+	ret[0] = makeVarcharExpr(start)
+	ret[1] = makeVarcharExpr(end)
+	ret[2] = makeVarcharExpr(step)
+	return ret
+}
+
+func makeInt64Expr(val int64) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_int64),
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_I64Val{
+					I64Val: val,
+				},
+			},
+		},
 	}
-	return b
+}
+func makeVarcharExpr(val string) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_varchar),
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Sval{
+					Sval: val,
+				},
+			},
+		},
+	}
+}
+
+func makeDatetimeExpr(s string, p int32) *plan.Expr {
+	dt, _ := types.ParseDatetime(s, p)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id:        int32(types.T_datetime),
+			Precision: p,
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Datetimeval{
+					Datetimeval: int64(dt),
+				},
+			},
+		},
+	}
 }
