@@ -8,6 +8,7 @@ drop table if exists json_table_4a;
 drop table if exists json_table_5;
 drop table if exists json_table_5a;
 drop table if exists json_view_1;
+drop table if exists json_table_6;
 create table json_table_1(j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "key123456": 223}'),('{"芝士面包": "12abc", "key_56": 78.90}'),('{"": "", "12_key": "中文mo"}'),('{"a 1": "b 1", "13key4": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
 insert into json_table_1 values('{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"1234567890000000000000000000000000000000000000000000000","uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu":["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}');
@@ -188,29 +189,29 @@ select * from json_table_5a;
 d1    j1
 select j1 from  json_table_1 union select j1 from  json_table_3;
 j1
-{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
-{"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
-{"key1": "@#$_%^&*()!@", "key123456": 223}
-{"key_56": 78.9, "芝士面包": "12abc"}
-{"13key4": "中文mo", "a 1": "b 1"}
 {}
 {"": "", "12_key": "中文mo"}
-{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
-{"key10": "value1", "key2": "value2"}
 {"d1": [true, false]}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"key10": "value1", "key2": "value2"}
+{"key1": "@#$_%^&*()!@", "key123456": 223}
+{"13key4": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
+{"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 select j1 from  json_table_1 intersect select j1 from  json_table_3;
-SQL parser error: the 0 column cann't cast to a same type
+j1
 select j1 from  json_table_1 minus select j1 from  json_table_3;
 j1
-{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
-{"key1": "@#$_%^&*()!@", "key123456": 223}
-{"key_56": 78.9, "芝士面包": "12abc"}
-{"13key4": "中文mo", "a 1": "b 1"}
 {}
 {"": "", "12_key": "中文mo"}
-{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
-{"key10": "value1", "key2": "value2"}
 {"d1": [true, false]}
+{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
+{"key_56": 78.9, "芝士面包": "12abc"}
+{"key10": "value1", "key2": "value2"}
+{"key1": "@#$_%^&*()!@", "key123456": 223}
+{"13key4": "中文mo", "a 1": "b 1"}
+{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}
 create table json_table_71(j1 json);
 insert into  json_table_71 values('{
 "orderType": "BUY",
@@ -271,4 +272,95 @@ select json_extract('bar','$.*');
 invalid input: json text bar
 select  json_extract(j1,'') from json_table_71;
 invalid input: invalid json path ''
-
+create table json_table_6(j1 json);
+insert into json_table_6 values('{"a": [1, "2", {"aa": "bb"}]}'),('{"key1": "value1", "key2": "value2"}');
+select * from json_table_6,unnest(json_table_6.j1) as u;
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    a    $.a    null    [1, "2", {"aa": "bb"}]    {"a": [1, "2", {"aa": "bb"}]}
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    1    key2    $.key2    null    "value2"    {"key1": "value1", "key2": "value2"}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    a    $.a    null    [1, "2", {"aa": "bb"}]    {"a": [1, "2", {"aa": "bb"}]}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    1    key2    $.key2    null    "value2"    {"key1": "value1", "key2": "value2"}
+select * from json_table_6,unnest(json_table_6.j1,"$") as u;
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    a    $.a    null    [1, "2", {"aa": "bb"}]    {"a": [1, "2", {"aa": "bb"}]}
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    1    key2    $.key2    null    "value2"    {"key1": "value1", "key2": "value2"}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    a    $.a    null    [1, "2", {"aa": "bb"}]    {"a": [1, "2", {"aa": "bb"}]}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    1    key2    $.key2    null    "value2"    {"key1": "value1", "key2": "value2"}
+select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+select * from unnest(' {"a": [1, "2", {"aa": ["yyy",56,89,{"aa2": ["aa3",{"aa4": [1,2,{"aa5": ["aa6", {"aa7": "bb"}]}]}]}]}]} ',"$.a[2].aa") as u;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    null    $.a[2].aa[0]    0    "yyy"    ["yyy", 56, 89, {"aa2": ["aa3", {"aa4": [1, 2, {"aa5": ["aa6", {"aa7": "bb"}]}]}]}]
+UNNEST_DEFAULT    1    null    $.a[2].aa[1]    1    56    ["yyy", 56, 89, {"aa2": ["aa3", {"aa4": [1, 2, {"aa5": ["aa6", {"aa7": "bb"}]}]}]}]
+UNNEST_DEFAULT    2    null    $.a[2].aa[2]    2    89    ["yyy", 56, 89, {"aa2": ["aa3", {"aa4": [1, 2, {"aa5": ["aa6", {"aa7": "bb"}]}]}]}]
+UNNEST_DEFAULT    3    null    $.a[2].aa[3]    3    {"aa2": ["aa3", {"aa4": [1, 2, {"aa5": ["aa6", {"aa7": "bb"}]}]}]}    ["yyy", 56, 89, {"aa2": ["aa3", {"aa4": [1, 2, {"aa5": ["aa6", {"aa7": "bb"}]}]}]}]
+select * from unnest(' {"a": [1, "2", {"aa": "b1"}]} ',"$.*") as u;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    null    $.a[0]    0    1    [1, "2", {"aa": "b1"}]
+UNNEST_DEFAULT    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "b1"}]
+UNNEST_DEFAULT    2    null    $.a[2]    2    {"aa": "b1"}    [1, "2", {"aa": "b1"}]
+select * from unnest(' {} ',"$.*") as u;
+col    seq    key    path    index    value    this
+select * from unnest(' [23,"gooooogle",874] ',"$") as u;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    null    $[0]    0    23    [23, "gooooogle", 874]
+UNNEST_DEFAULT    1    null    $[1]    1    "gooooogle"    [23, "gooooogle", 874]
+UNNEST_DEFAULT    2    null    $[2]    2    874    [23, "gooooogle", 874]
+select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$") as u;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    null    $[0]    0    23    [23, "gooooogle", {"k1": 89000}]
+UNNEST_DEFAULT    1    null    $[1]    1    "gooooogle"    [23, "gooooogle", {"k1": 89000}]
+UNNEST_DEFAULT    2    null    $[2]    2    {"k1": 89000}    [23, "gooooogle", {"k1": 89000}]
+select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$[2]") as u;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    k1    $[2].k1    null    89000    {"k1": 89000}
+select * from json_table_6,unnest(json_table_6.j1,"$.key1",true) as u;
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.key1    null    null    null
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.key1    null    null    "value1"
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.key1    null    null    null
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.key1    null    null    "value1"
+select * from json_table_6,unnest(json_table_6.j1,"$.a",true) as u;
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.a    null    null    null
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.a    null    null    null
+select * from json_table_6,unnest(json_table_6.j1,"$.a[2].aa") as u;
+j1    col    seq    key    path    index    value    this
+select * from json_table_6,unnest(json_table_6.j1,"$") as u where u.`key`="key1";
+j1    col    seq    key    path    index    value    this
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    key1    $.key1    null    "value1"    {"key1": "value1", "key2": "value2"}
+select seq,value from json_table_6,unnest(json_table_6.j1,"$.a") as u where u.`path` like "%a";
+seq    value
+create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 varchar(255),col7 varchar(255));
+insert into unnest_table_1 select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
+select * from unnest_table_1;
+col0    col1    col2    col3    col4    col5    col6    col7
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"a": [1, "2", {"aa": "bb"}]}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
+{"key1": "value1", "key2": "value2"}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
+-参数不是json类型,语法错误
+select * from unnest('abc',"$.*") as u;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 1 near "-参数不是json类型,语法错误
+select * from unnest('abc',"$.*") as u;";
+select unnest('abc',"$.*") ;
+not supported: function or operator 'unnest'
