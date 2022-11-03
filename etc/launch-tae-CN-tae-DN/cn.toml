@@ -2,7 +2,7 @@ service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
-level = "error"
+level = "info"
 format = "json"
 max-size = 512
 
@@ -28,7 +28,7 @@ disableTrace = true
 disableMetric = true
 
 [cn]
-uuid = "cn1"
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
 [cn.Engine]
 type = "distributed-tae"
