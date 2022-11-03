@@ -25,15 +25,29 @@ INSERT INTO is_test(str1, str2) VALUES('1', 0);
 INSERT INTO is_test(str1, str2) VALUES(1, '1');
 INSERT INTO is_test(str1, str2) VALUES(0, '0');
 SELECT * FROM is_test WHERE str1 IS FALSE;
-invalid input: '' is not a valid bool expression
+str1    str2    d1    d2    d3
+         null    null    null
+NULL    null    0001-01-01    2022-02-01 13:46:02    1994-03-02 00:00:00
+0    1    null    null    null
+0    0    null    null    null
 SELECT d1, d2 FROM is_test WHERE str2 IS NOT FALSE;
-invalid input: ' ' is not a valid bool expression
+d1    d2
+0001-01-01    2022-02-01 13:46:02
+null    null
+null    null
 SELECT * FROM is_test WHERE str2 IS TRUE;
-invalid input: ' ' is not a valid bool expression
+str1    str2    d1    d2    d3
+0    1    null    null    null
+1    1    null    null    null
 SELECT * FROM is_test WHERE str1 IS FALSE;
-invalid input: '' is not a valid bool expression
+str1    str2    d1    d2    d3
+         null    null    null
+NULL    null    0001-01-01    2022-02-01 13:46:02    1994-03-02 00:00:00
+0    1    null    null    null
+0    0    null    null    null
 SELECT * FROM is_test WHERE str2 IS TRUE AND str1 IS TRUE;
-invalid input: ' ' is not a valid bool expression
+str1    str2    d1    d2    d3
+1    1    null    null    null
 SELECT * FROM is_test WHERE LENGTH(str2) IS TRUE;
 str1    str2    d1    d2    d3
          null    null    null
@@ -42,7 +56,10 @@ str1    str2    d1    d2    d3
 1    1    null    null    null
 0    0    null    null    null
 SELECT * FROM is_test WHERE str1 IS TRUE OR str2 IS TRUE;
-invalid input: '' is not a valid bool expression
+str1    str2    d1    d2    d3
+0    1    null    null    null
+1    0    null    null    null
+1    1    null    null    null
 DELETE FROM is_test;
 DROP TABLE IF EXISTS is_test;
 CREATE TABLE is_test(
@@ -149,21 +166,28 @@ INSERT INTO t2 VALUES('1002', 'IRELAND', '1');
 INSERT INTO t2 VALUES('1003', 'TRUE', 'AI');
 INSERT INTO t2 VALUES('1004', 'IRELAND', '0');
 SELECT id FROM t1 WHERE name IS TRUE;
-invalid input: 'jack' is not a valid bool expression
+id
+1003
 SELECT name, class FROM t1 WHERE name IS NOT TRUE;
-invalid input: 'jack' is not a valid bool expression
+name    class
+JACK    
+TOM    0
+     9
 SELECT id, name, class FROM t1 WHERE CAST(SUBSTRING(id, 4) AS TINYINT) IS TRUE;
 id    name    class
-1001    JACK
+1001    JACK    
 1002    TOM    0
 1003    1    5
 1004         9
 SELECT t1.id, t1.name, t2.nation FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.class IS NOT FALSE AND t2.major IS NOT TRUE;
-invalid input: 'ai' is not a valid bool expression
+id    name    nation
+1003    1    TRUE
+1004         IRELAND
 SELECT t1.id, t2.major FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.name IS TRUE OR t2.nation IS TRUE;
-invalid input: 'jack' is not a valid bool expression
+id    major
+1003    AI
 SELECT t1.id, t2.major FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t2.nation IS TRUE;
-invalid input: 'brazil' is not a valid bool expression
+id    major
 SELECT * FROM t1 WHERE id = 1004 AND LENGTH(name) IS TRUE;
 id    name    class
 1004         9
