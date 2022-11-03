@@ -171,8 +171,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	if err := tmpDBSource.Create(c.ctx, dbName+"-"+tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
-	entireEngine := c.e.(*engine.EntireEngine)
-	return colexec.CreateAutoIncrCol(entireEngine.TempEngine, c.ctx, tmpDBSource, c.proc, tableCols, "temp-db", dbName+"-"+tblName)
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, "temp-db", dbName+"-"+tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -202,19 +201,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 	id := rel.GetTableID(c.ctx)
-	entireEngine := c.e.(*engine.EntireEngine)
 	if isTemp {
 		err = dbSource.Truncate(c.ctx, dbName+"-"+tblName)
 		if err != nil {
 			return err
 		}
-		err = colexec.ResetAutoInsrCol(entireEngine.TempEngine, c.ctx, dbName+"-"+tblName, dbSource, c.proc, id, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, dbName+"-"+tblName, dbSource, c.proc, id, dbName)
 	} else {
 		err = dbSource.Truncate(c.ctx, tblName)
 		if err != nil {
 			return err
 		}
-		err = colexec.ResetAutoInsrCol(entireEngine.Engine, c.ctx, tblName, dbSource, c.proc, id, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	}
 	if err != nil {
 		return err
@@ -256,7 +254,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		isTemp = true
 	}
-	entireEngine := c.e.(*engine.EntireEngine)
 	if isTemp {
 		if err := dbSource.Delete(c.ctx, dbName+"-"+tblName); err != nil {
 			return err
@@ -266,7 +263,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(entireEngine.TempEngine, c.ctx, rel, c.proc, "temp-db", rel.GetTableID(c.ctx))
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, "temp-db", rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
 			return err
@@ -276,7 +273,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(entireEngine.Engine, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 	}
 }
 

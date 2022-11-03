@@ -1454,10 +1454,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
-	e := tcc.ses.storage.(*engine.EntireEngine).TempEngine
-	if e == nil {
-		return nil, moerr.NewInternalError("temporary engine not init yet")
-	}
+	e := tcc.ses.storage
 	db, err := e.Database(ctx, "temp-db", tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get temp database error %v", err)

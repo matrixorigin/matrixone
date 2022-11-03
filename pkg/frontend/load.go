@@ -1703,6 +1703,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
 		tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
+		if e, ok := initSes.storage.(*engine.EntireEngine); ok {
+			tmpSes.storage = e
+		}
 		defer tmpSes.Close()
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
@@ -1853,6 +1856,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 				if e, ok := initSes.storage.(*engine.EntireEngine); ok {
 					tmpSes.storage = e
+					tmpSes.txnHandler = initSes.txnHandler
 				}
 				defer tmpSes.Close()
 				var dbHandler engine.Database

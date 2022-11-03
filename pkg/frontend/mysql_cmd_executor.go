@@ -2480,7 +2480,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
-		pu.TxnClient,
+		ses.GetTxnHandler().GetTxnClient(),
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
 		pu.GetClusterDetails,

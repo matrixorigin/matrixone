@@ -82,19 +82,18 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			}
 		}
 
-		entireEngine := c.e.(*engine.EntireEngine)
 		if isTemp {
 			err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].DbName+"-"+arg.DeleteCtxs[0].TableName)
 			if err != nil {
 				return 0, err
 			}
-			err = colexec.MoveAutoIncrCol(entireEngine.TempEngine, c.ctx, arg.DeleteCtxs[0].DbName+"-"+arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, "temp-db")
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].DbName+"-"+arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, "temp-db")
 		} else {
 			err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 			if err != nil {
 				return 0, err
 			}
-			err = colexec.MoveAutoIncrCol(entireEngine.Engine, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
 		}
 		if err != nil {
 			return 0, err
@@ -181,10 +180,10 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	batch.Reorder(bat, p.OrderAttrs)
 
 	if isTemp {
-		e := c.e.(*engine.EntireEngine).TempEngine
+		// e := c.e.(*engine.EntireEngine).TempEngine
 		p.TblName = p.DbName + "-" + p.TblName
 		p.DbName = "temp-db"
-		if err = colexec.UpdateInsertValueBatch(e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 			return 0, err
 		}
 	} else {
