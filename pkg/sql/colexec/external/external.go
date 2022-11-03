@@ -48,18 +48,14 @@ import (
 	"github.com/pierrec/lz4"
 )
 
-var (
-	ONE_BATCH_MAX_SIZE = 10 * 1024 * 1024 // 10M
-	ONE_BATCH_MAX_ROW  = 40000
-	ONE_BATCH_READ_ROW = 1000
-)
-
 func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("external output")
 }
 
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
+	param.batchSize = 40000
+	param.records = make([][]string, param.batchSize)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -336,6 +332,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 
 	channelSize := 100
 	plh := &ParseLineHandler{}
+	plh.batchSize = param.batchSize
 	plh.simdCsvGetParsedLinesChan = atomic.Value{}
 	plh.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
 	if param.extern.Tail.Fields == nil {
@@ -366,39 +363,26 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	curBatchSize := 0
-	records := make([][]string, ONE_BATCH_READ_ROW)
-	plh.simdCsvLineArray = nil
-	for curBatchSize < ONE_BATCH_MAX_SIZE && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
-		records, cnt, err = plh.simdCsvReader.Read(ONE_BATCH_READ_ROW, proc.Ctx, records)
-		if err != nil {
-			return nil, err
-		}
-
-		plh.simdCsvLineArray = append(plh.simdCsvLineArray, records[:cnt]...)
-		for i := 0; i < len(records); i++ {
-			for j := 0; j < len(records[i]); j++ {
-				curBatchSize += len(records[i][j])
-			}
-		}
-		if cnt < ONE_BATCH_READ_ROW {
-			err := param.reader.Close()
-			if err != nil {
-				logutil.Errorf("close file failed. err:%v", err)
-			}
-			plh.simdCsvReader.Close()
-			param.plh = nil
-			param.Fileparam.mu.Lock()
-			param.Fileparam.FileFin++
-			param.extern.Filepath = ""
-			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-				param.Fileparam.End = true
-			}
-			param.Fileparam.mu.Unlock()
-			break
-		}
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
+	if err != nil {
+		return nil, err
 	}
-
+	if cnt < param.batchSize {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
+		err := param.reader.Close()
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
+		}
+		plh.simdCsvReader.Close()
+		param.plh = nil
+		param.Fileparam.mu.Lock()
+		param.Fileparam.FileFin++
+		param.extern.Filepath = ""
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+		param.Fileparam.mu.Unlock()
+	}
 	if param.IgnoreLine != 0 {
 		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
 			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
@@ -524,6 +508,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int8:
+			//cols := vec.Col.([]int8)
 			cols := vector.MustTCols[int8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -545,6 +530,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int16:
+			//cols := vec.Col.([]int16)
 			cols := vector.MustTCols[int16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -566,6 +552,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int32:
+			//cols := vec.Col.([]int32)
 			cols := vector.MustTCols[int32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -587,6 +574,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int64:
+			//cols := vec.Col.([]int64)
 			cols := vector.MustTCols[int64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -608,6 +596,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint8:
+			//cols := vec.Col.([]uint8)
 			cols := vector.MustTCols[uint8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -629,6 +618,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint16:
+			//cols := vec.Col.([]uint16)
 			cols := vector.MustTCols[uint16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -650,6 +640,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint32:
+			//cols := vec.Col.([]uint32)
 			cols := vector.MustTCols[uint32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -671,6 +662,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint64:
+			//cols := vec.Col.([]uint64)
 			cols := vector.MustTCols[uint64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -692,48 +684,30 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_float32:
+			//cols := vec.Col.([]float32)
 			cols := vector.MustTCols[float32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				// origin float32 data type
-				if vec.Typ.Precision < 0 {
-					d, err := strconv.ParseFloat(field, 32)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return moerr.NewInternalError("the input value '%v' is not float32 type for column %d", field, colIdx)
-					}
-					cols[rowIdx] = float32(d)
-					continue
-				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := strconv.ParseFloat(field, 32)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not float32 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = float32(d.ToFloat64())
+				cols[rowIdx] = float32(d)
 			}
 		case types.T_float64:
+			//cols := vec.Col.([]float64)
 			cols := vector.MustTCols[float64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				// origin float64 data type
-				if vec.Typ.Precision < 0 {
-					d, err := strconv.ParseFloat(field, 64)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return moerr.NewInternalError("the input value '%v' is not float64 type for column %d", field, colIdx)
-					}
-					cols[rowIdx] = d
-					continue
-				}
-				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
+				d, err := strconv.ParseFloat(field, 64)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not float64 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = d.ToFloat64()
+				cols[rowIdx] = d
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
@@ -765,6 +739,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_date:
+			//cols := vec.Col.([]types.Date)
 			cols := vector.MustTCols[types.Date](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -777,6 +752,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_time:
+			//cols := vec.Col.([]types.Time)
 			cols := vector.MustTCols[types.Time](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -789,6 +765,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_datetime:
+			//cols := vec.Col.([]types.Datetime)
 			cols := vector.MustTCols[types.Datetime](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -801,6 +778,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal64:
+			//cols := vec.Col.([]types.Decimal64)
 			cols := vector.MustTCols[types.Decimal64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -816,6 +794,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal128:
+			//cols := vec.Col.([]types.Decimal128)
 			cols := vector.MustTCols[types.Decimal128](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -831,6 +810,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_timestamp:
+			//cols := vec.Col.([]types.Timestamp)
 			cols := vector.MustTCols[types.Timestamp](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))

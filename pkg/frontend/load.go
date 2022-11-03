@@ -957,7 +957,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return moerr.NewInternalError("the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = types.Decimal64_Zero
@@ -978,7 +978,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 								if !ignoreFieldError {
 									// XXX recreate another moerr, this may have side effect of
 									// another error log.
-									return moerr.NewInternalError("the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
 								d = types.Decimal128_Zero
