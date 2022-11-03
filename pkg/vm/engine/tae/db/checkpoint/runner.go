@@ -311,6 +311,12 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
+func (r *runner) GetEntries() []*CheckpointEntry {
+	r.storage.RLock()
+	entries := r.storage.entries.Items()
+	r.storage.RUnlock()
+	return entries
+}
 func (r *runner) MaxLSN() uint64 {
 	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	return r.source.GetMaxLSN(types.TS{}, endTs)
