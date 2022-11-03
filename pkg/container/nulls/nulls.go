@@ -119,14 +119,15 @@ func String(n *Nulls) string {
 
 func TryExpand(n *Nulls, size int) {
 	if n.Np == nil {
-		n.Np = bitmap.New(0)
+		n.Np = bitmap.New(size)
+		return
 	}
 	n.Np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
-	if n.Any() {
+	if n != nil && n.Np != nil {
 		return n.Np.Contains(row)
 	}
 	return false
@@ -264,7 +265,7 @@ func (n *Nulls) Set(row uint64) {
 }
 
 func (n *Nulls) Contains(row uint64) bool {
-	if n.Any() {
+	if n != nil && n.Np != nil {
 		return n.Np.Contains(row)
 	}
 	return false

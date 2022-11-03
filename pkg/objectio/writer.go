@@ -67,7 +67,7 @@ func (w *ObjectWriter) WriteHeader() error {
 }
 
 func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
-	block := NewBlock(uint16(len(batch.Vecs)), w.object)
+	block := NewBlock(uint16(len(batch.Vecs)), w.object, w.name)
 	w.AddBlock(block.(*Block))
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()

@@ -16,9 +16,10 @@ package taestorage
 
 import (
 	"context"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/debug"
+	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -27,34 +28,34 @@ func (s *taeStorage) Debug(ctx context.Context,
 	opCode uint32,
 	data []byte) ([]byte, error) {
 	switch opCode {
-	case uint32(debug.CmdMethod_Ping):
+	case uint32(ctl.CmdMethod_Ping):
 		return s.handlePing(data), nil
-	case uint32(debug.CmdMethod_Flush):
+	case uint32(ctl.CmdMethod_Flush):
 		_, err := handleRead(
 			ctx, s,
 			txnMeta, data,
 			s.taeHandler.HandleFlushTable,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&debug.DNStringResponse{
+			resp := protoc.MustMarshal(&ctl.DNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&debug.DNStringResponse{
+		resp := protoc.MustMarshal(&ctl.DNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
 	default:
-		return nil, moerr.NewNotSupported("TAEStorage not support debug method %d", opCode)
+		return nil, moerr.NewNotSupported("TAEStorage not support ctl method %d", opCode)
 	}
 }
 
 func (s *taeStorage) handlePing(data []byte) []byte {
-	req := debug.DNPingRequest{}
+	req := ctl.DNPingRequest{}
 	protoc.MustUnmarshal(&req, data)
 
-	return protoc.MustMarshal(&debug.DNPingResponse{
+	return protoc.MustMarshal(&ctl.DNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,
