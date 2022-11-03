@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/entireclient"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2217,7 +2218,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		// 1. bind the temporary engine to the session
-		cwft.ses.SetTempEngine(me.Bind(txnOp))
+		cwft.ses.SetTempEngine(me)
 		e := cwft.ses.GetStorage().(*engine.EntireEngine)
 
 		// 2. init temp-db to store temporary relations
@@ -2229,7 +2230,15 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 3. assign for compile, only for the first time needed
 		cwft.compile.SetTempEngine(e.TempEngine)
 		// 4. add auto_IncrementTable fortemp-db
-		colexec.CreateAutoIncrTable(e.TempEngine, requestCtx, cwft.proc, "temp-db")
+		txnop := cwft.proc.TxnOperator.(*entireclient.EntireTxnOperator)
+
+		txnop.SetTemp(txnOp)
+		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, "temp-db")
+		txnOp.Commit(requestCtx)
+
+		txnOp2, err := mc.New()
+		txnop.SetTemp(txnOp2)
+
 
 		txn := cwft.ses.txnCompileCtx.txnHandler
 		txn.SetTempEngine(e.TempEngine)

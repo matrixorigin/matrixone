@@ -32,6 +32,14 @@ func (eto *EntireTxnOperator) Txn() txn.TxnMeta {
 	return eto.txnOperator.Txn()
 }
 
+func (eto *EntireTxnOperator) GetTemp() client.TxnOperator {
+	return eto.tempOperator
+}
+
+func (eto *EntireTxnOperator) SetTemp(tc client.TxnOperator)  {
+	eto.tempOperator = tc
+}
+
 // Snapshot a snapshot of the transaction handle that can be passed around the
 // network. In some scenarios, operations of a transaction are executed on multiple
 // CN nodes for performance acceleration. But with only one CN coordinator, Snapshot
