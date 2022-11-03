@@ -114,7 +114,7 @@ invalid input: delete has no table def
 select * from test_11;
 SQL parser error: table "test_11" does not exist
 Insert into test_11 values(1,1);
-tae data: duplicate
+Duplicate entry '1' for key 'c'
 select * from test_11;
 c	d
 1	1

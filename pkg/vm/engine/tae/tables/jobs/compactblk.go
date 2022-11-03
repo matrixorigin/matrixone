@@ -165,7 +165,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	metaLoc, err := blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+	metaLoc, err := blockio.EncodeMetaLocWithObject(
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
 		ioTask.blocks)
@@ -176,7 +176,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	if deletes != nil {
-		deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ioTask.meta.AsCommonID(),
+		deltaLoc, err = blockio.EncodeMetaLocWithObject(
 			ioTask.blocks[1].GetExtent(),
 			0,
 			ioTask.blocks)
@@ -223,7 +223,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			return
 		}
 		var metaLocABlk string
-		metaLocABlk, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+		metaLocABlk, err = blockio.EncodeMetaLocWithObject(
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
 			ablockTask.blocks)
@@ -234,7 +234,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 		if deletes != nil {
-			deltaLoc, err = blockio.EncodeBlkMetaLocWithObject(ablockTask.meta.AsCommonID(),
+			deltaLoc, err = blockio.EncodeMetaLocWithObject(
 				ablockTask.blocks[1].GetExtent(),
 				0,
 				ablockTask.blocks)
