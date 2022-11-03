@@ -624,12 +624,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		if !IsTableFunctionValueScan(node) {
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ:  &plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
-			})
-		}
+		node.ProjectList = append(node.ProjectList, &plan.Expr{
+			Typ:  &plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+		})
 
 	default:
 		return nil, moerr.NewInternalError("unsupport node type")
@@ -1891,7 +1889,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
-
+	if _, ok := tbl.Right.(*tree.TableFunction); ok {
+		return 0, moerr.NewSyntaxError("Every table function must have an alias")
+	}
+	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
+		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err
@@ -2249,13 +2255,41 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 }
 
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	var (
+		childId int32 = -1
+		err     error
+		nodeId  int32
+	)
+	if tbl.SelectStmt != nil {
+		childId, err = builder.buildSelect(tbl.SelectStmt, ctx, false)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if childId == -1 {
+		scanNode := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+		}
+		childId = builder.appendNode(scanNode, ctx)
+	}
+	ctx.binder = NewTableBinder(builder, ctx)
+	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
+	for _, v := range tbl.Func.Exprs {
+		curExpr, err := ctx.binder.BindExpr(v, 0, false)
+		if err != nil {
+			return 0, err
+		}
+		exprs = append(exprs, curExpr)
+	}
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		return builder.buildUnnest(tbl, ctx)
+		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
 	case "generate_series":
-		return builder.buildGenerateSeries(tbl, ctx)
+		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	default:
-		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
+		err = moerr.NewNotSupported("table function '%s' not supported", id)
 	}
+	clearBinding(ctx)
+	return nodeId, err
 }

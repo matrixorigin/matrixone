@@ -18,8 +18,9 @@ select * from generate_series(2147483647, 2147483649, -1) g;
 select * from generate_series(2147483649, 2147483647, 1) g;
 select * from generate_series(9223372036854775806, 9223372036854775807) g;
 select * from generate_series(9223372036854775806, 9223372036854775807, 2) g;
-select * from generate_series(-9223372036854775805, -9223372036854775808) g;
-select * from generate_series(-9223372036854775805, -9223372036854775808,-2) g;
+select * from generate_series(-9223372036854775805, -9223372036854775807) g;
+select * from generate_series(-9223372036854775805, -9223372036854775807,-2) g;
+select * from generate_series(-9223372036854775805, cast(-9223372036854775808 as bigint),-2) g;
 
 # Test datetime
 select * from generate_series('2020-02-28 00:00:00','2021-03-01 00:01:00', '1 year') g;
