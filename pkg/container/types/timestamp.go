@@ -49,7 +49,7 @@ var TimestampMaxValue Timestamp
 // the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
 func init() {
 	TimestampMinValue = FromClockUTC(1970, 1, 1, 0, 0, 1, 0)
-	TimestampMaxValue = FromClockUTC(9999, 12, 31, 23, 59, 59, 999999)
+	TimestampMaxValue = FromClockUTC(2038, 1, 19, 3, 14, 7, 999999)
 }
 
 func (ts Timestamp) String() string {
@@ -129,20 +129,22 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // 3. yyyymmddhhmmss(.msec)
 func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, error) {
+	result, err := ParseTimestampWithoutRangeCheck(loc, s, precision)
+	if err != nil {
+		return -1, err
+	}
+	if !ValidTimestamp(result) {
+		return -1, moerr.NewInvalidArg("parse timestamp", s)
+	}
+	return result, nil
+}
+
+func ParseTimestampWithoutRangeCheck(loc *time.Location, s string, precision int32) (Timestamp, error) {
 	dt, err := ParseDatetime(s, precision)
 	if err != nil {
 		return -1, moerr.NewInvalidArg("parse timestamp", s)
 	}
-
 	result := dt.ToTimestamp(loc)
-	//for issue5305, do not do this check
-	//according to mysql, timestamp function actually return a datetime value
-	/*
-		if result < TimestampMinValue {
-			return -1, moerr.NewInvalidArg("parse timestamp", s)
-		}
-	*/
-
 	return result, nil
 }
 
@@ -199,7 +201,7 @@ func CurrentTimestamp() Timestamp {
 }
 
 func ValidTimestamp(timestamp Timestamp) bool {
-	return timestamp > TimestampMinValue
+	return timestamp >= TimestampMinValue && timestamp <= TimestampMaxValue
 }
 
 func UnixToTimestamp(ts int64) Timestamp {

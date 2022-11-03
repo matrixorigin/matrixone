@@ -145,7 +145,7 @@ func UnixTimestampVarcharToFloat64(lv []*vector.Vector, proc *process.Process) (
 }
 
 func MustTimestamp(loc *time.Location, s string) types.Timestamp {
-	ts, err := types.ParseTimestamp(loc, s, 6)
+	ts, err := types.ParseTimestampWithoutRangeCheck(loc, s, 6)
 	if err != nil {
 		ts = 0
 	}

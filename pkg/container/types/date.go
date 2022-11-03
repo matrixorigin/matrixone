@@ -59,7 +59,7 @@ var (
 
 const (
 	MaxDateYear    = 9999
-	MinDateYear    = 1
+	MinDateYear    = 1000
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 )
@@ -80,6 +80,19 @@ const (
 // `yyyy-m-d`
 // `yyyymmdd`
 func ParseDate(s string) (Date, error) {
+	result, err := parseDateWithoutRangeCheck(s)
+	if err != nil {
+		return -1, err
+	}
+	y, m, d, _ := result.Calendar(true)
+	if ValidDate(y, m, d) {
+		return FromCalendar(y, m, d), nil
+	}
+	return -1, moerr.NewInvalidArg("parsedate", s)
+}
+
+// parse date don't check out of range
+func parseDateWithoutRangeCheck(s string) (Date, error) {
 	var y int32
 	var m, d uint8
 
@@ -122,11 +135,10 @@ func ParseDate(s string) (Date, error) {
 		m = (s[4]-'0')*10 + (s[5] - '0')
 		d = (s[6]-'0')*10 + (s[7] - '0')
 	}
-
-	if ValidDate(y, m, d) {
-		return FromCalendar(y, m, d), nil
+	if !validMonthAndDay(y, m, d) {
+		return -1, moerr.NewInvalidArg("parsedate", s)
 	}
-	return -1, moerr.NewInvalidArg("parsedate", s)
+	return FromCalendar(y, m, d), nil
 }
 
 // ParseDateCast will parse a string to be a Date (this is used for cast string to date,it's different from above)
@@ -196,7 +208,7 @@ func ParseDateCast(s string) (Date, error) {
 	return -1, moerr.NewInvalidArg("parsedate", s)
 }
 
-// date[0001-01-01 to 9999-12-31]
+// date[1000-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
@@ -206,6 +218,19 @@ func ValidDate(year int32, month, day uint8) bool {
 				} else {
 					return day <= flatYearMonthDays[month-1]
 				}
+			}
+		}
+	}
+	return false
+}
+
+func validMonthAndDay(year int32, month, day uint8) bool {
+	if MinMonthInYear <= month && month <= MaxMonthInYear {
+		if day > 0 {
+			if isLeap(year) {
+				return day <= leapYearMonthDays[month-1]
+			} else {
+				return day <= flatYearMonthDays[month-1]
 			}
 		}
 	}

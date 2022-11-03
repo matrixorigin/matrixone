@@ -329,6 +329,10 @@ func TestDatetime_DayOfYear(t *testing.T) {
 			name:    "Test04",
 			datestr: "2022-01-31 00:00:00",
 		},
+		{
+			name:    "Test05",
+			datestr: "0999-01-31 00:00:00",
+		},
 	}
 
 	for _, c := range cases {

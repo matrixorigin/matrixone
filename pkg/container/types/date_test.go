@@ -104,6 +104,14 @@ func TestParseDate(t *testing.T) {
 			},
 			want: "2005-02-03",
 		},
+		// 7. yyyy-m-d
+		{
+			name: "yyyy-m-d",
+			args: args{
+				s: "0999-2-3",
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

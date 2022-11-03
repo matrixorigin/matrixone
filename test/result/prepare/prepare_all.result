@@ -145,8 +145,11 @@ truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
+truncated type TIMESTAMP value 1970-01-01 00:00:01.000000 for column time3, 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
+truncated type TIMESTAMP value 1970-01-01 00:00:01.000000 for column time3, 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
+truncated type TIMESTAMP value 1970-01-01 00:00:01.000000 for column time3, 1
 insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:01.000000');
 insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
 insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:01.000000');

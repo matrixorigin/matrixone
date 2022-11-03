@@ -88,7 +88,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 	if len(timeString) >= 14 {
 		// The minest length of yyyy-mm-dd hh:mm:ss or yyyymmddhhmmss
 		// must greater than 14 and it can be handled like Datetime
-		dt, err := ParseDatetime(s, precision)
+		dt, err := parseDatetimeWithoutRangeCheck(s, precision)
 		if err != nil {
 			return -1, moerr.NewInvalidInput("invalid time value %s", s)
 		}

@@ -80,10 +80,25 @@ func (dt Datetime) String2(precision int32) string {
 //	"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
 //	"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
 func ParseDatetime(s string, precision int32) (Datetime, error) {
+	result, err := parseDatetimeWithoutRangeCheck(s, precision)
+	if err != nil {
+		return -1, err
+	}
+	y, m, d, _ := result.ToDate().Calendar(true)
+	if !ValidDatetime(y, m, d) {
+		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+	}
+	return result, nil
+}
+
+// parse datetime don't check out of range
+func parseDatetimeWithoutRangeCheck(s string, precision int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
-		if d, err := ParseDate(s); err == nil {
-			return d.ToDatetime(), nil
+		if d, err := parseDateWithoutRangeCheck(s); err == nil {
+			if ValidDatetime(int32(d.Year()), d.Month(), d.Day()) {
+				return d.ToDatetime(), nil
+			}
 		}
 		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 	}
@@ -120,11 +135,9 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		day = uint8(unum)
-
-		if !ValidDate(year, month, day) {
+		if !validMonthAndDay(year, month, day) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
-
 		middleAndBack := strings.Split(strArr[1], ".")
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
@@ -165,6 +178,9 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		hour = (s[8]-'0')*10 + (s[9] - '0')
 		minute = (s[10]-'0')*10 + (s[11] - '0')
 		second = (s[12]-'0')*10 + (s[13] - '0')
+		if !validMonthAndDay(year, month, day) || !ValidTimeInDay(hour, minute, second) {
+			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+		}
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
@@ -177,14 +193,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			}
 		}
 	}
-	if !ValidDate(year, month, day) {
-		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
-	}
 	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
-	y, m, d, _ := result.ToDate().Calendar(true)
-	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
-	}
 	return result, nil
 }
 

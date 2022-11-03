@@ -51,21 +51,13 @@ func datetimeToTimestamp(loc *time.Location, xs []types.Datetime, ns *nulls.Null
 
 func dateStringToTimestamp(loc *time.Location, xs []string, ns *nulls.Nulls, rs []types.Timestamp) []types.Timestamp {
 	for i, str := range xs {
-		t, err := types.ParseTimestamp(loc, str, 6)
+		t, err := types.ParseTimestampWithoutRangeCheck(loc, str, 6)
 		if err != nil {
 			rs[i] = 0
 			nulls.Add(ns, uint64(i))
 			continue
 		}
 		rs[i] = t
-		//for issue5305, do not do this check
-		//according to mysql, timestamp function actually return a datetime value
-		/*
-			if !types.ValidTimestamp(rs[i]) {
-				rs[i] = 0
-				nulls.Add(ns, uint64(i))
-			}
-		*/
 	}
 	return rs
 }
