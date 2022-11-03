@@ -205,7 +205,8 @@ func startLogService(
 	fileService fileservice.FileService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService)
+	s, err := logservice.NewService(lscfg, fileService,
+		logservice.WithLogger(logutil.GetGlobalLogger().Named("log-service").With(zap.String("uuid", lscfg.UUID))))
 	if err != nil {
 		panic(err)
 	}
