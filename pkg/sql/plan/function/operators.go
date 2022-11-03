@@ -4895,6 +4895,24 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_time,
 				Fn:        operator.CoalesceTime,
 			},
+			{
+				Index:     20,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.CoalesceJson,
+			},
+			{
+				Index:     21,
+				Volatile:  true,
+				ReturnTyp: types.T_blob,
+				Fn:        operator.CoalesceBlob,
+			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_text,
+				Fn:        operator.CoalesceText,
+			},
 		},
 	},
 
@@ -5077,6 +5095,12 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_time,
 				Fn:        operator.CaseWhenTime,
 			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.CaseWhenJson,
+			},
 		},
 	},
 
@@ -5241,6 +5265,18 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				ReturnTyp: types.T_time,
 				Fn:        operator.IfTime,
+			},
+			{
+				Index:     21,
+				Volatile:  true,
+				ReturnTyp: types.T_json,
+				Fn:        operator.IfJson,
+			},
+			{
+				Index:     22,
+				Volatile:  true,
+				ReturnTyp: types.T_uuid,
+				Fn:        operator.IfUuid,
 			},
 		},
 	},
