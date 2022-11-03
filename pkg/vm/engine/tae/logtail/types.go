@@ -35,14 +35,19 @@ const (
 )
 
 const (
-	SnapshotAttr_SegID           = catalog.SnapshotAttr_SegID
-	SnapshotAttr_TID             = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID            = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID               = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt         = catalog.SegmentAttr_CreateAt
-	SegmentAttr_State            = catalog.SegmentAttr_State
-	SnapshotAttr_BlockMaxRow     = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_SegmentMaxBlock = catalog.SnapshotAttr_SegmentMaxBlock
+	SnapshotAttr_SegID                     = catalog.SnapshotAttr_SegID
+	SnapshotAttr_TID                       = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID                      = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID                         = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt                   = catalog.SegmentAttr_CreateAt
+	SegmentAttr_State                      = catalog.SegmentAttr_State
+	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
+	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
+	SnapshotMetaAttr_Tid                   = "table_id"
+	SnapshotMetaAttr_BlockInsertBatchStart = "block_insert_batch_start"
+	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
+	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
+	SnapshotMetaAttr_BlockDeleteBatchEnd   = "block_delete_batch_end"
 )
 
 var (
@@ -55,6 +60,7 @@ var (
 	TblDNSchema   *catalog.Schema
 	SegDNSchema   *catalog.Schema
 	BlkDNSchema   *catalog.Schema
+	MetaSchema    *catalog.Schema
 )
 
 var (
@@ -174,6 +180,20 @@ var (
 		types.New(types.T_varchar, 0, 0, 0),
 		types.New(types.T_varchar, 0, 0, 0),
 	}
+	MetaSchemaAttr = []string{
+		SnapshotMetaAttr_Tid,
+		SnapshotMetaAttr_BlockInsertBatchStart,
+		SnapshotMetaAttr_BlockInsertBatchEnd,
+		SnapshotMetaAttr_BlockDeleteBatchStart,
+		SnapshotMetaAttr_BlockDeleteBatchEnd,
+	}
+	MetaShcemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0, 0),
+		types.New(types.T_int32, 0, 0, 0),
+		types.New(types.T_int32, 0, 0, 0),
+		types.New(types.T_int32, 0, 0, 0),
+		types.New(types.T_int32, 0, 0, 0),
+	}
 	BaseAttr = []string{
 		catalog.AttrRowID,
 		catalog.AttrCommitTs,
@@ -278,6 +298,19 @@ func init() {
 			}
 		} else {
 			if err := BlkDNSchema.AppendCol(colname, BlockDNSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	MetaSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range MetaSchemaAttr {
+		if i == 0 {
+			if err := MetaSchema.AppendPKCol(colname, MetaShcemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := MetaSchema.AppendCol(colname, MetaShcemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
