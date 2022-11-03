@@ -133,3 +133,147 @@ prepare __mo_stmt_id_1 from UPDATE bmsql_district  SET d_next_o_id = d_next_o_id
 set @__mo_stmt_var_0=1, @__mo_stmt_var_1=7;
 execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1;
 deallocate prepare __mo_stmt_id_1;
+drop table if exists user;
+CREATE TABLE user
+(
+id BIGINT(20) NOT NULL COMMENT '主键ID',
+name VARCHAR(30) NULL DEFAULT NULL COMMENT '姓名',
+age INT(11) NULL DEFAULT NULL COMMENT '年龄',
+email VARCHAR(50) NULL DEFAULT NULL COMMENT '邮箱',
+PRIMARY KEY (id)
+);
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 0,@__mo_stmt_var_1 = "test_save_0" ,@__mo_stmt_var_2 = 0;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 1,@__mo_stmt_var_1 = "test_save_1" ,@__mo_stmt_var_2 = 1;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 2,@__mo_stmt_var_1 = "test_save_2" ,@__mo_stmt_var_2 = 2;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 3,@__mo_stmt_var_1 = "test_save_3" ,@__mo_stmt_var_2 = 3;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 4,@__mo_stmt_var_1 = "test_save_4" ,@__mo_stmt_var_2 = 4;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 5,@__mo_stmt_var_1 = "test_save_5" ,@__mo_stmt_var_2 = 5;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+5    test_save_5    null    5
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 6,@__mo_stmt_var_1 = "test_save_6" ,@__mo_stmt_var_2 = 6;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+5    test_save_5    null    5
+6    test_save_6    null    6
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 7,@__mo_stmt_var_1 = "test_save_7" ,@__mo_stmt_var_2 = 7;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+5    test_save_5    null    5
+6    test_save_6    null    6
+7    test_save_7    null    7
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 8,@__mo_stmt_var_1 = "test_save_8" ,@__mo_stmt_var_2 = 8;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+5    test_save_5    null    5
+6    test_save_6    null    6
+7    test_save_7    null    7
+8    test_save_8    null    8
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'INSERT INTO user  ( id, name, age )  VALUES  ( ?, ?,? )';
+set @__mo_stmt_var_0 = 9,@__mo_stmt_var_1 = "test_save_9" ,@__mo_stmt_var_2 = 9;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1,@__mo_stmt_var_2;
+deallocate prepare __mo_stmt_id_1;
+prepare __mo_stmt_id_1 from 'select id, name, email, age from user';
+execute __mo_stmt_id_1;
+id    name    email    age
+0    test_save_0    null    0
+1    test_save_1    null    1
+2    test_save_2    null    2
+3    test_save_3    null    3
+4    test_save_4    null    4
+5    test_save_5    null    5
+6    test_save_6    null    6
+7    test_save_7    null    7
+8    test_save_8    null    8
+9    test_save_9    null    9
+deallocate prepare __mo_stmt_id_1;
