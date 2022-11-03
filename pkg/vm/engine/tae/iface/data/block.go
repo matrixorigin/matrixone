@@ -68,7 +68,7 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
-	FreezeAppend()
+	PrepareCompact() bool
 
 	Rows() int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
@@ -83,23 +83,23 @@ type Block interface {
 	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
 	CollectAppendLogIndexes(startTs, endTs types.TS) ([]*wal.Index, error)
 
+	// check wether any delete intents with prepared ts within [from, to]
+	HasDeleteIntentsPreparedIn(from, to types.TS) bool
+
 	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
-	SetMaxCheckpointTS(ts types.TS)
-	GetMaxCheckpointTS() types.TS
-
-	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	ReplayImmutIndex() error
-	Close()
 	FreeData()
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
+
+	Close()
 }

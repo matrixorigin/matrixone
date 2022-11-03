@@ -124,7 +124,7 @@ select cast(10000002383263201056 as decimal) mod 50 as result;
 result
 49
 select cast(cast(19999999999999999999 as decimal) as unsigned);
-data out of range: data type uint64, value '19999999999999999999'
+Data truncation: data out of range: data type uint64, value '19999999999999999999'
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a decimal(20),
 b VARCHAR(20));

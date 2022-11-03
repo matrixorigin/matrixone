@@ -368,14 +368,13 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
+		name := blockio.EncodeObjectName()
 		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
 		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeBlkMetaLocWithObject(
-			dataBlk.GetID(),
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
@@ -709,8 +708,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	time.Sleep(time.Millisecond * 2)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -827,8 +825,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
-	assert.Nil(t, err)
+	tae.BGCheckpointRunner.MockCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -3763,6 +3760,15 @@ func TestBlockRead(t *testing.T) {
 	assert.NotEmpty(t, metaloc)
 	assert.NotEmpty(t, deltaloc)
 
+	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
+
+	info := &pkgcatalog.BlockInfo{
+		BlockID:   bid,
+		SegmentID: sid,
+		MetaLoc:   metaloc,
+		DeltaLoc:  deltaloc,
+	}
+
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
@@ -3779,20 +3785,32 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
+	b1, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		beforeDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b1.Close()
 	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
-	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterFirstDel, fs, pool)
+	b2, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		afterFirstDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b2.Close()
 	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
-	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterSecondDel, fs, pool)
+	b3, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		afterSecondDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b3.Close()
 	assert.Equal(t, columns, b2.Attrs)
@@ -3801,81 +3819,18 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(),
+		context.Background(), info,
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
 		[]bool{false},
-		metaloc, deltaloc, afterSecondDel,
-		fs, pool,
+		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b4.Close()
 	assert.Equal(t, []string{catalog.AttrRowID}, b4.Attrs)
 	assert.Equal(t, 1, len(b4.Vecs))
 	assert.Equal(t, 16, b4.Vecs[0].Length())
-}
-
-func TestSnapshotBatch(t *testing.T) {
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := newTestEngine(t, opts)
-	defer tae.Close()
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, 30)
-	tae.createRelAndAppend(bat, true)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs := types.BuildTS(0, 0)
-	txn, _ := tae.StartTxn(nil)
-	maxTs := txn.GetStartTS()
-
-	runner := tae.DB.BGCheckpointRunner
-	entry := checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg := catalog.NewEmptyCatalog()
-	r := checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
-
-	txn, relation := tae.getRelation()
-	blkIt := relation.MakeBlockIt()
-	for blkIt.Valid() {
-		id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
-		blkIt.GetBlock().GetSegment().SoftDeleteBlock(id)
-		blkIt.Next()
-	}
-	segIt := relation.MakeSegmentIt()
-	for segIt.Valid() {
-		id := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry).ID
-		segIt.GetSegment().GetRelation().SoftDeleteSegment(id)
-		segIt.Next()
-	}
-	db, err := txn.GetDatabase("db")
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName("test")
-	assert.NoError(t, err)
-	_, err = txn.DropDatabase("db")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	minTs = maxTs.Next()
-	txn, _ = tae.StartTxn(nil)
-	maxTs = txn.GetStartTS()
-	runner = tae.DB.BGCheckpointRunner
-	entry = checkpoint.NewCheckpointEntry(minTs, maxTs)
-	runner.TestCheckpoint(entry)
-	ctlg = catalog.NewEmptyCatalog()
-	r = checkpoint.MockRunner(tae.Fs, ctlg)
-	r.Replay()
-	t.Log(ctlg.SimplePPString(3))
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
