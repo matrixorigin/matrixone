@@ -452,6 +452,11 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 			return err
 		}
 	}
+	if numParams > 0 {
+		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+			return err
+		}
+	}
 
 	for i := 0; i < numColumns; i++ {
 		column := new(MysqlColumn)
@@ -467,6 +472,12 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 			return err
 		}
 	}
+	if numColumns > 0 {
+		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
