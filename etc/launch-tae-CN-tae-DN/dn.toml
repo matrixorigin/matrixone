@@ -3,7 +3,7 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]
