@@ -224,6 +224,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
+				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
 				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
@@ -360,7 +361,7 @@ func (seg *localSegment) GetPKColumn() containers.Vector {
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {
-	return seg.index.BatchDedup(key)
+	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
 }
 
 func (seg *localSegment) GetColumnDataById(
