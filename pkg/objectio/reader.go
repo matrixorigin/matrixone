@@ -207,16 +207,16 @@ type ToObjectFunc = func(r io.Reader) (any, int64, error)
 func newDecompressToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectFunc {
 	return func(read io.Reader) (any, int64, error) {
 		var err error
-		entry.Data, err = allocData(entry.Size, m)
+		data, err := allocData(entry.Size, m)
 		if err != nil {
 			return nil, 0, err
 		}
-		defer freeData(entry.Data, m)
-		_, err = read.Read(entry.Data)
+		defer freeData(data, m)
+		_, err = read.Read(data)
 		if err != nil {
 			return nil, 0, err
 		}
-		entry.Object, err = compress.Decompress(entry.Data, entry.Object.([]byte), compress.Lz4)
+		entry.Object, err = compress.Decompress(data, entry.Object.([]byte), compress.Lz4)
 		if err != nil {
 			return nil, 0, err
 		}
