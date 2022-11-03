@@ -8,13 +8,17 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type BlockT[R any] interface {
-	Append(R) error
-	IsAppendable() bool
-	Len() int
+type RowsT interface {
+	Length() int
 }
 
-type AOT[B BlockT[R], R any] struct {
+type BlockT[R RowsT] interface {
+	Append(R) error
+	IsAppendable() bool
+	Length() int
+}
+
+type AOT[B BlockT[R], R RowsT] struct {
 	sync.Mutex
 	blockSize int
 	appender  B
@@ -22,7 +26,7 @@ type AOT[B BlockT[R], R any] struct {
 	factory   func() B
 }
 
-func NewAOT[B BlockT[R], R any](
+func NewAOT[B BlockT[R], R RowsT](
 	blockSize int,
 	factory func() B,
 	lessFn func(_, _ B) bool) *AOT[B, R] {
@@ -97,23 +101,23 @@ func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
 }
 
 // One appender
-func (aot *AOT[B, R]) AppendRow(row R) (err error) {
-	if aot.appender.IsAppendable() && aot.appender.Len() < aot.blockSize {
-		err = aot.appender.Append(row)
+func (aot *AOT[B, R]) Append(rows R) (err error) {
+	if aot.appender.IsAppendable() && aot.appender.Length() < aot.blockSize {
+		err = aot.appender.Append(rows)
 		return
 	}
 	newB := aot.factory()
 	if err = aot.AppendBlock(newB); err != nil {
 		return
 	}
-	err = aot.appender.Append(row)
+	err = aot.appender.Append(rows)
 	return
 }
 
 func (aot *AOT[B, R]) AppendBlock(block B) (err error) {
 	aot.Lock()
 	defer aot.Unlock()
-	if aot.appender.IsAppendable() && aot.appender.Len() < aot.blockSize {
+	if aot.appender.IsAppendable() && aot.appender.Length() < aot.blockSize {
 		panic(moerr.NewInternalError("append a block but the previous block is appendable"))
 	}
 	aot.blocks.Set(block)
@@ -133,8 +137,8 @@ func NewTimedSliceBlock[R any](ts types.TS) *TimedSliceBlock[R] {
 	}
 }
 
-func (blk *TimedSliceBlock[R]) Append(row R) (err error) {
-	blk.Rows = append(blk.Rows, row)
+func (blk *TimedSliceBlock[R]) Append(rows R) (err error) {
+	blk.Rows = append(blk.Rows, rows)
 	return
 }
 
@@ -142,6 +146,6 @@ func (blk *TimedSliceBlock[R]) IsAppendable() bool {
 	return blk != nil
 }
 
-func (blk *TimedSliceBlock[R]) Len() int {
+func (blk *TimedSliceBlock[R]) Length() int {
 	return len(blk.Rows)
 }

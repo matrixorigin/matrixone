@@ -8,9 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testRow struct {
+type testRows struct {
 	id int
 }
+
+func (r *testRows) Length() int { return 1 }
 
 func createBlockFn[R any]() *TimedSliceBlock[R] {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
@@ -19,16 +21,16 @@ func createBlockFn[R any]() *TimedSliceBlock[R] {
 
 func TestAOT(t *testing.T) {
 	aot := NewAOT[
-		*TimedSliceBlock[*testRow],
-		*testRow](
+		*TimedSliceBlock[*testRows],
+		*testRows](
 		10,
-		createBlockFn[*testRow],
-		func(a, b *TimedSliceBlock[*testRow]) bool {
+		createBlockFn[*testRows],
+		func(a, b *TimedSliceBlock[*testRows]) bool {
 			return a.BornTS.Less(b.BornTS)
 		})
 	for i := 0; i < 30; i++ {
-		row := &testRow{id: i}
-		err := aot.AppendRow(row)
+		rows := &testRows{id: i}
+		err := aot.Append(rows)
 		assert.NoError(t, err)
 	}
 	t.Log(aot.BlockCount())
