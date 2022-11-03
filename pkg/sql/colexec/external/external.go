@@ -760,7 +760,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				d, err := types.ParseTime(field, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError("the input value '%v' is not Datetime type for column %d", field, colIdx)
+					return moerr.NewInternalError("the input value '%v' is not Time type for column %d", field, colIdx)
 				}
 				cols[rowIdx] = d
 			}
