@@ -23,121 +23,152 @@ import (
 
 var (
 	kases = []struct {
-		json    string
-		path    string
-		want    string
+		json    []string
+		path    []string
+		want    []string
 		jsonErr bool
 		pathErr bool
 	}{
 		{
-			json:    `{"a":1,"b":2,"c":3`,
-			path:    `$.a`,
-			want:    ``,
+			json:    []string{`{"a":1,"b":2,"c":3`},
+			path:    []string{`$.a`},
 			jsonErr: true,
 			pathErr: false,
 		},
 		{
-			json:    `{"a":1,"b":2,"c":3}`,
-			path:    `$.`,
-			want:    ``,
+			json:    []string{`{"a":1,"b":2,"c":3}`},
+			path:    []string{`$.`},
 			jsonErr: false,
 			pathErr: true,
 		},
 		{
-			json:    `{"a":1,"b":2,"c":3}`,
-			path:    `$.b`,
-			want:    `2`,
+			json:    []string{`{"a":1,"b":2,"c":3}`},
+			path:    []string{`$.b`},
+			want:    []string{`2`},
 			jsonErr: false,
 			pathErr: false,
 		},
 		{
-			json: `{"a":{"q":[1,2,3]}}`,
-			path: `$.a.q[1]`,
-			want: `2`,
+			json: []string{`{"a":{"q":[1,2,3]}}`},
+			path: []string{`$.a.q[1]`},
+			want: []string{`2`},
 		},
 		{
-			json: `[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`,
-			path: `$[1].a`,
-			want: `4`,
+			json: []string{`[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`},
+			path: []string{`$[1].a`},
+			want: []string{`4`},
 		},
 		{
-			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
-			path: `$.a.q[1]`,
-			want: `{"a":2}`,
+			json: []string{`{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`},
+			path: []string{`$.a.q[1]`},
+			want: []string{`{"a":2}`},
 		},
 		{
-			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
-			path: `$.a.q`,
-			want: `[{"a":1},{"a":2},{"a":3}]`,
+			json: []string{`{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`},
+			path: []string{`$.a.q`},
+			want: []string{`[{"a":1},{"a":2},{"a":3}]`},
 		},
 		{
-			json: `[1,2,3]`,
-			path: "$[*]",
-			want: "[1,2,3]",
+			json: []string{`[1,2,3]`},
+			path: []string{"$[*]"},
+			want: []string{"[1,2,3]"},
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}]}`,
-			path: "$.a[3].b",
-			want: "4",
+			json: []string{`{"a":[1,2,3,{"b":4}]}`},
+			path: []string{"$.a[3].b"},
+			want: []string{"4"},
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}]}`,
-			path: "$.a[3].c",
-			want: "null",
+			json: []string{`{"a":[1,2,3,{"b":4}]}`},
+			path: []string{"$.a[3].c"},
+			want: []string{"null"},
 		},
 		{
-			json: `{"a":[1,2,3,{"b":4}],"c":5}`,
-			path: "$.*",
-			want: `[[1,2,3,{"b":4}],5]`,
+			json: []string{`{"a":[1,2,3,{"b":4}],"c":5}`},
+			path: []string{"$.*"},
+			want: []string{`[[1,2,3,{"b":4}],5]`},
 		},
 		{
-			json: `{"a":[1,2,3,{"a":4}]}`,
-			path: "$**.a",
-			want: `[[1,2,3,{"a":4}],4]`,
+			json: []string{`{"a":[1,2,3,{"a":4}]}`},
+			path: []string{"$**.a"},
+			want: []string{`[[1,2,3,{"a":4}],4]`},
 		},
 		{
-			json: `{"a":[1,2,3,{"a":4}]}`,
-			path: "$.a[*].a",
-			want: `4`,
+			json: []string{`{"a":[1,2,3,{"a":4}]}`},
+			path: []string{"$.a[*].a"},
+			want: []string{`4`},
+		},
+	}
+	multiKases = []struct {
+		json []string
+		path []string
+		want []string
+	}{
+		{
+			json: []string{`{"a":1,"b":2,"c":3}`, `{"a":1,"b":2,"c":3}`},
+			path: []string{`$.a`},
+			want: []string{`1`, `1`},
+		},
+		{
+			json: []string{`{"a":1,"b":2,"c":3}`, `{"a":1,"b":2,"c":3}`},
+			path: []string{`$.a`, `$.b`},
+			want: []string{`1`, `2`},
+		},
+		{
+			json: []string{`{"a":1,"b":2,"c":3}`},
+			path: []string{`$.a`, `$.b`},
+			want: []string{`1`, `2`},
 		},
 	}
 )
 
 func TestByStringOne(t *testing.T) {
 	for _, kase := range kases {
-		ph, err := types.ParseStringToPath(kase.path)
+		ph, err := types.ParseStringToPath(kase.path[0])
 		if kase.pathErr {
 			require.NotNil(t, err)
 			continue
 		}
 		require.Nil(t, err)
-		q, err := byStringOne([]byte(kase.json), &ph)
+		q, err := byStringOne([]byte(kase.json[0]), &ph)
 		if kase.jsonErr {
 			require.NotNil(t, err)
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+		if kase.want[0] == "null" {
+			require.True(t, q.IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want[0], q.String())
 	}
 }
 
 func TestByString(t *testing.T) {
-	for _, kase := range kases {
-		jBytes := [][]byte{[]byte(kase.json)}
-		pBytes := [][]byte{[]byte(kase.path)}
-		result, err := byString(jBytes, pBytes, nil)
-		if kase.pathErr || kase.jsonErr {
-			require.NotNil(t, err)
-			continue
+	for _, kase := range multiKases {
+		jbytes := make([][]byte, 0, len(kase.json))
+		for _, j := range kase.json {
+			jbytes = append(jbytes, []byte(j))
 		}
+		pbytes := make([][]byte, 0, len(kase.path))
+		for _, p := range kase.path {
+			pbytes = append(pbytes, []byte(p))
+		}
+		qs, err := byString(jbytes, pbytes, nil)
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result[0]))
+		for i, q := range qs {
+			if kase.want[i] == "null" {
+				require.True(t, q.IsNull())
+				continue
+			}
+			require.JSONEq(t, kase.want[i], q.String())
+		}
 	}
 }
 
 func TestByJsonOne(t *testing.T) {
 	for _, kase := range kases {
-		byteJson, err := types.ParseStringToByteJson(kase.json)
+		byteJson, err := types.ParseStringToByteJson(kase.json[0])
 		if kase.jsonErr {
 			require.NotNil(t, err)
 			continue
@@ -145,7 +176,7 @@ func TestByJsonOne(t *testing.T) {
 		require.Nil(t, err)
 		json, err := byteJson.Marshal()
 		require.Nil(t, err)
-		ph, err := types.ParseStringToPath(kase.path)
+		ph, err := types.ParseStringToPath(kase.path[0])
 		if kase.pathErr {
 			require.NotNil(t, err)
 			continue
@@ -153,28 +184,36 @@ func TestByJsonOne(t *testing.T) {
 		require.Nil(t, err)
 		q, err := byJsonOne(json, &ph)
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+		if kase.want[0] == "null" {
+			require.True(t, q.IsNull())
+			continue
+		}
+		require.JSONEq(t, kase.want[0], q.String())
 	}
 }
 
 func TestByJson(t *testing.T) {
-	for _, kase := range kases {
-		json, err := types.ParseStringToByteJson(kase.json)
-		if kase.jsonErr {
-			require.NotNil(t, err)
-			continue
+	for _, kase := range multiKases {
+		jbytes := make([][]byte, 0, len(kase.json))
+		for _, j := range kase.json {
+			tmp, err := types.ParseStringToByteJson(j)
+			require.Nil(t, err)
+			bytes, err := tmp.Marshal()
+			require.Nil(t, err)
+			jbytes = append(jbytes, bytes)
 		}
-		require.Nil(t, err)
-		jsonBytes, err := types.EncodeJson(json)
-		require.Nil(t, err)
-		jBytes := [][]byte{jsonBytes}
-		pBytes := [][]byte{[]byte(kase.path)}
-		result, err := byJson(jBytes, pBytes, nil)
-		if kase.pathErr {
-			require.NotNil(t, err)
-			continue
+		pbytes := make([][]byte, 0, len(kase.path))
+		for _, p := range kase.path {
+			pbytes = append(pbytes, []byte(p))
 		}
+		qs, err := byJson(jbytes, pbytes, nil)
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result[0]))
+		for i, q := range qs {
+			if kase.want[i] == "null" {
+				require.True(t, q.IsNull())
+				continue
+			}
+			require.JSONEq(t, kase.want[i], q.String())
+		}
 	}
 }
