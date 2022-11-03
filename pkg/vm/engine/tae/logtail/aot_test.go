@@ -57,7 +57,7 @@ func TestAOT2(t *testing.T) {
 		10,
 		factory,
 		func(a, b *BatchBlock) bool {
-			return true
+			return a.ID < b.ID
 		})
 	defer aot.Close()
 
