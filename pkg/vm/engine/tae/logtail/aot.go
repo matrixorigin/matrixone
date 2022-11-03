@@ -5,6 +5,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
 )
 
@@ -17,6 +19,7 @@ type BlockT[R RowsT[R]] interface {
 	Append(R) error
 	IsAppendable() bool
 	Length() int
+	Close()
 }
 
 type AOT[B BlockT[R], R RowsT[R]] struct {
@@ -38,9 +41,13 @@ func NewAOT[B BlockT[R], R RowsT[R]](
 	}
 }
 
-func (aot *AOT[B, R]) Reset() {
+func (aot *AOT[B, R]) Close() {
 	aot.Lock()
 	defer aot.Unlock()
+	aot.blocks.Scan(func(block B) bool {
+		block.Close()
+		return true
+	})
 	aot.blocks.Clear()
 }
 
@@ -105,7 +112,7 @@ func (aot *AOT[B, R]) prepareAppend(rows int) (cnt int, all bool) {
 	if !aot.appender.IsAppendable() {
 		return
 	}
-	left := aot.blockSize - rows
+	left := aot.blockSize - aot.appender.Length()
 	if rows > left {
 		cnt = left
 	} else {
@@ -140,6 +147,7 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 				return
 			}
 		}
+		logutil.Infof("Appended=%d, ToAppend=%d, done=%v, AllRows=%d", appended, toAppend, done, rows.Length())
 		appended += toAppend
 	}
 	return
@@ -179,4 +187,32 @@ func (blk *TimedSliceBlock[R]) IsAppendable() bool {
 
 func (blk *TimedSliceBlock[R]) Length() int {
 	return len(blk.Rows)
+}
+
+func (blk *TimedSliceBlock[R]) Close() {
+	blk.BornTS = types.TS{}
+	blk.Rows = make([]R, 0)
+}
+
+type BatchBlock struct {
+	*containers.Batch
+	ID uint64
+}
+
+func NewBatchBlock(
+	id uint64,
+	attrs []string,
+	colTypes []types.Type,
+	nullables []bool,
+	opts *containers.Options) *BatchBlock {
+	bat := containers.BuildBatch(attrs, colTypes, nullables, opts)
+	block := &BatchBlock{
+		Batch: bat,
+		ID:    id,
+	}
+	return block
+}
+
+func (blk *BatchBlock) IsAppendable() bool {
+	return blk != nil
 }

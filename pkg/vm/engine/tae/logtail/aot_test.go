@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,7 +23,7 @@ func createBlockFn[R any]() *TimedSliceBlock[R] {
 	return NewTimedSliceBlock[R](ts)
 }
 
-func TestAOT(t *testing.T) {
+func TestAOT1(t *testing.T) {
 	aot := NewAOT[
 		*TimedSliceBlock[*testRows],
 		*testRows](
@@ -35,4 +38,33 @@ func TestAOT(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	t.Log(aot.BlockCount())
+}
+
+func TestAOT2(t *testing.T) {
+	schema := catalog.MockSchemaAll(14, 3)
+	factory := func() *BatchBlock {
+		id := common.NextGlobalSeqNum()
+		return NewBatchBlock(
+			id,
+			schema.Attrs(),
+			schema.Types(),
+			schema.Nullables(),
+			new(containers.Options))
+	}
+	aot := NewAOT[
+		*BatchBlock,
+		*containers.Batch](
+		10,
+		factory,
+		func(a, b *BatchBlock) bool {
+			return true
+		})
+	defer aot.Close()
+
+	bat := catalog.MockBatch(schema, 42)
+	defer bat.Close()
+
+	assert.NoError(t, aot.Append(bat))
+	t.Log(aot.BlockCount())
+	assert.Equal(t, 5, aot.BlockCount())
 }
