@@ -167,17 +167,25 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	// initialize cluster
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
+
+	halt := make(chan bool)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
-		select {}
+		select {
+		case <-ctx.Done():
+			close(halt)
+		case <-halt:
+		}
+		return nil
 	}
 
 	// start the cluster
 	err = c.Start()
 	require.NoError(t, err)
-	defer func(c Cluster) {
+	defer func(c Cluster, halt chan bool) {
+		halt <- true
 		_ = c.Close()
-	}(c)
+	}(c, halt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
