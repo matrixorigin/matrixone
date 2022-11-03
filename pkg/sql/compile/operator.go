@@ -398,7 +398,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -410,7 +410,8 @@ func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.Ex
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			Fileparam:     fileparam,
+			FileList:      fileList,
+			Fileparam:     new(external.ExternalFileparam),
 		},
 	}
 }

@@ -45,7 +45,7 @@ function run_bvt() {
     cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
   elif [[ "$LAUNCH" == "launch-tae-CN-tae-DN" ]]; then
     echo "> test case: test/distributed/cases"
-    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases 2>&1
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
   else
     echo ">>>>>>>>>>>>>>>>>>>>>>>> please choose a launch way"
     exit 1
