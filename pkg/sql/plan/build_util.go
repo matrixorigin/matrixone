@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -293,4 +294,21 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 		}, nil
 	}
 	return d.Default.Expr, nil
+}
+
+func judgeUnixTimestampReturnType(timestr string) types.T {
+	retDecimal := -1
+	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
+		retDecimal = len(timestr) - dotIdx - 1
+	}
+
+	if retDecimal > 6 || retDecimal == -1 {
+		retDecimal = 6
+	}
+
+	if retDecimal == 0 {
+		return types.T_int64
+	} else {
+		return types.T_float64
+	}
 }

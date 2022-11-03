@@ -21,17 +21,29 @@ import (
 const int32_MAX int64 = 0x7fffffff
 
 var (
-	UnixTimestamp func([]types.Timestamp, []int64) []int64
+	UnixTimestampToInt   func([]types.Timestamp, []int64) []int64
+	UnixTimestampToFloat func([]types.Timestamp, []float64) []float64
 )
 
 func init() {
-	UnixTimestamp = unixTimestamp
+	UnixTimestampToInt = unixTimestampToInt
+	UnixTimestampToFloat = unixTimestampToFloat
 }
 
-func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
+func unixTimestampToInt(xs []types.Timestamp, rs []int64) []int64 {
 	for i := range xs {
 		rs[i] = xs[i].Unix()
 		if rs[i] > int32_MAX {
+			rs[i] = -1
+		}
+	}
+	return rs
+}
+
+func unixTimestampToFloat(xs []types.Timestamp, rs []float64) []float64 {
+	for i := range xs {
+		rs[i] = xs[i].UnixToFloat()
+		if rs[i] > float64(int32_MAX) {
 			rs[i] = -1
 		}
 	}
