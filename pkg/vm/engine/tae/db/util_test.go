@@ -1,4 +1,18 @@
-package logtail
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package db
 
 import (
 	"testing"
@@ -8,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,18 +33,18 @@ type testRows struct {
 func (r *testRows) Length() int               { return 1 }
 func (r *testRows) Window(_, _ int) *testRows { return nil }
 
-func createBlockFn[R any]() *TimedSliceBlock[R] {
+func createBlockFn[R any]() *model.TimedSliceBlock[R] {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	return NewTimedSliceBlock[R](ts)
+	return model.NewTimedSliceBlock[R](ts)
 }
 
 func TestAOT1(t *testing.T) {
-	aot := NewAOT[
-		*TimedSliceBlock[*testRows],
+	aot := model.NewAOT[
+		*model.TimedSliceBlock[*testRows],
 		*testRows](
 		10,
 		createBlockFn[*testRows],
-		func(a, b *TimedSliceBlock[*testRows]) bool {
+		func(a, b *model.TimedSliceBlock[*testRows]) bool {
 			return a.BornTS.Less(b.BornTS)
 		})
 	for i := 0; i < 30; i++ {
@@ -42,21 +57,21 @@ func TestAOT1(t *testing.T) {
 
 func TestAOT2(t *testing.T) {
 	schema := catalog.MockSchemaAll(14, 3)
-	factory := func() *BatchBlock {
+	factory := func() *model.BatchBlock {
 		id := common.NextGlobalSeqNum()
-		return NewBatchBlock(
+		return model.NewBatchBlock(
 			id,
 			schema.Attrs(),
 			schema.Types(),
 			schema.Nullables(),
 			new(containers.Options))
 	}
-	aot := NewAOT[
-		*BatchBlock,
+	aot := model.NewAOT[
+		*model.BatchBlock,
 		*containers.Batch](
 		10,
 		factory,
-		func(a, b *BatchBlock) bool {
+		func(a, b *model.BatchBlock) bool {
 			return a.ID < b.ID
 		})
 	defer aot.Close()
