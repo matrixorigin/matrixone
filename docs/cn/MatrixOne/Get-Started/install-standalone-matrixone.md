@@ -10,7 +10,7 @@
 
 更多关于硬件规格推荐，参见[硬件与操作系统要求](../FAQs/deployment-faqs.md)。
 
-## <h2><a name="code_source">方法 1：使用源代码搭建</a></h2>
+## 开始前准备
 
 ### 1. 安装部署 Go 语言环境
 
@@ -18,9 +18,14 @@ Go 语言需要升级到 1.19 版本。
 
 ### 2. 安装部署 MySQL 客户端
 
-MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) 版本。
+安装部署 MySQL 客户端请进入到 [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) 页面下载：
 
-### 3. 获取 MatrixOne 源码完成搭建
+1. 根据你的系统，下拉选择 **Select Operating System**。
+2. 下拉选择 **Select OS Version**，建议选择 8.0.30 版本及以上。
+
+## <h2><a name="code_source">方法 1：使用源代码搭建</a></h2>
+
+### 1. 获取 MatrixOne 源码完成搭建
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
@@ -76,11 +81,9 @@ MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) �
     ./mo-server system_vars_config.toml
     ```
 
-### 4. 连接 MatrixOne 服务
+### 2. 连接 MatrixOne 服务
 
-当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
-
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+当你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，连接 MatrixOne，具体步骤，参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
 
 ## <h2><a name="binary_packages">方法 2：下载二进制包</a></h2>
 
@@ -117,6 +120,8 @@ MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) �
       unzip mo-server-v0.5.1-darwin-x86_64.zip
       ```
 
+      MacOS 系统默认不包含 `wget` 命令，需要先提前安装 `wget` 命令，你也可以参见下方 *下载方式二* 下载安装。
+
    + 下载方式二：
 
       ```bash
@@ -131,21 +136,15 @@ MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) �
 !!! info
     ARM 芯片硬件配置下，MatrixOne 仅支持通过源代码方式进行安装部署；如果你使用的是 MacOS 系统 M1 及以上版本，请使用<a href="#code_source">源代码</a>构建的方式安装部署 MatrixOne。若果在 X86 硬件配置下使用二进制方式安装部署 MatrixOne 会导致未知问题。
 
-### 2. 安装部署 MySQL 客户端
-
-MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) 版本。
-
-### 3. 启动 MatrixOne 服务
+### 2. 启动 MatrixOne 服务
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-### 4. 连接 MatrixOne 服务
+### 3. 连接 MatrixOne 服务
 
-当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
-
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+当你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，连接 MatrixOne，具体步骤，参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
 
 ## <h2><a name="use_docker">方法 3：使用 Docker</a></h2>
 
@@ -199,9 +198,7 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
 ### 4. 连接 MatrixOne 服务
 
-当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
-
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+当你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，连接 MatrixOne，具体步骤，参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
 
 ## 参考文档
 

@@ -37,7 +37,7 @@ func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (er
 	panic("not support")
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
-func (index *immutableIndex) String() string                         { panic("not support") }
+func (index *immutableIndex) String() string                         { return "immutable" }
 func (index *immutableIndex) Dedup(key any) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
