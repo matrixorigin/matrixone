@@ -128,7 +128,9 @@ func TryExpand(n *Nulls, size int) {
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
 	if n != nil && n.Np != nil {
-		return n.Np.Contains(row)
+		if row < uint64(n.Np.Len()) {
+			return n.Np.Contains(row)
+		}
 	}
 	return false
 }
@@ -200,6 +202,13 @@ func FilterCount(n *Nulls, sels []int64) int {
 
 func RemoveRange(n *Nulls, start, end uint64) {
 	if n.Np != nil {
+		upperLimit := uint64(n.Np.Len())
+		if start >= upperLimit {
+			return
+		}
+		if end >= upperLimit {
+			end = upperLimit - 1
+		}
 		n.Np.RemoveRange(start, end)
 	}
 }
@@ -239,7 +248,11 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 	}
 	np := bitmap.New(len(sels))
+	upperLimit := uint64(n.Np.Len())
 	for i, sel := range sp {
+		if sel >= upperLimit {
+			continue
+		}
 		if n.Np.Contains(sel) {
 			np.Add(uint64(i))
 		}
