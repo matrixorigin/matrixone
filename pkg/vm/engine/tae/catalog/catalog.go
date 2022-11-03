@@ -966,7 +966,7 @@ func (catalog *Catalog) CreateDBEntryWithID(name, createSql string, id uint64, t
 	catalog.Lock()
 	defer catalog.Unlock()
 	if _, exist := catalog.entries[id]; exist {
-		return nil, moerr.NewDuplicate()
+		return nil, moerr.GetOkExpectedDup()
 	}
 	entry := NewDBEntryWithID(catalog, name, createSql, id, txn)
 	err = catalog.AddEntryLocked(entry, txn, false)

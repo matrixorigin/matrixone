@@ -230,7 +230,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -1593,7 +1593,7 @@ func TestDedup(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(bat)
 	t.Log(err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback()
 	assert.NoError(t, err)
@@ -3956,4 +3956,55 @@ func TestFlushTable(t *testing.T) {
 		it.Next()
 	}
 	assert.NoError(t, txn.Commit())
+}
+
+func TestReadCheckpoint(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	tids := []uint64{
+		pkgcatalog.MO_DATABASE_ID,
+		pkgcatalog.MO_TABLES_ID,
+		pkgcatalog.MO_COLUMNS_ID,
+		1000,
+	}
+
+	entries := tae.BGCheckpointRunner.GetEntries()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
+	tae.restart()
+	entries = tae.BGCheckpointRunner.GetEntries()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
 }
