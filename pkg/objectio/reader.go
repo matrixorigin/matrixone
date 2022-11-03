@@ -104,27 +104,24 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 			Offset: int64(col.GetMeta().location.Offset()),
 			Size:   int64(col.GetMeta().location.Length()),
 		}
-		// IOEntry.Data&IOEntry.Object needs to allocate memory in advance
-		objects[i], err = allocData(int64(col.GetMeta().location.OriginSize()), m)
-		if err != nil {
-			r.freeDataEntries(data.Entries, m)
-			r.freeObjects(objects, m)
-			return nil, err
-		}
+		// IOEntry.Data needs to allocate memory in advance
 		entry.Data, err = allocData(int64(col.GetMeta().location.Length()), m)
 		if err != nil {
 			r.freeDataEntries(data.Entries, m)
 			r.freeObjects(objects, m)
 			return nil, err
 		}
-		entry.ToObject = newDecompressToObject(objects[i])
+		// object needs to allocate memory inside ToObject,
+		// because ToObject will not be called if the object is cached
+		entry.ToObject = newDecompressToObject(objects[i], int64(col.GetMeta().location.OriginSize()), m)
 		data.Entries = append(data.Entries, entry)
 	}
 	// Temp data needs to be free
 	defer r.freeDataEntries(data.Entries, m)
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
-		r.freeDataEntries(data.Entries, m)
+		// If the read fails, you need to release the memory allocated by ToObject to the object
+		r.freeObjects(objects, m)
 		return nil, err
 	}
 	return data, nil
@@ -216,7 +213,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 type ToObjectFunc = func(r io.Reader, buf []byte) (any, int64, error)
 
 // newDecompressToObject the decompression function passed to fileservice
-func newDecompressToObject(object []byte) ToObjectFunc {
+func newDecompressToObject(object []byte, size int64, m *mpool.MPool) ToObjectFunc {
 	return func(read io.Reader, buf []byte) (any, int64, error) {
 		var err error
 		var data []byte
@@ -227,8 +224,13 @@ func newDecompressToObject(object []byte) ToObjectFunc {
 				return nil, 0, err
 			}
 		}
+		object, err = allocData(size, m)
+		if err != nil {
+			return nil, 0, err
+		}
 		object, err = compress.Decompress(data, object, compress.Lz4)
 		if err != nil {
+			freeData(buf, m)
 			return nil, 0, err
 		}
 		return object, int64(len(object)), nil
@@ -279,4 +281,10 @@ func allocData(size int64, m *mpool.MPool) (data []byte, err error) {
 		data = make([]byte, size)
 	}
 	return data, nil
+}
+
+func freeData(buf []byte, m *mpool.MPool) {
+	if m != nil {
+		m.Free(buf)
+	}
 }
