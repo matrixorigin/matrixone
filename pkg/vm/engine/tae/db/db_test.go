@@ -3957,3 +3957,54 @@ func TestFlushTable(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 }
+
+func TestReadCheckpoint(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	tids := []uint64{
+		pkgcatalog.MO_DATABASE_ID,
+		pkgcatalog.MO_TABLES_ID,
+		pkgcatalog.MO_COLUMNS_ID,
+		1000,
+	}
+
+	entries := tae.BGCheckpointRunner.GetEntries()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
+	tae.restart()
+	entries = tae.BGCheckpointRunner.GetEntries()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
+}
