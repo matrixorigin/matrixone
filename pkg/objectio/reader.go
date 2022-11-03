@@ -59,7 +59,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 			r.freeDataEntries(metas.Entries, m)
 			return nil, err
 		}
-		metas.Entries[i].ToObject = newToObject(&metas.Entries[i])
+		metas.Entries[i].ToObject = newToObject
 	}
 	defer r.freeDataEntries(metas.Entries, m)
 	if err != nil {
@@ -106,11 +106,20 @@ func (r *ObjectReader) Read(ctx context.Context, extent Extent, idxs []uint16, m
 		entry.Object, err = allocData(int64(col.GetMeta().location.OriginSize()), m)
 		if err != nil {
 			r.freeDataEntries(data.Entries, m)
+			r.freeObjectEntries(data.Entries, m)
+			return nil, err
+		}
+		entry.Data, err = allocData(int64(col.GetMeta().location.Length()), m)
+		if err != nil {
+			r.freeDataEntries(data.Entries, m)
+			r.freeObjectEntries(data.Entries, m)
 			return nil, err
 		}
 		entry.ToObject = newDecompressToObject(&entry, m)
 		data.Entries = append(data.Entries, entry)
 	}
+	// Temp data needs to be free
+	defer r.freeDataEntries(data.Entries, m)
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
 		r.freeDataEntries(data.Entries, m)
@@ -189,7 +198,7 @@ func (r *ObjectReader) readFooterAndUnMarshal(ctx context.Context, fileSize, siz
 		return nil, err
 	}
 	defer r.freeDataEntries(data.Entries, m)
-	data.Entries[0].ToObject = newToObject(&data.Entries[0])
+	data.Entries[0].ToObject = newToObject
 	err = r.object.fs.Read(ctx, data)
 	if err != nil {
 		return nil, err
@@ -224,25 +233,30 @@ func newDecompressToObject(entry *fileservice.IOEntry, m *mpool.MPool) ToObjectF
 	}
 }
 
-func newToObject(entry *fileservice.IOEntry) ToObjectFunc {
-	return func(read io.Reader) (any, int64, error) {
-		var err error
-		if b, ok := read.(interface {
-			Bytes() []byte
-		}); ok {
-			data := b.Bytes()
-			return data, int64(len(data)), nil
-		}
-		data, err := io.ReadAll(read)
-		return data, int64(len(data)), err
+func newToObject(read io.Reader, buf []byte) (any, int64, error) {
+	var err error
+	if len(buf) > 0 {
+		return buf, int64(len(buf)), err
 	}
+	data, err := io.ReadAll(read)
+	return data, int64(len(data)), err
 }
 
 func (r *ObjectReader) freeDataEntries(Entries []fileservice.IOEntry, m *mpool.MPool) {
 	if m != nil {
 		for i := range Entries {
-			if Entries[i].Data != nil {
+			if len(Entries[i].Data) > 0 {
 				m.Free(Entries[i].Data)
+			}
+		}
+	}
+}
+
+func (r *ObjectReader) freeObjectEntries(Entries []fileservice.IOEntry, m *mpool.MPool) {
+	if m != nil {
+		for i := range Entries {
+			if len(Entries[i].Object.([]byte)) > 0 {
+				m.Free(Entries[i].Object.([]byte))
 			}
 		}
 	}
