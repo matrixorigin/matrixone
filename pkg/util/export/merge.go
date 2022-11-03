@@ -437,6 +437,9 @@ func (c *SliceCache) Flush(writer CSVWriter) error {
 }
 
 func (c *SliceCache) Reset() {
+	for _, row := range c.m {
+		row.Reset()
+	}
 	c.m = c.m[:]
 	c.size = 0
 }
@@ -470,7 +473,8 @@ func (c *MapCache) Flush(writer CSVWriter) error {
 
 func (c *MapCache) Reset() {
 	c.size = 0
-	for key := range c.m {
+	for key, row := range c.m {
+		row.Reset()
 		delete(c.m, key)
 	}
 }
