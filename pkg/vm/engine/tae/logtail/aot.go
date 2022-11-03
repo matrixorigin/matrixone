@@ -8,17 +8,18 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type RowsT interface {
+type RowsT[T any] interface {
 	Length() int
+	Window(offset, length int) T
 }
 
-type BlockT[R RowsT] interface {
+type BlockT[R RowsT[R]] interface {
 	Append(R) error
 	IsAppendable() bool
 	Length() int
 }
 
-type AOT[B BlockT[R], R RowsT] struct {
+type AOT[B BlockT[R], R RowsT[R]] struct {
 	sync.Mutex
 	blockSize int
 	appender  B
@@ -26,7 +27,7 @@ type AOT[B BlockT[R], R RowsT] struct {
 	factory   func() B
 }
 
-func NewAOT[B BlockT[R], R RowsT](
+func NewAOT[B BlockT[R], R RowsT[R]](
 	blockSize int,
 	factory func() B,
 	lessFn func(_, _ B) bool) *AOT[B, R] {
@@ -100,21 +101,51 @@ func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
 	return
 }
 
-// One appender
-func (aot *AOT[B, R]) Append(rows R) (err error) {
-	if aot.appender.IsAppendable() && aot.appender.Length() < aot.blockSize {
-		err = aot.appender.Append(rows)
+func (aot *AOT[B, R]) prepareAppend(rows int) (cnt int, all bool) {
+	if !aot.appender.IsAppendable() {
 		return
 	}
-	newB := aot.factory()
-	if err = aot.AppendBlock(newB); err != nil {
-		return
+	left := aot.blockSize - rows
+	if rows > left {
+		cnt = left
+	} else {
+		cnt = rows
+		all = true
 	}
-	err = aot.appender.Append(rows)
 	return
 }
 
-func (aot *AOT[B, R]) AppendBlock(block B) (err error) {
+// One appender
+func (aot *AOT[B, R]) Append(rows R) (err error) {
+	var (
+		done     bool
+		appended int
+		toAppend int
+	)
+	for !done {
+		toAppend, done = aot.prepareAppend(rows.Length() - appended)
+		if toAppend == 0 {
+			newB := aot.factory()
+			if err = aot.appendBlock(newB); err != nil {
+				return
+			}
+			continue
+		}
+		if toAppend == rows.Length() {
+			if err = aot.appender.Append(rows); err != nil {
+				return
+			}
+		} else {
+			if err = aot.appender.Append(rows.Window(appended, toAppend)); err != nil {
+				return
+			}
+		}
+		appended += toAppend
+	}
+	return
+}
+
+func (aot *AOT[B, R]) appendBlock(block B) (err error) {
 	aot.Lock()
 	defer aot.Unlock()
 	if aot.appender.IsAppendable() && aot.appender.Length() < aot.blockSize {

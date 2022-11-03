@@ -12,7 +12,8 @@ type testRows struct {
 	id int
 }
 
-func (r *testRows) Length() int { return 1 }
+func (r *testRows) Length() int               { return 1 }
+func (r *testRows) Window(_, _ int) *testRows { return nil }
 
 func createBlockFn[R any]() *TimedSliceBlock[R] {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
