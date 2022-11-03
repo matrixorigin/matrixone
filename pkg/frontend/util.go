@@ -483,10 +483,10 @@ func logInfo(info string, msg string, fields ...zap.Field) {
 	logutil.Info(msg, fields...)
 }
 
-func logDebug(info string, msg string, fields ...zap.Field) {
-	fields = append(fields, zap.String("session_info", info))
-	logutil.Debug(msg, fields...)
-}
+//func logDebug(info string, msg string, fields ...zap.Field) {
+//	fields = append(fields, zap.String("session_info", info))
+//	logutil.Debug(msg, fields...)
+//}
 
 func logError(info string, msg string, fields ...zap.Field) {
 	fields = append(fields, zap.String("session_info", info))

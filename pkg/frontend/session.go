@@ -274,8 +274,7 @@ func (ses *Session) makeProfile(profileTyp profileType) {
 	defer ses.mu.Unlock()
 	var mask profileType
 	var profile string
-	var account *TenantInfo
-	account = ses.tenant
+	account := ses.tenant
 	for i := uint8(0); i < 8; i++ {
 		mask = 1 << i
 		switch mask & profileTyp {
