@@ -9,6 +9,7 @@ drop table if exists json_table_4a;
 drop table if exists json_table_5;
 drop table if exists json_table_5a;
 drop table if exists json_view_1;
+drop table if exists json_table_6;
 
 --覆盖json串 key value为字符，数字，中文，特殊字符， ' '，常量，日期格式字符串,true/false
 create table json_table_1(j1 json);
@@ -177,3 +178,33 @@ select json_extract(' {"a.f": [1, "2", {"aa.f": "bb"}],"e.a.b":"888"} ','$**.f')
 select  json_extract('{"a":"a1","b":"b1"}','$.**');
 select json_extract('bar','$.*');
 select  json_extract(j1,'') from json_table_71;
+
+--数组，jsontype,包含空
+create table json_table_6(j1 json);
+insert into json_table_6 values('{"a": [1, "2", {"aa": "bb"}]}'),('{"key1": "value1", "key2": "value2"}');
+select * from json_table_6,unnest(json_table_6.j1) as u;
+select * from json_table_6,unnest(json_table_6.j1,"$") as u;
+select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
+select * from unnest(' {"a": [1, "2", {"aa": ["yyy",56,89,{"aa2": ["aa3",{"aa4": [1,2,{"aa5": ["aa6", {"aa7": "bb"}]}]}]}]}]} ',"$.a[2].aa") as u;
+select * from unnest(' {"a": [1, "2", {"aa": "b1"}]} ',"$.*") as u;
+select * from unnest(' {} ',"$.*") as u;
+select * from unnest(' [23,"gooooogle",874] ',"$") as u;
+select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$") as u;
+select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$[2]") as u;
+
+--非数组，jsontype类型
+select * from json_table_6,unnest(json_table_6.j1,"$.key1",true) as u;
+select * from json_table_6,unnest(json_table_6.j1,"$.a",true) as u;
+select * from json_table_6,unnest(json_table_6.j1,"$.a[2].aa") as u;
+
+--select xxx from unnest where xxx
+select * from json_table_6,unnest(json_table_6.j1,"$") as u where u.`key`="key1";
+select seq,value from json_table_6,unnest(json_table_6.j1,"$.a") as u where u.`path` like "%a";
+
+--insert into table select xxx from unnest
+create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 varchar(255),col7 varchar(255));
+insert into unnest_table_1 select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
+select * from unnest_table_1;
+-参数不是json类型,语法错误
+select * from unnest('abc',"$.*") as u;
+select unnest('abc',"$.*") ;
