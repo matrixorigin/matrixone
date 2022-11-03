@@ -2237,8 +2237,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		txnOp.Commit(requestCtx)
 
 		txnOp2, err := mc.New()
+		if err != nil {
+			return nil, err
+		}
 		txnop.SetTemp(txnOp2)
-
 
 		txn := cwft.ses.txnCompileCtx.txnHandler
 		txn.SetTempEngine(e.TempEngine)
