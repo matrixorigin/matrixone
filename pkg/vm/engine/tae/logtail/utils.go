@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -36,6 +37,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
+		collector.data.prepareMeta()
 		if err != nil {
 			return
 		}
@@ -44,7 +46,18 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 	}
 }
 
+type CheckpointMeta struct {
+	blkInsertOffset *common.ClosedInterval
+	blkDeleteOffset *common.ClosedInterval
+}
+
+func NewCheckpointMeta() *CheckpointMeta {
+	return &CheckpointMeta{}
+}
+
 type CheckpointData struct {
+	meta               map[uint64]*CheckpointMeta
+	metaBatch          *containers.Batch
 	dbInsBatch         *containers.Batch
 	dbInsTxnBatch      *containers.Batch
 	dbDelBatch         *containers.Batch
@@ -67,6 +80,8 @@ type CheckpointData struct {
 
 func NewCheckpointData() *CheckpointData {
 	return &CheckpointData{
+		meta:               make(map[uint64]*CheckpointMeta),
+		metaBatch:          makeRespBatchFromSchema(MetaSchema),
 		dbInsBatch:         makeRespBatchFromSchema(catalog.SystemDBSchema),
 		dbInsTxnBatch:      makeRespBatchFromSchema(TxnNodeSchema),
 		dbDelBatch:         makeRespBatchFromSchema(DelSchema),
@@ -121,9 +136,117 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayBlockBatch(ins, dnins, del, dndel, dataFactory)
 	return
 }
+func (data *CheckpointData) ReplayMeta() {
+	for i := 0; i < data.metaBatch.GetVectorByName(SnapshotMetaAttr_Tid).Length(); i++ {
+		tid := data.metaBatch.GetVectorByName(SnapshotMetaAttr_Tid).Get(i).(uint64)
+		insStart := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Get(i).(int32)
+		insEnd := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Get(i).(int32)
+		delStart := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Get(i).(int32)
+		delEnd := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Get(i).(int32)
+		meta := &CheckpointMeta{}
+		if insStart != -1 {
+			meta.blkInsertOffset = &common.ClosedInterval{
+				Start: uint64(insStart),
+				End:   uint64(insEnd),
+			}
+		}
+		if delStart != -1 {
+			meta.blkDeleteOffset = &common.ClosedInterval{
+				Start: uint64(delStart),
+				End:   uint64(delEnd),
+			}
+		}
+		data.meta[tid] = meta
+	}
+}
+func (data *CheckpointData) GetTableData(tid uint64) (ins, del *containers.Batch) {
+	switch tid {
+	case pkgcatalog.MO_DATABASE_ID:
+		ins = data.dbInsBatch
+		del = data.dbDelBatch
+		return
+	case pkgcatalog.MO_TABLES_ID:
+		ins = data.tblInsBatch
+		del = data.tblDelBatch
+		return
+	case pkgcatalog.MO_COLUMNS_ID:
+		ins = data.tblColInsBatch
+		del = data.tblColDelBatch
+		return
+	}
+	if len(data.meta) == 0 {
+		data.ReplayMeta()
+	}
+	meta, ok := data.meta[tid]
+	if !ok {
+		return nil, nil
+	}
+	insInterval := meta.blkInsertOffset
+	if insInterval != nil {
+		insOffset := insInterval.Start
+		insLength := insInterval.End - insInterval.Start + 1
+		ins = data.blkMetaInsBatch.Window(int(insOffset), int(insLength))
+	}
+	delInterval := meta.blkDeleteOffset
+	if delInterval != nil {
+		delOffset := delInterval.Start
+		delLength := delInterval.End - delInterval.Start + 1
+		del = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
+	}
+	return
+}
+
+func (data *CheckpointData) prepareMeta() {
+	for tid, meta := range data.meta {
+		data.metaBatch.GetVectorByName(SnapshotMetaAttr_Tid).Append(tid)
+		if meta.blkInsertOffset == nil {
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(-1))
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(-1))
+		} else {
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(meta.blkInsertOffset.Start))
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(meta.blkInsertOffset.End))
+		}
+		if meta.blkDeleteOffset == nil {
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(-1))
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(-1))
+		} else {
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(meta.blkDeleteOffset.Start))
+			data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(meta.blkDeleteOffset.End))
+		}
+	}
+}
+
+func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
+	meta, ok := data.meta[tid]
+	if !ok {
+		meta = NewCheckpointMeta()
+		data.meta[tid] = meta
+	}
+	if delEnd >= delStart {
+		if meta.blkDeleteOffset == nil {
+			meta.blkDeleteOffset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
+		} else {
+			if !meta.blkDeleteOffset.TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.blkDeleteOffset, delStart, delEnd))
+			}
+		}
+	}
+	if insEnd >= insStart {
+		if meta.blkInsertOffset == nil {
+			meta.blkInsertOffset = &common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}
+		} else {
+			if !meta.blkInsertOffset.TryMerge(common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.blkInsertOffset, insStart, insEnd))
+			}
+		}
+	}
+}
 
 func (data *CheckpointData) WriteTo(
 	writer *blockio.Writer) (blks []objectio.BlockObject, err error) {
+	if _, err = writer.WriteBlock(data.metaBatch); err != nil {
+		return
+	}
 	if _, err = writer.WriteBlock(data.dbInsBatch); err != nil {
 		return
 	}
@@ -189,130 +312,137 @@ func (data *CheckpointData) ReadFrom(
 	if err != nil {
 		return
 	}
+	if data.metaBatch, err = reader.LoadBlkColumnsByMeta(
+		append(BaseTypes, MetaSchema.Types()...),
+		append(BaseAttr, MetaSchema.AllNames()...),
+		append([]bool{false, false}, catalog.SystemDBSchema.AllNullables()...),
+		metas[0]); err != nil {
+		return
+	}
 	if data.dbInsBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, catalog.SystemDBSchema.Types()...),
 		append(BaseAttr, catalog.SystemDBSchema.AllNames()...),
 		append([]bool{false, false}, catalog.SystemDBSchema.AllNullables()...),
-		metas[0]); err != nil {
+		metas[1]); err != nil {
 		return
 	}
 	if data.dbInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, TxnNodeSchema.Types()...),
 		append(BaseAttr, TxnNodeSchema.AllNames()...),
 		append([]bool{false, false}, TxnNodeSchema.AllNullables()...),
-		metas[1]); err != nil {
+		metas[2]); err != nil {
 		return
 	}
 	if data.dbDelBatch, err = reader.LoadBlkColumnsByMeta(
 		BaseTypes,
 		BaseAttr,
 		[]bool{false, false},
-		metas[2]); err != nil {
+		metas[3]); err != nil {
 		return
 	}
 	if data.dbDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, DBDNSchema.Types()...),
 		append(BaseAttr, DBDNSchema.AllNames()...),
 		append([]bool{false, false}, DBDNSchema.AllNullables()...),
-		metas[3]); err != nil {
+		metas[4]); err != nil {
 		return
 	}
 	if data.tblInsBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, catalog.SystemTableSchema.Types()...),
 		append(BaseAttr, catalog.SystemTableSchema.AllNames()...),
 		append([]bool{false, false}, catalog.SystemTableSchema.AllNullables()...),
-		metas[4]); err != nil {
+		metas[5]); err != nil {
 		return
 	}
 	if data.tblInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, TblDNSchema.Types()...),
 		append(BaseAttr, TblDNSchema.AllNames()...),
 		append([]bool{false, false}, TblDNSchema.AllNullables()...),
-		metas[5]); err != nil {
+		metas[6]); err != nil {
 		return
 	}
 	if data.tblDelBatch, err = reader.LoadBlkColumnsByMeta(
 		BaseTypes,
 		BaseAttr,
 		[]bool{false, false},
-		metas[6]); err != nil {
+		metas[7]); err != nil {
 		return
 	}
 	if data.tblDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, TblDNSchema.Types()...),
 		append(BaseAttr, TblDNSchema.AllNames()...),
 		append([]bool{false, false}, TblDNSchema.AllNullables()...),
-		metas[7]); err != nil {
+		metas[8]); err != nil {
 		return
 	}
 	if data.tblColInsBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, catalog.SystemColumnSchema.Types()...),
 		append(BaseAttr, catalog.SystemColumnSchema.AllNames()...),
 		append([]bool{false, false}, catalog.SystemColumnSchema.AllNullables()...),
-		metas[8]); err != nil {
+		metas[9]); err != nil {
 		return
 	}
 	if data.tblColDelBatch, err = reader.LoadBlkColumnsByMeta(
 		BaseTypes,
 		BaseAttr,
 		[]bool{false, false},
-		metas[9]); err != nil {
+		metas[10]); err != nil {
 		return
 	}
 	if data.segInsBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, SegSchema.Types()...),
 		append(BaseAttr, SegSchema.AllNames()...),
 		append([]bool{false, false}, SegSchema.AllNullables()...),
-		metas[10]); err != nil {
+		metas[11]); err != nil {
 		return
 	}
 	if data.segInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, SegDNSchema.Types()...),
 		append(BaseAttr, SegDNSchema.AllNames()...),
 		append([]bool{false, false}, SegDNSchema.AllNullables()...),
-		metas[11]); err != nil {
+		metas[12]); err != nil {
 		return
 	}
 	if data.segDelBatch, err = reader.LoadBlkColumnsByMeta(
 		BaseTypes,
 		BaseAttr,
 		[]bool{false, false},
-		metas[12]); err != nil {
+		metas[13]); err != nil {
 		return
 	}
 	if data.segDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, SegDNSchema.Types()...),
 		append(BaseAttr, SegDNSchema.AllNames()...),
 		append([]bool{false, false}, SegDNSchema.AllNullables()...),
-		metas[13]); err != nil {
+		metas[14]); err != nil {
 		return
 	}
 	if data.blkMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, BlkMetaSchema.Types()...),
 		append(BaseAttr, BlkMetaSchema.AllNames()...),
 		append([]bool{false, false}, BlkMetaSchema.AllNullables()...),
-		metas[14]); err != nil {
+		metas[15]); err != nil {
 		return
 	}
 	if data.blkMetaInsTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, BlkDNSchema.Types()...),
 		append(BaseAttr, BlkDNSchema.AllNames()...),
 		append([]bool{false, false}, BlkDNSchema.AllNullables()...),
-		metas[15]); err != nil {
+		metas[16]); err != nil {
 		return
 	}
 	if data.blkMetaDelBatch, err = reader.LoadBlkColumnsByMeta(
 		BaseTypes,
 		BaseAttr,
 		[]bool{false, false},
-		metas[16]); err != nil {
+		metas[17]); err != nil {
 		return
 	}
 	if data.blkMetaDelTxnBatch, err = reader.LoadBlkColumnsByMeta(
 		append(BaseTypes, BlkDNSchema.Types()...),
 		append(BaseAttr, BlkDNSchema.AllNames()...),
 		append([]bool{false, false}, BlkDNSchema.AllNullables()...),
-		metas[17]); err != nil {
+		metas[18]); err != nil {
 		return
 	}
 	return
@@ -488,6 +618,9 @@ func (collector *IncrementalCollector) VisitSeg(entry *catalog.SegmentEntry) (er
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -514,6 +647,11 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	insStart := collector.data.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Length()
+	delStart := collector.data.blkMetaDelBatch.GetVectorByName(catalog.AttrRowID).Length()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -545,6 +683,9 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			collector.data.blkMetaInsTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
 		}
 	}
+	insEnd := collector.data.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Length() - 1
+	delEnd := collector.data.blkMetaDelBatch.GetVectorByName(catalog.AttrRowID).Length() - 1
+	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 	return nil
 }
 
