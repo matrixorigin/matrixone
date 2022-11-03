@@ -26,6 +26,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// WithServerMaxMessageSize set max rpc message size
+func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
+	return func(s *server) {
+		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
+// set filter func. Requests can be modified or filtered out by the filter
+// before they are processed by the handler.
+func WithServerMessageFilter(filter func(*txn.TxnRequest) bool) ServerOption {
+	return func(s *server) {
+		s.options.filter = filter
+	}
+}
+
 type server struct {
 	logger   *zap.Logger
 	rpc      morpc.RPCServer
@@ -37,12 +52,16 @@ type server struct {
 	}
 
 	options struct {
-		filter func(*txn.TxnRequest) bool
+		filter         func(*txn.TxnRequest) bool
+		maxMessageSize int
 	}
 }
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
-func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnServer, error) {
+func NewTxnServer(address string,
+	clock clock.Clock,
+	logger *zap.Logger,
+	opts ...ServerOption) (TxnServer, error) {
 	s := &server{
 		logger:   logutil.Adjust(logger),
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
@@ -57,12 +76,17 @@ func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnSer
 			return &txn.TxnResponse{}
 		},
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.adjust()
 
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
 			morpc.WithCodecIntegrationHLC(clock),
 			morpc.WithCodecEnableChecksum(),
-			morpc.WithCodecPayloadCopyBufferSize(16*1024)),
+			morpc.WithCodecPayloadCopyBufferSize(16*1024),
+			morpc.WithCodecMaxBodySize(s.options.maxMessageSize)),
 		morpc.WithServerLogger(s.logger),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
@@ -77,6 +101,12 @@ func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnSer
 	return s, nil
 }
 
+func (s *server) adjust() {
+	if s.options.maxMessageSize == 0 {
+		s.options.maxMessageSize = defaultMaxMessageSize
+	}
+}
+
 func (s *server) Start() error {
 	return s.rpc.Start()
 }
@@ -87,10 +117,6 @@ func (s *server) Close() error {
 
 func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) {
 	s.handlers[m] = h
-}
-
-func (s *server) SetFilter(filter func(*txn.TxnRequest) bool) {
-	s.options.filter = filter
 }
 
 // onMessage a client connection has a separate read goroutine. The onMessage invoked in this read goroutine.
