@@ -278,11 +278,18 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 			// errorFileHandler(m.ctx, m.FS, path) without continue
 			continue
 		}
-		for line := reader.ReadLine(); line != nil; line = reader.ReadLine() {
-
+		line, err := reader.ReadLine()
+		if err != nil {
+			return err
+		}
+		for line != nil {
 			row := m.Table.ParseRow(line)
 			// fixme: if !obj.Valid() { continue }
 			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
+			line, err = reader.ReadLine()
+			if err != nil {
+				return err
+			}
 		}
 		// fixme: reader.Close()
 		if cacheFileData.Size() > m.FileCacheSize {
@@ -309,32 +316,104 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 }
 
 type CSVReader interface {
-	ReadLine() []string
+	ReadLine() ([]string, error)
+	Close()
 }
 
 type ContentReader struct {
+	ctx     context.Context
 	idx     int
 	length  int
 	content [][]string
+
+	reader *simdcsv.Reader
+	raw    io.ReadCloser
 }
 
-func NewContentReader(content [][]string) *ContentReader {
+const ContentLength = 4000
+const ONE_BATCH_READ_ROW = ContentLength
+
+func NewContentReader(ctx context.Context, reader *simdcsv.Reader, raw io.ReadCloser) *ContentReader {
 	return &ContentReader{
+		ctx:     ctx,
+		length:  0,
+		content: make([][]string, ContentLength),
+		reader:  reader,
+		raw:     raw,
+	}
+}
+
+func NewContentReaderOLD(ctx context.Context, content [][]string) *ContentReader {
+	return &ContentReader{
+		ctx:     ctx,
 		length:  len(content),
 		content: content,
 	}
 }
 
-func (s *ContentReader) ReadLine() []string {
+func (s *ContentReader) ReadLine() ([]string, error) {
+	if s.idx == s.length && s.reader != nil {
+		var cnt int
+		var err error
+		s.content, cnt, err = s.reader.Read(ONE_BATCH_READ_ROW, s.ctx, s.content)
+		if err != nil {
+			return nil, err
+		}
+		if cnt < ONE_BATCH_READ_ROW {
+			s.reader.Close()
+			s.reader = nil
+			s.raw.Close()
+			s.raw = nil
+		}
+		s.idx = 0
+		s.length = cnt
+	}
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
-		return s.content[idx]
+		return s.content[idx], nil
 	}
-	return nil
+	return nil, nil
+}
+
+func (s *ContentReader) Close() {
+	for _, row := range s.content {
+		for idx := range row {
+			row[idx] = ""
+		}
+	}
 }
 
 func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) (CSVReader, error) {
+	// external.ReadFile
+	var reader io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &reader,
+			},
+		},
+	}
+	// open file reader
+	if err := fs.Read(ctx, &vec); err != nil {
+		return nil, err
+	}
+
+	// parse csv content
+	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
+		CommonCsvOptions.FieldTerminator,
+		'#',
+		true,
+		true)
+
+	// return content Reader
+	return NewContentReader(ctx, simdCsvReader, reader), nil
+}
+
+func NewCSVReaderOLD(ctx context.Context, fs fileservice.FileService, path string) (CSVReader, error) {
 	// external.ReadFile
 	var reader io.ReadCloser
 	vec := fileservice.IOVector{
@@ -366,7 +445,7 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 	}
 
 	// return content Reader
-	return NewContentReader(content), nil
+	return NewContentReaderOLD(ctx, content), nil
 }
 
 type CSVWriter interface {
