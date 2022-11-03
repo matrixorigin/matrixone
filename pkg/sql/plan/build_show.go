@@ -267,7 +267,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	}
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or (account_id = 0 and datname = '%s' )", MO_CATALOG_DB_NAME, accountId, MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
