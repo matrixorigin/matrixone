@@ -148,7 +148,7 @@ func NewService(cfg *Config,
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.logger = logutil.Adjust(s.logger).With(zap.String("dn-store", cfg.UUID))
+	s.logger = logutil.Adjust(s.logger)
 	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store", stopper.WithLogger(s.logger))
 	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
