@@ -766,6 +766,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if err != nil {
 				return 0, moerr.NewParseError("the %d column cann't cast to a same type", columnIdx)
 			}
+
+			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
+				for i := 0; i < len(argsCastType); i++ {
+					argsCastType[i].Precision = 0
+				}
+			}
 			var targetType *plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {

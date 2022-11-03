@@ -20,13 +20,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type TableIndex interface {
 	io.Closer
-	BatchDedup(containers.Vector) error
-	BatchInsert(containers.Vector, int, int, uint32, bool) error
+	BatchDedup(string, containers.Vector) error
+	BatchInsert(string, containers.Vector, int, int, uint32, bool) error
 	Insert(any, uint32) error
 	Delete(any) error
 	Search(any) (uint32, error)
@@ -46,23 +47,36 @@ func NewSimpleTableIndex() *simpleTableIndex {
 	}
 }
 
-func DedupOp[T comparable](vs any, tree map[any]uint32) (err error) {
+func DedupOp[T comparable](
+	t types.Type,
+	attr string,
+	vs any,
+	tree map[any]uint32) (err error) {
 	vals := vs.([]T)
 	for _, v := range vals {
 		if _, ok := tree[v]; ok {
-			return moerr.NewDuplicate()
+			entry := common.TypeStringValue(t, v)
+			return moerr.NewDuplicateEntry(entry, attr)
 		}
 	}
 	return
 }
 
-func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupInput bool, tree map[any]uint32) (err error) {
+func InsertOp[T comparable](
+	t types.Type,
+	attr string,
+	input any,
+	start, count int,
+	fromRow uint32,
+	dedupInput bool,
+	tree map[any]uint32) (err error) {
 	vals := input.([]T)
 	if dedupInput {
 		set := make(map[T]bool)
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				return moerr.NewDuplicate()
+				entry := common.TypeStringValue(t, v)
+				return moerr.NewDuplicateEntry(entry, attr)
 			}
 			set[v] = true
 		}
@@ -70,7 +84,8 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 	}
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			return moerr.NewDuplicate()
+			entry := common.TypeStringValue(t, v)
+			return moerr.NewDuplicateEntry(entry, attr)
 		}
 		tree[v] = fromRow
 		fromRow++
@@ -110,7 +125,7 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	defer idx.Unlock()
 	_, ok := idx.tree[v]
 	if ok {
-		return moerr.NewDuplicate()
+		return moerr.GetOkExpectedDup()
 	}
 	idx.tree[v] = row
 	return nil
@@ -127,7 +142,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	}
 	_, ok := idx.tree[v]
 	if !ok {
-		return moerr.NewDuplicate()
+		return moerr.GetOkExpectedDup()
 	}
 	delete(idx.tree, v)
 	return nil
@@ -143,48 +158,54 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	return uint32(row), nil
 }
 
-func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int, row uint32, dedupInput bool) error {
+func (idx *simpleTableIndex) BatchInsert(
+	attr string,
+	col containers.Vector,
+	start, count int,
+	row uint32,
+	dedupInput bool) error {
 	idx.Lock()
 	defer idx.Unlock()
-	switch col.GetType().Oid {
+	colType := col.GetType()
+	switch colType.Oid {
 	case types.T_bool:
-		return InsertOp[bool](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[bool](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_int8:
-		return InsertOp[int8](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[int8](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_int16:
-		return InsertOp[int16](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[int16](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_int32:
-		return InsertOp[int32](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[int32](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_int64:
-		return InsertOp[int64](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[int64](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_uint8:
-		return InsertOp[uint8](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[uint8](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_uint16:
-		return InsertOp[uint16](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[uint16](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_uint32:
-		return InsertOp[uint32](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[uint32](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_uint64:
-		return InsertOp[uint64](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[uint64](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_decimal64:
-		return InsertOp[types.Decimal64](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Decimal64](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_decimal128:
-		return InsertOp[types.Decimal128](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Decimal128](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_uuid:
-		return InsertOp[types.Uuid](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Uuid](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_float32:
-		return InsertOp[float32](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[float32](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_float64:
-		return InsertOp[float64](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[float64](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_date:
-		return InsertOp[types.Date](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Date](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_timestamp:
-		return InsertOp[types.Timestamp](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Timestamp](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_datetime:
-		return InsertOp[types.Datetime](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Datetime](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_TS:
-		return InsertOp[types.TS](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.TS](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_Rowid:
-		return InsertOp[types.Rowid](col.Slice(), start, count, row, dedupInput, idx.tree)
+		return InsertOp[types.Rowid](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
@@ -192,7 +213,8 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 			for i := start; i < start+count; i++ {
 				v := string(vs.GetVarValueAt(i))
 				if _, ok := set[v]; ok {
-					return moerr.NewDuplicate()
+					entry := common.TypeStringValue(colType, []byte(v))
+					return moerr.NewDuplicateEntry(entry, attr)
 				}
 				set[v] = true
 			}
@@ -201,7 +223,8 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		for i := start; i < start+count; i++ {
 			v := string(vs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
-				return moerr.NewDuplicate()
+				entry := common.TypeStringValue(colType, []byte(v))
+				return moerr.NewDuplicateEntry(entry, attr)
 			}
 			idx.tree[v] = row
 			row++
@@ -213,53 +236,55 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 }
 
 // TODO: rewrite
-func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
+func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) error {
 	idx.RLock()
 	defer idx.RUnlock()
 	vals := col.Slice()
-	switch col.GetType().Oid {
+	colType := col.GetType()
+	switch colType.Oid {
 	case types.T_bool:
-		return DedupOp[bool](vals, idx.tree)
+		return DedupOp[bool](colType, attr, vals, idx.tree)
 	case types.T_int8:
-		return DedupOp[int8](vals, idx.tree)
+		return DedupOp[int8](colType, attr, vals, idx.tree)
 	case types.T_int16:
-		return DedupOp[int16](vals, idx.tree)
+		return DedupOp[int16](colType, attr, vals, idx.tree)
 	case types.T_int32:
-		return DedupOp[int32](vals, idx.tree)
+		return DedupOp[int32](colType, attr, vals, idx.tree)
 	case types.T_int64:
-		return DedupOp[int64](vals, idx.tree)
+		return DedupOp[int64](colType, attr, vals, idx.tree)
 	case types.T_uint8:
-		return DedupOp[uint8](vals, idx.tree)
+		return DedupOp[uint8](colType, attr, vals, idx.tree)
 	case types.T_uint16:
-		return DedupOp[uint16](vals, idx.tree)
+		return DedupOp[uint16](colType, attr, vals, idx.tree)
 	case types.T_uint32:
-		return DedupOp[uint32](vals, idx.tree)
+		return DedupOp[uint32](colType, attr, vals, idx.tree)
 	case types.T_uint64:
-		return DedupOp[uint64](vals, idx.tree)
+		return DedupOp[uint64](colType, attr, vals, idx.tree)
 	case types.T_decimal64:
-		return DedupOp[types.Decimal64](vals, idx.tree)
+		return DedupOp[types.Decimal64](colType, attr, vals, idx.tree)
 	case types.T_decimal128:
-		return DedupOp[types.Decimal128](vals, idx.tree)
+		return DedupOp[types.Decimal128](colType, attr, vals, idx.tree)
 	case types.T_float32:
-		return DedupOp[float32](vals, idx.tree)
+		return DedupOp[float32](colType, attr, vals, idx.tree)
 	case types.T_float64:
-		return DedupOp[float64](vals, idx.tree)
+		return DedupOp[float64](colType, attr, vals, idx.tree)
 	case types.T_date:
-		return DedupOp[types.Date](vals, idx.tree)
+		return DedupOp[types.Date](colType, attr, vals, idx.tree)
 	case types.T_datetime:
-		return DedupOp[types.Datetime](vals, idx.tree)
+		return DedupOp[types.Datetime](colType, attr, vals, idx.tree)
 	case types.T_timestamp:
-		return DedupOp[types.Timestamp](vals, idx.tree)
+		return DedupOp[types.Timestamp](colType, attr, vals, idx.tree)
 	case types.T_TS:
-		return DedupOp[types.TS](vals, idx.tree)
+		return DedupOp[types.TS](colType, attr, vals, idx.tree)
 	case types.T_Rowid:
-		return DedupOp[types.Rowid](vals, idx.tree)
+		return DedupOp[types.Rowid](colType, attr, vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text:
 		bs := vals.(*containers.Bytes)
 		for i := 0; i < col.Length(); i++ {
 			v := string(bs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
-				return moerr.NewDuplicate()
+				entry := common.TypeStringValue(colType, []byte(v))
+				return moerr.NewDuplicateEntry(entry, attr)
 			}
 		}
 	default:
