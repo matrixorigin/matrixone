@@ -17,9 +17,10 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -819,6 +820,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			args, err = resetDateFunctionArgs(args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
+		} else if (args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64)) &&
+			(args[1].Typ.Id == int32(types.T_decimal128) || args[1].Typ.Id == int32(types.T_decimal64)) {
+			args, err = resetDecimalScale(args[0], args[1])
 		}
 		if err != nil {
 			return nil, err
@@ -1289,4 +1293,13 @@ func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 		Expr: expr,
 	}
 	return resetDateFunctionArgs(dateExpr, listExpr)
+}
+
+func resetDecimalScale(firstDecimal *Expr, secondDecimal *Expr) ([]*Expr, error) {
+	if firstDecimal.Typ.Scale < secondDecimal.Typ.Scale {
+		firstDecimal.Typ.Scale = secondDecimal.Typ.Scale
+	} else {
+		secondDecimal.Typ.Scale = firstDecimal.Typ.Scale
+	}
+	return []*Expr{firstDecimal, secondDecimal}, nil
 }

@@ -532,3 +532,19 @@ insert into t1 values(0.999999999999999995);
 truncated type DECIMAL128 value 0.999999999999999995 for column a, 1
 insert into t1 values(-0.999999999999999995);
 truncated type DECIMAL128 value -0.999999999999999995 for column a, 1
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a + 4589.6 from t1;
+a + 4589.6
+306523.87
+select a + 4589.60 from t1;
+a + 4589.60
+306523.87
+select 4589.6 + a from t1;
+4589.6 + a
+306523.87
+select 4589.60 + a from t1;
+4589.60 + a
+306523.87
+drop table t1;
