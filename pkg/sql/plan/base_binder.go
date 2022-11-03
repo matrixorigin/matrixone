@@ -923,6 +923,24 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		} else {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
+	case "unix_timestamp":
+		if len(args) == 1 {
+			if types.IsString(types.T(args[0].Typ.Id)) {
+				if exprC, ok := args[0].Expr.(*plan.Expr_C); ok {
+					sval := exprC.C.Value.(*plan.Const_Sval)
+					tp := judgeUnixTimestampReturnType(sval.Sval)
+					if tp == types.T_int64 {
+						args = append(args, makePlan2Int64ConstExprWithType(0))
+					} else {
+						args = append(args, makePlan2Float64ConstExprWithType(0))
+					}
+				} else {
+					args = append(args, makePlan2Float64ConstExprWithType(0))
+				}
+			}
+		} else if len(args) > 1 {
+			return nil, moerr.NewInvalidArg(name+" function have invalid input args size", len(args))
+		}
 	}
 
 	// get args(exprs) & types

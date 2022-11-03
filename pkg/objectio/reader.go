@@ -74,6 +74,7 @@ func (r *ObjectReader) ReadMeta(ctx context.Context, extents []Extent, m *mpool.
 		blocks[i] = &Block{
 			object: r.object,
 			extent: extents[i],
+			name:   r.name,
 		}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Object.([]byte))
 		if err != nil {

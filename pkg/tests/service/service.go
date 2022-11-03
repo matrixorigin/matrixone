@@ -44,11 +44,12 @@ import (
 
 var (
 	defaultWaitInterval = 100 * time.Millisecond
+	defaultTestTimeout  = time.Minute
 )
 
 // Cluster describes behavior of test framework.
 type Cluster interface {
-	// Start starts svcs sequentially
+	// Start starts svcs sequentially, after start, system init is completed.
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
@@ -317,41 +318,25 @@ func (c *testCluster) Start() error {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
 	// start log services first
-	if err := c.startLogServices(); err != nil {
+	if err := c.startLogServices(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
-	if err := c.startDNServices(); err != nil {
+	if err := c.startDNServices(ctx); err != nil {
 		return err
 	}
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel1()
-	c.WaitDNShardsReported(ctx1)
 
-	if c.opt.initial.cnServiceNum != 0 {
-		if err := c.startCNServices(); err != nil {
-			return err
-		}
+	// start cn services
+	if err := c.startCNServices(ctx); err != nil {
+		return err
 	}
 
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.mu.running = true
-
-	log, err := c.GetLogServiceIndexed(0)
-	if err != nil {
-		return err
-	}
-	if err := log.CreateInitTasks(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -1425,7 +1410,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 }
 
 // startDNServices initializes and starts all dn services.
-func (c *testCluster) startDNServices() error {
+func (c *testCluster) startDNServices(ctx context.Context) error {
 	// initialize all dn services
 	c.dn.svcs = c.initDNServices(c.fileservices)
 
@@ -1436,11 +1421,12 @@ func (c *testCluster) startDNServices() error {
 		}
 	}
 
+	c.WaitDNShardsReported(ctx)
 	return nil
 }
 
 // startLogServices initializes and starts all log services.
-func (c *testCluster) startLogServices() error {
+func (c *testCluster) startLogServices(ctx context.Context) error {
 	// initialize all log service
 	c.log.svcs = c.initLogServices()
 
@@ -1461,16 +1447,21 @@ func (c *testCluster) startLogServices() error {
 		return err
 	}
 
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 	return nil
 }
 
-func (c *testCluster) startCNServices() error {
+func (c *testCluster) startCNServices(ctx context.Context) error {
 	c.cn.svcs = c.initCNServices(c.fileservices)
 
 	for _, cs := range c.cn.svcs {
 		if err := cs.Start(); err != nil {
 			return err
 		}
+	}
+
+	if err := c.waitSystemInitCompleted(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1593,6 +1584,26 @@ func (c *testCluster) rangeHAKeeperService(
 			break
 		}
 	}
+}
+
+func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
+	log, err := c.GetLogServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := log.CreateInitTasks(); err != nil {
+		return err
+	}
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	cn, err := c.GetCNServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FilterFunc returns true if traffic was allowed.
