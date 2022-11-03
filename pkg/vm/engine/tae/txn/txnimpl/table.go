@@ -522,7 +522,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		}
 		segData := seg.GetSegmentData()
 		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			return
 		}
 		if err == nil {
@@ -567,7 +567,13 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 
 func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
+	if err = index.BatchInsert(
+		tbl.schema.GetSingleSortKey().Name,
+		key,
+		0,
+		key.Length(),
+		0,
+		true); err != nil {
 		return
 	}
 

@@ -230,7 +230,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -1593,7 +1593,7 @@ func TestDedup(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(bat)
 	t.Log(err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback()
 	assert.NoError(t, err)
