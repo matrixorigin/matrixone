@@ -15,7 +15,6 @@
 package txn
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -40,16 +39,8 @@ type sqlClient struct {
 }
 
 func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
-	env.WaitCNStoreReportedIndexed(ctx, 0)
-	env.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	cn, err := env.GetCNServiceIndexed(0)
 	if err != nil {
-		return nil, err
-	}
-	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
 		return nil, err
 	}
 

@@ -37,9 +37,12 @@ type Block struct {
 
 	// extent is the location of the block's metadata on the fileservice
 	extent Extent
+
+	// name is the file name or object name of the block
+	name string
 }
 
-func NewBlock(colCnt uint16, object *Object) BlockObject {
+func NewBlock(colCnt uint16, object *Object, name string) BlockObject {
 	header := BlockHeader{
 		columnCount: colCnt,
 	}
@@ -47,6 +50,7 @@ func NewBlock(colCnt uint16, object *Object) BlockObject {
 		header:  header,
 		object:  object,
 		columns: make([]ColumnObject, colCnt),
+		name:    name,
 	}
 	for i := range block.columns {
 		block.columns[i] = NewColumnBlock(uint16(i), block.object)
@@ -69,6 +73,7 @@ func (b *Block) GetRows() (uint32, error) {
 func (b *Block) GetMeta() BlockMeta {
 	return BlockMeta{
 		header: b.header,
+		name:   b.name,
 	}
 }
 

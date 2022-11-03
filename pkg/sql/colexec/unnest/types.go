@@ -19,24 +19,15 @@ import (
 )
 
 type Param struct {
-	Attrs   []string
-	Cols    []*plan.ColDef
-	Extern  *ExternalParam
-	filters []string
-	colName string
-	seq     int32
-	isCol   bool // use to mark the unnest args is from column in table
-	path    string
-	outer   bool
+	Attrs    []string
+	Cols     []*plan.ColDef
+	ExprList []*plan.Expr
+	ColName  string
+	filters  []string
 }
 
 type Argument struct {
 	Es *Param
-}
-type ExternalParam struct {
-	ColName string
-	Path    string
-	Outer   bool
 }
 
 var (
