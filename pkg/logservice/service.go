@@ -99,7 +99,7 @@ func NewService(
 		opt(service)
 	}
 
-	service.logger = logutil.Adjust(service.logger).Named("LogService").With(zap.String("uuid", cfg.UUID))
+	service.logger = logutil.Adjust(service.logger)
 
 	store, err := newLogStore(cfg, service.getTaskService, service.logger)
 	if err != nil {
