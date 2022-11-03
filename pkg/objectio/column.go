@@ -57,21 +57,20 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
-	data.Entries[0].Object, err = allocData(int64(cb.meta.location.OriginSize()), m)
+	object, err := allocData(int64(cb.meta.location.OriginSize()), m)
 	if err != nil {
 		return nil, err
 	}
-	data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0])
+	data.Entries[0].ToObject = newDecompressToObject(object)
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
-		cb.freeData(data.Entries, m)
+		cb.freeData(object, m)
 		return nil, err
 	}
 	return data, nil
 }
 
 func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
-	var err error
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
 	} else if dataType == BloomFilterType {
@@ -83,14 +82,14 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
-		data.Entries[0].Object, err = allocData(int64(cb.meta.bloomFilter.OriginSize()), m)
+		object, err := allocData(int64(cb.meta.bloomFilter.OriginSize()), m)
 		if err != nil {
 			return nil, err
 		}
-		data.Entries[0].ToObject = newDecompressToObject(&data.Entries[0])
+		data.Entries[0].ToObject = newDecompressToObject(object)
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
-			cb.freeData(data.Entries, m)
+			cb.freeData(object, m)
 			return nil, err
 		}
 		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object.([]byte)), nil
@@ -196,8 +195,8 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	return err
 }
 
-func (cb *ColumnBlock) freeData(entry []fileservice.IOEntry, m *mpool.MPool) {
+func (cb *ColumnBlock) freeData(buf []byte, m *mpool.MPool) {
 	if m != nil {
-		m.Free(entry[0].Data)
+		m.Free(buf)
 	}
 }
