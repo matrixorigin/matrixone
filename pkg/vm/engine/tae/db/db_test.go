@@ -3280,12 +3280,11 @@ func TestLogtailBasic(t *testing.T) {
 
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 3)                                 // 2 db + mo_catalog
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	assert.NoError(t, err)
-	assert.Equal(t, pkgcatalog.MO_CATALOG, datname.GetString(0))
-	assert.Equal(t, "todrop", datname.GetString(1))
-	assert.Equal(t, "db", datname.GetString(2))
+	assert.Equal(t, "todrop", datname.GetString(0))
+	assert.Equal(t, "db", datname.GetString(1))
 
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	assert.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
@@ -3301,11 +3300,11 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 5)                                 // 2 tables + 3 sys tables
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	assert.NoError(t, err)
-	assert.Equal(t, schema.Name, relname.GetString(3))
-	assert.Equal(t, schema.Name, relname.GetString(4))
+	assert.Equal(t, schema.Name, relname.GetString(0))
+	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
 	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -3317,8 +3316,8 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
-	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2+sysColumnsCount) // column count of 2 tables
+	// sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
+	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
 	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
