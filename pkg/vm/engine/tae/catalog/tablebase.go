@@ -213,11 +213,11 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 	}
 	if txn == nil || be.GetTxn() != txn {
 		if !be.HasDropCommittedLocked() {
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 	} else {
 		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 	}
 	return
