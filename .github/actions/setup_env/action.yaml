@@ -4,7 +4,7 @@ inputs:
   go-version:
     description: 'version of golang'
     required: false
-    default: "1.19"
+    default: "1.19.3"
 
 runs:
   using: "composite"
