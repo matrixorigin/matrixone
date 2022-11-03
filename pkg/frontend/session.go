@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/entireclient"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -84,7 +83,7 @@ func (th *TxnHandler) SetTempEngine(te engine.Engine) {
 func (th *TxnHandler) SetTempClient(tc client.TxnClient) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	ec := th.txnClient.(*entireclient.EntireClient)
+	ec := th.txnClient.(*client.EntireClient)
 	ec.TempClient = tc
 }
 
@@ -201,7 +200,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 		}
 	}
 
-	txnHandler := InitTxnHandler(PU.StorageEngine, entireclient.NewEntireClient(PU.TxnClient, nil))
+	txnHandler := InitTxnHandler(PU.StorageEngine, client.NewEntireClient(PU.TxnClient, nil))
 
 	ses := &Session{
 		protocol: proto,

@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/entireclient"
 )
 
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
@@ -49,7 +48,7 @@ func (e *EntireEngine) Databases(ctx context.Context, op client.TxnOperator) (da
 func (e *EntireEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error) {
 	if databaseName == "temp-db" {
 		if e.TempEngine != nil {
-			return e.TempEngine.Database(ctx, "temp-db", op.(*entireclient.EntireTxnOperator).GetTemp())
+			return e.TempEngine.Database(ctx, "temp-db", op.(*client.EntireTxnOperator).GetTemp())
 		} else {
 			return nil, moerr.NewInternalError("temporary engine not init yet")
 		}

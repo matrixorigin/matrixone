@@ -35,8 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/entireclient"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2230,7 +2230,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 3. assign for compile, only for the first time needed
 		cwft.compile.SetTempEngine(e.TempEngine)
 		// 4. add auto_IncrementTable fortemp-db
-		txnop := cwft.proc.TxnOperator.(*entireclient.EntireTxnOperator)
+		txnop := cwft.proc.TxnOperator.(*client.EntireTxnOperator)
 
 		txnop.SetTemp(txnOp)
 		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, "temp-db")

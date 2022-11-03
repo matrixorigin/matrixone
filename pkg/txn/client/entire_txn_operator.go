@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package entireclient
+package client
 
 import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
 type EntireTxnOperator struct {
-	txnOperator  client.TxnOperator
-	tempOperator client.TxnOperator
+	txnOperator  TxnOperator
+	tempOperator TxnOperator
 }
 
 // Txn returns the current txn metadata
@@ -32,11 +31,11 @@ func (eto *EntireTxnOperator) Txn() txn.TxnMeta {
 	return eto.txnOperator.Txn()
 }
 
-func (eto *EntireTxnOperator) GetTemp() client.TxnOperator {
+func (eto *EntireTxnOperator) GetTemp() TxnOperator {
 	return eto.tempOperator
 }
 
-func (eto *EntireTxnOperator) SetTemp(tc client.TxnOperator)  {
+func (eto *EntireTxnOperator) SetTemp(tc TxnOperator) {
 	eto.tempOperator = tc
 }
 

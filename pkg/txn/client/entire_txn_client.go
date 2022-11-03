@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package entireclient
+package client
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-)
-
+// EntireClient is a wrapper to support txn for temp engine.
 type EntireClient struct {
-	txnClient  client.TxnClient
-	TempClient client.TxnClient
+	txnClient  TxnClient
+	TempClient TxnClient
 }
 
-// tc1 should be client.txnClient
+// tc1 should be txnClient
 // tc2 should be memorystorage.StorageTxnClient
-func NewEntireClient(tc1 client.TxnClient, tc2 client.TxnClient) client.TxnClient {
+func NewEntireClient(tc1 TxnClient, tc2 TxnClient) TxnClient {
 	return &EntireClient{
 		txnClient:  tc1,
 		TempClient: tc2,
@@ -34,9 +31,9 @@ func NewEntireClient(tc1 client.TxnClient, tc2 client.TxnClient) client.TxnClien
 
 // New returns a TxnOperator to handle read and write operation for a
 // transaction.
-func (ec *EntireClient) New(options ...client.TxnOption) (client.TxnOperator, error) {
-	var txnOperator client.TxnOperator
-	var tempOperator client.TxnOperator
+func (ec *EntireClient) New(options ...TxnOption) (TxnOperator, error) {
+	var txnOperator TxnOperator
+	var tempOperator TxnOperator
 	var err error
 	if txnOperator, err = ec.txnClient.New(options...); err != nil {
 		return nil, err
@@ -54,9 +51,9 @@ func (ec *EntireClient) New(options ...client.TxnOption) (client.TxnOperator, er
 
 // NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 // be from a CN coordinator txn operator.
-func (ec *EntireClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
-	var txnOperator client.TxnOperator
-	var tempOperator client.TxnOperator
+func (ec *EntireClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
+	var txnOperator TxnOperator
+	var tempOperator TxnOperator
 	var err error
 	if txnOperator, err = ec.txnClient.NewWithSnapshot(snapshot); err != nil {
 		return nil, err
