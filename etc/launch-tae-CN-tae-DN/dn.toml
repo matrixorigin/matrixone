@@ -8,7 +8,7 @@ max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-    "127.0.0.1:32001",
+  "127.0.0.1:32001",
 ]
 
 [[fileservice]]
@@ -31,8 +31,8 @@ backend = "TAE"
 log-backend = "logservice"
 
 [dn.Ckp]
-flush-interval = "100000s"
-min-count = 2000000
-scan-interval = "100000s"
-incremental-interval = "100000s"
+flush-interval = "60s"
+min-count = 100
+scan-interval = "5s"
+incremental-interval = "60s"
 global-interval = "100000s"

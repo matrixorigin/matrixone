@@ -2961,6 +2961,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			if _, ok := stmt.(*tree.Insert); ok {
+				resp.lastInsertId = 1
+			}
 			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
 				trace.EndStatement(requestCtx, err2)
 				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
