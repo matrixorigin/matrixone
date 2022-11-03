@@ -300,6 +300,9 @@ func (cpi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
 
 func (cpi *ProtocolImpl) Peer() (string, string, string, string) {
 	tcp := cpi.GetTcpConnection()
+	if tcp == nil {
+		return "", "", "", ""
+	}
 	addr := tcp.RemoteAddress()
 	rawConn := tcp.RawConn()
 	var local net.Addr
