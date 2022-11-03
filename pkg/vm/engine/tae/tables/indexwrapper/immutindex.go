@@ -57,7 +57,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 		}
 	}
 
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }
 
@@ -79,7 +79,7 @@ func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row 
 			return
 		}
 	}
-	err = moerr.NewTAEPossibleDuplicate()
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }
 
