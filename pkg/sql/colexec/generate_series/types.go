@@ -24,32 +24,10 @@ type Number interface {
 }
 
 type Param struct {
-	Attrs []string
-	Cols  []*plan.ColDef
-	start string
-	end   string
-	step  string
+	Attrs    []string
+	ExprList []*plan.Expr
 }
 
 type Argument struct {
 	Es *Param
 }
-
-var (
-
-//	timeStampCol = &plan.ColDef{
-//		Name: "generate_series",
-//		Typ: &plan.Type{
-//			Id:       int32(types.T_timestamp),
-//			Nullable: false,
-//		},
-//	}
-//
-//	intCol = &plan.ColDef{
-//		Name: "generate_series",
-//		Typ: &plan.Type{
-//			Id:       int32(types.T_int64),
-//			Nullable: false,
-//		},
-//	}
-)

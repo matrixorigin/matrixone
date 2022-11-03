@@ -155,22 +155,35 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) error {
 	bat1 := ctr.bat
-	rbat := batch.NewWithSize(len(bat1.Vecs))
-	for i, vec := range bat1.Vecs {
-		rbat.Vecs[i] = vector.New(vec.Typ)
+	if bat1 == nil {
+		bat1 = batch.NewWithSize(len(bat1.Vecs))
+		for i, vec := range bat2.Vecs {
+			bat1.Vecs[i] = vector.New(vec.Typ)
+		}
 	}
+	// union bat1 and bat2
+	// do merge sort, get final order number and shuffle the result batch.
 	for i, cmp := range ctr.cmps {
 		if cmp != nil {
 			cmp.Set(0, bat1.GetVector(int32(i)))
 			cmp.Set(1, bat2.GetVector(int32(i)))
 		}
 	}
-	// init index-number for merge-sort
-	i, j := int64(0), int64(0)
-	l1, l2 := int64(vector.Length(bat1.Vecs[0])), int64(vector.Length(bat2.Vecs[0]))
+	s1, s2 := int64(0), int64(bat1.Vecs[0].Length()) // startIndexOfBat1, startIndexOfBat2
+	for i := range bat1.Vecs {
+		n := bat2.Vecs[i].Length()
+		err := vector.UnionBatch(bat1.Vecs[i], bat2.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
+		if err != nil {
+			return err
+		}
+	}
+	bat1.Zs = append(bat1.Zs, bat2.Zs...)
 
-	// do merge-sort work
-	for i < l1 && j < l2 {
+	end1, end2 := s2, int64(bat1.Vecs[0].Length())
+	sels := make([]int64, 0, end2)
+	for s1 < end1 && s2 < end2 {
+		i := s1
+		j := s2 - end1
 		compareResult := 0
 		for _, pos := range ctr.poses {
 			compareResult = ctr.cmps[pos].Compare(0, 1, i, j)
@@ -178,54 +191,29 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 				break
 			}
 		}
-		if compareResult <= 0 { // Weight of item1 is less than or equal to item2
-			for k := 0; k < len(rbat.Vecs); k++ {
-				err := vector.UnionOne(rbat.Vecs[k], bat1.Vecs[k], i, proc.Mp())
-				if err != nil {
-					rbat.Clean(proc.Mp())
-					return err
-				}
-			}
-			rbat.Zs = append(rbat.Zs, bat1.Zs[i])
-			i++
+		if compareResult <= 0 {
+			// weight of item1 is less or equal to item2
+			sels = append(sels, s1)
+			s1++
 		} else {
-			for k := 0; k < len(rbat.Vecs); k++ {
-				err := vector.UnionOne(rbat.Vecs[k], bat2.Vecs[k], j, proc.Mp())
-				if err != nil {
-					rbat.Clean(proc.Mp())
-					return err
-				}
-			}
-			rbat.Zs = append(rbat.Zs, bat2.Zs[j])
-			j++
+			sels = append(sels, s2)
+			s2++
 		}
 	}
-	if i < l1 {
-		count := int(l1 - i)
-		// union all bat1 from i to l1
-		for k := 0; k < len(rbat.Vecs); k++ {
-			err := vector.UnionBatch(rbat.Vecs[k], bat1.Vecs[k], i, count, makeFlagsOne(count), proc.Mp())
-			if err != nil {
-				rbat.Clean(proc.Mp())
-				return err
-			}
-		}
-		rbat.Zs = append(rbat.Zs, bat1.Zs[i:]...)
+	for s1 < end1 {
+		sels = append(sels, s1)
+		s1++
 	}
-	if j < l2 {
-		count := int(l2 - j)
-		// union all bat2 from j to l2
-		for k := 0; k < len(rbat.Vecs); k++ {
-			err := vector.UnionBatch(rbat.Vecs[k], bat2.Vecs[k], j, count, makeFlagsOne(count), proc.Mp())
-			if err != nil {
-				rbat.Clean(proc.Mp())
-				return err
-			}
-		}
-		rbat.Zs = append(rbat.Zs, bat2.Zs[j:]...)
+	for s2 < end2 {
+		sels = append(sels, s2)
+		s2++
 	}
-	ctr.bat.Clean(proc.Mp())
-	ctr.bat = rbat
+	err := bat1.Shuffle(sels, proc.Mp())
+	if err != nil {
+		return err
+	}
+
+	ctr.bat = bat1
 	return nil
 }
 

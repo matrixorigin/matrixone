@@ -119,7 +119,8 @@ func String(n *Nulls) string {
 
 func TryExpand(n *Nulls, size int) {
 	if n.Np == nil {
-		n.Np = bitmap.New(0)
+		n.Np = bitmap.New(size)
+		return
 	}
 	n.Np.TryExpandWithSize(size)
 }

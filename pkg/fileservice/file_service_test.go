@@ -474,9 +474,14 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader) (any, int64, error) {
+					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+						bs, err := io.ReadAll(r)
+						assert.Nil(t, err)
+						if len(data) > 0 {
+							assert.Equal(t, bs, data)
+						}
 						var m map[int]int
-						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
 							return nil, 0, err
 						}
 						return m, 1, nil

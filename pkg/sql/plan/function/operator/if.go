@@ -104,8 +104,17 @@ var (
 	IfBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifForString(vs, proc, types.Type{Oid: types.T_blob})
 	}
+
 	IfText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifForString(vs, proc, types.Type{Oid: types.T_text})
+	}
+
+	IfJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return ifForString(vs, proc, types.Type{Oid: types.T_json})
+	}
+
+	IfUuid = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return ifForString(vs, proc, types.Type{Oid: types.T_uuid})
 	}
 )
 

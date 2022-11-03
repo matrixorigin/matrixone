@@ -375,7 +375,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			return nil, err
 		}
 
-		plh.simdCsvLineArray = append(plh.simdCsvLineArray, records...)
+		plh.simdCsvLineArray = append(plh.simdCsvLineArray, records[:cnt]...)
 		for i := 0; i < len(records); i++ {
 			for j := 0; j < len(records[i]); j++ {
 				curBatchSize += len(records[i][j])
