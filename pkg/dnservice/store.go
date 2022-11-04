@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -136,7 +135,7 @@ func NewService(cfg *Config,
 	common.InitTAEMPool()
 
 	// get metadata fs
-	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)
 	if err != nil {
 		return nil, err
 	}

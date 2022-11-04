@@ -55,7 +55,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.MainFS)
+	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.Service)
 	if err != nil {
 		return
 	}
