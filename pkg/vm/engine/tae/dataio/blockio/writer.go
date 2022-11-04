@@ -28,7 +28,7 @@ type Writer struct {
 }
 
 func NewWriter(ctx context.Context, fs *objectio.ObjectFS, name string) *Writer {
-	writer, err := objectio.NewObjectWriter(name, fs.MainFS)
+	writer, err := objectio.NewObjectWriter(name, fs.Service)
 	if err != nil {
 		panic(any(err))
 	}
