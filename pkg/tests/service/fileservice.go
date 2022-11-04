@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -59,12 +58,12 @@ func (c *testCluster) buildFileServices() *fileServices {
 
 	dnLocals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {
-		dnLocals = append(dnLocals, factory(c.dn.cfgs[i].DataDir, defines.LocalFileServiceName))
+		dnLocals = append(dnLocals, factory(c.dn.cfgs[i].DataDir, "LOCAL"))
 	}
 
 	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)
 	for i := 0; i < cnServiceNum; i++ {
-		cnLocals = append(cnLocals, factory(filepath.Join(c.opt.rootDataDir, c.cn.cfgs[i].UUID), defines.LocalFileServiceName))
+		cnLocals = append(cnLocals, factory(filepath.Join(c.opt.rootDataDir, c.cn.cfgs[i].UUID), "LOCAL"))
 	}
 
 	return &fileServices{
@@ -73,7 +72,7 @@ func (c *testCluster) buildFileServices() *fileServices {
 		cnServiceNum: cnServiceNum,
 		dnLocalFSs:   dnLocals,
 		cnLocalFSs:   cnLocals,
-		s3FS:         factory(c.opt.rootDataDir, defines.S3FileServiceName),
+		s3FS:         factory(c.opt.rootDataDir, "S3"),
 	}
 }
 
