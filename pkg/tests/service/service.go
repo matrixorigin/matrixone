@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -1323,7 +1322,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			defines.LocalFileServiceName,
+			"LOCAL",
 			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1384,7 +1383,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			defines.LocalFileServiceName,
+			"LOCAL",
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)

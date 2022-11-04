@@ -92,9 +92,7 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	mp                *mpool.MPool
-	allFS             fileservice.FileService
-	mainFS            fileservice.FileService
-	tempFS            fileservice.FileService
+	fs                fileservice.FileService
 	db                *DB
 	cli               client.TxnClient
 	idGen             IDGenerator

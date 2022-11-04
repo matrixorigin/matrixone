@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -30,6 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
+)
+
+const (
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
+	etlFileServiceName   = "ETL"
 )
 
 var (
@@ -134,13 +139,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}
-	// use s3 as main file service
-	mainFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	// use local as temp file service
-	tempFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.FileService)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +147,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		s.cfg.Txn.Storage.dataDir,
 		shard,
 		factory,
-		mainFS,
-		tempFS,
+		fs,
 		s.clock,
 		ckpcfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
