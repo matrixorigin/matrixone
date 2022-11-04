@@ -28,7 +28,7 @@ var (
 	defaultMaxIdleDuration = time.Minute
 	defaultSendQueueSize   = 10240
 	defaultBufferSize      = 1024
-	defaultMaxMessageSize  = 1024 * 1024 * 10
+	defaultMaxMessageSize  = 1024 * 1024 * 100 // 100MB
 )
 
 // Config txn sender config
