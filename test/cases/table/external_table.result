@@ -284,8 +284,6 @@ clo1    clo5    clo7    col12    col13    col14    col16    col17    col18
 91    122    625429347    2865-02-22    9976-06-04 00:00:00    1985-01-13 07:59:59    878.09    HI|G;KL/MN?OPQR.STU-_+=VWXYZabcd    QR.STU-_+=VWXYZabcdefghigklmnopqrstu
 33    104    3258037690    6316-02-16    3647-01-21 23:59:59    2034-02-10 08:00:00    439.95    EF|GHI|G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh    OPQR.STU-_+=VWXYZa
 121    141    849972079    9948-05-08    6216-12-30 00:00:00    2011-03-10 08:00:00    428.14    U-_+=VWXYZabcdefghigklmnopqrstuvwxy    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012
-show create table ex_table_15;
-[unknown result because it is related to issue#6102]
 select count(*) from ex_table_15,table_15 where ex_table_15.clo1=table_15.clo1;
 count(*)
 4

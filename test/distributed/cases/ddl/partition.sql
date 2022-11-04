@@ -86,18 +86,14 @@ load data infile '$resources/external_table_file/pt_table_data.csv' into table  
 select col2 from pt_table_33;
 
 --range(表达式)
--- @bvt:issue#5912
 create table pt_table_34(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by range(year(col14))(PARTITION p0 VALUES LESS THAN (1991) comment ='expression range',PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (2009)comment ='range',PARTITION p3 VALUES LESS THAN (2010),PARTITION p5 VALUES LESS THAN MAXVALUE);
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_34;
 select col14 from pt_table_34;
--- @bvt:issue
 
 --range column list
--- @bvt:issue#5912
 create table pt_table_35(col1 tinyint not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_35;
 select col14 from pt_table_35;
--- @bvt:issue
 
 --less than表达式
 create table pt_table_36(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3))partition by range(col3)(PARTITION p0 VALUES LESS THAN (100+50),PARTITION p1 VALUES LESS THAN (2000+100),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
