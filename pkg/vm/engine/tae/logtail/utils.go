@@ -586,7 +586,7 @@ func (data *CheckpointData) GetBlkBatchs() (*containers.Batch, *containers.Batch
 }
 
 func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
-	if entry.IsSystemDB() {
+	if shouldIgnoreDBInLogtail(entry.ID) {
 		return nil
 	}
 	entry.RLock()
@@ -620,7 +620,7 @@ func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
 }
 
 func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (err error) {
-	if entry.GetDB().IsSystemDB() {
+	if shouldIgnoreTblInLogtail(entry.ID) {
 		return nil
 	}
 	entry.RLock()
