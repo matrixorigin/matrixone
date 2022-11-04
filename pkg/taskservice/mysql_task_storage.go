@@ -57,7 +57,7 @@ var (
 			trigger_times				int,
 			create_at					bigint,
 			update_at					bigint)`,
-		`use `,
+		`use %s`,
 	}
 
 	insertAsyncTask = `insert into %s.sys_async_task(

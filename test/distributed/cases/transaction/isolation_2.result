@@ -95,7 +95,7 @@ a    b    c
 commit;
 update dis_table_02 set a=90;
 commit;
-tae data: duplicate
+Duplicate entry '90' for key 'a'
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
@@ -366,7 +366,7 @@ select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 start transaction ;
-tae data: duplicate
+Duplicate entry '1' for key 'a'
 update dis_table_02 set b='catttteee' where a>1;
 select * from dis_table_02;
 a    b    c
@@ -485,14 +485,14 @@ a    b    c
 3    sun    0.0
 use isolation_2;
 insert into dis_table_06 values (3,'uuubbb',12.02);
-tae data: duplicate
+Duplicate entry '3' for key 'a'
 select * from dis_table_06;
 a    b    c
 2    moon    0.0
 3    sun    0.0
 insert into dis_table_06(a,b) values (4,'cookie');
 commit;
-tae data: duplicate
+Duplicate entry '3' for key 'a'
 select * from dis_table_06;
 a    b    c
 2    moon    0.0
@@ -551,7 +551,7 @@ a    b    c    d
 2    blue    12.0    2024-01-20 00:00:00
 1    yellow    20.09    2020-09-27 00:00:00
 commit;
-tae data: duplicate
+Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00

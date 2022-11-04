@@ -100,6 +100,7 @@ func NewService(
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
+		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -288,7 +289,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender)
+		c = client.NewTxnClient(sender, client.WithLogger(s.logger))
 		s._txnClient = c
 	})
 	c = s._txnClient
