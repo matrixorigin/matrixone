@@ -3150,8 +3150,8 @@ func TestUpdateAttr(t *testing.T) {
 
 type dummyChecker struct{}
 
-func (c *dummyChecker) Check(start, end types.TS) (string, types.TS, types.TS) {
-	return "", start, end
+func (c *dummyChecker) Check(start, end types.TS) ([]string, types.TS, types.TS) {
+	return []string{}, start, end
 }
 
 func TestLogtailBasic(t *testing.T) {

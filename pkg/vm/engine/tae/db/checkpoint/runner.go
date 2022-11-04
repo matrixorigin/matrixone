@@ -740,6 +740,23 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) Check(start, end types.TS) (ckpLoc string, newStart, newEnd types.TS) {
-	return "", start, end
+func (r *runner) Check(start, end types.TS) (ckpLoc []string, newStart, newEnd types.TS) {
+	r.storage.RLock()
+	entries := r.storage.entries.Items()
+	r.storage.RUnlock()
+	ckpLoc = make([]string, 0)
+	newStart = start
+	newEnd = end
+	for _, entry := range entries {
+		if entry.end.Greater(start) || entry.start.LessEq(end) {
+			if entry.GetState() == ST_Finished {
+				ckpLoc = append(ckpLoc, entry.location)
+				newStart = entry.end.Next()
+			}
+		}
+		if entry.end.Greater(end){
+			break
+		}
+	}
+	return
 }
