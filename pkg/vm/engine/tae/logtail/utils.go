@@ -634,31 +634,36 @@ func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (er
 		if !tblNode.HasDropCommitted() {
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(entry, syscol.Name, collector.data.tblColInsBatch.GetVectorByName(syscol.Name))
-				rowidVec := collector.data.tblColInsBatch.GetVectorByName(catalog.AttrRowID)
-				commitVec := collector.data.tblColInsBatch.GetVectorByName(catalog.AttrCommitTs)
-				for _, usercol := range entry.GetSchema().ColDefs {
-					rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
-					commitVec.Append(tblNode.GetEnd())
-				}
 			}
+			rowidVec := collector.data.tblColInsBatch.GetVectorByName(catalog.AttrRowID)
+			commitVec := collector.data.tblColInsBatch.GetVectorByName(catalog.AttrCommitTs)
+			for _, usercol := range entry.GetSchema().ColDefs {
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
+				commitVec.Append(tblNode.GetEnd())
+			}
+
 			collector.data.tblInsTxnBatch.GetVectorByName(SnapshotAttr_BlockMaxRow).Append(entry.GetSchema().BlockMaxRows)
 			collector.data.tblInsTxnBatch.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Append(entry.GetSchema().SegmentMaxBlocks)
+
 			catalogEntry2Batch(collector.data.tblInsBatch,
 				entry,
 				catalog.SystemTableSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd())
+
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.tblInsTxnBatch)
 		} else {
 			collector.data.tblDelTxnBatch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetDB().GetID())
 			collector.data.tblDelTxnBatch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetID())
+
 			rowidVec := collector.data.tblColDelBatch.GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.tblColDelBatch.GetVectorByName(catalog.AttrCommitTs)
 			for _, usercol := range entry.GetSchema().ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))))
 				commitVec.Append(tblNode.GetEnd())
 			}
+
 			catalogEntry2Batch(collector.data.tblDelBatch,
 				entry, DelSchema,
 				txnimpl.FillTableRow,
