@@ -2,7 +2,7 @@ show variables like 'auto%';
 Variable_name    Value
 auto_increment_increment    1
 auto_increment_offset    1
-autocommit    on
+autocommit    1
 show variables like 'auto_increment_increment';
 Variable_name    Value
 auto_increment_increment    1
