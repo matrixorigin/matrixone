@@ -38,7 +38,7 @@ import (
 // avoid import cycle
 type CkpChecker interface {
 	// Check finds reasonable
-	Check(start, end types.TS) (ckpLoc string, newStart, newEnd types.TS)
+	Check(start, end types.TS) (ckpLoc []string, newStart, newEnd types.TS)
 }
 
 func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
@@ -54,7 +54,7 @@ func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Cat
 	if end.IsEmpty() {
 		logutil.Debugf("[Logtail] only send ckp %q\n", verifiedCheckpoint)
 		return api.SyncLogTailResp{
-			CkpLocation: verifiedCheckpoint,
+			CkpLocation: verifiedCheckpoint[0],
 		}, err
 	}
 
@@ -70,9 +70,9 @@ func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Cat
 		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
 			return api.SyncLogTailResp{}, err
 		}
-		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint[0], start, end, tableEntry)
 	} else {
-		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
+		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint[0], start, end)
 	}
 	defer visitor.Close()
 

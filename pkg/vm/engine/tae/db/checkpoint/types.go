@@ -30,7 +30,7 @@ const (
 )
 
 type Runner interface {
-	logtail.CkpChecker
+	// logtail.CkpChecker
 	Start()
 	Stop()
 	EnqueueWait(any) error
