@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -56,6 +57,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
+	defer bat.Clean(proc.Mp())
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
@@ -70,10 +72,11 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 		}
 		b.Clean(proc.Mp())
 	}
-	err := n.TargetTable.Write(ctx, bat)
-	bat.Clean(proc.Mp())
-	n.Affected += uint64(len(bat.Zs))
-	return err
+	if err := n.TargetTable.Write(ctx, bat); err != nil {
+		return err
+	}
+	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+	return nil
 }
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {

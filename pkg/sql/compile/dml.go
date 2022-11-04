@@ -108,6 +108,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 
 	bat := makeInsertBatch(p)
+	defer bat.Clean(c.proc.Mp())
 
 	if p.OtherCols != nil {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
