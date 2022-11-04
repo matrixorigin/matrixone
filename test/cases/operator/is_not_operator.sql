@@ -115,8 +115,8 @@ INSERT INTO t2 VALUES('1004', 'IRELAND', '0');
 SELECT id FROM t1 WHERE name IS TRUE;
 SELECT name, class FROM t1 WHERE name IS NOT TRUE;
 SELECT id, name, class FROM t1 WHERE CAST(SUBSTRING(id, 4) AS TINYINT) IS TRUE;
-SELECT t1.id, t1.name, t2.nation FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.class IS NOT FALSE AND t2.major IS NOT TRUE;
-SELECT t1.id, t2.major FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.name IS TRUE OR t2.nation IS TRUE;
+SELECT t1.id, t1.name, t2.nation FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.class IS NOT FALSE;
+SELECT t1.id, t2.major FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.name IS TRUE;
 SELECT t1.id, t2.major FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t2.nation IS TRUE;
 
 -- @case
