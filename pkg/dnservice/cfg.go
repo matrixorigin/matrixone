@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -125,7 +126,7 @@ func (c *Config) Validate() error {
 		c.Txn.Storage.Backend = StorageTAE
 	}
 	if c.Txn.Storage.FileService == "" {
-		c.Txn.Storage.FileService = localFileServiceName
+		c.Txn.Storage.FileService = defines.LocalFileServiceName
 	}
 	if c.Txn.Storage.LogBackend == "" {
 		c.Txn.Storage.LogBackend = defaultLogBackend

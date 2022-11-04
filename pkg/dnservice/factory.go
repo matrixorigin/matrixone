@@ -31,12 +31,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
-)
-
 var (
 	supportTxnStorageBackends = map[StorageType]struct{}{
 		StorageMEMKV: {},
