@@ -105,26 +105,28 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, table *Table,
 		return filepath
 	}
 
+	buf := make([]byte, 0, 4096)
+
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1))
+	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2), buf)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3), buf)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts1New))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts1New), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -143,8 +145,10 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, table *
 		return filepath
 	}
 
+	buf := make([]byte, 0, 4096)
+
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1))
+	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
@@ -172,7 +176,7 @@ func TestNewMerge(t *testing.T) {
 				ctx: context.Background(),
 				opts: []MergeOption{WithFileServiceName(etlFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(mpool.PB), WithMaxMergeJobs(16)},
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
 			},
 			want: nil,
 		},
