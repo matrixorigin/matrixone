@@ -17,18 +17,21 @@ package objectio
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 type ObjectFS struct {
-	Service fileservice.FileService
-	Dir     string
+	MainFS fileservice.FileService
+	TempFS fileservice.FileService
+	Dir    string
 }
 
 func TmpNewFileservice(dir string) fileservice.FileService {
 	c := fileservice.Config{
-		Name:    "LOCAL",
+		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}
@@ -40,14 +43,15 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 	return service
 }
 
-func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
+func NewObjectFS(mainFS fileservice.FileService, tempFS fileservice.FileService, dir string) *ObjectFS {
 	fs := &ObjectFS{
-		Service: service,
-		Dir:     dir,
+		MainFS: mainFS,
+		TempFS: tempFS,
+		Dir:    dir,
 	}
 	return fs
 }
 
 func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
-	return o.Service.List(context.Background(), dir)
+	return o.MainFS.List(context.Background(), dir)
 }
