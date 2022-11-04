@@ -225,8 +225,10 @@ func (m *Merge) Main(ts time.Time) error {
 			}
 		}
 
-		if err = m.doMergeFiles(account.Name, files, 0); err != nil {
-			logutil.Errorf("merge task meet error: %v", err)
+		if len(files) > 0 {
+			if err = m.doMergeFiles(account.Name, files, 0); err != nil {
+				logutil.Errorf("merge task meet error: %v", err)
+			}
 		}
 	}
 
@@ -493,7 +495,7 @@ func (c *SliceCache) Reset() {
 	for idx := range c.m {
 		c.m[idx] = nil
 	}
-	c.m = c.m[:]
+	c.m = c.m[:0]
 	c.size = 0
 }
 
