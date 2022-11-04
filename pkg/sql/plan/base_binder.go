@@ -17,9 +17,10 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -899,12 +900,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
 		}
 
-		if isNullExpr(args[0]) || isNullExpr(args[1]) {
-			break
-		}
-		if int(args[0].Typ.Id) != int(args[1].Typ.Id) {
-			return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
-		}
 	case "str_to_date", "to_date":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(name+" function have invalid input args length", len(args))
@@ -993,6 +988,15 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 					if err != nil {
 						return nil, err
 					}
+				}
+			}
+		}
+
+	case "timediff":
+		if len(argsType) == len(argsCastType) {
+			for i := range argsType {
+				if int(argsType[i].Oid) == int(types.T_time) && int(argsCastType[i].Oid) == int(types.T_datetime) {
+					return nil, moerr.NewInvalidInput(name + " function have invalid input args type")
 				}
 			}
 		}

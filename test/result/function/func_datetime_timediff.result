@@ -84,7 +84,7 @@ invalid input: timediff function have invalid input args type
 select timediff(cast('11:11:11' as time), cast('2017-08-08 22:22:22' as datetime));
 invalid input: timediff function have invalid input args type
 select timediff(CAST('2017-08-08 22:22:22' as datetime), 1);
-invalid input: timediff function have invalid input args type
+invalid argument function timediff, bad value [DATETIME BIGINT]
 drop table if exists t1;
 create table t1(a INT,  b time);
 insert into t1 values(1, '22:22:22');
@@ -122,7 +122,7 @@ insert into t2 values(4, '2012-12-20 11:11:11');
 insert into t2 values(2, '2012-10-10 11:11:11');
 select a, timediff(cast('2012-12-12 22:22:21' as datetime), b) from t2;
 a    timediff(cast(2012-12-12 22:22:21 as datetime(26)), b)
-1    -00:00:01
+1    00:00:01
 2    59:11:10
 3    -36:48:50
 4    -180:48:50
