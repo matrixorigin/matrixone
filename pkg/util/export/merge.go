@@ -218,7 +218,7 @@ func (m *Merge) Main(ts time.Time) error {
 			files = append(files, filepath)
 			if totalSize > m.MaxFileSize {
 				if err = m.doMergeFiles(account.Name, files, totalSize); err != nil {
-					return err
+					logutil.Errorf("merge task meet error: %v", err)
 				}
 				files = files[:0]
 				totalSize = 0
@@ -226,7 +226,7 @@ func (m *Merge) Main(ts time.Time) error {
 		}
 
 		if err = m.doMergeFiles(account.Name, files, 0); err != nil {
-			logutil.Errorf("err: %v\n", err)
+			logutil.Errorf("merge task meet error: %v", err)
 		}
 	}
 
@@ -252,20 +252,20 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 
 	// Step 1. group by node_uuid, find target timestamp
 	timestamps := make([]string, 0, len(paths))
-	for _, path := range paths {
-		p, err := m.pathBuilder.ParsePath(path)
+	for _, path_ := range paths {
+		p, err := m.pathBuilder.ParsePath(path_)
 		if err != nil {
 			return err
 		}
 		ts := p.Timestamp()
 		if len(ts) == 0 {
-			// fixme: logutil.Warn
+			logutil.Warnf("merge file meet unknown file: %s", path_)
 			continue
 		}
 		timestamps = append(timestamps, ts[0])
 	}
 	if len(timestamps) == 0 {
-		return moerr.NewNotSupported("CSVMerge: NO timestamp for merge")
+		return moerr.NewNotSupported("csv merge: NO timestamp for merge")
 	}
 	timestampStart := timestamps[0]
 	timestampEnd := timestamps[len(timestamps)-1]
@@ -288,9 +288,8 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 	for _, path := range paths {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
 		if err != nil {
-			// fixme: handle this path ? just return
-			// errorFileHandler(m.ctx, m.FS, path) without continue
-			continue
+			logutil.Errorf("merge file meet read failed: %v", err)
+			return err
 		}
 		var line []string
 		for line, err = reader.ReadLine(); line != nil && err == nil; line, err = reader.ReadLine() {
@@ -305,7 +304,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 		// check cache size
 		if cacheFileData.Size() > m.FileCacheSize {
 			if err = cacheFileData.Flush(newFileWriter); err != nil {
-				logutil.Errorf("merge file meet flush error: %v", err)
+				logutil.Errorf("merge file meet flush failed: %v", err)
 				return err
 			}
 			cacheFileData.Reset()
@@ -313,17 +312,23 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 	}
 	if !cacheFileData.IsEmpty() {
 		if err := cacheFileData.Flush(newFileWriter); err != nil {
-			logutil.Errorf("merge file meet flush error: %v", err)
+			logutil.Errorf("merge file meet flush failed: %v", err)
 			return err
 		}
 		cacheFileData.Reset()
 	}
-	newFileWriter.FlushAndClose()
+	if err := newFileWriter.FlushAndClose(); err != nil {
+		logutil.Errorf("merge file meet write failed: %v", err)
+		return err
+	}
 
 	// step 4. delete old files
-	err := m.FS.Delete(m.ctx, paths...)
+	if err := m.FS.Delete(m.ctx, paths...); err != nil {
+		logutil.Errorf("merge file meet delete failed: %v", err)
+		return err
+	}
 
-	return err
+	return nil
 }
 
 type CSVReader interface {
