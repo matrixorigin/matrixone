@@ -34,6 +34,10 @@ var (
 	defaultMaxMessageSize = 1024 * 1024 * 100
 )
 
+var (
+	DefaultMaxMessageSize = defaultMaxMessageSize
+)
+
 // WithCodecEnableChecksum enable checksum
 func WithCodecEnableChecksum() CodecOption {
 	return func(c *messageCodec) {

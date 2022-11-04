@@ -130,7 +130,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	ctx := context.TODO()
-
 	filePath := strings.TrimSpace(param.Filepath)
 	pathDir := strings.Split(filePath, "/")
 	l := list.New()
@@ -398,7 +397,6 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			break
 		}
 	}
-
 	if param.IgnoreLine != 0 {
 		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
 			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
