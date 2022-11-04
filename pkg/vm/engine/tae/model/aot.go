@@ -137,9 +137,11 @@ func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
 			return false
 		}
 		candidates = append(candidates, block)
+		logutil.Infof("candidate %s", block.String())
 		return true
 	})
 
+	logutil.Infof("valid=%v, candidates len=%d", valid, len(candidates))
 	if !valid || len(candidates) == 0 {
 		return
 	}
@@ -147,6 +149,7 @@ func (aot *AOT[B, R]) Truncate(filter func(_ B) bool) (cnt int) {
 	aot.Lock()
 	defer aot.Unlock()
 
+	cnt = len(candidates)
 	for _, block := range candidates {
 		aot.blocks.Delete(block)
 	}

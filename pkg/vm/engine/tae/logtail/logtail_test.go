@@ -20,4 +20,29 @@ func TestTxnTable1(t *testing.T) {
 	}
 	t.Log(table.BlockCount())
 	t.Log(table.String())
+	timestamps := make([]types.TS, 0)
+	fn1 := func(block *txnBlock) bool {
+		timestamps = append(timestamps, block.bornTS)
+		return true
+	}
+	table.Scan(fn1)
+	assert.Equal(t, 3, len(timestamps))
+	// t.Log(timestamps)
+
+	ckp := timestamps[0].Prev()
+	cnt := table.TruncateByTimeStamp(ckp)
+	assert.Equal(t, 0, cnt)
+
+	ckp = timestamps[0].Next()
+	cnt = table.TruncateByTimeStamp(ckp)
+	assert.Equal(t, 0, cnt)
+	return
+
+	ckp = timestamps[1].Prev()
+	cnt = table.TruncateByTimeStamp(ckp)
+	assert.Equal(t, 0, cnt)
+
+	ckp = timestamps[1].Next()
+	cnt = table.TruncateByTimeStamp(ckp)
+	assert.Equal(t, 0, cnt)
 }
