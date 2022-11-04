@@ -563,10 +563,6 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if expr == nil {
 		return true
 	}
-	// return true anyway
-	if expr != nil {
-		return true
-	}
 
 	// key = expr's ColPos,  value = tableDef's ColPos
 	columnMap := getColumnsByExpr(expr, tableDef)
@@ -578,6 +574,7 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		if err != nil {
 			return true
 		}
+		bat.Clean(proc.Mp())
 		return ifNeed
 	}
 
@@ -614,8 +611,10 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 
 	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
+		bat.Clean(proc.Mp())
 		return true
 	}
+	bat.Clean(proc.Mp())
 
 	return ifNeed
 
