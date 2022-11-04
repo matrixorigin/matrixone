@@ -29,9 +29,9 @@ const (
 	// default cluster initial information
 	defaultDNServiceNum  = 1
 	defaultDNShardNum    = 1
-	defaultLogServiceNum = 3
+	defaultLogServiceNum = 1
 	defaultLogShardNum   = 1
-	defaultLogReplicaNum = 3
+	defaultLogReplicaNum = 1
 	defaultCNServiceNum  = 1
 	defaultCNShardNum    = 1
 
@@ -44,8 +44,8 @@ const (
 	defaultCNEngine  = cnservice.EngineDistributedTAE
 
 	// default configuration for log service
-	defaultGossipSeedNum = 3
-	defaultHAKeeperNum   = 3
+	defaultGossipSeedNum = 1
+	defaultHAKeeperNum   = 1
 
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10

@@ -20,6 +20,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
+func WithCheckpointMinCount(count int64) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.MinCount = count
+	}
+}
+
+func WithCheckpointScanInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.ScanInterval = interval
+	}
+}
+
+func WithCheckpointIncrementaInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.IncrementalInterval = interval
+	}
+}
+
+func WithCheckpointGlobalInterval(interval time.Duration) func(*Options) {
+	return func(opts *Options) {
+		if opts.CheckpointCfg == nil {
+			opts.CheckpointCfg = new(CheckpointCfg)
+		}
+		opts.CheckpointCfg.GlobalInterval = interval
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
@@ -41,14 +77,22 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.CheckpointCfg == nil {
-		o.CheckpointCfg = &CheckpointCfg{
-			ScannerInterval:    DefaultScannerInterval,
-			ExecutionInterval:  DefaultExecutionInterval,
-			FlushInterval:      DefaultFlushInterval,
-			ExecutionLevels:    DefaultExecutionLevels,
-			CatalogCkpInterval: DefaultCatalogCkpInterval,
-			CatalogUnCkpLimit:  DefaultCatalogUnCkpLimit,
-		}
+		o.CheckpointCfg = new(CheckpointCfg)
+	}
+	if o.CheckpointCfg.ScanInterval <= 0 {
+		o.CheckpointCfg.ScanInterval = DefaultScannerInterval
+	}
+	if o.CheckpointCfg.FlushInterval <= 0 {
+		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
+	}
+	if o.CheckpointCfg.IncrementalInterval <= 0 {
+		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
+	}
+	if o.CheckpointCfg.GlobalInterval <= 0 {
+		o.CheckpointCfg.GlobalInterval = DefaultCheckpointGlobalInterval
+	}
+	if o.CheckpointCfg.MinCount <= 0 {
+		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
 	}
 
 	if o.SchedulerCfg == nil {

@@ -203,8 +203,24 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				Properties: &plan.PropertiesDef{
 					Properties: properties,
 				},
+			}})
+	} else {
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemOrdinaryRel,
 			},
-		})
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: ctx.GetRootSql(),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -225,7 +241,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(builder, bindContext)
-		err = buildPartitionByClause(partitionBinder, stmt.PartitionOption, createTable.TableDef)
+		err = buildPartitionByClause(partitionBinder, stmt, createTable.TableDef)
 		if err != nil {
 			return nil, err
 		}
@@ -245,16 +261,16 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported
-func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) (err error) {
-	switch partitionOp.PartBy.PType.(type) {
+func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+	switch stmt.PartitionOption.PartBy.PType.(type) {
 	case *tree.HashType:
-		err = buildHashPartition(partitionBinder, partitionOp, tableDef)
+		err = buildHashPartition(partitionBinder, stmt, tableDef)
 	case *tree.KeyType:
-		err = buildKeyPartition(partitionBinder, partitionOp, tableDef)
+		err = buildKeyPartition(partitionBinder, stmt, tableDef)
 	case *tree.RangeType:
-		err = buildRangePartition(partitionBinder, partitionOp, tableDef)
+		err = buildRangePartition(partitionBinder, stmt, tableDef)
 	case *tree.ListType:
-		err = buildListPartitiion(partitionBinder, partitionOp, tableDef)
+		err = buildListPartitiion(partitionBinder, stmt, tableDef)
 	}
 	return err
 }

@@ -15,7 +15,6 @@
 package checkpoint
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -31,7 +31,6 @@ type CheckpointEntry struct {
 	sync.RWMutex
 	start, end types.TS
 	state      State
-	fileName   string
 	location   string
 }
 
@@ -96,7 +95,8 @@ func (e *CheckpointEntry) IsFinished() bool {
 }
 
 func (e *CheckpointEntry) IsIncremental() bool {
-	return !e.start.IsEmpty()
+	// Currently only incremental is supported
+	return true
 }
 
 func (e *CheckpointEntry) String() string {
@@ -104,30 +104,38 @@ func (e *CheckpointEntry) String() string {
 	if !e.IsIncremental() {
 		t = "G"
 	}
-	return fmt.Sprintf("CKP[%s](%s->%s)", t, e.start.ToString(), e.end.ToString())
+	state := e.GetState()
+	return fmt.Sprintf("CKP[%s][%v](%s->%s)", t, state, e.start.ToString(), e.end.ToString())
 }
 
-func (e *CheckpointEntry) NewCheckpointWriter(fs *objectio.ObjectFS) *blockio.Writer {
-	e.fileName = blockio.EncodeCheckpointName(PrefixIncremental, e.start, e.end)
-	return blockio.NewWriter(context.Background(), fs, e.fileName)
-}
-
-func (e *CheckpointEntry) EncodeAndSetLocation(blks []objectio.BlockObject) {
-	metaLoc := blockio.EncodeMetalocFromMetas(e.fileName, blks)
-	e.SetLocation(metaLoc)
-}
-
-func (e *CheckpointEntry) NewCheckpointReader(fs *objectio.ObjectFS) *blockio.Reader {
+func (e *CheckpointEntry) Replay(
+	c *catalog.Catalog,
+	fs *objectio.ObjectFS,
+	dataFactory catalog.DataFactory) (err error) {
 	reader, err := blockio.NewCheckpointReader(fs, e.location)
 	if err != nil {
-		panic(err)
+		return
 	}
-	return reader
+
+	data := logtail.NewCheckpointData()
+	defer data.Close()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	err = data.ApplyReplayTo(c, dataFactory)
+	return
 }
 
-func (e *CheckpointEntry) Replay(c *catalog.Catalog, fs *objectio.ObjectFS) {
-	reader := e.NewCheckpointReader(fs)
-	builder := logtail.NewCheckpointLogtailRespBuilder(e.start, e.end)
-	builder.ReadFromFS(reader, common.DefaultAllocator)
-	builder.ReplayCatalog(c)
+func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del *containers.Batch, err error) {
+	reader, err := blockio.NewCheckpointReader(fs, e.location)
+	if err != nil {
+		return
+	}
+	data := logtail.NewCheckpointData()
+	data.Close()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	ins, del = data.GetTableData(tid)
+	return
 }

@@ -227,9 +227,17 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  arg.Es.Attrs,
-				Cols:   arg.Es.Cols,
-				Extern: arg.Es.Extern,
+				Attrs:    arg.Es.Attrs,
+				Cols:     arg.Es.Cols,
+				ExprList: arg.Es.ExprList,
+				ColName:  arg.Es.ColName,
+			},
+		}
+	case *generate_series.Argument:
+		rin.Arg = &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs:    arg.Es.Attrs,
+				ExprList: arg.Es.ExprList,
 			},
 		}
 	default:
@@ -322,6 +330,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
+	dbName := make([]string, len(n.UpdateCtxs))
+	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
@@ -334,6 +344,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 
 		tableID[i] = relation.GetTableID(ctx)
+		dbName[i] = updateCtx.DbName
+		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -374,6 +386,8 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:      eg,
 		DB:          db,
 		TableID:     tableID,
+		DBName:      dbName,
+		TblName:     tblName,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }
@@ -400,16 +414,17 @@ func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.Ex
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
 	return &unnest.Argument{
 		Es: &unnest.Param{
-			Attrs:  attrs,
-			Cols:   n.TableDef.Cols,
-			Extern: param,
+			Attrs:    attrs,
+			Cols:     n.TableDef.Cols,
+			ExprList: n.TblFuncExprList,
+			ColName:  string(n.TableDef.TblFunc.Param),
 		},
 	}
 }
@@ -421,20 +436,16 @@ func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series
 	}
 	return &generate_series.Argument{
 		Es: &generate_series.Param{
-			Attrs: attrs,
-			Cols:  n.TableDef.Cols,
+			Attrs:    attrs,
+			ExprList: n.TblFuncExprList,
 		},
 	}
 }
 
-func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
+func constructTop(n *plan.Node, topN int64) *top.Argument {
 	return &top.Argument{
 		Fs:    n.OrderBy,
-		Limit: vec.Col.([]int64)[0],
+		Limit: topN,
 	}
 }
 
@@ -645,14 +656,10 @@ func constructMergeGroup(_ *plan.Node, needEval bool) *mergegroup.Argument {
 	}
 }
 
-func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
-	if err != nil {
-		panic(err)
-	}
+func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
 	return &mergetop.Argument{
 		Fs:    n.OrderBy,
-		Limit: vec.Col.([]int64)[0],
+		Limit: topN,
 	}
 }
 

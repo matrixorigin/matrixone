@@ -20,9 +20,11 @@ import (
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -31,6 +33,7 @@ const (
 	_host     = "127.0.0.1"
 	_port     = 6001
 	batchSize = 4096
+	timeout   = 10 * time.Second
 )
 
 var (
@@ -41,14 +44,20 @@ type Column struct {
 	Name string
 	Type string
 }
-type Tables []string
+
+type Table struct {
+	Name string
+	Kind string
+}
+
+type Tables []Table
 
 func (t *Tables) String() string {
 	return fmt.Sprint(*t)
 }
 
 func (t *Tables) Set(value string) error {
-	*t = append(*t, value)
+	*t = append(*t, Table{value, ""})
 	return nil
 }
 
@@ -85,7 +94,20 @@ func main() {
 	if err != nil {
 		return
 	}
-	err = conn.Ping() // Before use, we must ping to validate DSN data:
+	ch := make(chan struct{})
+	go func() {
+		err = conn.Ping() // Before use, we must ping to validate DSN data:
+		if err != nil {
+			return
+		}
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		err = moerr.NewInternalError("connect to %s timeout", dsn)
+	}
 	if err != nil {
 		return
 	}
@@ -97,14 +119,14 @@ func main() {
 		fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", database)
 		fmt.Println(createDb, ";")
 		fmt.Printf("USE `%s`;\n\n\n", database)
-		tables, err = getTables()
-		if err != nil {
-			return
-		}
+	}
+	tables, err = getTables(database, tables)
+	if err != nil {
+		return
 	}
 	createTable = make([]string, len(tables))
 	for i, tbl := range tables {
-		createTable[i], err = getCreateTable(tbl)
+		createTable[i], err = getCreateTable(database, tbl.Name)
 		if err != nil {
 			return
 		}
@@ -112,44 +134,80 @@ func main() {
 
 	for i, create := range createTable {
 		tbl := tables[i]
-		if isView(create) {
-			fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl)
-			fmt.Printf("%s;\n\n\n", create)
+		if tbl.Kind == catalog.SystemViewRel || tbl.Kind == catalog.SystemExternalRel {
 			continue
 		}
-		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl)
+		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 		var suffix string
 		if !strings.HasSuffix(create, ";") {
 			suffix = ";"
 		}
 		fmt.Printf("%s%s\n", create, suffix)
-		err = showInsert(database, tbl)
+		err = showInsert(database, tbl.Name)
 		if err != nil {
 			return
 		}
 	}
+
+	for i, tbl := range tables {
+		if tbl.Kind != catalog.SystemExternalRel {
+			continue
+		}
+		fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
+		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+		fmt.Printf("%s;\n\n\n", createTable[i])
+
+	}
+
+	for i, tbl := range tables {
+		if tbl.Kind != catalog.SystemViewRel {
+			continue
+		}
+		fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
+		fmt.Printf("%s;\n\n\n", createTable[i])
+		continue
+	}
 }
 
-func getTables() ([]string, error) {
-	r, err := conn.Query("show tables")
+func getTables(db string, tables Tables) (Tables, error) {
+	sql := "select relname,relkind from mo_catalog.mo_tables where reldatabase = '" + db + "'"
+	if len(tables) > 0 {
+		sql += " and relname in ("
+		for i, tbl := range tables {
+			if i != 0 {
+				sql += ","
+			}
+			sql += "'" + tbl.Name + "'"
+		}
+		sql += ")"
+	}
+	r, err := conn.Query(sql) //TODO: after unified sys table prefix, add condition in where clause
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	var tables []string
+
+	if tables == nil {
+		tables = Tables{}
+	}
+	tables = tables[:0]
 	for r.Next() {
 		var table string
-		err = r.Scan(&table)
+		var kind string
+		err = r.Scan(&table, &kind)
 		if err != nil {
 			return nil, err
 		}
-		tables = append(tables, table)
+		if strings.HasPrefix(table, "__mo_") || strings.HasPrefix(table, "%!%") { //TODO: after adding condition in where clause, remove this
+			continue
+		}
+		tables = append(tables, Table{table, kind})
 	}
 	return tables, nil
 }
 
 func getCreateDB(db string) (string, error) {
-	r := conn.QueryRow("show create database " + db)
+	r := conn.QueryRow("show create database `" + db + "`")
 	var (
 		create string
 	)
@@ -160,8 +218,8 @@ func getCreateDB(db string) (string, error) {
 	return create, nil
 }
 
-func getCreateTable(tbl string) (string, error) {
-	r := conn.QueryRow("show create table " + tbl)
+func getCreateTable(db, tbl string) (string, error) {
+	r := conn.QueryRow("show create table `" + db + "`.`" + tbl + "`")
 	var create string
 	err := r.Scan(&tbl, &create)
 	if err != nil {
@@ -171,7 +229,7 @@ func getCreateTable(tbl string) (string, error) {
 }
 
 func showInsert(db string, tbl string) error {
-	r, err := conn.Query("select * from " + db + "." + tbl + " limit 0, " + strconv.Itoa(batchSize))
+	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "` limit 0, " + strconv.Itoa(batchSize))
 	if err != nil {
 		return err
 	}
@@ -230,7 +288,7 @@ func showInsert(db string, tbl string) error {
 		r.Close()
 		buf.Reset()
 		cur += batchSize
-		r, err = conn.Query("select * from " + db + "." + tbl + " limit " + strconv.Itoa(cur) + ", " + strconv.Itoa(batchSize))
+		r, err = conn.Query("select * from `" + db + "`.`" + tbl + "` limit " + strconv.Itoa(cur) + ", " + strconv.Itoa(batchSize))
 		if err != nil {
 			return err
 		}
@@ -255,8 +313,4 @@ func convertValue(v interface{}, typ string) string {
 	default:
 		return fmt.Sprintf("'%v'", string(ret.([]byte)))
 	}
-}
-func isView(sql string) bool {
-	sql = strings.ToLower(sql)
-	return strings.HasPrefix(sql, "create view")
 }

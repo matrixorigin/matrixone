@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -689,8 +690,16 @@ func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
 	}
 	pow := math.Pow10(int(Typ.Precision))
 	t := math.Abs(float64(num))
-	t *= pow
-	t = math.Round(t)
+	upperLimit := math.Pow10(int(Typ.Width))
+	if t >= upperLimit {
+		t = upperLimit - 1
+	} else {
+		t *= pow
+		t = math.Round(t)
+	}
+	if t >= upperLimit {
+		t = upperLimit - 1
+	}
 	t /= pow
 	if num < 0 {
 		t = -1 * t
@@ -2372,18 +2381,29 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
+		pu.GetClusterDetails,
 	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:         ses.GetUserName(),
-		Host:         pu.SV.Host,
-		ConnectionID: uint64(proto.ConnectionID()),
-		Database:     ses.GetDatabaseName(),
-		Version:      serverVersion,
-		TimeZone:     ses.GetTimeZone(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+	}
+	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+	} else {
+		proc.SessionInfo.AccountId = sysAccountID
+		proc.SessionInfo.RoleId = moAdminRoleID
+		proc.SessionInfo.UserId = rootID
 	}
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
@@ -2941,6 +2961,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			if _, ok := stmt.(*tree.Insert); ok {
+				resp.lastInsertId = 1
+			}
 			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
 				trace.EndStatement(requestCtx, err2)
 				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)

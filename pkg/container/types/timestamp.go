@@ -80,6 +80,11 @@ func (ts Timestamp) Unix() int64 {
 	return (int64(ts) - unixEpoch) / microSecsPerSec
 }
 
+func (ts Timestamp) UnixToFloat() float64 {
+	return float64(int64(ts)-unixEpoch) / microSecsPerSec
+	//strconv.ParseFloat()
+}
+
 // this scaleTable stores the corresponding microseconds value for a precision
 var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 
@@ -130,9 +135,13 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 	}
 
 	result := dt.ToTimestamp(loc)
-	if result < TimestampMinValue {
-		return -1, moerr.NewInvalidArg("parse timestamp", s)
-	}
+	//for issue5305, do not do this check
+	//according to mysql, timestamp function actually return a datetime value
+	/*
+		if result < TimestampMinValue {
+			return -1, moerr.NewInvalidArg("parse timestamp", s)
+		}
+	*/
 
 	return result, nil
 }

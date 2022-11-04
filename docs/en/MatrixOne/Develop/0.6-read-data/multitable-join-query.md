@@ -221,6 +221,6 @@ The query procedure is as below:
 4 rows in set (0.01 sec)
 ```
 
-## 隐式连接
+## Implicit join
 
 Before the `JOIN` statement that explicitly declared a join was added to the SQL standard, it was possible to join two or more tables in a SQL statement using the `FROM t1, t2` clause, and specify the conditions for the join using the `WHERE t1.id = t2.id` clause. You can understand it as an implicit join, which uses the inner join to join tables.

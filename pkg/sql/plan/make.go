@@ -35,6 +35,20 @@ func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
 	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
+func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:       int32(t),
+			Nullable: true,
+		},
+	}
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
@@ -72,8 +86,8 @@ func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
 func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
-		Value: &plan.Const_Ival{
-			Ival: v,
+		Value: &plan.Const_I64Val{
+			I64Val: v,
 		},
 	}}
 }
@@ -94,8 +108,8 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
-		Value: &plan.Const_Uval{
-			Uval: v,
+		Value: &plan.Const_U64Val{
+			U64Val: v,
 		},
 	}}
 }

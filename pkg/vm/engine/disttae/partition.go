@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -86,7 +88,7 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	if len(blks) == 0 {
+	if len(blocks) == 0 {
 		return blks, deletes
 	}
 	ids := make([]uint64, len(blocks))
@@ -161,12 +163,17 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		// indexes
 		var indexes []memtable.Tuple
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.ToOrdered(opDelete),
+			memtable.Uint(opDelete),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -247,12 +254,17 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				primaryKey,
 			})
 		}
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.ToOrdered(opInsert),
+			memtable.Uint(opInsert),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 		// columns indexes
 		for _, def := range p.columnsIndexDefs {
@@ -265,20 +277,55 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		err = p.data.Upsert(tx, &DataRow{
-			rowID:   rowID,
-			value:   dataValue,
-			indexes: indexes,
-		})
-		if err != nil {
-			return err
-		}
-
-		if err := tx.Commit(t); err != nil {
+		_, err := p.data.Get(tx, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = p.data.Upsert(tx, &DataRow{
+				rowID:   rowID,
+				value:   dataValue,
+				indexes: indexes,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Commit(t); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func (p *Partition) GC(ts timestamp.Timestamp) error {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	min := memtable.Tuple{
+		index_Time,
+		memtable.Min,
+	}
+	max := memtable.Tuple{
+		index_Time,
+		ts,
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		err := p.data.Delete(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(t); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -345,13 +392,13 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
 		memtable.Min,
-		memtable.ToOrdered(opInsert),
+		memtable.Uint(opInsert),
 	}
 	max := memtable.Tuple{
 		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
 		memtable.Max,
-		memtable.ToOrdered(opInsert),
+		memtable.Uint(opInsert),
 	}
 	iter := p.data.NewIndexIter(tx, min, max)
 	defer iter.Close()
@@ -412,6 +459,7 @@ func (p *Partition) NewReader(
 	index memtable.Tuple,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
+	skipBlocks map[uint64]uint8,
 	blks []ModifyBlockMeta,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
@@ -455,14 +503,15 @@ func (p *Partition) NewReader(
 	}
 
 	readers[0] = &PartitionReader{
-		typsMap:  mp,
-		readTime: t,
-		tx:       tx,
-		index:    index,
-		inserts:  inserts,
-		deletes:  deletes,
-		data:     p.data,
-		iter:     p.data.NewIter(tx),
+		typsMap:    mp,
+		readTime:   t,
+		tx:         tx,
+		index:      index,
+		inserts:    inserts,
+		deletes:    deletes,
+		skipBlocks: skipBlocks,
+		data:       p.data,
+		iter:       p.data.NewIter(tx),
 	}
 	if readerNumber == 1 {
 		for i := range blks {
@@ -504,7 +553,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step:],
+				blks:     blks[(i-1)*step:],
 				sels:     make([]int64, 0, 1024),
 			}
 		} else {
@@ -513,7 +562,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step : (i+1)*step],
+				blks:     blks[(i-1)*step : i*step],
 				sels:     make([]int64, 0, 1024),
 			}
 		}

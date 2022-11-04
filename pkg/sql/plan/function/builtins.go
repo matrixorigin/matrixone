@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 )
@@ -1538,9 +1539,16 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Args:      []types.T{types.T_varchar},
+				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.UnixTimestampVarchar,
+				Fn:        multi.UnixTimestampVarcharToInt64,
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        multi.UnixTimestampVarcharToFloat64,
 			},
 		},
 	},
@@ -1694,6 +1702,49 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.ToDate,
+			},
+		},
+	},
+	STR_TO_DATE: {
+		Id:     STR_TO_DATE,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     1,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     2,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
+			},
+			{
+				Index:     3,
+				Args:      []types.T{types.T_char, types.T_char, types.T_datetime},
+				ReturnTyp: types.T_datetime,
+				Fn:        binary.StrToDateTime,
+			},
+			{
+				Index:     4,
+				Args:      []types.T{types.T_char, types.T_char, types.T_date},
+				ReturnTyp: types.T_date,
+				Fn:        binary.StrToDate,
+			},
+			{
+				Index:     5,
+				Args:      []types.T{types.T_char, types.T_char, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.StrToTime,
 			},
 		},
 	},
@@ -2378,6 +2429,20 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_time, types.T_time},
 				ReturnTyp: types.T_varchar,
 				Fn:        binary.TimeDiff[types.Time],
+			},
+		},
+	},
+	MO_CTL: {
+		Id:     MO_CTL,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        ctl.Handler,
 			},
 		},
 	},

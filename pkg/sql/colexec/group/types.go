@@ -17,6 +17,7 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,6 +27,7 @@ import (
 const (
 	H8 = iota
 	HStr
+	HIndex
 )
 
 type evalVector struct {
@@ -40,6 +42,7 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
+	idx        *index.LowCardinalityIndex
 
 	aggVecs   []evalVector
 	groupVecs []evalVector

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,33 +57,128 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 	return physical <= time.Now().UTC().UnixNano()-p.interval.Nanoseconds()
 }
 
+// Q: What does runner do?
+// A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
+//    does the following things:
+//    - Manage the life cycle of all checkpoints and provide some query interfaces.
+//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligibl dirty
+//      blocks to the remote storage
+//    - The cron job peridically test whether a new checkpoint can be created. If it is not
+//      satisfied, it will wait for next trigger. Otherwise, it will start the process of
+//      creating a checkpoint.
+
+// Q: How to collect dirty blocks?
+// A: There is a logtail manager maintains all transaction information that occurred over a
+//    period of time. When a checkpoint is generated, we clean up the data before the
+//    checkpoint timestamp in logtail.
+//
+//         |----to prune----|                                           Time
+//    -----+----------------+-------------------------------------+----------->
+//         t1         checkpoint-t10                             t100
+//
+//    For each transaction, it maintains a dirty block list.
+//
+//    [t1]: TB1-[1]
+//    [t2]: TB2-[2]
+//    [t3]: TB1-[1],TB2-[3]
+//    [t4]: []
+//    [t5]: TB2[3,4]
+//    .....
+//    .....
+//    When collecting the dirty blocks in [t1, t5], it will get 2 block list, which is represented
+//    with `common.Tree`
+//                  [t1,t5] - - - - - - - - - <DirtyTreeEntry>
+//                  /     \
+//               [TB1]   [TB2]
+//                 |       |
+//                [1]   [2,3,4] - - - - - - - leaf nodes are all dirty blocks
+//    We store the dirty tree entries into the internal storage. Over time, we'll see something like
+//    this inside the storage:
+//    - Entry[t1,  t5]
+//    - Entry[t6, t12]
+//    - Entry[t13,t29]
+//    - Entry[t30,t47]
+//    .....
+//    .....
+//    When collecting the dirty blocks in [t1, t20], it will get 3 dirty trees from [t1,t5],[t6,t12],
+//    [t13,t29] and merge the three trees into a tree with all the leaf nodes being dirty blocks.
+//
+//    In order to reduce the workload of scan, we have always been incremental scan. And also we will
+//    continue to clean up the entries in the storage.
+
+// Q: How to test whether a block need to be flushed?
+// A: It is an open question. There are a lot of options, just chose a simple strategy for now.
+//    Must:
+//    - The born transaction of the block was committed
+//    - No uncommitted transaction on the block
+//    Factors:
+//    - Max rows reached
+//    - Delete ratio
+//    - Max flush timeout
+
+// Q: How to do incremental checkpoint?
+// A: 1. Decide a checkpoint timestamp
+//    2. Wait all transactions before timestamp were committed
+//    3. Wait all dirty blocks before the timestamp were flushed
+//    4. Prepare checkpoint data
+//    5. Persist the checkpoint data
+//    6. Persist the checkpoint meta data
+//    7. Notify checkpoint events to all the observers
+//    8. Schedule to remove stale checkpoint meta objects
+
+// Q: How to boot from the checkpoints?
+// A: When a meta version is created, it contains all information of the previouse version. So we always
+//
+//	delete the stale versions when a new version is created. Over time, the number of objects under
+//	`ckp/` is small.
+//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
+//	   from the meta object.
+//	2. Apply the latest global checkpoint
+//	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
+//	   latest version.
 type runner struct {
 	options struct {
-		collectInterval        time.Duration
-		maxFlushInterval       time.Duration
+		// checkpoint scanner interval duration
+		collectInterval time.Duration
+
+		// maximum dirty block flush interval duration
+		maxFlushInterval time.Duration
+
+		// minimum incremental checkpoint interval duration
 		minIncrementalInterval time.Duration
-		minGlobalInterval      time.Duration
+
+		// minimum global checkpoint interval duration
+		minGlobalInterval time.Duration
+
+		// minimum count of uncheckpointed transactions allowed before the next checkpoint
+		minCount int
+
+		forceFlushTimeout       time.Duration
+		forceFlushCheckInterval time.Duration
 
 		dirtyEntryQueueSize int
 		waitQueueSize       int
 		checkpointQueueSize int
-		minCount            int
 	}
 
+	// logtail sourcer
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	scheduler tasks.TaskScheduler
 	fs        *objectio.ObjectFS
 	observers *observers
+	wal       wal.Driver
 
 	stopper *stopper.Stopper
 
+	// memory storage of the checkpoint entries
 	storage struct {
 		sync.RWMutex
 		entries    *btree.BTreeG[*CheckpointEntry]
 		prevGlobal *CheckpointEntry
 	}
 
+	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *timeBasedPolicy
 
@@ -113,6 +209,7 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
 	source logtail.Collector,
+	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
 		catalog:   catalog,
@@ -120,6 +217,7 @@ func NewRunner(
 		source:    source,
 		fs:        fs,
 		observers: new(observers),
+		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(b.end)
@@ -141,7 +239,15 @@ func NewRunner(
 	return r
 }
 
+// Only used in UT
+func (r *runner) DebugUpdateOptions(opts ...Option) {
+	for _, opt := range opts {
+		opt(r)
+	}
+}
+
 func (r *runner) onCheckpointEntries(items ...any) {
+	var err error
 	entry := r.MaxCheckpoint()
 	if entry.IsFinished() {
 		return
@@ -163,11 +269,30 @@ func (r *runner) onCheckpointEntries(items ...any) {
 
 	now := time.Now()
 	if entry.IsIncremental() {
-		r.doIncrementalCheckpoint(entry)
+		err = r.doIncrementalCheckpoint(entry)
 	} else {
-		r.doGlobalCheckpoint(entry)
+		err = r.doGlobalCheckpoint(entry)
 	}
-	r.syncCheckpointMetadata(entry.start, entry.end)
+	if err != nil {
+		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
+		return
+	}
+	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
+		// TODO:
+		// 1. Retry
+		// 2. Clean garbage
+		return
+	}
+
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 
 	entry.SetState(ST_Finished)
 	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
@@ -186,38 +311,137 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
+func (r *runner) GetEntries() []*CheckpointEntry {
+	r.storage.RLock()
+	entries := r.storage.entries.Items()
+	r.storage.RUnlock()
+	return entries
+}
+func (r *runner) MaxLSN() uint64 {
+	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	return r.source.GetMaxLSN(types.TS{}, endTs)
+}
+func (r *runner) MockCheckpoint(end types.TS) {
+	var err error
+	entry := NewCheckpointEntry(types.TS{}, end)
+	if err = r.doIncrementalCheckpoint(entry); err != nil {
+		panic(err)
+	}
+	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		panic(err)
+	}
+	r.storage.Lock()
+	r.storage.entries.Set(entry)
+	r.storage.Unlock()
+	entry.SetState(ST_Finished)
+	r.storage.prevGlobal = entry
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
+}
+func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+	makeCtx := func() *DirtyCtx {
+		tree := r.source.ScanInRangePruned(types.TS{}, ts)
+		tree.GetTree().Compact()
+		tableTree := tree.GetTree().GetTable(tableID)
+		if tableTree == nil {
+			return nil
+		}
+		nTree := common.NewTree()
+		nTree.Tables[tableID] = tableTree
+		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
+		dirtyCtx := new(DirtyCtx)
+		dirtyCtx.tree = entry
+		dirtyCtx.force = true
+		return dirtyCtx
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), r.options.forceFlushTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(r.options.forceFlushCheckInterval)
+	defer ticker.Stop()
+
+	dirtyCtx := makeCtx()
+	if dirtyCtx == nil {
+		return
+	}
+	if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Warnf("Flush %d-%d timeout", dbID, tableID)
+			return
+		case <-ticker.C:
+			if dirtyCtx = makeCtx(); dirtyCtx == nil {
+				return
+			}
+			if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
+				return
+			}
+		}
+	}
+}
+
 func (r *runner) TestCheckpoint(entry *CheckpointEntry) {
 	r.doIncrementalCheckpoint(entry)
 	r.storage.entries.Set(entry)
-	r.syncCheckpointMetadata(entry.start, entry.end)
+	r.storage.Unlock()
+	entry.SetState(ST_Finished)
+	r.storage.prevGlobal = entry
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	e, err := r.wal.RangeCheckpoint(1, lsn)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 }
-func (r *runner) syncCheckpointMetadata(start, end types.TS) {
+
+func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata()
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer := blockio.NewWriter(context.Background(), r.fs, name)
-	writer.WriteBlock(bat)
-	writer.Sync()
+	if _, err = writer.WriteBlock(bat); err != nil {
+		return
+	}
+
+	// TODO: checkpoint entry should maintain the location
+	_, err = writer.Sync()
+	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) {
-	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end)
+	data, err := factory(r.catalog)
 	if err != nil {
-		panic(err)
+		return
 	}
-	writer := entry.NewCheckpointWriter(r.fs)
-	blks := builder.WriteToFS(writer)
-	entry.EncodeAndSetLocation(blks)
+	defer data.Close()
+
+	filename := uuid.NewString()
+	writer := blockio.NewWriter(context.Background(), r.fs, filename)
+	blks, err := data.WriteTo(writer)
+	if err != nil {
+		return
+	}
+	location := blockio.EncodeMetalocFromMetas(filename, blks)
+	entry.SetLocation(location)
+	return
 }
 
-func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) {
-	// TODO
-	builder, err := logtail.CollectSnapshot(r.catalog, entry.start, entry.end)
-	if err != nil {
-		panic(err)
-	}
-	writer := entry.NewCheckpointWriter(r.fs)
-	blks := builder.WriteToFS(writer)
-	entry.EncodeAndSetLocation(blks)
+func (r *runner) doGlobalCheckpoint(entry *CheckpointEntry) (err error) {
+	// TODO: do global checkpoint
+	return r.doIncrementalCheckpoint(entry)
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
@@ -251,19 +475,32 @@ func (r *runner) tryAddNewCheckpointEntry(entry *CheckpointEntry) (success bool)
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	maxEntry, _ := r.storage.entries.Max()
-	if maxEntry != nil && entry.IsIncremental() {
-		if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
-			success = false
-		} else if !maxEntry.IsFinished() {
-			success = false
-		} else {
-			r.storage.entries.Set(entry)
-			success = true
-		}
+
+	// if it's the first entry, add it
+	if maxEntry == nil {
+		r.storage.entries.Set(entry)
+		success = true
 		return
 	}
+
+	// if it is not the right candidate, skip this request
+	// [startTs, endTs] --> [endTs+1, ?]
+	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+		success = false
+		return
+	}
+
+	// if the max entry is not finished, skip this request
+	if !maxEntry.IsFinished() {
+		success = false
+		return
+	}
+
 	r.storage.entries.Set(entry)
-	r.storage.prevGlobal = entry
+	if !maxEntry.IsIncremental() {
+		r.storage.prevGlobal = maxEntry
+	}
+
 	success = true
 	return
 }
@@ -327,7 +564,8 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	prevGlobal := r.MaxGlobalCheckpoint()
 
-	if r.globalPolicy.Check(prevGlobal.GetEnd()) {
+	if prevGlobal != nil && r.globalPolicy.Check(prevGlobal.GetEnd()) {
+		// FIXME
 		r.tryScheduleGlobalCheckpoint(entry.GetEnd())
 		return
 	}
@@ -338,6 +576,12 @@ func (r *runner) tryScheduleCheckpoint() {
 }
 
 func (r *runner) fillDefaults() {
+	if r.options.forceFlushTimeout <= 0 {
+		r.options.forceFlushTimeout = time.Second * 10
+	}
+	if r.options.forceFlushCheckInterval <= 0 {
+		r.options.forceFlushCheckInterval = time.Millisecond * 400
+	}
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
@@ -362,7 +606,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -380,7 +624,7 @@ func (r *runner) tryCompactBlock(dbID, tableID, segmentID, id uint64) (err error
 		panic(err)
 	}
 	blkData := blk.GetBlockData()
-	score := blkData.EstimateScore(r.options.maxFlushInterval)
+	score := blkData.EstimateScore(r.options.maxFlushInterval, force)
 	logutil.Debugf("%s [SCORE=%d]", blk.String(), score)
 	if score < 100 {
 		return
@@ -414,21 +658,40 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
-func (r *runner) onDirtyEntries(entries ...any) {
-	merged := logtail.NewEmptyDirtyTreeEntry()
-	for _, entry := range entries {
-		e := entry.(*logtail.DirtyTreeEntry)
-		merged.Merge(e)
-	}
-	if merged.IsEmpty() {
+func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
+	if entry.IsEmpty() {
 		return
 	}
-	logutil.Debugf(merged.String())
+	logutil.Debugf(entry.String())
 	visitor := new(blockVisitor)
-	visitor.blockFn = r.tryCompactBlock
+	visitor.blockFn = func(force bool) func(uint64, uint64, uint64, uint64) error {
+		return func(dbID, tableID, segmentID, id uint64) (err error) {
+			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
+		}
+	}(force)
 
-	if err := merged.GetTree().Visit(visitor); err != nil {
+	if err := entry.GetTree().Visit(visitor); err != nil {
 		panic(err)
+	}
+}
+
+func (r *runner) onDirtyEntries(entries ...any) {
+	normal := logtail.NewEmptyDirtyTreeEntry()
+	force := logtail.NewEmptyDirtyTreeEntry()
+	for _, entry := range entries {
+		e := entry.(*DirtyCtx)
+		if e.force {
+			force.Merge(e.tree)
+		} else {
+			normal.Merge(e.tree)
+		}
+	}
+	if !force.IsEmpty() {
+		r.tryCompactTree(force, true)
+	}
+
+	if !normal.IsEmpty() {
+		r.tryCompactTree(normal, false)
 	}
 }
 
@@ -439,9 +702,11 @@ func (r *runner) crontask(ctx context.Context) {
 		if entry.IsEmpty() {
 			logutil.Debugf("No dirty block found")
 		} else {
-			r.dirtyEntryQueue.Enqueue(entry)
+			e := new(DirtyCtx)
+			e.tree = entry
+			r.dirtyEntryQueue.Enqueue(e)
 		}
-		_ = r.tryScheduleCheckpoint
+		r.tryScheduleCheckpoint()
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

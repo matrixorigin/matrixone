@@ -37,6 +37,7 @@ type PartitionReader struct {
 	index       memtable.Tuple
 	inserts     []*batch.Batch
 	deletes     map[types.Rowid]uint8
+	skipBlocks  map[uint64]uint8
 	iter        *memtable.TableIter[RowID, DataValue]
 	data        *memtable.Table[RowID, DataValue, *DataRow]
 }
@@ -79,6 +80,11 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 			entry := itr.Item()
 			if _, ok := p.deletes[types.Rowid(entry.Key)]; ok {
 				continue
+			}
+			if p.skipBlocks != nil {
+				if _, ok := p.skipBlocks[rowIDToBlockID(entry.Key)]; ok {
+					continue
+				}
 			}
 			dataValue, err := p.data.Get(p.tx, entry.Key)
 			if err != nil {

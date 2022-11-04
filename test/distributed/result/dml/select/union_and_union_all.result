@@ -361,13 +361,18 @@ a
 3
 3
 select * from t8 union select * from t9 intersect select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select * from t10' at line 1
+a
+1
 select * from t8 union select * from t9 minus select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'select * from t10' at line 1
+a
+1
+2
 (select * from t8 union select * from t9) intersect select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'intersect select * from t10' at line 1
+a
 (select * from t8 union select * from t9) minus select * from t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'minus select * from t10' at line 1
+a
+1
+2
 drop table t8;
 drop table t9;
 drop table t10;
@@ -468,14 +473,11 @@ deallocate prepare st_18492;
 deallocate prepare st_18493;
 drop table t13;
 select cast(a as DECIMAL(3,2))
-from (select 11.1233 as a
+from (select 11.1234 as a
 UNION select 11.1234
-UNION select 12.1234
+UNION select 11.1234
 ) t;
-cast(a as DECIMAL(3,2))
-9.99
-9.99
-9.99
+Data truncation: data out of range: data type dec64, value '11.1234'
 drop table if exists t14;
 CREATE TABLE t14 (
 `pseudo` char(35) NOT NULL default '',

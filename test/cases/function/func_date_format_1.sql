@@ -83,12 +83,8 @@ drop table t5;
 
 
 SELECT DATE_FORMAT("2009-01-01",'%W %d %M %Y') as valid_date;
-
--- @bvt:issue#4764
 SELECT DATE_FORMAT('0000-01-01','%W %d %M %Y') as valid_date;
 SELECT DATE_FORMAT('0000-02-28','%W %d %M %Y') as valid_date;
--- @bvt:issue
-
 SELECT DATE_FORMAT('9999-02-28','%W %d %M %Y') as valid_date;
 
 select date_format('1997-01-02 03:04:05', '%M %W %D %Y %y %m %d %h %i %s %w');
