@@ -35,6 +35,13 @@ type Int64HashMap struct {
 	cells       []Int64HashMapCell
 	rawData     []byte
 	//confCnt     uint64
+
+	allCellCnt      uint64
+	allElemCnt      uint64
+	blockMaxCellCnt uint64
+	blockMaxElemCnt uint64
+	rawData2        [][]byte
+	cells2          [][]Int64HashMapCell
 }
 
 var intCellSize int64

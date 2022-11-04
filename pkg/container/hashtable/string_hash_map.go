@@ -41,6 +41,13 @@ type StringHashMap struct {
 	cells       []StringHashMapCell
 	rawData     []byte
 	//confCnt     uint64
+
+	allCellCnt      uint64
+	allElemCnt      uint64
+	blockMaxCellCnt uint64
+	blockMaxElemCnt uint64
+	rawData2        [][]byte
+	cells2          [][]StringHashMapCell
 }
 
 var strCellSize int64
