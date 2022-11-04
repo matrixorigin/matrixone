@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -72,8 +73,16 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 
 func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
-	if _, err := consumerCheckPoint(logTail.CkpLocation, tbl, tbl.db.fs); err != nil {
+	var entries []*api.Entry
+	var err error
+	if entries, err = consumerCheckPoint(logTail.CkpLocation, tbl, tbl.db.fs); err != nil {
 		return err
+	}
+	for _, e := range entries {
+		if err := consumerEntry(idx, primaryIdx, tbl, ts, ctx,
+			db, mvcc, e); err != nil {
+			return err
+		}
 	}
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err := consumerEntry(idx, primaryIdx, tbl, ts, ctx,
@@ -104,11 +113,15 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 		if err != nil {
 			return nil, err
 		}
+		tblName := tbl.tableName
+		if tblName != catalog.MO_DATABASE && tblName != catalog.MO_COLUMNS && tblName != catalog.MO_TABLES {
+			tblName = fmt.Sprintf("_%d_meta", tbl.tableId)
+		}
 		if ins != nil {
 			entry := &api.Entry{
 				EntryType:    api.Entry_Insert,
 				TableId:      tbl.tableId,
-				TableName:    tbl.tableName,
+				TableName:    tblName,
 				DatabaseId:   tbl.db.databaseId,
 				DatabaseName: tbl.db.databaseName,
 				Bat:          ins,
@@ -119,7 +132,7 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 			entry := &api.Entry{
 				EntryType:    api.Entry_Delete,
 				TableId:      tbl.tableId,
-				TableName:    tbl.tableName,
+				TableName:    tblName,
 				DatabaseId:   tbl.db.databaseId,
 				DatabaseName: tbl.db.databaseName,
 				Bat:          del,
