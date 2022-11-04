@@ -151,6 +151,8 @@ L_COMMENT      VARCHAR(44) NOT NULL
 
 ## **4. Load data into the created tables**
 
+### Option 1: Load the sigle table dataset into related tables with this command in MatrixOne
+
 Load data into related tables with this command in MatrixOne.
 
 ```
@@ -172,6 +174,12 @@ load data infile '/YOUR_TPCH_DATA_PATH/lineitem.tbl' into table LINEITEM FIELDS 
 ```
 
 Then you can query data in MatrixOne with the created table.
+
+### Option 2: Load the large wide table dataset into the *lineorder_flat*
+
+```
+load data infile '/ssb-dbgen-path/lineorder_flat.tbl' into table lineorder_flat FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+```
 
 ## **5. Run TPCH Queries**
 

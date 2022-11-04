@@ -43,9 +43,7 @@ type ExternalParam struct {
 	// tag indicate the fileScan is finished
 	Fileparam *ExternalFileparam
 	FileList  []string
-	batchSize int
 	reader    io.ReadCloser
-	records   [][]string
 }
 
 type ExternalFileparam struct {
