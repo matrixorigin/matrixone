@@ -2233,6 +2233,15 @@ show_index_stmt:
             Where: $6,
         }
     }
+|	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
+     {
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5), prefix)
+         $$ = &tree.ShowIndex{
+             TableName: *tbl,
+             Where: $8,
+         }
+     }
 
 extended_opt:
     {}
@@ -4521,7 +4530,7 @@ load_param_opt:
     	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
     		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
     		return 1
-    	    }
+    	}
     	$$ = &tree.ExternParam{
     	    Filepath: $5,
     	    CompressType: $9,
