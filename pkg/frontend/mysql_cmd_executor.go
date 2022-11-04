@@ -1443,7 +1443,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 		mysql CMD_FIELD_LIST response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = proto.SendEOFPacketIf(0, 0)
+	err = proto.sendEOFOrOkPacket(0, 0)
 	if err != nil {
 		return err
 	}
