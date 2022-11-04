@@ -13,7 +13,8 @@ backend = "DISK"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/s3"
 
 [[fileservice]]
 name = "ETL"
