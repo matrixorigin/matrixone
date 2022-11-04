@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -64,15 +63,13 @@ type dataBlock struct {
 	pkIndex      indexwrapper.Index // a shortcut, nil if no pk column
 	mvcc         *updates.MVCCHandle
 	score        *statBlock
-	ckpTs        atomic.Value
-	appendFrozen bool
 	fs           *objectio.ObjectFS
+	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	schema := meta.GetSchema()
 	var node *appendableNode
-	//var zeroV types.TS
 	block := &dataBlock{
 		RWMutex:   new(sync.RWMutex),
 		meta:      meta,
@@ -82,7 +79,6 @@ func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INode
 		bufMgr:    bufMgr,
 		fs:        fs,
 	}
-	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -124,19 +120,21 @@ func (blk *dataBlock) FreezeAppend() {
 	blk.appendFrozen = true
 }
 
+func (blk *dataBlock) PrepareCompact() bool {
+	if blk.RefCount() > 0 {
+		return false
+	}
+	blk.FreezeAppend()
+	if !blk.meta.PrepareCompact() {
+		return false
+	}
+	return blk.RefCount() == 0
+}
+
 func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
 	return blk.appendFrozen
-}
-
-func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
-	blk.ckpTs.Store(ts)
-}
-
-func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
-	ts := blk.ckpTs.Load().(types.TS)
-	return ts
 }
 
 func (blk *dataBlock) FreeData() {
@@ -179,6 +177,12 @@ func (blk *dataBlock) RunCalibration() (score int) {
 }
 
 func (blk *dataBlock) estimateABlkRawScore() (score int) {
+	blk.meta.RLock()
+	hasAnyCommitted := blk.meta.HasCommittedNode()
+	blk.meta.RUnlock()
+	if !hasAnyCommitted {
+		return 1
+	}
 	// Max row appended
 	rows := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
@@ -247,9 +251,15 @@ func (blk *dataBlock) MutationInfo() string {
 	return s
 }
 
-func (blk *dataBlock) EstimateScore(interval time.Duration) int {
+func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 	score, dropped := blk.estimateRawScore()
 	if dropped {
+		return 0
+	}
+	if force {
+		return 100
+	}
+	if score == 0 {
 		return 0
 	}
 	if score > 1 {
@@ -281,20 +291,11 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
-	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.FreezeAppend()
-	blk.meta.RLock()
-	dropped := blk.meta.HasDropCommittedLocked()
-	inTxn := blk.meta.IsCreating()
-	blk.meta.RUnlock()
-	if dropped || inTxn {
+
+	if !blk.PrepareCompact() {
 		return
 	}
-	// Make sure no appender use this block to compact
-	if blk.RefCount() > 0 {
-		// logutil.Infof("blk.RefCount() != 0 : %v, rows: %d", blk.meta.String(), blk.node.rows)
-		return
-	}
+
 	//logutil.Infof("CompactBlockTaskFactory blk: %d, rows: %d", blk.meta.ID, blk.node.rows)
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
@@ -593,7 +594,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 		err = moerr.NewNotFound()
 		return
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
 	}
 	err = nil
@@ -658,7 +659,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 			err = moerr.NewNotFound()
 			return
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			return
 		}
 		err = nil
@@ -670,14 +671,14 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		err = sortKey.Foreach(func(v any, offset int) error {
 			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
 				row = uint32(offset)
-				return moerr.NewDuplicate()
+				return moerr.GetOkExpectedDup()
 			}
 			return nil
 		}, nil)
 		if err == nil {
 			return 0, moerr.NewNotFound()
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 			return
 		}
 
@@ -719,7 +720,10 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 	return 0, moerr.NewNotFound()
 }
 
-func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.TS) func(row uint32) (err error) {
+func (blk *dataBlock) onCheckConflictAndDedup(
+	dupRow *uint32,
+	rowmask *roaring.Bitmap,
+	ts types.TS) func(row uint32) (err error) {
 	return func(row uint32) (err error) {
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
@@ -739,7 +743,8 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
 		if deleteNode == nil {
-			return moerr.NewDuplicate()
+			*dupRow = row
+			return moerr.GetOkExpectedDup()
 		}
 		needWait, txn = deleteNode.NeedWaitCommitting(ts)
 		if needWait {
@@ -748,7 +753,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 			blk.mvcc.RLock()
 		}
 		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 		if err = appendnode.CheckConflict(ts); err != nil {
 			return
@@ -761,16 +766,18 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
+	var dupRow uint32
 	if blk.meta.IsAppendable() {
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
 		var keyselects *roaring.Bitmap
-		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
+		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(&dupRow, rowmask, ts))
 		if err == nil {
 			return
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		pkDef := blk.meta.GetSchema().GetSingleSortKey()
+		if moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			if keyselects == nil {
 				panic("unexpected error")
 			}
@@ -779,7 +786,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			sortKey, err = blk.ResolveColumnFromMeta(
 				metaLoc,
 				txn.GetStartTS(),
-				blk.meta.GetSchema().GetSingleSortKeyIdx(),
+				pkDef.Idx,
 				nil)
 			if err != nil {
 				return
@@ -788,30 +795,37 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
-						return moerr.NewDuplicate()
+						entry := common.TypeStringValue(pks.GetType(), v1)
+						return moerr.NewDuplicateEntry(entry, pkDef.Name)
 					}
 					return nil
 				}, nil)
 			}
 			err = pks.Foreach(deduplicate, keyselects)
+		} else if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			v := blk.node.data.Vecs[pkDef.Idx].Get(int(dupRow))
+			entry := common.TypeStringValue(pks.GetType(), v)
+			return moerr.NewDuplicateEntry(entry, pkDef.Name)
 		}
 		return err
 	}
 	if blk.indexes == nil {
 		panic("index not found")
 	}
-	keyselects, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, txn.GetStartTS()))
+	keyselects, err := blk.pkIndex.BatchDedup(pks,
+		blk.onCheckConflictAndDedup(&dupRow, rowmask, txn.GetStartTS()))
 	if err == nil {
 		return
 	}
 	if keyselects == nil {
 		panic("unexpected error")
 	}
+	pkDef := blk.meta.GetSchema().GetSingleSortKey()
 	metaLoc := blk.meta.GetMetaLoc()
 	sortKey, err := blk.ResolveColumnFromMeta(
 		metaLoc,
 		txn.GetStartTS(),
-		blk.meta.GetSchema().GetSingleSortKeyIdx(),
+		pkDef.Idx,
 		nil)
 	if err != nil {
 		return
@@ -819,11 +833,19 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
-			return moerr.NewDuplicate()
+			entry := common.TypeStringValue(pks.GetType(), v)
+			return moerr.NewDuplicateEntry(entry, blk.meta.GetSchema().GetSingleSortKey().Name)
 		}
 		return nil
 	}
 	err = pks.Foreach(deduplicate, keyselects)
+	return
+}
+
+func (blk *dataBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
 }
 
@@ -842,33 +864,43 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	return
 }
 
-func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+func (blk *dataBlock) CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
 	if blk.meta.IsAppendable() {
-		return blk.collectAblkAppendInRange(start, end)
+		return blk.collectAblkAppendInRange(start, end, withAborted)
 	}
 	return nil, nil
 }
 
-func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
-	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+	minRow, maxRow, commitTSVec, abortVec, abortedMap := blk.mvcc.CollectAppend(start, end)
 	batch, err := blk.node.GetData(minRow, maxRow)
 	if err != nil {
 		return nil, err
 	}
 	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
-	batch.AddVector(catalog.AttrAborted, abortVec)
+	if withAborted {
+		batch.AddVector(catalog.AttrAborted, abortVec)
+	} else {
+		batch.Deletes = abortedMap
+		batch.Compact()
+	}
 	return batch, nil
 }
 
-func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
-	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
+func (blk *dataBlock) CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return nil, nil
 	}
 	batch := containers.NewBatch()
 	batch.AddVector(catalog.PhyAddrColumnName, rowID)
 	batch.AddVector(catalog.AttrCommitTs, ts)
-	batch.AddVector(catalog.AttrAborted, abort)
+	if withAborted {
+		batch.AddVector(catalog.AttrAborted, abort)
+	} else {
+		batch.Deletes = abortedMap
+		batch.Compact()
+	}
 	return batch, nil
 }
 

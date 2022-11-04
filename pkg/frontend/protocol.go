@@ -199,7 +199,7 @@ func (cpi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (cpi *ProtocolImpl) SetEstablished() {
-	logutil.Infof("SWITCH ESTABLISHED to true")
+	logutil.Debugf("SWITCH ESTABLISHED to true")
 	cpi.established.Store(true)
 }
 
@@ -208,7 +208,7 @@ func (cpi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (cpi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Infof("SWITCH TLS_ESTABLISHED to true")
+	logutil.Debugf("SWITCH TLS_ESTABLISHED to true")
 	cpi.tlsEstablished.Store(true)
 }
 
@@ -285,7 +285,13 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		}
 		switch myerr := err.(type) {
 		case *moerr.Error:
-			return mp.sendErrPacket(myerr.ErrorCode(), myerr.SqlState(), myerr.Error())
+			var code uint16
+			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+				code = myerr.MySQLCode()
+			} else {
+				code = myerr.ErrorCode()
+			}
+			return mp.sendErrPacket(code, myerr.SqlState(), myerr.Error())
 		}
 		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
 	case ResultResponse:

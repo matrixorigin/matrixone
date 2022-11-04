@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -75,9 +75,10 @@ import (
 
 // messageHandleHelper a structure records some elements to help handle messages.
 type messageHandleHelper struct {
-	storeEngine engine.Engine
-	fileService fileservice.FileService
-	acquirer    func() morpc.Message
+	storeEngine       engine.Engine
+	fileService       fileservice.FileService
+	getClusterDetails engine.GetClusterDetailsFunc
+	acquirer          func() morpc.Message
 }
 
 // processHelper a structure records information about source process. and to help
@@ -97,13 +98,15 @@ type processHelper struct {
 // write back Analysis Information and error info if error occurs to client.
 func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message,
+	getClusterDetails engine.GetClusterDetailsFunc) error {
 	var errData []byte
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
-		storeEngine: storeEngine,
-		fileService: fileService,
-		acquirer:    messageAcquirer,
+		storeEngine:       storeEngine,
+		fileService:       fileService,
+		acquirer:          messageAcquirer,
+		getClusterDetails: getClusterDetails,
 	}
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
@@ -421,6 +424,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			ColList:      s.DataSource.Attributes,
 			PushdownId:   s.DataSource.PushdownId,
 			PushdownAddr: s.DataSource.PushdownAddr,
+			Expr:         s.DataSource.Expr,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -485,6 +489,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Attributes:   dsc.ColList,
 			PushdownId:   dsc.PushdownId,
 			PushdownAddr: dsc.PushdownAddr,
+			Expr:         dsc.Expr,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -742,22 +747,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
-		var (
-			dt  []byte
-			err error
-		)
-		if dt, err = json.Marshal(t.Es.Extern); err != nil {
-			return ctxId, nil, err
-		}
-		in.Unnest = &pipeline.Unnest{
-			Attrs:  t.Es.Attrs,
-			Cols:   t.Es.Cols,
-			Extern: dt,
-		}
-	case *generate_series.Argument:
-		in.GenerateSeries = &pipeline.GenerateSeries{
+		in.TableFunction = &pipeline.TableFunction{
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
+			Exprs: t.Es.ExprList,
+			Param: []byte(t.Es.ColName),
+		}
+	case *generate_series.Argument:
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs: t.Es.Attrs,
+			Exprs: t.Es.ExprList,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -978,23 +977,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.Unnest:
-		param := &unnest.ExternalParam{}
-		if err := json.Unmarshal(opr.Unnest.Extern, param); err != nil {
-			return v, err
-		}
-		logutil.Infof("unnest unmarshal %+v", param)
 		v.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  opr.Unnest.Attrs,
-				Cols:   opr.Unnest.Cols,
-				Extern: param,
+				Attrs:    opr.TableFunction.Attrs,
+				Cols:     opr.TableFunction.Cols,
+				ExprList: opr.TableFunction.Exprs,
+				ColName:  string(opr.TableFunction.Param),
 			},
 		}
 	case vm.GenerateSeries:
 		v.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
-				Attrs: opr.GenerateSeries.Attrs,
-				Cols:  opr.GenerateSeries.Cols,
+				Attrs:    opr.TableFunction.Attrs,
+				ExprList: opr.TableFunction.Exprs,
 			},
 		}
 	case vm.HashBuild:
@@ -1040,6 +1035,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,
+		mHelper.getClusterDetails,
 	)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -1057,7 +1053,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		anal: &anaylze{},
 	}
 
-	c.fill = func(a any, b *batch.Batch) error {
+	c.fill = func(_ any, b *batch.Batch) error {
 		encodeData, errEncode := types.Encode(b)
 		if errEncode != nil {
 			return errEncode
@@ -1213,13 +1209,32 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	// TODO: allocate the memory from process may suitable.
+func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
 	bat := new(batch.Batch)
+	mp := proc.Mp()
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process then.
+	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i].SetOriginal(true)
+		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+	}
+	// allocated memory of aggVec from mPool.
+	for i, ag := range bat.Aggs {
+		err = ag.WildAggReAlloc(mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Aggs[j].Free(mp)
+			}
+			for j := range bat.Vecs {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
 	}
 	return bat, err
 }

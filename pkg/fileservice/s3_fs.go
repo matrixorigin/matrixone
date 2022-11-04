@@ -77,9 +77,12 @@ func NewS3FS(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFromURL(endpoint),
-		),
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(endpoint),
+			),
+		},
 	)
 }
 
@@ -103,6 +106,23 @@ func NewS3FSOnMinio(
 	}
 	endpoint = u.String()
 
+	endpointResolver := s3.EndpointResolverFunc(
+		func(
+			region string,
+			options s3.EndpointResolverOptions,
+		) (
+			ep aws.Endpoint,
+			err error,
+		) {
+			_ = options
+			ep.URL = endpoint
+			ep.Source = aws.EndpointSourceCustom
+			ep.HostnameImmutable = true
+			ep.SigningRegion = region
+			return
+		},
+	)
+
 	return newS3FS(
 		sharedConfigProfile,
 		name,
@@ -110,23 +130,12 @@ func NewS3FSOnMinio(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				endpointResolver,
 			),
-		),
+		},
 	)
 
 }
@@ -138,7 +147,8 @@ func newS3FS(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
-	options ...func(*s3.Options),
+	configOptions []func(*config.LoadOptions) error,
+	s3Options []func(*s3.Options),
 ) (*S3FS, error) {
 
 	if endpoint == "" {
@@ -151,9 +161,12 @@ func newS3FS(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
 	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx,
+	configOptions = append(configOptions,
 		config.WithSharedConfigProfile(sharedConfigProfile),
 		config.WithLogger(logutil.GetS3Logger()),
+	)
+	cfg, err := config.LoadDefaultConfig(ctx,
+		configOptions...,
 	)
 	if err != nil {
 		return nil, err
@@ -161,7 +174,7 @@ func newS3FS(
 
 	client := s3.NewFromConfig(
 		cfg,
-		options...,
+		s3Options...,
 	)
 
 	// head bucket to validate config
@@ -190,6 +203,9 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -229,8 +245,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		for _, prefix := range output.CommonPrefixes {
 			filePath := s.keyToPath(*prefix.Prefix)
 			filePath = strings.TrimRight(filePath, "/")
+			_, name := pathpkg.Split(filePath)
 			entries = append(entries, DirEntry{
-				Name:  filePath,
+				Name:  name,
 				IsDir: true,
 			})
 		}
@@ -246,6 +263,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -321,6 +341,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVector()
@@ -469,6 +492,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if len(filePaths) == 0 {
 		return nil
 	}

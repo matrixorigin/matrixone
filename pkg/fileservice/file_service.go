@@ -90,10 +90,12 @@ type IOEntry struct {
 	Object any
 
 	// ToObject constructs an object from entry contents
-	// the io.Reader must be fully read before returning nil error
+	// reader always contains entry contents
+	// data may contains entry contents if available
+	// if data is empty, the io.Reader must be fully read before returning nil error
 	// return an *RC value to make the object pinnable
 	// cache implementations should not evict an *RC value with non-zero reference
-	ToObject func(r io.Reader) (object any, objectSize int64, err error)
+	ToObject func(reader io.Reader, data []byte) (object any, objectSize int64, err error)
 
 	// ObjectSize indicates the memory bytes to hold the object
 	// set from ToObject returning value

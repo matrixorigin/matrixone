@@ -15,8 +15,7 @@
 package service
 
 import (
-	"path"
-	"strconv"
+	"path/filepath"
 	"sync"
 
 	"github.com/google/uuid"
@@ -63,6 +62,7 @@ type LogService interface {
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
 
+	// CreateInitTasks create init task
 	CreateInitTasks() error
 }
 
@@ -166,17 +166,18 @@ func buildLogConfig(
 	index int, opt Options, address serviceAddresses,
 ) logservice.Config {
 	cfg := logservice.Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        defaultDeploymentID,
-		RTTMillisecond:      defaultRTTMillisecond,
-		DataDir:             buildLogDataDir(opt.rootDataDir, index),
-		ServiceAddress:      address.getLogListenAddress(index), // hakeeper client use this address
-		RaftAddress:         address.getLogRaftAddress(index),
-		GossipAddress:       address.getLogGossipAddress(index),
-		GossipSeedAddresses: address.getLogGossipSeedAddresses(),
+		UUID:                  uuid.New().String(),
+		FS:                    vfs.NewStrictMem(),
+		DeploymentID:          defaultDeploymentID,
+		RTTMillisecond:        defaultRTTMillisecond,
+		ServiceAddress:        address.getLogListenAddress(index), // hakeeper client use this address
+		RaftAddress:           address.getLogRaftAddress(index),
+		GossipAddress:         address.getLogGossipAddress(index),
+		GossipSeedAddresses:   address.getLogGossipSeedAddresses(),
+		GossipAllowSelfAsSeed: opt.initial.logReplicaNum == 1,
 	}
-	cfg.HeartbeatInterval.Duration = opt.log.heartbeatInterval
+	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
+	cfg.HeartbeatInterval.Duration = opt.heartbeat.log
 	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
 	cfg.HAKeeperClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	// setting hakeeper configuration
@@ -198,11 +199,6 @@ func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
 	return []logservice.Option{
 		logservice.WithBackendFilter(filter),
 	}
-}
-
-// buildLogDataDir generates data directory for a log service.
-func buildLogDataDir(root string, index int) string {
-	return path.Join(root, "log", strconv.Itoa(index))
 }
 
 // startHAKeeperReplica selects the first `n` log services to start hakeeper replica.

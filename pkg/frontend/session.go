@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -60,6 +61,7 @@ type TxnHandler struct {
 	ses       *Session
 	txn       TxnOperator
 	mu        sync.Mutex
+	entryMu   sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
@@ -133,6 +135,8 @@ type Session struct {
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
 	fromRealUser bool
+
+	cache *privilegeCache
 
 	mu sync.Mutex
 }
@@ -208,6 +212,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, PU *config.ParameterUnit, gSysV
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
+		cache: &privilegeCache{},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -243,6 +248,18 @@ func (bgs *BackgroundSession) Close() {
 	if bgs.cancel != nil {
 		bgs.cancel()
 	}
+}
+
+func (ses *Session) GetPrivilegeCache() *privilegeCache {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.cache
+}
+
+func (ses *Session) InvalidatePrivilegeCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.cache.invalidate()
 }
 
 // GetBackgroundExec generates a background executor
@@ -917,6 +934,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 
+	logutil.Debugf("check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -933,11 +951,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	pu := ses.GetParameterUnit()
 	mp := ses.GetMemPool()
+	logutil.Debugf("check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, mp, pu, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+	if !execResultArrayHasData(rsset) {
 		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
 	}
 
@@ -952,13 +971,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
+	logutil.Debugf("check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
 	rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+	if !execResultArrayHasData(rsset) {
 		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
 	}
 
@@ -994,6 +1014,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
+		logutil.Debugf("check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		sqlForCheckRoleExists := getSqlForRoleIdOfRole(tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForCheckRoleExists)
@@ -1001,17 +1022,18 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("there is no role %s", tenant.GetDefaultRole())
 		}
 
+		logutil.Debugf("check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
@@ -1022,13 +1044,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	} else {
+		logutil.Debugf("check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, mp, pu, sql)
 		if err != nil {
 			return nil, err
 		}
-		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalError("get the default role of the user %s failed", tenant.GetUser())
 		}
 
@@ -1092,6 +1115,9 @@ func (th *TxnHandler) TxnClientNew() error {
 	if err != nil {
 		return err
 	}
+	if th.txn == nil {
+		return moerr.NewInternalError("TxnClientNew: txnClient new a null txn")
+	}
 	return err
 }
 
@@ -1149,6 +1175,8 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1162,18 +1190,35 @@ func (th *TxnHandler) CommitTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Commit(ctx, txnOp); err != nil {
-		txnOp.Rollback(ctx)
+	if txnOp == nil {
+		logutil.Errorf("CommitTxn: txn operator is null")
+	}
+	if err = storage.Commit(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("CommitTxn: storage commit failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Commit(ctx)
+	if txnOp != nil {
+		err = txnOp.Commit(ctx)
+		if err != nil {
+			logutil.Errorf("CommitTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	th.entryMu.Lock()
+	defer th.entryMu.Unlock()
 	if !th.IsValidTxn() {
 		return nil
 	}
@@ -1187,12 +1232,28 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	var err, err2 error
 	txnOp := th.GetTxnOperator()
-	if err := storage.Rollback(ctx, txnOp); err != nil {
+	if txnOp == nil {
+		logutil.Errorf("RollbackTxn: txn operator is null")
+	}
+	if err = storage.Rollback(ctx, txnOp); err != nil {
 		th.SetInvalid()
+		logutil.Errorf("RollbackTxn: storage rollback failed. error:%v", err)
+		if txnOp != nil {
+			err2 = txnOp.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("RollbackTxn: txn operator rollback failed. error:%v", err2)
+			}
+		}
 		return err
 	}
-	err := txnOp.Rollback(ctx)
+	if txnOp != nil {
+		err = txnOp.Rollback(ctx)
+		if err != nil {
+			logutil.Errorf("RollbackTxn: txn operator commit failed. error:%v", err)
+		}
+	}
 	th.SetInvalid()
 	return err
 }
@@ -1212,6 +1273,8 @@ func (th *TxnHandler) GetTxn() TxnOperator {
 }
 
 func (th *TxnHandler) GetTxnOnly() TxnOperator {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	return th.txn
 }
 
@@ -1323,15 +1386,13 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	if err != nil {
 		return nil, err
 	}
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+	logutil.Debugf("dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
 	table, err := db.Relation(ctx, tableName)
 	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
-	table.Ranges(ctx, nil) // TODO
 	return table, nil
 }
 
@@ -1642,7 +1703,9 @@ func getResultSet(bh BackgroundExec) ([]ExecResult, error) {
 func executeSQLInBackgroundSession(ctx context.Context, mp *mpool.MPool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundHandler(ctx, mp, pu)
 	defer bh.Close()
+	logutil.Debugf("background exec sql:%v", sql)
 	err := bh.Exec(ctx, sql)
+	logutil.Debugf("background exec sql done")
 	if err != nil {
 		return nil, err
 	}
@@ -1686,6 +1749,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		ctx = bh.ses.GetRequestContext()
 	}
+	//logutil.Debugf("-->bh:%s", sql)
 	err := bh.mce.doComQuery(ctx, sql)
 	if err != nil {
 		return err

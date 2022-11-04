@@ -60,10 +60,10 @@ SELECT stu.name, stu.class_name, class.name, class.stu_name FROM stu, class;
 UPDATE stu s INNER JOIN class c ON s.class_id = c.id SET s.class_name = 'test11', c.stu_name = 'test11';
 SELECT stu.id, stu.name, stu.class_name, class.stu_name FROM stu, class;
 
--- @bvt:issue#5201
+
 UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
 UPDATE stu s RIGHT JOIN class c ON s.class_id = c.id SET s.class_name = 'test33',c.stu_name = 'test33';
--- @bvt:issue
+SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 UPDATE stu s JOIN class c ON s.class_id = c.id SET s.class_name = c.name , c.stu_name = s.name;
 SELECT stu.name, stu.class_name, class.stu_name FROM stu, class;
 
@@ -96,13 +96,11 @@ WHERE
 SELECT t1.paytime, t2.processtime FROM t1,t2;
 
 -- USE TO_DATE() function.
--- @bvt:issue#5204
 UPDATE t1,t2
 SET
     paytime = TO_DATE('2099-01-01 00:00:01', '%Y-%m-%d %H-%i-%s'), processtime = TO_DATE('2088-01-01 :00:00:02', '%Y-%m-%d %H:%i:%s')
 WHERE
     t1.id = t2.id;
--- @bvt:issue
 
 -- USE DATE() function
 UPDATE t1,t2

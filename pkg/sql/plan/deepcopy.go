@@ -44,6 +44,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
+		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -87,7 +88,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			TblName:      deleteTablesCtx.TblName,
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
-			IsHideKey:    deleteTablesCtx.IsHideKey,
 			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
@@ -175,6 +175,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
 	}
+	for idx, expr := range node.TblFuncExprList {
+		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
+	}
 
 	return newNode
 }
@@ -215,7 +218,17 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Pkidx:    col.Pkidx,
 		Comment:  col.Comment,
 		IsCPkey:  col.IsCPkey,
-		OnUpdate: DeepCopyExpr(col.OnUpdate),
+		OnUpdate: DeepCopyOnUpdate(col.OnUpdate),
+	}
+}
+
+func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
+	if old == nil {
+		return nil
+	}
+	return &plan.OnUpdate{
+		Expr:         DeepCopyExpr(old.Expr),
+		OriginString: old.OriginString,
 	}
 }
 
@@ -247,8 +260,8 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
 	// }
 
-	for table.CompositePkey != nil {
-		table.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	if table.CompositePkey != nil {
+		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
 	}
 	for idx, indexInfo := range table.IndexInfos {
 		newTable.IndexInfos[idx] = &IndexInfo{
@@ -585,16 +598,28 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 		switch c := item.C.Value.(type) {
-		case *plan.Const_Ival:
-			pc.Value = &plan.Const_Ival{Ival: c.Ival}
+		case *plan.Const_I8Val:
+			pc.Value = &plan.Const_I8Val{I8Val: c.I8Val}
+		case *plan.Const_I16Val:
+			pc.Value = &plan.Const_I16Val{I16Val: c.I16Val}
+		case *plan.Const_I32Val:
+			pc.Value = &plan.Const_I32Val{I32Val: c.I32Val}
+		case *plan.Const_I64Val:
+			pc.Value = &plan.Const_I64Val{I64Val: c.I64Val}
 		case *plan.Const_Dval:
 			pc.Value = &plan.Const_Dval{Dval: c.Dval}
 		case *plan.Const_Sval:
 			pc.Value = &plan.Const_Sval{Sval: c.Sval}
 		case *plan.Const_Bval:
 			pc.Value = &plan.Const_Bval{Bval: c.Bval}
-		case *plan.Const_Uval:
-			pc.Value = &plan.Const_Uval{Uval: c.Uval}
+		case *plan.Const_U8Val:
+			pc.Value = &plan.Const_U8Val{U8Val: c.U8Val}
+		case *plan.Const_U16Val:
+			pc.Value = &plan.Const_U16Val{U16Val: c.U16Val}
+		case *plan.Const_U32Val:
+			pc.Value = &plan.Const_U32Val{U32Val: c.U32Val}
+		case *plan.Const_U64Val:
+			pc.Value = &plan.Const_U64Val{U64Val: c.U64Val}
 		case *plan.Const_Fval:
 			pc.Value = &plan.Const_Fval{Fval: c.Fval}
 		case *plan.Const_Dateval:

@@ -189,7 +189,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				obj, size, err := entry.ToObject(cr)
+				obj, size, err := entry.ToObject(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -237,7 +237,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						obj, size, err := entry.ToObject(buf)
+						obj, size, err := entry.ToObject(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}

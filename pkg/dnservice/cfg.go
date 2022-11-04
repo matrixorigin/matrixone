@@ -15,7 +15,7 @@
 package dnservice
 
 import (
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,17 +33,21 @@ var (
 	defaultConnectTimeout   = time.Second * 30
 	defaultHeatbeatTimeout  = time.Millisecond * 500
 
-	defaultScannerInterval    = time.Second * 5
-	defaultExecutionInterval  = time.Second * 2
-	defaultFlushInterval      = time.Second * 60
-	defaultExecutionLevels    = int16(30)
-	defaultCatalogCkpInterval = time.Second * 30
-	defaultCatalogUnCkpLimit  = int64(10)
-	defaultLogstoreType       = "batchstore"
+	defaultFlushInterval       = time.Second * 60
+	defaultScanInterval        = time.Second * 5
+	defaultIncrementalInterval = time.Minute
+	defaultGlobalInterval      = time.Minute * 60
+	defaultMinCount            = int64(100)
+	defaultLogBackend          = "batchstore"
+
+	storageDir     = "storage"
+	defaultDataDir = "./mo-data"
 )
 
 // Config dn store configuration
 type Config struct {
+	// DataDir data dir
+	DataDir string `toml:"-"`
 	// UUID dn store uuid
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
@@ -74,12 +78,11 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		ScannerInterval    toml.Duration `toml:"scanner-interval"`
-		ExecutionInterval  toml.Duration `toml:"execution-interval"`
-		FlushInterval      toml.Duration `toml:"flush-interval"`
-		ExecutionLevels    int16         `toml:"execution-levels"`
-		CatalogCkpInterval toml.Duration `toml:"catalog-ckp-interval"`
-		CatalogUnCkpLimit  int64         `toml:"catalog-unckp-limit"`
+		FlushInterval       toml.Duration `toml:"flush-interval"`
+		ScanInterval        toml.Duration `toml:"scan-interval"`
+		MinCount            int64         `toml:"min-count"`
+		IncrementalInterval toml.Duration `toml:"incremental-interval"`
+		GlobalInterval      toml.Duration `toml:"global-interval"`
 	}
 
 	// Txn transactions configuration
@@ -91,22 +94,15 @@ type Config struct {
 
 		// Storage txn storage config
 		Storage struct {
+			// dataDir data dir used to store the data
+			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
-			Backend string `toml:"backend"`
-			Name    string `toml:"name"`
-
-			// TAE tae storage configuration
-			TAE struct {
-			}
-
-			// Mem mem storage configuration
-			Mem struct {
-			}
+			Backend StorageType `toml:"backend"`
+			// FileService tae used fileservice, default is LOCAL
+			FileService string `toml:"fileservice"`
+			// LogBackend the backend used to store logs
+			LogBackend string `toml:"log-backend"`
 		}
-	}
-
-	LogStore struct {
-		LogService string `toml:"logstore"`
 	}
 }
 
@@ -114,6 +110,10 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return moerr.NewInternalError("Config.UUID not set")
 	}
+	if c.DataDir == "" {
+		c.DataDir = defaultDataDir
+	}
+	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 		c.ServiceAddress = defaultServiceAddress
@@ -122,12 +122,15 @@ func (c *Config) Validate() error {
 		c.ServiceAddress = c.ListenAddress
 	}
 	if c.Txn.Storage.Backend == "" {
-		c.Txn.Storage.Backend = taeStorageBackend
+		c.Txn.Storage.Backend = StorageTAE
 	}
-	if c.Txn.Storage.Name == "" {
-		c.Txn.Storage.Name = localFileServiceName
+	if c.Txn.Storage.FileService == "" {
+		c.Txn.Storage.FileService = localFileServiceName
 	}
-	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
+	if c.Txn.Storage.LogBackend == "" {
+		c.Txn.Storage.LogBackend = defaultLogBackend
+	}
+	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
@@ -145,26 +148,20 @@ func (c *Config) Validate() error {
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
 	}
-	if c.Ckp.ScannerInterval.Duration == 0 {
-		c.Ckp.ScannerInterval.Duration = defaultScannerInterval
-	}
-	if c.Ckp.ExecutionInterval.Duration == 0 {
-		c.Ckp.ExecutionInterval.Duration = defaultExecutionInterval
+	if c.Ckp.ScanInterval.Duration == 0 {
+		c.Ckp.ScanInterval.Duration = defaultScanInterval
 	}
 	if c.Ckp.FlushInterval.Duration == 0 {
 		c.Ckp.FlushInterval.Duration = defaultFlushInterval
 	}
-	if c.Ckp.ExecutionLevels == 0 {
-		c.Ckp.ExecutionLevels = defaultExecutionLevels
+	if c.Ckp.MinCount == 0 {
+		c.Ckp.MinCount = defaultMinCount
 	}
-	if c.Ckp.CatalogCkpInterval.Duration == 0 {
-		c.Ckp.CatalogCkpInterval.Duration = defaultCatalogCkpInterval
+	if c.Ckp.IncrementalInterval.Duration == 0 {
+		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
 	}
-	if c.Ckp.CatalogUnCkpLimit == 0 {
-		c.Ckp.CatalogUnCkpLimit = defaultCatalogUnCkpLimit
-	}
-	if c.LogStore.LogService == "" {
-		c.LogStore.LogService = defaultLogstoreType
+	if c.Ckp.GlobalInterval.Duration == 0 {
+		c.Ckp.GlobalInterval.Duration = defaultGlobalInterval
 	}
 	return nil
 }

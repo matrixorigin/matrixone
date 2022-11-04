@@ -46,6 +46,7 @@ type Service interface {
 
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
+	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string
@@ -74,8 +75,13 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type     EngineType           `toml:"type"`
-		Logstore options.LogstoreType `toml:"logstore"`
+		Type                EngineType           `toml:"type"`
+		Logstore            options.LogstoreType `toml:"logstore"`
+		FlushInterval       toml.Duration        `toml:"flush-interval"`
+		MinCount            int64                `toml:"min-count"`
+		ScanInterval        toml.Duration        `toml:"scan-interval"`
+		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
+		GlobalInterval      toml.Duration        `toml:"global-interval"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -182,7 +188,7 @@ type service struct {
 	logger         *zap.Logger
 	server         morpc.RPCServer
 	requestHandler func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient,
-		messageAcquirer func() morpc.Message) error
+		messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -194,6 +200,7 @@ type service struct {
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
+	pu                     *config.ParameterUnit
 
 	stopper *stopper.Stopper
 

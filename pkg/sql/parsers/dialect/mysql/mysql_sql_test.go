@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table t0 (a float(255, 3))",
+		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
+		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}
 )
 
@@ -51,6 +52,20 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
+		output: "select * from (select * from (select 1, 2, 3)) as t1",
+	}, {
+		input:  "SELECT count(*) AS low_stock FROM (\nSELECT s_w_id, s_i_id, s_quantity\nFROM bmsql_stock\nWHERE s_w_id = 1 AND s_quantity < 1000 AND s_i_id IN (\nSELECT ol_i_id\nFROM bmsql_district\nJOIN bmsql_order_line ON ol_w_id = d_w_id\nAND ol_d_id = d_id\nAND ol_o_id >= d_next_o_id - 20\nAND ol_o_id < d_next_o_id\nWHERE d_w_id = 1 AND d_id = 1\n)\n);",
+		output: "select count(*) as low_stock from (select s_w_id, s_i_id, s_quantity from bmsql_stock where s_w_id = 1 and s_quantity < 1000 and s_i_id in (select ol_i_id from bmsql_district inner join bmsql_order_line on ol_w_id = d_w_id and ol_d_id = d_id and ol_o_id >= d_next_o_id - 20 and ol_o_id < d_next_o_id where d_w_id = 1 and d_id = 1))",
+	}, {
+		input:  "create account `abc@124` admin_name `abc@124` identified by '111'",
+		output: "create account abc@124 admin_name 'abc@124' identified by '111'",
+	}, {
+		input:  "create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';",
+		output: "create account account admin_name 'root' identified by '123456'",
+	}, {
+		input: "drop table if exists history",
+	}, {
 		input: "create user daisy@192.168.1.10 identified by '123456'",
 	}, {
 		input: "create table t0 (a float(255, 3))",
@@ -398,6 +413,9 @@ var (
 		input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
 		output: "insert into t1 values (date_add(null, interval(1, day)))",
 	}, {
+		input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
+		output: "replace into t1 values (date_add(null, interval(1, day)))",
+	}, {
 		input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
 		output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later",
 	}, {
@@ -534,6 +552,18 @@ var (
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
 	}, {
+		input:  "REPLACE INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+		output: "replace into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
+	}, {
+		input:  "REPLACE INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
+		output: "replace into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
+	}, {
+		input:  "REPLACE INTO t1 SET f1 = -1;",
+		output: "replace into t1 (f1) values (-1)",
+	}, {
+		input:  "replace into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+		output: "replace into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
+	}, {
 		input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
 		output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
 	}, {
@@ -575,12 +605,16 @@ var (
 	}, {
 		input: "insert into cms values (null, default)",
 	}, {
+		input: "replace into cms values (null, default)",
+	}, {
 		input:  "create database `show`",
 		output: "create database show",
 	}, {
 		input: "create table table16 (1a20 int, 1e int)",
 	}, {
 		input: "insert into t2 values (-3, 2)",
+	}, {
+		input: "replace into t2 values (-3, 2)",
 	}, {
 		input:  "select spID,userID,score from t1 where spID>(userID-1);",
 		output: "select spid, userid, score from t1 where spid > (userid - 1)",
@@ -589,6 +623,8 @@ var (
 		output: "create table t2 (product varchar(32), country_id integer not null, year integer, profit integer)",
 	}, {
 		input: "insert into numtable values (255, 65535, 4294967295, 18446744073709551615)",
+	}, {
+		input: "replace into numtable values (255, 65535, 4294967295, 18446744073709551615)",
 	}, {
 		input: "create table numtable (a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned)",
 	}, {
@@ -727,11 +763,18 @@ var (
 			input:  "insert into tbl1 values (0,1,5,11, \"a\")",
 			output: "insert into tbl1 values (0, 1, 5, 11, a)",
 		}, {
+			input:  "replace into tbl1 values (0,1,5,11, \"a\")",
+			output: "replace into tbl1 values (0, 1, 5, 11, a)",
+		}, {
 			input: "create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null)",
 		}, {
 			input: "insert into numtable values (4, 1.234567891, 1.234567891)",
 		}, {
 			input: "insert into numtable values (3, 1.234567, 1.234567)",
+		}, {
+			input: "replace into numtable values (4, 1.234567891, 1.234567891)",
+		}, {
+			input: "replace into numtable values (3, 1.234567, 1.234567)",
 		}, {
 			input: "create table numtable (id int, fl float, dl double)",
 		}, {
@@ -809,6 +852,12 @@ var (
 			output: "select t.a from sa.t cross join u",
 		}, {
 			input: "select t.a from sa.t",
+		}, {
+			input:  "create table k1 (id int not null primary key,name varchar(20)) partition by key() partitions 2",
+			output: "create table k1 (id int not null primary key, name varchar(20)) partition by key algorithm = 2 partitions 2",
+		}, {
+			input:  "create table k1 (id int not null,name varchar(20),unique key (id))partition by key() partitions 2",
+			output: "create table k1 (id int not null, name varchar(20), unique key (id)) partition by key algorithm = 2 partitions 2",
 		}, {
 			input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
 			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
@@ -1049,6 +1098,8 @@ var (
 		}, {
 			input: "explain insert into u (a, b, c, d) values (1, 2, 3, 4), (5, 6, 7, 8)",
 		}, {
+			input: "explain replace into u (a, b, c, d) values (1, 2, 3, 4), (5, 6, 7, 8)",
+		}, {
 			input: "explain delete from a where a != 0 order by b limit 1",
 		}, {
 			input: "explain select a from a union select b from b",
@@ -1197,6 +1248,22 @@ var (
 			input: "insert into t select c1, c2, c3 from t1",
 		}, {
 			input: "insert into t values (1, 3, 4)",
+		}, {
+			input: "replace into u partition(p1, p2) (a, b, c, d) values (1, 2, 3, 4), (5, 6, 1, 0)",
+		}, {
+			input:  "replace into t values ('aa', 'bb', 'cc')",
+			output: "replace into t values (aa, bb, cc)",
+		}, {
+			input:  "replace into t() values (1, 2, 3)",
+			output: "replace into t values (1, 2, 3)",
+		}, {
+			input: "replace into t (c1, c2, c3) values (1, 2, 3)",
+		}, {
+			input: "replace into t (c1, c2, c3) select c1, c2, c3 from t1",
+		}, {
+			input: "replace into t select c1, c2, c3 from t1",
+		}, {
+			input: "replace into t values (1, 3, 4)",
 		}, {
 			input:  "create table t1 (`show` bool(0));",
 			output: "create table t1 (show bool(0))",
@@ -1509,11 +1576,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a") as f`,
-			output: `select * from unnest(a, $, false) as f`,
+			output: `select * from unnest(a) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b") as f`,
-			output: `select * from unnest(a, b, false) as f`,
+			output: `select * from unnest(a, b) as f`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true) as f`,
@@ -1521,11 +1588,11 @@ var (
 		},
 		{
 			input:  `select * from unnest("a")`,
-			output: `select * from unnest(a, $, false)`,
+			output: `select * from unnest(a)`,
 		},
 		{
 			input:  `select * from unnest("a", "b")`,
-			output: `select * from unnest(a, b, false)`,
+			output: `select * from unnest(a, b)`,
 		},
 		{
 			input:  `select * from unnest("a", "b", true)`,
@@ -1533,11 +1600,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a)`,
-			output: `select * from unnest(t.a, $, false)`,
+			output: `select * from unnest(t.a)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b")`,
-			output: `select * from unnest(t.a, $.b, false)`,
+			output: `select * from unnest(t.a, $.b)`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true)`,
@@ -1545,11 +1612,11 @@ var (
 		},
 		{
 			input:  `select * from unnest(t.a) as f`,
-			output: `select * from unnest(t.a, $, false) as f`,
+			output: `select * from unnest(t.a) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b") as f`,
-			output: `select * from unnest(t.a, $.b, false) as f`,
+			output: `select * from unnest(t.a, $.b) as f`,
 		},
 		{
 			input:  `select * from unnest(t.a, "$.b", true) as f`,
@@ -1570,6 +1637,34 @@ var (
 		{
 			input:  `select * from generate_series(1, 10, 1) as g`,
 			output: `select * from generate_series(1, 10, 1) as g`,
+		},
+		{
+			input:  `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
+			output: `create table t1 (a int low_cardinality, b int not null low_cardinality)`,
+		},
+		{
+			input:  `modump database t into 'a.sql'`,
+			output: `modump database t into a.sql`,
+		},
+		{
+			input:  `modump database t into 'a.sql' max_file_size 1`,
+			output: `modump database t into a.sql max_file_size 1`,
+		},
+		{
+			input:  `modump database t tables t1 into 'a.sql'`,
+			output: `modump database t tables t1 into a.sql`,
+		},
+		{
+			input:  `modump database t tables t1 into 'a.sql' max_file_size 1`,
+			output: `modump database t tables t1 into a.sql max_file_size 1`,
+		},
+		{
+			input:  `modump database t tables t1,t2 into 'a.sql'`,
+			output: `modump database t tables t1, t2 into a.sql`,
+		},
+		{
+			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
+			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
 		},
 	}
 )

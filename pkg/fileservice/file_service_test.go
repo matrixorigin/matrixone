@@ -46,7 +46,11 @@ func testFileService(
 
 		assert.Equal(t, fsName, fs.Name())
 
-		err := fs.Write(ctx, IOVector{
+		entries, err := fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.Equal(t, 0, len(entries))
+
+		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
@@ -67,6 +71,10 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
+
+		entries, err = fs.List(ctx, "")
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(entries))
 
 		buf1 := new(bytes.Buffer)
 		var r io.ReadCloser
@@ -158,7 +166,7 @@ func testFileService(
 			filePath := fmt.Sprintf("%d", mrand.Int63())
 
 			// random content
-			content := make([]byte, 512)
+			content := make([]byte, _BlockContentSize*4)
 			_, err := rand.Read(content)
 			assert.Nil(t, err)
 			parts := randomSplit(content, 32)
@@ -210,6 +218,18 @@ func testFileService(
 			assert.Nil(t, err)
 			for i, entry := range readVector.Entries {
 				assert.Equal(t, parts2[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
+			}
+
+			// list
+			entries, err := fs.List(ctx, "/")
+			assert.Nil(t, err)
+			for _, entry := range entries {
+				if entry.Name != filePath {
+					continue
+				}
+				assert.Equal(t, filePath, entry.Name)
+				assert.Equal(t, false, entry.IsDir)
+				assert.Equal(t, int64(len(content)), entry.Size)
 			}
 
 		}
@@ -280,6 +300,42 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		entries, err = fs.List(ctx, "qux/quux")
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with / suffix
+		entries, err = fs.List(ctx, "qux/quux/")
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with / prefix
+		entries, err = fs.List(ctx, "/qux/quux/")
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with fs name
+		entries, err = fs.List(ctx, joinPath(fsName, "qux/quux/"))
+		assert.Nil(t, err)
+		assert.Equal(t, len(entries), 8)
+		assert.Equal(t, entries[0].IsDir, false)
+		assert.Equal(t, entries[0].Name, "0")
+		assert.Equal(t, entries[7].IsDir, false)
+		assert.Equal(t, entries[7].Name, "7")
+
+		// with fs name and / prefix and suffix
+		entries, err = fs.List(ctx, joinPath(fsName, "/qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -377,7 +433,7 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 		vector := IOVector{
-			FilePath: joinPath(fsName, "a:b:c"),
+			FilePath: joinPath(fsName, "a#b#c"),
 			Entries: []IOEntry{
 				{Size: 1, Data: []byte("a")},
 			},
@@ -418,9 +474,14 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader) (any, int64, error) {
+					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+						bs, err := io.ReadAll(r)
+						assert.Nil(t, err)
+						if len(data) > 0 {
+							assert.Equal(t, bs, data)
+						}
 						var m map[int]int
-						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
 							return nil, 0, err
 						}
 						return m, 1, nil
@@ -538,6 +599,26 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 		err = fs.Delete(ctx, vec.FilePath)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
+	})
+
+	t.Run("issue6110", func(t *testing.T) {
+		ctx := context.Background()
+		fs := newFS(fsName)
+		err := fs.Write(ctx, IOVector{
+			FilePath: "path/to/file/foo",
+			Entries: []IOEntry{
+				{
+					Offset: 0,
+					Size:   4,
+					Data:   []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+		entries, err := fs.List(ctx, joinPath(fsName, "/path"))
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(entries))
+		assert.Equal(t, "to", entries[0].Name)
 	})
 
 }

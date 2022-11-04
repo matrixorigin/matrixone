@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -32,14 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const (
-	index_PrimaryKey      = memtable.Text("primary key")
-	index_BlockID_Time_OP = memtable.Text("block id, time, op")
-)
-
-func NewPartition() *Partition {
+func NewPartition(
+	columnsIndexDefs []ColumnsIndexDef,
+) *Partition {
 	return &Partition{
-		data: memtable.NewTable[RowID, DataValue, *DataRow](),
+		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
+		columnsIndexDefs: columnsIndexDefs,
 	}
 }
 
@@ -88,7 +88,14 @@ func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
 	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
 	deletes := make(map[uint64][]int)
-	p.IterDeletedRowIDs(ctx, []uint64{ /*TODO*/ }, ts, func(rowID RowID) bool {
+	if len(blocks) == 0 {
+		return blks, deletes
+	}
+	ids := make([]uint64, len(blocks))
+	for i := range blocks {
+		ids[i] = blocks[i].Info.BlockID
+	}
+	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
 		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
 		deletes[id] = append(deletes[id], int(offset))
 		return true
@@ -156,12 +163,17 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		// indexes
 		var indexes []memtable.Tuple
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.ToOrdered(opDelete),
+			memtable.Uint(opDelete),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -242,29 +254,129 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				primaryKey,
 			})
 		}
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
 			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
-			memtable.ToOrdered(opInsert),
+			memtable.Uint(opInsert),
 		})
-
-		err = p.data.Upsert(tx, &DataRow{
-			rowID:   rowID,
-			value:   dataValue,
-			indexes: indexes,
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
-		if err != nil {
-			return err
+		// columns indexes
+		for _, def := range p.columnsIndexDefs {
+			index := memtable.Tuple{
+				def.Name,
+			}
+			for _, col := range def.Columns {
+				index = append(index, memtable.ToOrdered(tuple[col].Value))
+			}
+			indexes = append(indexes, index)
 		}
 
-		if err := tx.Commit(t); err != nil {
+		_, err := p.data.Get(tx, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = p.data.Upsert(tx, &DataRow{
+				rowID:   rowID,
+				value:   dataValue,
+				indexes: indexes,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Commit(t); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (p *Partition) GC(ts timestamp.Timestamp) error {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	min := memtable.Tuple{
+		index_Time,
+		memtable.Min,
+	}
+	max := memtable.Tuple{
+		index_Time,
+		ts,
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		err := p.data.Delete(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(t); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
+	columns []string, deletes map[types.Rowid]uint8) (rows [][]any, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(tx, index, index)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if _, ok := deletes[types.Rowid(entry.Key)]; ok {
+			continue
+		}
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, genRow(&data, columns))
+	}
+	return
+}
+
+func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable.Tuple) (rows []DataValue, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(
+		tx,
+		append(append(prefix[:0:0], prefix...), memtable.Min),
+		append(append(prefix[:0:0], prefix...), memtable.Max),
+	)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, data)
+	}
+	return
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
@@ -280,13 +392,13 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
 		memtable.Min,
-		memtable.ToOrdered(opInsert),
+		memtable.Uint(opInsert),
 	}
 	max := memtable.Tuple{
 		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
 		memtable.Max,
-		memtable.ToOrdered(opInsert),
+		memtable.Uint(opInsert),
 	}
 	iter := p.data.NewIndexIter(tx, min, max)
 	defer iter.Close()
@@ -296,7 +408,7 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(tx.Time)
 }
 
 func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
@@ -344,9 +456,10 @@ func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
-	expr *plan.Expr,
+	index memtable.Tuple,
 	defs []engine.TableDef,
 	tableDef *plan.TableDef,
+	skipBlocks map[uint64]uint8,
 	blks []ModifyBlockMeta,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
@@ -388,14 +501,17 @@ func (p *Partition) NewReader(
 		}
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
+
 	readers[0] = &PartitionReader{
-		typsMap:  mp,
-		iter:     p.data.NewIter(tx),
-		readTime: t,
-		tx:       tx,
-		expr:     expr,
-		inserts:  inserts,
-		deletes:  deletes,
+		typsMap:    mp,
+		readTime:   t,
+		tx:         tx,
+		index:      index,
+		inserts:    inserts,
+		deletes:    deletes,
+		skipBlocks: skipBlocks,
+		data:       p.data,
+		iter:       p.data.NewIter(tx),
 	}
 	if readerNumber == 1 {
 		for i := range blks {
@@ -437,7 +553,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step:],
+				blks:     blks[(i-1)*step:],
 				sels:     make([]int64, 0, 1024),
 			}
 		} else {
@@ -446,7 +562,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step : (i+1)*step],
+				blks:     blks[(i-1)*step : i*step],
 				sels:     make([]int64, 0, 1024),
 			}
 		}

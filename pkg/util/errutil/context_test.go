@@ -17,6 +17,7 @@ package errutil
 import (
 	"context"
 	goErrors "errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -112,7 +113,7 @@ func Test_withContext_Cause(t *testing.T) {
 				cause: tt.fields.cause,
 				ctx:   tt.fields.ctx,
 			}
-			if got := w.Cause(); !reflect.DeepEqual(got, tt.wantErr) {
+			if got := w.Cause(); !dummyEqualError(got, tt.wantErr) {
 				t.Errorf("Cause() error = %v, wantErr %v", got, tt.wantErr)
 			}
 		})
@@ -214,7 +215,7 @@ func Test_withContext_Unwrap(t *testing.T) {
 				cause: tt.fields.cause,
 				ctx:   tt.fields.ctx,
 			}
-			if got := w.Unwrap(); !reflect.DeepEqual(got, tt.wantErr) {
+			if got := w.Unwrap(); !dummyEqualError(got, tt.wantErr) {
 				t.Errorf("Unwrap() = %v, want %v", got, tt.wantErr)
 			}
 		})
@@ -249,4 +250,8 @@ func TestWithContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func dummyEqualError(err1, err2 error) bool {
+	return fmt.Sprintf("%+v", err1) == fmt.Sprintf("%+v", err2)
 }

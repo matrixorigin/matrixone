@@ -12,6 +12,8 @@ MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过MyS
 
 目前，MatrixOne只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。
 
+如果你已经安装完成 MySQL 客户端，请继续参见下述步骤。
+
 ## **2. 连接 MatrixOne 服务**
 
 你可以使用 MySQL 命令行客户端来连接 MatrixOne 服务。
@@ -34,4 +36,4 @@ Enter password:
 
 目前，MatrixOne 只支持TCP监听。
 
-更多有关连接 MatrixOne 的方式，参见[客户端连接 MatrixOne 服务](../Develop/connect-mo/client-connect-to-matrixone.md)、[JDBC 连接 MatrixOne 服务](../Develop/connect-mo/java-connect-to-matrixone/connect-mo-with-jdbc.md)和[Python 连接 MatrixOne 服务](../Develop/connect-mo/python-connect-to-matrixone.md)。
+更多有关连接 MatrixOne 的方式，参见[客户端连接 MatrixOne 服务](../Develop/connect-mo/client-connect-to-matrixone.md)、[JDBC 连接 MatrixOne 服务](../Develop/connect-mo/0.6-java-connect-to-matrixone/connect-mo-with-jdbc.md)和[Python 连接 MatrixOne 服务](../Develop/connect-mo/python-connect-to-matrixone.md)。

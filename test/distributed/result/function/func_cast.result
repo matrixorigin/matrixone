@@ -1,16 +1,16 @@
 select CAST(1-2 AS UNSIGNED);
-data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, 
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, 
 select CAST('10 ' as unsigned integer);
 cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint, bad value 10x
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
-data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, 
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-data out of range: data type uint64, 
+Data truncation: data out of range: data type uint64, 
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -36,12 +36,12 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-data out of range: data type int, 
+Data truncation: data out of range: data type int, 
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-data out of range: data type int, 
+Data truncation: data out of range: data type int, 
 select cast('-10a' as signed integer);
 invalid argument cast to int, bad value -10a
 select cast('a10' as unsigned integer);
@@ -55,11 +55,11 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-data out of range: data type uint, value '18446744073709551616'
+Data truncation: data out of range: data type uint, value '18446744073709551616'
 select cast('18446744073709551616' as signed);
-data out of range: data type int, value '18446744073709551616'
+Data truncation: data out of range: data type int, value '18446744073709551616'
 select cast('9223372036854775809' as signed);
-data out of range: data type int, value '9223372036854775809'
+Data truncation: data out of range: data type int, value '9223372036854775809'
 select cast('-1' as unsigned);
 invalid argument cast to uint, bad value -1
 select cast('abc' as signed);
@@ -84,12 +84,12 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-data out of range: data type int64, 
+Data truncation: data out of range: data type int64, 
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-data out of range: data type int, value '18446744073709551615'
+Data truncation: data out of range: data type int, value '18446744073709551615'
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
@@ -100,12 +100,12 @@ select cast(concat_ws('184467440','73709551615') as signed);
 cast(concat_ws('184467440','73709551615') as signed)
 73709551615
 select cast(1.0e+300 as signed int);
-data out of range: data type int64, value '1e+300'
+Data truncation: data out of range: data type int64, value '1e+300'
 CREATE TABLE t1 (f1 double);
 INSERT INTO t1 SET f1 = -1.0e+30 ;
 INSERT INTO t1 SET f1 = +1.0e+30 ;
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
-data out of range: data type int64, value '-1e+30'
+Data truncation: data out of range: data type int64, value '-1e+30'
 DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 [42883]unsupported parameter types [DATE BIGINT UNSIGNED] for operator 'cast'

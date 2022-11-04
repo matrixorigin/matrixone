@@ -10,6 +10,8 @@ MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers 
 
 Currently, MatrixOne is only compatible with the Oracle MySQL client. This means that some features might not work with the MariaDB client or Percona client.
 
+If you have installed MySQL client, see the following steps.
+
 ## **2. Connect to MatrixOne server**
 
 You can use the MySQL command-line client to connect to MatrixOne server:
@@ -33,4 +35,4 @@ Enter password:
 Currently, MatrixOne only supports the TCP listener.
 
 For more information on connecting to MatriOne, see
-[Using client connect to the MatrixOne server](../Develop/connect-mo/client-connect-to-matrixone.md),[Connecting to MatrixOne with JDBC](../Develop/connect-mo/java-connect-to-matrixone/connect-mo-with-jdbc.md), and [Connecting to MatrixOne with Python](../Develop/connect-mo/python-connect-to-matrixone.md).
+[Using client connect to the MatrixOne server](../Develop/connect-mo/client-connect-to-matrixone.md),[Connecting to MatrixOne with JDBC](../Develop/connect-mo/0.6-java-connect-to-matrixone/connect-mo-with-jdbc.md), and [Connecting to MatrixOne with Python](../Develop/connect-mo/python-connect-to-matrixone.md).

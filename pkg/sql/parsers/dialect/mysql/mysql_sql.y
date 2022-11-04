@@ -87,6 +87,7 @@ import (
     selectExpr tree.SelectExpr
 
     insert *tree.Insert
+    replace *tree.Replace
     createOption tree.CreateOption
     createOptions []tree.CreateOption
     indexType tree.IndexType
@@ -202,7 +203,7 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT 
+%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
@@ -278,7 +279,7 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
 
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
@@ -292,6 +293,9 @@ import (
 
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT FROM_JSONLINE
+
+// MODump
+%token <str> MODUMP
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -328,7 +332,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 //JSON function
-%token <str> JSON_EXTRACT
+%token <str> JSON_EXTRACT ARROW
 
 // JSON table function
 %token <str> UNNEST
@@ -366,9 +370,11 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> replace_stmt
 %type <statement> do_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
+%type <statement> mo_dump_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -416,14 +422,14 @@ import (
 %type <groupBy> group_by_opt
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
-%type <parenTableExpr> derived_table
+%type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-%type <funcExpr> function_call_json
+//%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
@@ -511,7 +517,7 @@ import (
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
-%type <updateList> on_duplicate_key_update_opt
+%type <replace> replace_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop extended_opt
@@ -567,7 +573,7 @@ import (
 %type <indexHintScope> index_hint_scope
 %type <indexHint> index_hint
 %type <indexHintList> index_hint_list index_hint_list_opt
-
+%type <updateList> on_duplicate_key_update_opt
 %start start_command
 
 %%
@@ -591,7 +597,9 @@ stmt_list:
 
 stmt:
     create_stmt
+|   mo_dump_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   truncate_table_stmt
@@ -621,6 +629,28 @@ stmt:
     {
         $$ = tree.Statement(nil)
     }
+
+
+mo_dump_stmt:
+    MODUMP DATABASE database_id INTO STRING max_file_size_opt
+    {
+	$$ = &tree.MoDump{
+	    Database: tree.Identifier($3),
+	    OutFile: $5,
+	    MaxFileSize: int64($6),
+	}
+    }
+|   MODUMP DATABASE database_id TABLES table_name_list INTO STRING max_file_size_opt
+    {
+	$$ = &tree.MoDump{
+	    Database: tree.Identifier($3),
+	    Tables: $5,
+	    OutFile: $7,
+	    MaxFileSize: int64($8),
+	}
+    }
+
+
 
 import_data_stmt:
     IMPORT DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
@@ -1823,6 +1853,7 @@ deallocate_stmt:
 explainable_stmt:
     delete_stmt
 |   insert_stmt
+|   replace_stmt
 |   update_stmt
 |   select_stmt
     {
@@ -2112,7 +2143,7 @@ show_stmt:
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}  
+        $$ = &tree.ShowCollation{}
     }
 show_grants_stmt:
     SHOW GRANTS
@@ -2606,6 +2637,70 @@ quick_opt:
 ignore_opt:
     {}
 |    IGNORE
+
+replace_stmt:
+    REPLACE into_table_name partition_clause_opt replace_data
+    {
+    	rep := $4
+    	rep.Table = $2
+    	rep.PartitionNames = $3
+    	$$ = rep
+    }
+
+replace_data:
+    VALUES values_list
+    {
+        vc := tree.NewValuesClause($2)
+        $$ = &tree.Replace{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   select_stmt
+    {
+        $$ = &tree.Replace{
+            Rows: $1,
+        }
+    }
+|   '(' insert_column_list ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($5)
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Replace{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
+    {
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: $4,
+        }
+    }
+|	SET set_value_list
+	{
+		if $2 == nil {
+			yylex.Error("the set list of replace can not be empty")
+			return 1
+		}
+		var identList tree.IdentifierList
+		var valueList tree.Exprs
+		for _, a := range $2 {
+			identList = append(identList, a.Column)
+			valueList = append(valueList, a.Expr)
+		}
+		vc := tree.NewValuesClause([]tree.Exprs{valueList})
+		$$ = &tree.Replace{
+			Columns: identList,
+			Rows: tree.NewSelect(vc, nil, nil),
+		}
+	}
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
@@ -3556,13 +3651,13 @@ table_factor:
     {
         $$ = $1
     }
-|   derived_table as_opt ident column_list_opt
+|   table_subquery as_opt_id column_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
-                Alias: tree.Identifier($3),
-                Cols: $4,
+                Alias: tree.Identifier($2),
+                Cols: $3,
             },
         }
     }
@@ -3584,178 +3679,27 @@ table_factor:
 		$$ = $2
 	}
 
-derived_table:
-    '(' select_no_parens ')'
+table_subquery:
+    select_with_parens %prec SUBQUERY_AS_EXPR
     {
-        $$ = &tree.ParenTableExpr{Expr: $2}
+    	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
 
 table_function:
-    UNNEST '(' STRING ')'
+    UNNEST '(' expression_list ')'
     {
-        a1 := $3
-        a2 := "$"
-        a3 := false
-        e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
        	name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
 	    Func: &tree.FuncExpr{
                 Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ')'
-    {
-	a1 := $3
-	a2 := "$"
-	if len($5) > 0 {
-       	    a2 = $5
-        }
-        a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-	a3 := true
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-            a2 = $5
-        }
-    	a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := true
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
+                Exprs: $3,
                 Type: tree.FUNC_TYPE_TABLE,
             },
 	}
     }
 |   GENERATE_SERIES '(' expression_list ')'
     {
-	name := tree.SetUnresolvedName(strings.ToLower($1))
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
 	$$ = &tree.TableFunction{
 	    Func: &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -3764,11 +3708,6 @@ table_function:
 	    },
 	}
     }
-
-
-as_opt:
-    {}
-|   AS {}
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -3955,19 +3894,19 @@ view_recursive_opt:
 create_account_stmt:
     CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
     {
-    $$ = &tree.CreateAccount{
-        IfNotExists:$3,
-                Name:$4,
-                AuthOption:$5,
-                 StatusOption:$6,
-                Comment:$7,
-    }
+   		$$ = &tree.CreateAccount{
+        	IfNotExists:$3,
+            Name:$4,
+            AuthOption:$5,
+            StatusOption:$6,
+            Comment:$7,
+    	}
     }
 
 account_name:
-    ID
+    ident
     {
-    $$ = $1
+    	$$ = $1
     }
 
 account_auth_option:
@@ -3976,15 +3915,19 @@ account_auth_option:
     $$ = tree.AccountAuthOption{
         Equal:$2,
         AdminName:$3,
-                IdentifiedType:$4,
+        IdentifiedType:$4,
     }
     }
 
 account_admin_name:
     STRING
     {
-    $$ = $1
+    	$$ = $1
     }
+|	ident
+	{
+		$$ = $1
+	}
 
 account_identified:
     IDENTIFIED BY STRING
@@ -4801,7 +4744,16 @@ partition_method:
 |   sub_partition_method
 
 sub_partition_method:
-    linear_opt KEY algorithm_opt '(' column_name_list ')'
+    linear_opt KEY algorithm_opt '(' ')'
+    {
+        $$ = &tree.PartitionBy{
+            PType: &tree.KeyType{
+                Linear: $1,
+                Algorithm: $3,
+            },
+        }
+    }
+|   linear_opt KEY algorithm_opt '(' column_name_list ')'
     {
         $$ = &tree.PartitionBy{
             PType: &tree.KeyType{
@@ -5356,6 +5308,10 @@ column_attribute_elem:
         }
         $$ = tree.NewAttributeOnUpdate(expr)
     }
+|   LOW_CARDINALITY
+    {
+	$$ = tree.NewAttributeLowCardinality()
+    }
 
 enforce:
     ENFORCED
@@ -5668,10 +5624,10 @@ simple_expr:
     {
         $$ = $1
     }
-|   function_call_json
-    {
-        $$ = $1
-    }
+//|     function_call_json
+//    {
+//        $$ = $1
+//    }
 
 else_opt:
     {
@@ -6117,17 +6073,6 @@ function_call_generic:
         }
     }
 
-function_call_json:
-    JSON_EXTRACT '(' STRING ',' STRING ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{a1, a2},
-        }
-    }
 
 trim_direction:
     BOTH
@@ -6200,7 +6145,7 @@ function_call_nonkeyword:
         }
     }
 |	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
-	{   
+	{
         name := tree.SetUnresolvedName(strings.ToLower($1))
         arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
@@ -7672,6 +7617,7 @@ reserved_keyword:
 |   UNBOUNDED
 |   SECONDARY
 |   DECLARE
+|   MODUMP
 
 non_reserved_keyword:
     ACCOUNT
@@ -7776,7 +7722,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
-|    PROFILES
+|   PROFILES
 |   ROLE
 |   RANGE
 |   READ
@@ -7831,23 +7777,25 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
-|    TYPE
+|   TYPE
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
-|    UNKNOWN
-|    ANY
-|    SOME
+|   UNKNOWN
+|   ANY
+|   SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
-|    HASH
-|    ENGINES
-|    TRIGGERS
+|   HASH
+|   ENGINES
+|   TRIGGERS
+|   HISTORY
+|   LOW_CARDINALITY
 
 func_not_keyword:
     DATE_ADD

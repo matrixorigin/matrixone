@@ -1,0 +1,96 @@
+drop role if exists use_role_1,use_role_2,use_role_3,use_role_4,use_role_5;
+drop user if exists use_user_1,use_user_2;
+drop database if exists use_db_1;
+create role use_role_1,use_role_2,use_role_3,use_role_4,use_role_5;
+create database use_db_1;
+create user use_user_1 identified by '123456' default role use_role_1;
+grant select ,insert ,update on table *.* to use_role_1;
+grant all on database * to use_role_2;
+grant use_role_2 to use_user_1;
+create table use_db_1.use_table_1(a int,b varchar(20),c double );
+internal error: do not have privilege to execute the statement
+set secondary role all;
+create table use_db_1.use_table_1(a int,b varchar(20),c double );
+select * from use_db_1.use_table_1;
+a    b    c
+insert into use_db_1.use_table_1 values(34,'kelly',90.3);
+set role use_role_2;
+create table use_db_1.use_table_2(a int,b varchar(20),c double );
+insert into use_db_1.use_table_2 values(34,'kelly',90.3);
+internal error: do not have privilege to execute the statement
+select * from use_db_1.use_table_2;
+internal error: do not have privilege to execute the statement
+set secondary role none;
+create table use_db_1.use_table_3(a int,b varchar(20),c double );
+insert into use_db_1.use_table_3 values(34,'kelly',90.3);
+internal error: do not have privilege to execute the statement
+select * from use_db_1.use_table_3;
+internal error: do not have privilege to execute the statement
+drop table use_db_1.use_table_3;
+set role use_role_1;
+create table use_db_1.use_table_4(a int,b varchar(20),c double );
+internal error: do not have privilege to execute the statement
+insert into use_db_1.use_table_2 values(10,'yellow',99.99);
+select * from use_db_1.use_table_2;
+a    b    c
+10    yellow    99.99
+drop table use_db_1.use_table_2;
+internal error: do not have privilege to execute the statement
+set role public;
+create table use_db_1.use_table_4(a int,b varchar(20),c double );
+internal error: do not have privilege to execute the statement
+insert into use_db_1.use_table_2 values(10,'yellow',99.99);
+internal error: do not have privilege to execute the statement
+select * from use_db_1.use_table_2;
+internal error: do not have privilege to execute the statement
+drop table use_db_1.use_table_2;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+create table use_db_1.use_table_5(a int,b varchar(20),c double );
+insert into use_db_1.use_table_5 values(10,'yellow',99.99);
+select * from use_db_1.use_table_5;
+a    b    c
+10    yellow    99.99
+drop table use_db_1.use_table_5;
+set role moadmin;
+internal error: the role moadmin has not be granted to the user use_user_1
+create user use_user_2 identified by '123456';
+grant create user, drop user, alter user, create role, drop role, create database,drop database,show databases on account *  to use_role_3;
+grant all on table *.* to use_role_4;
+grant create table,drop table on database * to use_role_5;
+grant use_role_3,use_role_4,use_role_5 to use_user_2;
+set role use_not_exists;
+internal error: there is no role use_not_exists
+set role use_role_3;
+internal error: the role use_role_3 has not be granted to the user use_user_1
+create role use_role_test;
+internal error: do not have privilege to execute the statement
+set role use_role_test;
+internal error: there is no role use_role_test
+drop role  use_role_test;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+create table use_db_1.use_table_6(a int,b varchar(20),c double);
+insert into use_db_1.use_table_6 values(10,'yellow',99.99);
+create database use_db_test;
+internal error: do not have privilege to execute the statement
+drop database use_db_test;
+internal error: do not have privilege to execute the statement
+set secondary role none;
+insert into use_db_1.use_table_6 values (10, 'yellow', 99.99);
+internal error: do not have privilege to execute the statement
+drop table use_db_1.use_table_6;
+internal error: do not have privilege to execute the statement
+create role if not exists use_role_test;
+internal error: do not have privilege to execute the statement
+drop role use_role_test;
+internal error: do not have privilege to execute the statement
+set role use_role_5;
+internal error: the role use_role_5 has not be granted to the user use_user_1
+drop table use_db_1.use_table_6;
+internal error: do not have privilege to execute the statement
+create database if not exists use_db_test;
+internal error: do not have privilege to execute the statement
+drop role if exists use_role_1,use_role_2,use_role_3,use_role_4,use_role_5;
+drop user if exists use_user_1,use_user_2;
+drop database if exists use_db_1;

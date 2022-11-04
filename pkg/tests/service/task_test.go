@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	"math"
 	"testing"
 	"time"
 
@@ -76,6 +75,11 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// initialize cluster
 	c, err := NewCluster(t, DefaultOptions().
 		WithCNServiceNum(1).
@@ -101,10 +105,12 @@ func TestTaskServiceCanCreate(t *testing.T) {
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	cnSvcNum := 1
-	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum)
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
 
+	opt := DefaultOptions()
 	// initialize cluster
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
@@ -116,7 +122,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 		_ = c.Close()
 	}(c)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -140,7 +146,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 			i++
 			continue
 		}
-		require.Equal(t, 4, len(tasks))
+		require.Equal(t, 1, len(tasks))
 		t.Logf("task status: %s", tasks[0].Status)
 		break
 	}
@@ -149,6 +155,11 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	cnSvcNum := 2
 	opt := DefaultOptions().
 		WithCNServiceNum(cnSvcNum)
@@ -157,11 +168,26 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
+	halt := make(chan bool)
+	taskExecutor := func(ctx context.Context, task task.Task) error {
+		t.Logf("task %d is running", task.ID)
+		select {
+		case <-ctx.Done():
+			close(halt)
+		case <-halt:
+		}
+		return nil
+	}
+
 	// start the cluster
 	err = c.Start()
 	require.NoError(t, err)
+	defer func(c Cluster, halt chan bool) {
+		halt <- true
+		_ = c.Close()
+	}(c, halt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -171,14 +197,18 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	cn2, err := c.GetCNServiceIndexed(1)
 	require.NoError(t, err)
+	cn1.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+	cn2.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
 
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
+
 	tasks, err := taskService.QueryTask(ctx,
-		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+		taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_TestOnly)))
 	require.NoError(t, err)
-	require.Equal(t, 4, len(tasks))
+	require.Equal(t, 1, len(tasks))
 
 	uuid1 := waitTaskScheduled(t, ctx, taskService)
 
@@ -188,15 +218,16 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	if uuid1 == cn1.ID() {
 		taskService, ok = cn2.GetTaskService()
 		require.True(t, ok)
-		require.NoError(t, err)
 	}
 	waitTaskRescheduled(t, ctx, taskService, uuid1)
-
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestTaskRunner(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
@@ -216,20 +247,19 @@ func TestTaskRunner(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	id := uint32(math.MaxInt32)
-	indexed.GetTaskRunner().RegisterExecutor(id, taskExecutor)
+	indexed.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
 
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: id})
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: uint32(task.TaskCode_TestOnly)})
 	require.NoError(t, err)
 
 	waitTaskScheduled(t, ctx, taskService)
@@ -242,4 +272,79 @@ func TestTaskRunner(t *testing.T) {
 	}
 	err = c.Close()
 	require.NoError(t, err)
+}
+
+func TestCronTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	opt := DefaultOptions()
+	// initialize cluster
+	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	ch := make(chan int)
+	taskExecutor := func(ctx context.Context, task task.Task) error {
+		t.Logf("task %d is running", task.ID)
+		select {
+		case ch <- int(task.ID):
+		case <-ctx.Done():
+			close(ch)
+			return nil
+		}
+		return nil
+	}
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	indexed, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+
+	indexed.GetTaskRunner().RegisterExecutor(uint32(task.TaskCode_TestOnly), taskExecutor)
+
+	taskService, ok := indexed.GetTaskService()
+	require.True(t, ok)
+
+	err = taskService.CreateCronTask(context.TODO(),
+		task.TaskMetadata{
+			ID:       "a",
+			Executor: uint32(task.TaskCode_TestOnly),
+		},
+		"*/1 * * * * *", // every 1 second
+	)
+	require.NoError(t, err)
+
+	waitChannelFull(t, ctx, ch, 3)
+}
+
+func waitChannelFull(t *testing.T, ctx context.Context, ch chan int, expected int) {
+	i := 0
+	received := make([]int, 0, expected)
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(t, "cron task not repeated enough")
+		case c := <-ch:
+			received = append(received, c)
+			if len(received) == expected {
+				t.Logf("received %d numbers", expected)
+				return
+			}
+		default:
+			t.Logf("iteration: %d", i)
+			time.Sleep(time.Second)
+			i++
+		}
+	}
 }

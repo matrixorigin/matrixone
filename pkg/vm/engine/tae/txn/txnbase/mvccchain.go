@@ -116,6 +116,13 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	return
 }
 
+func (be *MVCCChain) MustOneNodeLocked() txnif.MVCCNode {
+	if be.MVCC.Depth() != 1 {
+		return nil
+	}
+	return be.MVCC.GetHead().GetPayload()
+}
+
 // GetLatestNodeLocked gets the latest mvcc node.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
@@ -192,10 +199,37 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	return un.NeedWaitCommitting(ts)
 }
 
-func (be *MVCCChain) IsCreating() bool {
-	un := be.GetLatestNodeLocked()
-	if un == nil {
+func (be *MVCCChain) HasUncommittedNode() bool {
+	var found bool
+	be.LoopChain(func(n txnif.MVCCNode) bool {
+		if n.IsCommitted() {
+			return false
+		} else {
+			if !n.IsAborted() {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func (be *MVCCChain) HasCommittedNode() bool {
+	var found bool
+	be.LoopChain(func(n txnif.MVCCNode) bool {
+		if n.IsCommitted() {
+			found = true
+			return false
+		}
 		return true
+	})
+	return found
+}
+
+func (be *MVCCChain) IsCreating() bool {
+	un := be.MustOneNodeLocked()
+	if un == nil {
+		return false
 	}
 	return un.IsActive()
 }

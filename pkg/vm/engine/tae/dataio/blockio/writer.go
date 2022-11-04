@@ -15,24 +15,27 @@
 package blockio
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type Writer struct {
-	writer objectio.Writer
-	fs     *objectio.ObjectFS
+	writer   objectio.Writer
+	fs       *objectio.ObjectFS
+	writeCxt context.Context
 }
 
-func NewWriter(fs *objectio.ObjectFS, name string) *Writer {
+func NewWriter(ctx context.Context, fs *objectio.ObjectFS, name string) *Writer {
 	writer, err := objectio.NewObjectWriter(name, fs.Service)
 	if err != nil {
 		panic(any(err))
 	}
 	return &Writer{
-		fs:     fs,
-		writer: writer,
+		fs:       fs,
+		writer:   writer,
+		writeCxt: ctx,
 	}
 }
 
@@ -40,14 +43,11 @@ func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObje
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.writer.Write(bat)
-	if err != nil {
-		return
-	}
 	return
 }
 
 func (w *Writer) Sync() ([]objectio.BlockObject, error) {
-	blocks, err := w.writer.WriteEnd()
+	blocks, err := w.writer.WriteEnd(w.writeCxt)
 	return blocks, err
 }
 

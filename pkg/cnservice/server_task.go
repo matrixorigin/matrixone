@@ -19,11 +19,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -32,11 +35,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	initTasks = []task.TaskCode{task.TaskCode_TraceInit,
-		task.TaskCode_SysViewInit,
-		task.TaskCode_FrontendInit,
-		task.TaskCode_MetricInit}
+const (
+	defaultSystemInitTimeout = time.Minute * 5
 )
 
 func (s *service) adjustSQLAddress() {
@@ -69,7 +69,7 @@ func (s *service) initTaskServiceHolder() {
 			})
 	}
 
-	if err := s.stopper.RunTask(s.waitAllInitTaskCompleted); err != nil {
+	if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
 		panic(err)
 	}
 }
@@ -113,7 +113,7 @@ func (s *service) startTaskRunner() {
 		),
 	)
 
-	s.registerExecutors()
+	s.registerExecutorsLocked()
 	if err := s.task.runner.Start(); err != nil {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
@@ -132,7 +132,15 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	return s.task.holder.Get()
 }
 
-func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
+func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
+	s.waitSystemInitCompleted(ctx)
+	return ctx.Err()
+}
+
+func (s *service) waitSystemInitCompleted(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
+
+	startAt := time.Now()
 	s.logger.Debug("wait all init task completed task started")
 	wait := func() {
 		time.Sleep(time.Second)
@@ -146,16 +154,15 @@ func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
 			ts, ok := s.GetTaskService()
 			if ok {
 				tasks, err := ts.QueryTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.LE, uint32(task.TaskCode_FrontendInit)),
+					taskservice.WithTaskExecutorCond(taskservice.EQ, uint32(task.TaskCode_SystemInit)),
 					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
 				if err != nil {
 					s.logger.Error("wait all init task completed failed", zap.Error(err))
 					break
 				}
 				s.logger.Debug("waiting all init task completed",
-					zap.Int("all", len(initTasks)),
 					zap.Int("completed", len(tasks)))
-				if len(tasks) == len(initTasks) {
+				if len(tasks) > 0 {
 					if err := file.WriteFile(s.metadataFS,
 						"./system_init_completed",
 						[]byte("OK")); err != nil {
@@ -166,10 +173,15 @@ func (s *service) waitAllInitTaskCompleted(ctx context.Context) {
 			}
 		}
 		wait()
+		if time.Since(startAt) > defaultSystemInitTimeout {
+			panic("wait system init timeout")
+		}
 	}
 }
 
 func (s *service) stopTask() error {
+	defer logutil.LogClose(s.logger, "cnservice/task")()
+
 	s.task.Lock()
 	defer s.task.Unlock()
 	if err := s.task.holder.Close(); err != nil {
@@ -181,12 +193,18 @@ func (s *service) stopTask() error {
 	return nil
 }
 
-func (s *service) registerExecutors() {
+func (s *service) registerExecutorsLocked() {
 	if s.task.runner == nil {
 		return
 	}
 
-	pu := config.NewParameterUnit(&s.cfg.Frontend, nil, nil, nil)
+	pu := config.NewParameterUnit(
+		&s.cfg.Frontend,
+		nil,
+		nil,
+		nil,
+		s.pu.GetClusterDetails,
+	)
 	pu.StorageEngine = s.storeEngine
 	pu.TxnClient = s._txnClient
 	s.cfg.Frontend.SetDefaultValues()
@@ -196,24 +214,34 @@ func (s *service) registerExecutors() {
 		return frontend.NewInternalExecutor(pu)
 	}
 
-	executors := map[task.TaskCode]func(context.Context, func() ie.InternalExecutor) error{
-		task.TaskCode_TraceInit:   trace.InitSchema,
-		task.TaskCode_MetricInit:  metric.InitSchema,
-		task.TaskCode_SysViewInit: sysview.InitSchema,
-		task.TaskCode_FrontendInit: func(moServerCtx context.Context, _ func() ie.InternalExecutor) error {
-			return frontend.InitSysTenant(moServerCtx)
-		},
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		panic(moerr.NewInternalError("task Service not ok"))
 	}
-
-	for code, exec := range executors {
-		fn := func(handler func(context.Context, func() ie.InternalExecutor) error) taskservice.TaskExecutor {
-			return func(ctx context.Context, task task.Task) error {
-				if err := handler(moServerCtx, ieFactory); err != nil {
-					panic(err)
-				}
-				return nil
+	s.task.runner.RegisterExecutor(uint32(task.TaskCode_SystemInit),
+		func(ctx context.Context, t task.Task) error {
+			if err := frontend.InitSysTenant(moServerCtx); err != nil {
+				return err
 			}
-		}
-		s.task.runner.RegisterExecutor(uint32(code), fn(exec))
-	}
+			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+			if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+			if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+				return err
+			}
+
+			// init metric/log merge task cron rule
+			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+				return err
+			}
+
+			return nil
+		})
+
+	// init metric/log merge task executor
+	s.task.runner.RegisterExecutor(uint32(task.TaskCode_MetricLogMerge),
+		export.MergeTaskExecutorFactory(export.WithFileService(s.fileService)))
 }

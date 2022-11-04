@@ -305,7 +305,7 @@ drop view v2;
 drop view v3;
 drop view v4;
 drop view v5;
-invalid view view-from-subquery%!(EXTRA string=v5)
+invalid view 'view-from-subquery.v5'
 drop view v6;
 drop view v7;
 drop view v8;

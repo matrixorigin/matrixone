@@ -60,7 +60,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.NewBadDB(tblName)
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -76,12 +76,16 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// logutil.Info(sql)
 
-	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	var createStr string
+	if tableDef.TableType == catalog.SystemOrdinaryRel {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemExternalRel {
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	}
 	rowCount := 0
 	var pkDefs []string
 
 	for _, col := range tableDef.Cols {
-
 		colName := col.Name
 		if colName == catalog.Row_ID {
 			continue
@@ -89,7 +93,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		if col.Default != nil {
 			if col.Default.Expr != nil {
-				nullOrNot = "DEFAULT " + col.Default.OriginString
+				originStr := col.Default.OriginString
+				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
+					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
+						originStr = fmt.Sprintf("'%s'", originStr)
+					}
+				}
+				nullOrNot = "DEFAULT " + originStr
 			} else if col.Default.NullAbility {
 				nullOrNot = "DEFAULT NULL"
 			}
@@ -110,10 +120,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		typ := types.Type{Oid: types.T(col.Typ.Id)}
 		typeStr := typ.String()
+		if types.IsDecimal(typ.Oid) { //after decimal fix,remove this
+			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
+
+		updateOpt := ""
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		}
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
@@ -155,6 +173,42 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += comment
 	createStr += partition
+
+	if tableDef.TableType == catalog.SystemExternalRel {
+		param := tree.ExternParam{}
+		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
+		if err != nil {
+			return nil, err
+		}
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
+
+		escapedby := ""
+		if param.Tail.Fields.EscapedBy != byte(0) {
+			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		}
+
+		line := ""
+		if param.Tail.Lines.StartingBy != "" {
+			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+		}
+		lineEnd := ""
+		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
+			lineEnd = " TERMINATED BY '\\\\n'"
+		} else {
+			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+		}
+		if len(line) > 0 {
+			line += lineEnd
+		} else {
+			line = " LINES" + lineEnd
+		}
+
+		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
+		createStr += line
+		if param.Tail.IgnoredLines > 0 {
+			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
+		}
+	}
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
 	var buf bytes.Buffer
@@ -213,7 +267,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	}
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or (account_id = 0 and datname = '%s' )", MO_CATALOG_DB_NAME, accountId, MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -250,12 +304,13 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNoDB()
 	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	var tableType string
+	var tableType, mustShowTable string
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and (account_id = %v or account_id = 0)",
-		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", accountId)
+	mustShowTable = "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (account_id = %v or (account_id = 0 and (%s)))",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountId, mustShowTable)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

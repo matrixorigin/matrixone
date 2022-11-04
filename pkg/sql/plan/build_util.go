@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -159,6 +160,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+			return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+		}
+	}
+
 	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -179,7 +186,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -211,8 +218,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error)
 	if err != nil {
 		return nil, err
 	}
-
-	return onUpdateExpr, nil
+	ret := &plan.OnUpdate{
+		Expr:         onUpdateExpr,
+		OriginString: tree.String(expr, dialect.MYSQL),
+	}
+	return ret, nil
 }
 
 func isNullExpr(expr *plan.Expr) bool {
@@ -246,8 +256,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		switch ex := arg.Expr.(type) {
 		case *plan.Expr_C:
 			switch value := ex.C.Value.(type) {
-			case *plan.Const_Ival:
-				if value.Ival == 0 {
+			case *plan.Const_I64Val:
+				if value.I64Val == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
 				} else {
 					ex.C.Value = &plan.Const_Bval{Bval: true}
@@ -284,4 +294,21 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 		}, nil
 	}
 	return d.Default.Expr, nil
+}
+
+func judgeUnixTimestampReturnType(timestr string) types.T {
+	retDecimal := -1
+	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
+		retDecimal = len(timestr) - dotIdx - 1
+	}
+
+	if retDecimal > 6 || retDecimal == -1 {
+		retDecimal = 6
+	}
+
+	if retDecimal == 0 {
+		return types.T_int64
+	} else {
+		return types.T_float64
+	}
 }

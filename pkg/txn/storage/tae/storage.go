@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,10 +30,12 @@ import (
 )
 
 type taeStorage struct {
+	shard      metadata.DNShard
 	taeHandler rpchandle.Handler
 }
 
 func NewTAEStorage(
+	dataDir string,
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
@@ -42,7 +43,6 @@ func NewTAEStorage(
 	ckpCfg *options.CheckpointCfg,
 	logStore options.LogstoreType,
 ) (*taeStorage, error) {
-
 	opt := &options.Options{
 		Clock:         clock,
 		Fs:            fs,
@@ -52,7 +52,8 @@ func NewTAEStorage(
 		LogStoreT:     logStore,
 	}
 	storage := &taeStorage{
-		taeHandler: rpc.NewTAEHandle(opt),
+		shard:      shard,
+		taeHandler: rpc.NewTAEHandle(dataDir, opt),
 	}
 	return storage, nil
 }

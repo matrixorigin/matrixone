@@ -40,6 +40,9 @@ func (s *store) registerRPCHandlers() {
 	s.server.RegisterMethodHandler(txn.TxnMethod_CommitDNShard, s.handleCommitDNShard)
 	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackDNShard, s.handleRollbackDNShard)
 	s.server.RegisterMethodHandler(txn.TxnMethod_GetStatus, s.handleGetStatus)
+
+	// debug request
+	s.server.RegisterMethodHandler(txn.TxnMethod_DEBUG, s.handleDebug)
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandleFunc {
@@ -57,6 +60,10 @@ func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, respons
 
 func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return s.handleWithRetry(ctx, request, response, s.doWrite)
+}
+
+func (s *store) handleDebug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	return s.handleWithRetry(ctx, request, response, s.doDebug)
 }
 
 func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -78,6 +85,17 @@ func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *
 	r.waitStarted()
 	prepareResponse(request, response)
 	return r.service.Write(ctx, request, response)
+}
+
+func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	r := s.validDNShard(request, response)
+	if r == nil {
+		return nil
+	}
+	r.waitStarted()
+
+	prepareResponse(request, response)
+	return r.service.Debug(ctx, request, response)
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

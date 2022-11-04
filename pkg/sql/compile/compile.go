@@ -16,16 +16,13 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,7 +88,8 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	PrintScope(nil, []*Scope{c.scope})
+	// XXX PrintScope has a none-trivial amount of logging
+	// PrintScope(nil, []*Scope{c.scope})
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -343,16 +341,8 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsTableFunctionValueScan(n) {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-			bat.Vecs[0].Col = make([]int64, 1)
-		}
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
 		bat.InitZsOne(1)
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
@@ -547,7 +537,7 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
-		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+		return c.compileUnnest(n, ss)
 	case "generate_series":
 		return c.compileGenerateSeries(n, ss)
 	default:
@@ -555,16 +545,12 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
-	externParam := &unnest.ExternalParam{}
-	if err := json.Unmarshal(dt, externParam); err != nil {
-		return nil, err
-	}
+func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, externParam),
+			Arg: constructUnnest(n, c.ctx),
 		})
 	}
 	return ss, nil
@@ -607,6 +593,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Attributes:   attrs,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
+			Expr:         colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
@@ -809,13 +796,31 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		return c.compileTop(n, ss)
+		vec, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		if err != nil {
+			panic(err)
+		}
+		return c.compileTop(n, vec.Col.([]int64)[0], ss)
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
+	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
+		vec1, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		if err != nil {
+			panic(err)
+		}
+		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
+		if err != nil {
+			panic(err)
+		}
+		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
+		topN := limit + offset
+		if topN <= 8192*2 {
+			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
+			return c.compileOffset(n, c.compileTop(n, topN, ss))
+		}
+		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
-	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
-		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
 		return c.compileLimit(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
@@ -827,25 +832,41 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	}
 }
 
-func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
+func containBrokenNode(s *Scope) bool {
+	for i := range s.Instructions {
+		if s.Instructions[i].IsBrokenNode() {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
+	// use topN TO make scope.
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Top,
 			Idx: c.anal.curr,
-			Arg: constructTop(n, c.proc),
+			Arg: constructTop(n, topN),
 		})
 	}
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
-		Arg: constructMergeTop(n, c.proc),
+		Arg: constructMergeTop(n, topN),
 	}
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Order,
 			Idx: c.anal.curr,
@@ -862,6 +883,11 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+	}
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
@@ -873,6 +899,9 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Limit,
 			Idx: c.anal.curr,
@@ -890,6 +919,9 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
@@ -909,6 +941,11 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	rs := c.newScopeList(validScopeCount(ss))
 	j := 0
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			isEnd := ss[i].IsEnd
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i].IsEnd = isEnd
+		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,

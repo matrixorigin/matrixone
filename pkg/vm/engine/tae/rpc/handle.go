@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -43,9 +44,10 @@ func (h *Handle) GetTxnEngine() moengine.TxnEngine {
 	return h.eng
 }
 
-func NewTAEHandle(opt *options.Options) *Handle {
-	//just for test
-	path := "./store"
+func NewTAEHandle(path string, opt *options.Options) *Handle {
+	if path == "" {
+		path = "./store"
+	}
 	tae, err := openTAE(path, opt)
 	if err != nil {
 		panic(err)
@@ -145,6 +147,26 @@ func (h *Handle) HandleGetLogTail(
 	return nil
 }
 
+func (h *Handle) HandleFlushTable(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req db.FlushTable,
+	resp *apipb.SyncLogTailResp) (err error) {
+
+	// We use current TS instead of transaction ts.
+	// Here, the point of this handle function is to trigger a flush
+	// via mo_ctl.  We mimic the behaviour of a real background flush
+	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.eng.FlushTable(ctx,
+		req.AccessInfo.AccountID,
+		req.DatabaseID,
+		req.TableID,
+		currTs)
+	return err
+}
+
 // TODO:: need to handle resp.
 func (h *Handle) HandlePreCommit(
 	ctx context.Context,
@@ -164,6 +186,7 @@ func (h *Handle) HandlePreCommit(
 			for _, cmd := range cmds {
 				req := db.CreateDatabaseReq{
 					Name:       cmd.Name,
+					CreateSql:  cmd.CreateSql,
 					DatabaseId: cmd.DatabaseId,
 					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Creator,
@@ -264,7 +287,7 @@ func (h *Handle) HandleCreateDatabase(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.DatabaseId, txn)
+	err = h.eng.CreateDatabaseWithID(ctx, req.Name, req.CreateSql, req.DatabaseId, txn)
 	if err != nil {
 		return
 	}

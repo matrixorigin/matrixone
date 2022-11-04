@@ -57,6 +57,7 @@ var (
 			trigger_times				int,
 			create_at					bigint,
 			update_at					bigint)`,
+		`use %s`,
 	}
 
 	insertAsyncTask = `insert into %s.sys_async_task(
@@ -138,7 +139,7 @@ var (
     						create_at=?,
     						update_at=? where cron_task_id=?`
 
-	checkTaskExists = `select exists(select * from %s.sys_async_task where task_metadata_id=?)`
+	countTaskId = `select count(task_metadata_id) from %s.sys_async_task where task_metadata_id=?`
 
 	getTriggerTimes = `select trigger_times from %s.sys_cron_task where task_metadata_id=?`
 
@@ -163,15 +164,7 @@ func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
 	}
 
 	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(0)
-
-	// TODO: Can not init here. Consider how many CNs are started and how many times they will be executed,
-	// the initialization logic needs to be moved to the initialization of HaKeeper
-	for _, s := range initSqls {
-		if _, err = db.Exec(fmt.Sprintf(s, dbname)); err != nil {
-			return nil, multierr.Append(err, db.Close())
-		}
-	}
+	db.SetMaxIdleConns(1)
 
 	_, ok := os.LookupEnv(forceNewConn)
 	return &mysqlTaskStorage{
@@ -671,12 +664,11 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 }
 
 func (m *mysqlTaskStorage) taskExists(ctx context.Context, conn *sql.Conn, taskMetadataID string) (bool, error) {
-	var exists bool
-	err := conn.QueryRowContext(ctx, fmt.Sprintf(checkTaskExists, m.dbname), taskMetadataID).Scan(&exists)
-	if err != nil {
+	var count int32
+	if err := conn.QueryRowContext(ctx, fmt.Sprintf(countTaskId, m.dbname), taskMetadataID).Scan(&count); err != nil {
 		return false, err
 	}
-	return exists, nil
+	return count != 0, nil
 }
 
 func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, conn *sql.Conn, taskMetadataID string) (uint64, error) {
@@ -758,7 +750,15 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 	if _, err := db.Exec("use " + m.dbname); err != nil {
-		return err
+		me, ok := err.(*mysql.MySQLError)
+		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
+			return err
+		}
+		for _, s := range initSqls {
+			if _, err = db.Exec(fmt.Sprintf(s, m.dbname)); err != nil {
+				return multierr.Append(err, db.Close())
+			}
+		}
 	}
 	return nil
 }
@@ -785,15 +785,13 @@ func removeDuplicateTasks(err error, tasks []task.Task) ([]task.Task, error) {
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	i := 0
+	b := tasks[:0]
 	for _, t := range tasks {
 		if !strings.Contains(me.Message, t.Metadata.ID) {
-			tasks[i] = t
-			i++
+			b = append(b, t)
 		}
 	}
-	tasks = tasks[:i]
-	return tasks, nil
+	return b, nil
 }
 
 func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask, error) {
@@ -804,13 +802,11 @@ func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask
 	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
-	i := 0
+	b := tasks[:0]
 	for _, t := range tasks {
 		if !strings.Contains(me.Message, t.Metadata.ID) {
-			tasks[i] = t
-			i++
+			b = append(b, t)
 		}
 	}
-	tasks = tasks[:i]
-	return tasks, nil
+	return b, nil
 }

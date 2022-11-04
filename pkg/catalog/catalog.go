@@ -133,6 +133,7 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
+		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(uint64)
 	}
 	return infos
 }
@@ -242,7 +243,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 		}
 	}
 	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
 			return nil, err
 		}

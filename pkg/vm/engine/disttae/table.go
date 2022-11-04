@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -91,7 +92,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
-	if !ok {
+	if !ok && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
@@ -104,9 +105,11 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			return nil, err
 		}
 		tbl.meta = meta
+		tbl.updated = true
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
+	tbl.skipBlocks = make(map[uint64]uint8)
 	if tbl.meta == nil {
 		return ranges, nil
 	}
@@ -115,11 +118,12 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		blks, deletes := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
-			if needRead(expr, blk, tbl.getTableDef(), tbl.proc) {
+			tbl.skipBlocks[blk.Info.BlockID] = 0
+			if needRead(ctx, expr, blk, tbl.getTableDef(), tbl.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(deletes,
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(ctx, deletes,
 			tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	return ranges, nil
@@ -327,11 +331,13 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     []BlockMeta{blks[i]},
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -346,19 +352,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step:],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step : (i+1)*step],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
 			}
 		}
 	}
@@ -367,12 +377,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 
 func (tbl *table) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
+	var index memtable.Tuple
 	/*
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
+	if tbl.primaryIdx >= 0 && expr != nil {
+		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
+			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
+		if ok {
+			index = memtable.Tuple{
+				index_PrimaryKey,
+				memtable.ToOrdered(v),
+			}
+		}
+	}
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	for i := range tbl.db.txn.writes {
 		for _, entry := range tbl.db.txn.writes[i] {
@@ -390,8 +411,8 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		if tbl.meta != nil {
 			blks = tbl.meta.modifedBlocks[i]
 		}
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs, tbl.tableDef,
-			blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
+		rds0, err := tbl.parts[i].NewReader(ctx, num, index, tbl.defs, tbl.tableDef,
+			tbl.skipBlocks, blks, tbl.db.txn.meta.SnapshotTS, tbl.db.fs, writes)
 		if err != nil {
 			return nil, err
 		}
