@@ -121,3 +121,30 @@ clo4    col14    col20
 20    2034-02-10 08:00:00    .STU-_+=VWXYZab
 7    1985-01-13 07:59:59    bbbbbbccccc
 9    1975-09-09 23:59:59    balabalabalabalabala
+drop table if exists rawlog_withnull;
+CREATE external TABLE rawlog_withnull (
+`raw_item` VARCHAR(1024),
+`node_uuid` VARCHAR(36),
+`node_type` VARCHAR(64),
+`span_id` VARCHAR(16),
+`statement_id` VARCHAR(36),
+`logger_name` VARCHAR(1024),
+`timestamp` DATETIME,
+`level` VARCHAR(1024),
+`caller` VARCHAR(1024),
+`message` TEXT,
+`extra` JSON,
+`err_code` VARCHAR(1024),
+`error` TEXT,
+`stack` VARCHAR(4096),
+`span_name` VARCHAR(1024),
+`parent_span_id` VARCHAR(16),
+`start_time` DATETIME,
+`end_time` DATETIME,
+`duration` BIGINT UNSIGNED,
+`resource` JSON)
+infile{"filepath"='$resources/external_table_file/rawlog_withnull.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select raw_item,node_uuid,node_type,span_id,statement_id,logger_name,timestamp from rawlog_withnull order by 1 limit 1;
+raw_item    node_uuid    node_type    span_id    statement_id    logger_name    timestamp
+error_info    7c4dccb4-4d3c-41f8-b482-5251dc7a41bf    ALL    0    0        2022-11-01 11:11:24
+drop table if exists rawlog_withnull;
