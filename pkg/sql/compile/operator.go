@@ -260,6 +260,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 		var dbSource engine.Database
 		var relation engine.Relation
 		var err error
+		var isTemp bool
 		dbSource, err = eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
 		if err != nil {
 			return nil, err
@@ -275,11 +276,18 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 			if e != nil {
 				return nil, err
 			}
+			isTemp = true
 		}
 
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
+			var indexTable engine.Relation
+			var err error
+			if isTemp {
+				indexTable, err = dbSource.Relation(ctx, n.DeleteTablesCtx[i].DbName+"-"+info.TableName)
+			} else {
+				indexTable, err = dbSource.Relation(ctx, info.TableName)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -309,6 +317,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	var db engine.Database
 	var relation engine.Relation
 	var err error
+	var isTemp bool
 	db, err = eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
 	if err != nil {
 		return nil, err
@@ -324,10 +333,17 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		if e != nil {
 			return nil, err
 		}
+		isTemp = true
 	}
 	indexTables := make([]engine.Relation, 0)
 	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(ctx, info.TableName)
+		var indexTable engine.Relation
+		var err error
+		if isTemp {
+			indexTable, err = db.Relation(ctx, n.ObjRef.SchemaName+"-"+info.TableName)
+		} else {
+			indexTable, err = db.Relation(ctx, info.TableName)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -358,6 +374,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 		var dbSource engine.Database
 		var relation engine.Relation
 		var err error
+		var isTemp bool
 		dbSource, err = eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
@@ -373,6 +390,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 			if e != nil {
 				return nil, err
 			}
+			isTemp = true
 		}
 		db[i] = dbSource
 		tableID[i] = relation.GetTableID(ctx)
@@ -391,7 +409,13 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 		}
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
+			var indexTable engine.Relation
+			var err error
+			if isTemp {
+				indexTable, err = dbSource.Relation(ctx, updateCtx.DbName+"-"+info.TableName)
+			} else {
+				indexTable, err = dbSource.Relation(ctx, info.TableName)
+			}
 			if err != nil {
 				return nil, err
 			}

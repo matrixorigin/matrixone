@@ -224,7 +224,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, dbName+"-"+tblName, dbSource, c.proc, id, dbName)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, dbName+"-"+tblName, dbSource, c.proc, id, engine.TEMPORARY_DBNAME)
 	} else {
 		err = dbSource.Truncate(c.ctx, tblName)
 		if err != nil {
