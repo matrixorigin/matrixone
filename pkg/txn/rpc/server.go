@@ -79,7 +79,6 @@ func NewTxnServer(address string,
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.adjust()
 
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest,
@@ -99,12 +98,6 @@ func NewTxnServer(address string,
 	rpc.RegisterRequestHandler(s.onMessage)
 	s.rpc = rpc
 	return s, nil
-}
-
-func (s *server) adjust() {
-	if s.options.maxMessageSize == 0 {
-		s.options.maxMessageSize = defaultMaxMessageSize
-	}
 }
 
 func (s *server) Start() error {
