@@ -16,7 +16,6 @@ package operator
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -2261,12 +2260,12 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
-		// XXX: very strange way of parsing bool
-		val, err := strconv.ParseFloat(vs[0], 64)
+
+		val, err := types.ParseBool(vs[0])
 		if err != nil {
 			return nil, err
 		}
-		return vector.NewConstFixed(rv.Typ, lv.Length(), val != 0, proc.Mp()), nil
+		return vector.NewConstFixed(rv.Typ, lv.Length(), val, proc.Mp()), nil
 	}
 
 	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(vs)), lv.Nsp)
@@ -2278,12 +2277,11 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 		if nulls.Contains(lv.Nsp, uint64(i)) {
 			continue
 		}
-		val, err := strconv.ParseFloat(str, 64)
-		if err == nil && val != 0 {
-			rs[i] = true
-		} else {
-			rs[i] = false
+		val, err := types.ParseBool(str)
+		if err != nil {
+			return nil, err
 		}
+		rs[i] = val
 	}
 	return vec, nil
 }

@@ -58,7 +58,11 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 	canCompute, v := getPkValueByExpr(r.expr, pkIdx, vec.Typ.Oid)
 	if canCompute {
 		row := findRowByPkValue(vec, v)
-		if row > -1 {
+		if row >= vec.Length() {
+			// can not find row.
+			bat.Shrink([]int64{})
+		} else if row > -1 {
+			// maybe find row.
 			bat.Shrink([]int64{int64(row)})
 		}
 	}
