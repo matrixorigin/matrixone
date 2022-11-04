@@ -52,6 +52,7 @@ drop table if exists ex_table_cp2;
 drop table if exists ex_table_15;
 drop table if exists ex_table_drop;
 drop table if exists table_15;
+drop table if exists table_16;
 drop table if exists ex_table_yccs;
 
 --覆盖各数值类型正常值,极值，空值
@@ -233,6 +234,10 @@ create external table ex_table_yccs(char_1 char(20),char_2 varchar(10),date_1 da
 insert into ex_table_yccs select 'yellow','apple','2020-09-30','2020-09-30 10:20:08','2020-09-30 10:20:08.09834';
 update ex_table_yccs set char_1="cat123";
 delete from ex_table_yccs;
+
+create table table_16(a int);
+insert into table_16 values(99);
+select * from table_16, ex_table_gzip;
 
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;
