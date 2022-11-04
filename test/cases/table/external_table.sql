@@ -225,10 +225,6 @@ drop table ex_table_drop;
 create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '' lines terminated by '\n';
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_drop;
 
---show create table
--- @bvt:issue#6102
-show create table ex_table_15;
--- @bvt:issue
 --内部表和外部表关联
 -- @bvt:issue#6171
 select count(*) from ex_table_15,table_15 where ex_table_15.clo1=table_15.clo1;
