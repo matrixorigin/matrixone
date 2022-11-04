@@ -157,12 +157,12 @@ func main() {
 
 	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, "mo-data/etl")
 	if err != nil {
-		logutil.Infof("failed open fileservice: %v\n", err)
+		logutil.Infof("failed open fileservice: %v", err)
 		return
 	}
 	files, err := fs.List(ctx, "/")
 	if err != nil {
-		logutil.Infof("failed list /: %v\n", err)
+		logutil.Infof("failed list /: %v", err)
 		return
 	}
 	if len(files) == 0 {
@@ -189,12 +189,12 @@ func main() {
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *export.Table) {
 	var err error
 	merge := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
-	logutil.Infof("[%v] create merge task\n", table.GetName())
+	logutil.Infof("[%v] create merge task", table.GetName())
 	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
-	logutil.Infof("[%v] create ts: %v, err: %v\n", table.GetName(), ts, err)
+	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
 	err = merge.Main(ts)
 	if err != nil {
-		logutil.Infof("[%v] failed to merge: %v\n", table.GetName(), err)
+		logutil.Infof("[%v] failed to merge: %v", table.GetName(), err)
 	} else {
 		logutil.Infof("[%v] merge succeed.", table.GetName())
 	}
