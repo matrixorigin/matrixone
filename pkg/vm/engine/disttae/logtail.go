@@ -16,17 +16,23 @@ package disttae
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
@@ -67,7 +73,7 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 
 func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
-	if err := consumerCheckPoint(logTail.CkpLocation); err != nil {
+	if _, err := consumerCheckPoint(logTail.CkpLocation, tbl, tbl.db.fs); err != nil {
 		return err
 	}
 	for i := 0; i < len(logTail.Commands); i++ {
@@ -79,9 +85,54 @@ func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	return nil
 }
 
-func consumerCheckPoint(ckpt string) error {
-	// TODO
-	return nil
+func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]*api.Entry, error) {
+	if ckpt == "" {
+		return nil, nil
+	}
+	ckps := strings.Split(ckpt, ";")
+	minTSStr := ckps[len(ckps)-1]
+	minTS := types.StringToTS(minTSStr)
+	logutil.Infof("mints is %v", minTS.ToString())
+	ckps = ckps[:len(ckps)-1]
+	entries := make([]*api.Entry, 0)
+	for _, ckp := range ckps {
+		reader, err := blockio.NewCheckpointReader(fs, ckp)
+		if err != nil {
+			return nil, err
+		}
+		data := logtail.NewCheckpointData()
+		data.Close()
+		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+			return nil, err
+		}
+		ins, del, err := data.GetTableData(tbl.tableId)
+		if err != nil {
+			return nil, err
+		}
+		if ins != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tbl.tableId,
+				TableName:    tbl.tableName,
+				DatabaseId:   tbl.db.databaseId,
+				DatabaseName: tbl.db.databaseName,
+				Bat:          ins,
+			}
+			entries = append(entries, entry)
+		}
+		if del != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Delete,
+				TableId:      tbl.tableId,
+				TableName:    tbl.tableName,
+				DatabaseId:   tbl.db.databaseId,
+				DatabaseName: tbl.db.databaseName,
+				Bat:          del,
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
 }
 
 func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,

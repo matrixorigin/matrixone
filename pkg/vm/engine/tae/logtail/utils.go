@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -159,19 +160,56 @@ func (data *CheckpointData) ReplayMeta() {
 		data.meta[tid] = meta
 	}
 }
-func (data *CheckpointData) GetTableData(tid uint64) (ins, del *containers.Batch) {
+func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err error) {
+	var insTaeBat, delTaeBat *containers.Batch
 	switch tid {
 	case pkgcatalog.MO_DATABASE_ID:
-		ins = data.dbInsBatch
-		del = data.dbDelBatch
+		insTaeBat = data.dbInsBatch
+		delTaeBat = data.dbDelBatch
+		if insTaeBat != nil {
+			ins, err = containersBatchToProtoBatch(insTaeBat)
+			if err != nil {
+				return
+			}
+		}
+		if delTaeBat != nil {
+			del, err = containersBatchToProtoBatch(delTaeBat)
+			if err != nil {
+				return
+			}
+		}
 		return
 	case pkgcatalog.MO_TABLES_ID:
-		ins = data.tblInsBatch
-		del = data.tblDelBatch
+		insTaeBat = data.tblInsBatch
+		delTaeBat = data.tblDelBatch
+		if insTaeBat != nil {
+			ins, err = containersBatchToProtoBatch(insTaeBat)
+			if err != nil {
+				return
+			}
+		}
+		if delTaeBat != nil {
+			del, err = containersBatchToProtoBatch(delTaeBat)
+			if err != nil {
+				return
+			}
+		}
 		return
 	case pkgcatalog.MO_COLUMNS_ID:
-		ins = data.tblColInsBatch
-		del = data.tblColDelBatch
+		insTaeBat = data.tblColInsBatch
+		delTaeBat = data.tblColDelBatch
+		if insTaeBat != nil {
+			ins, err = containersBatchToProtoBatch(insTaeBat)
+			if err != nil {
+				return
+			}
+		}
+		if delTaeBat != nil {
+			del, err = containersBatchToProtoBatch(delTaeBat)
+			if err != nil {
+				return
+			}
+		}
 		return
 	}
 	if len(data.meta) == 0 {
@@ -179,19 +217,31 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *containers.Batch
 	}
 	meta, ok := data.meta[tid]
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	insInterval := meta.blkInsertOffset
 	if insInterval != nil {
 		insOffset := insInterval.Start
 		insLength := insInterval.End - insInterval.Start + 1
-		ins = data.blkMetaInsBatch.Window(int(insOffset), int(insLength))
+		insTaeBat = data.blkMetaInsBatch.Window(int(insOffset), int(insLength))
 	}
 	delInterval := meta.blkDeleteOffset
 	if delInterval != nil {
 		delOffset := delInterval.Start
 		delLength := delInterval.End - delInterval.Start + 1
-		del = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
+		delTaeBat = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
+	}
+	if insTaeBat != nil {
+		ins, err = containersBatchToProtoBatch(insTaeBat)
+		if err != nil {
+			return
+		}
+	}
+	if delTaeBat != nil {
+		del, err = containersBatchToProtoBatch(delTaeBat)
+		if err != nil {
+			return
+		}
 	}
 	return
 }

@@ -20,9 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -112,7 +112,7 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (err error) {
-	reader, err := blockio.NewCheckpointReader(fs, e.location)
+	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -126,8 +126,8 @@ func (e *CheckpointEntry) Replay(
 	return
 }
 
-func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del *containers.Batch, err error) {
-	reader, err := blockio.NewCheckpointReader(fs, e.location)
+func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del *api.Batch, err error) {
+	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
@@ -136,6 +136,6 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
-	ins, del = data.GetTableData(tid)
+	ins, del, err = data.GetTableData(tid)
 	return
 }
