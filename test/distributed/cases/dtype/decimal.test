@@ -265,3 +265,41 @@ insert into t1 values(0), (0.99999999999999999), (0.999999999999999994), (-0.999
 select * from t1;
 insert into t1 values(0.999999999999999995);
 insert into t1 values(-0.999999999999999995);
+
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a + 4589.6 from t1;
+select a + 4589.60 from t1;
+select 4589.6 + a from t1;
+select 4589.60 + a from t1;
+drop table t1;
+
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a - 4589.6 from t1;
+select a - 4589.60 from t1;
+select 4589.6 - a from t1;
+select 4589.60 - a from t1;
+drop table t1;
+
+drop table if exists t1;
+create table t1 (a decimal(12,2));
+insert into t1 values (301934.27);
+select a * 4589.6 from t1;
+select a * 4589.60 from t1;
+select a * 54545.5 from t1;
+select a * 54545.50 from t1;
+select a * 54545.8 from t1;
+select a * 54545.80 from t1;
+drop table t1;
+
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a / 4589.6 from t1;
+select a / 4589.60 from t1;
+select 4589.6 / a from t1;
+select 4589.60 / a from t1;
+drop table t1;

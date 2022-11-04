@@ -156,6 +156,8 @@ L_COMMENT      VARCHAR(44) NOT NULL
 
 在 MatrixOne 中使用以下命令将数据加载到相关的表中。
 
+### 选项一：使用如下命令导入单表数据集
+
 ```
 load data infile '/YOUR_TPCH_DATA_PATH/nation.tbl' into table NATION FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
@@ -175,6 +177,14 @@ load data infile '/YOUR_TPCH_DATA_PATH/lineitem.tbl' into table LINEITEM FIELDS 
 ```
 
 加载完成后，可以使用创建的表查询 MatrixOne 中的数据。
+
+### 选项二：使用如下命令导入大宽表数据集
+
+运行以下命令将数据导入`lineorder_flat`：
+
+```
+load data infile '/ssb-dbgen-path/lineorder_flat.tbl' into table lineorder_flat FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+```
 
 ## **5. 运行 TPCH 测试命令**
 

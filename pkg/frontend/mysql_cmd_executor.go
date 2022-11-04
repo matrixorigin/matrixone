@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2960,6 +2961,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
+			if _, ok := stmt.(*tree.Insert); ok {
+				resp.lastInsertId = 1
+			}
 			if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
 				trace.EndStatement(requestCtx, err2)
 				retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)

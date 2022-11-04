@@ -11,7 +11,7 @@ jobs:
   bvt-linux-x86:
     runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -68,7 +68,7 @@ jobs:
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
       
       - name: generate upload files
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
@@ -78,10 +78,11 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
+        if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: linux_x86_ci_reports
+          name: e2e_linux_x86_reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
+
