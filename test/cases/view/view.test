@@ -44,3 +44,5 @@ insert into t2 values(1);
 create view vvvv as select a from t1 union all select a from t2;
 select * from vvvv;
 drop view vvvv;
+
+select data_type,column_type,IS_NULLABLE,COLUMN_DEFAULT from information_schema.columns where table_name ='mo_tables' limit 5;
