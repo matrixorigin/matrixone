@@ -252,8 +252,8 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	}
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*deletion.Argument, error) {
-	ctx := context.TODO()
+func constructDeletion(n *plan.Node, eg engine.Engine,
+	ctx context.Context, txnOperator TxnOperator) (*deletion.Argument, error) {
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
@@ -293,8 +293,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*insert.Argument, error) {
-	ctx := context.TODO()
+func constructInsert(n *plan.Node, eg engine.Engine,
+	ctx context.Context, txnOperator TxnOperator) (*insert.Argument, error) {
 	db, err := eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
 	if err != nil {
 		return nil, err
@@ -325,8 +325,8 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	}, nil
 }
 
-func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
-	ctx := context.TODO()
+func constructUpdate(n *plan.Node, eg engine.Engine,
+	ctx context.Context, txnOperator TxnOperator) (*update.Argument, error) {
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
