@@ -389,7 +389,10 @@ func (s *store) initTxnSender() error {
 }
 
 func (s *store) initTxnServer() error {
-	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.clock, s.logger)
+	server, err := rpc.NewTxnServer(s.cfg.ListenAddress,
+		s.clock,
+		s.logger,
+		rpc.WithServerMaxMessageSize(int(s.cfg.RPC.MaxMessageSize)))
 	if err != nil {
 		return err
 	}
