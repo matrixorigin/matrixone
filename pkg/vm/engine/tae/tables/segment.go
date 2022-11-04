@@ -56,7 +56,7 @@ func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
 	// TODO: segment level index
-	return moerr.NewTAEPossibleDuplicate()
+	return moerr.GetOkExpectedPossibleDup()
 	// blkIt := segment.meta.MakeBlockIt(false)
 	// for blkIt.Valid() {
 	// 	block := blkIt.Get().GetPayload().(*catalog.BlockEntry)
