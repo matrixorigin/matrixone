@@ -79,19 +79,12 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := ReadDir(param.extern)
-	if err != nil {
-		param.Fileparam.End = true
-		return err
-	}
-
-	if len(fileList) == 0 {
+	if len(param.FileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.Fileparam.End = true
 	}
-	param.FileList = fileList
 	param.extern.Filepath = ""
-	param.Fileparam.FileCnt = len(fileList)
+	param.Fileparam.FileCnt = len(param.FileList)
 	return nil
 }
 
@@ -101,22 +94,18 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	defer anal.Stop()
 	anal.Input(nil)
 	param := arg.(*Argument).Es
-	param.Fileparam.mu.Lock()
 	if param.Fileparam.End {
-		param.Fileparam.mu.Unlock()
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if param.extern.Filepath == "" {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
-			param.Fileparam.mu.Unlock()
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		param.extern.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	param.Fileparam.mu.Unlock()
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
 		param.Fileparam.End = true
@@ -388,13 +377,11 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			}
 			plh.simdCsvReader.Close()
 			param.plh = nil
-			param.Fileparam.mu.Lock()
 			param.Fileparam.FileFin++
 			param.extern.Filepath = ""
 			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 				param.Fileparam.End = true
 			}
-			param.Fileparam.mu.Unlock()
 			break
 		}
 	}

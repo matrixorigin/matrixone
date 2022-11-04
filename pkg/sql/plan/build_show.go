@@ -91,19 +91,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default != nil {
-			if col.Default.Expr != nil {
-				originStr := col.Default.OriginString
-				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
-					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
-						originStr = fmt.Sprintf("'%s'", originStr)
-					}
-				}
-				nullOrNot = "DEFAULT " + originStr
-			} else if col.Default.NullAbility {
-				nullOrNot = "DEFAULT NULL"
+		// col.Default must be not nil
+		if len(col.Default.OriginString) > 0 {
+			str := col.Default.OriginString
+			if strings.ToUpper(str) != "NULL" && needQuoteType(types.T(col.Typ.Id)) && col.Default.Expr.GetC() != nil {
+				str = fmt.Sprintf("'%s'", str)
 			}
+			nullOrNot = "DEFAULT " + str
+		} else if col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
 		}
+
 		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
