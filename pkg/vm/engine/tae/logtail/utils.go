@@ -232,13 +232,13 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 	insInterval := meta.blkInsertOffset
 	if insInterval != nil {
 		insOffset := insInterval.Start
-		insLength := insInterval.End - insInterval.Start + 1
+		insLength := insInterval.End - insInterval.Start
 		insTaeBat = data.blkMetaInsBatch.Window(int(insOffset), int(insLength))
 	}
 	delInterval := meta.blkDeleteOffset
 	if delInterval != nil {
 		delOffset := delInterval.Start
-		delLength := delInterval.End - delInterval.Start + 1
+		delLength := delInterval.End - delInterval.Start
 		delTaeBat = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
 	}
 	if insTaeBat != nil {
