@@ -182,8 +182,6 @@ func main() {
 	mergeTable(ctx, fs, dummyStatementTable)
 	mergeTable(ctx, fs, dummyRawlogTable)
 
-	writeAllocsProfile()
-
 }
 
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *export.Table) {
@@ -198,9 +196,11 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *export.T
 	} else {
 		logutil.Infof("[%v] merge succeed.", table.GetName())
 	}
+
+	writeAllocsProfile(table.GetName())
 }
 
-func writeAllocsProfile() {
+func writeAllocsProfile(suffix string) {
 	profile := pprof.Lookup("heap")
 	if profile == nil {
 		return
@@ -208,6 +208,9 @@ func writeAllocsProfile() {
 	profilePath := ""
 	if profilePath == "" {
 		profilePath = "heap-profile"
+	}
+	if len(suffix) > 0 {
+		profilePath = profilePath + "." + suffix
 	}
 	f, err := os.Create(profilePath)
 	if err != nil {
