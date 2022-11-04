@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -143,16 +142,16 @@ func main() {
 
 	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, "mo-data/etl")
 	if err != nil {
-		fmt.Printf("failed open fileservice: %v\n", err)
+		logutil.Infof("failed open fileservice: %v\n", err)
 		return
 	}
 	files, err := fs.List(ctx, "/")
 	if err != nil {
-		fmt.Printf("failed list /: %v\n", err)
+		logutil.Infof("failed list /: %v\n", err)
 		return
 	}
 	if len(files) == 0 {
-		fmt.Printf("skipping, no mo-data/etl folder")
+		logutil.Infof("skipping, no mo-data/etl folder")
 		return
 	}
 
@@ -167,14 +166,14 @@ func main() {
 
 	//merge := export.NewMerge(ctx, export.WithTable(dummyStatementTable), export.WithFileService(fs))
 	merge := export.NewMerge(ctx, export.WithTable(dummyRawlogTable), export.WithFileService(fs))
-	fmt.Printf("[%v] create merge task\n", time.Now())
+	logutil.Infof("[%v] create merge task\n", time.Now())
 	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
-	fmt.Printf("[%v] create ts: %v, err: %v\n", time.Now(), ts, err)
+	logutil.Infof("[%v] create ts: %v, err: %v\n", time.Now(), ts, err)
 	err = merge.Main(ts)
 	if err != nil {
-		fmt.Printf("[%v] failed to merge: %v\n", time.Now(), err)
+		logutil.Infof("[%v] failed to merge: %v\n", time.Now(), err)
 	} else {
-		fmt.Printf("[%v] merge succeed.", time.Now())
+		logutil.Infof("[%v] merge succeed.", time.Now())
 	}
 
 	writeAllocsProfile()

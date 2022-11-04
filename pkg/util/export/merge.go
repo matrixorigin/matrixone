@@ -329,24 +329,16 @@ type ContentReader struct {
 	raw    io.ReadCloser
 }
 
-const ContentLength = 4000
-const ONE_BATCH_READ_ROW = ContentLength
+// BatchReadRows ~= 20MB rawlog file has about 3700+ rows
+const BatchReadRows = 4000
 
 func NewContentReader(ctx context.Context, reader *simdcsv.Reader, raw io.ReadCloser) *ContentReader {
 	return &ContentReader{
 		ctx:     ctx,
 		length:  0,
-		content: make([][]string, ContentLength),
+		content: make([][]string, BatchReadRows),
 		reader:  reader,
 		raw:     raw,
-	}
-}
-
-func NewContentReaderOLD(ctx context.Context, content [][]string) *ContentReader {
-	return &ContentReader{
-		ctx:     ctx,
-		length:  len(content),
-		content: content,
 	}
 }
 
@@ -354,11 +346,11 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 	if s.idx == s.length && s.reader != nil {
 		var cnt int
 		var err error
-		s.content, cnt, err = s.reader.Read(ONE_BATCH_READ_ROW, s.ctx, s.content)
+		s.content, cnt, err = s.reader.Read(BatchReadRows, s.ctx, s.content)
 		if err != nil {
 			return nil, err
 		}
-		if cnt < ONE_BATCH_READ_ROW {
+		if cnt < BatchReadRows {
 			s.reader.Close()
 			s.reader = nil
 			s.raw.Close()
@@ -410,41 +402,6 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 
 	// return content Reader
 	return NewContentReader(ctx, simdCsvReader, reader), nil
-}
-
-func NewCSVReaderOLD(ctx context.Context, fs fileservice.FileService, path string) (CSVReader, error) {
-	// external.ReadFile
-	var reader io.ReadCloser
-	vec := fileservice.IOVector{
-		FilePath: path,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &reader,
-			},
-		},
-	}
-	// open file reader
-	if err := fs.Read(ctx, &vec); err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-
-	// parse csv content
-	simdCsvReader := simdcsv.NewReaderWithOptions(reader,
-		CommonCsvOptions.FieldTerminator,
-		'#',
-		true,
-		true)
-	defer simdCsvReader.Close()
-	content, err := simdCsvReader.ReadAll(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// return content Reader
-	return NewContentReaderOLD(ctx, content), nil
 }
 
 type CSVWriter interface {
