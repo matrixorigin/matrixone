@@ -517,6 +517,5 @@ func init() {
 		"modump":                   MODUMP,
 		"generate_series":          GENERATE_SERIES,
 		"low_cardinality":          LOW_CARDINALITY,
-		"mo_show_visible_bin":      MO_SHOW_VISIBLE_BIN,
 	}
 }
