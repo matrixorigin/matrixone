@@ -93,7 +93,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 			return bat, err
 		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Data); err != nil && !errors.Is(err, io.EOF) {
+		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector
