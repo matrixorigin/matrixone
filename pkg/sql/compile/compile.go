@@ -16,13 +16,13 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -522,13 +523,33 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		mcpu = 1
 	}
 	ss := make([]*Scope, mcpu)
-	fileparam := &external.ExternalFileparam{}
+	param := &tree.ExternParam{}
+	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	if err != nil {
+		panic(err)
+	}
+	param.FileService = c.proc.FileService
+	fileList, err := external.ReadDir(param)
+	if err != nil {
+		panic(err)
+	}
+	cnt := len(fileList) / mcpu
+	tag := len(fileList) % mcpu
+	index := 0
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.ConstructScope()
+		var fileListTmp []string
+		if i < tag {
+			fileListTmp = fileList[index : index+cnt+1]
+			index += cnt + 1
+		} else {
+			fileListTmp = fileList[index : index+cnt]
+			index += cnt
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
 			Idx: c.anal.curr,
-			Arg: constructExternal(n, c.ctx, fileparam),
+			Arg: constructExternal(n, c.ctx, fileListTmp),
 		})
 	}
 	return ss
