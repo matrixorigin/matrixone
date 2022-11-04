@@ -30,11 +30,11 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	resultType := types.T_time.ToType()
 
 	resultPrecision := firstVector.Typ.Precision
-	if firstVector.Typ.Precision < secondVector.Typ.Precision{
+	if firstVector.Typ.Precision < secondVector.Typ.Precision {
 		resultPrecision = secondVector.Typ.Precision
 	}
 	resultType.Precision = resultPrecision
-	
+
 	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
