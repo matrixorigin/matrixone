@@ -1,17 +1,32 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"net/http"
 	"os"
-	"runtime/pprof"
 	"sync"
 	"time"
 
 	_ "net/http/pprof"
+	"runtime/pprof"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
 var (
@@ -164,20 +179,25 @@ func main() {
 	httpWG.Wait()
 	time.Sleep(time.Second)
 
-	//merge := export.NewMerge(ctx, export.WithTable(dummyStatementTable), export.WithFileService(fs))
-	merge := export.NewMerge(ctx, export.WithTable(dummyRawlogTable), export.WithFileService(fs))
-	logutil.Infof("[%v] create merge task\n", time.Now())
-	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
-	logutil.Infof("[%v] create ts: %v, err: %v\n", time.Now(), ts, err)
-	err = merge.Main(ts)
-	if err != nil {
-		logutil.Infof("[%v] failed to merge: %v\n", time.Now(), err)
-	} else {
-		logutil.Infof("[%v] merge succeed.", time.Now())
-	}
+	mergeTable(ctx, fs, dummyStatementTable)
+	mergeTable(ctx, fs, dummyRawlogTable)
 
 	writeAllocsProfile()
 
+}
+
+func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *export.Table) {
+	var err error
+	merge := export.NewMerge(ctx, export.WithTable(table), export.WithFileService(fs))
+	logutil.Infof("[%v] create merge task\n", table.GetName())
+	ts, err := time.Parse("2006-01-02 15:04:05", "2022-11-03 00:00:00")
+	logutil.Infof("[%v] create ts: %v, err: %v\n", table.GetName(), ts, err)
+	err = merge.Main(ts)
+	if err != nil {
+		logutil.Infof("[%v] failed to merge: %v\n", table.GetName(), err)
+	} else {
+		logutil.Infof("[%v] merge succeed.", table.GetName())
+	}
 }
 
 func writeAllocsProfile() {

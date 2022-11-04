@@ -209,10 +209,11 @@ func TestNewMerge(t *testing.T) {
 			r, err := NewCSVReader(tt.args.ctx, fs, files[0])
 			require.Nil(t, err)
 			lines := 0
-			for l := r.ReadLine(); l != nil; l = r.ReadLine() {
+			for l, err := r.ReadLine(); l != nil && err == nil; l, err = r.ReadLine() {
 				lines++
 				t.Logf("line %d: %s", lines, l)
 			}
+			require.Nil(t, err)
 			require.Equal(t, 6, lines)
 
 		})

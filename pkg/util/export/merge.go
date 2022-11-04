@@ -285,18 +285,13 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 			// errorFileHandler(m.ctx, m.FS, path) without continue
 			continue
 		}
-		line, err := reader.ReadLine()
+		var line []string
+		for line, err = reader.ReadLine(); line != nil && err == nil; line, err = reader.ReadLine() {
+			row := m.Table.ParseRow(line)
+			cacheFileData.Put(row)
+		}
 		if err != nil {
 			return err
-		}
-		for line != nil {
-			row := m.Table.ParseRow(line)
-			// fixme: if !obj.Valid() { continue }
-			cacheFileData.Put(row) // if table_name == "statement_info", try to save last record.
-			line, err = reader.ReadLine()
-			if err != nil {
-				return err
-			}
 		}
 	}
 	if !cacheFileData.IsEmpty() {
