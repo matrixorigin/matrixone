@@ -26,10 +26,10 @@ Variable_name    Value
 init_connect    
 show variables like 'interactive%';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    30100
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    30100
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -90,16 +90,14 @@ show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
 drop table if exists t;
-[unknown result because it is related to issue#6034]
 create table t(
 a int,
 b int,
 c int,
 primary key(a)
 );
-[unknown result because it is related to issue#6034]
 show indexes from t;
-[unknown result because it is related to issue#6034]
+internal error: do not have privilege to execute the statement
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -135,26 +133,519 @@ table_catalog    VARCHAR    YES        NULL
 table_schema    VARCHAR    YES        NULL        
 table_name    VARCHAR    YES        NULL        
 column_name    VARCHAR    YES        NULL        
-ordinal_position    INT UNSIGNED    YES        NULL        
-column_default    TEXT    YES        NULL        
+ordinal_position    INT    YES        NULL        
+column_default    VARCHAR    YES        NULL        
 is_nullable    VARCHAR    YES        NULL        
-data_type    BLOB    YES        NULL        
-character_maximum_length    BIGINT    YES        NULL        
-character_octet_length    BIGINT    YES        NULL        
-numeric_precision    BIGINT UNSIGNED    YES        NULL        
-numeric_scale    BIGINT UNSIGNED    YES        NULL        
-datetime_precision    INT UNSIGNED    YES        NULL        
+data_type    VARCHAR    YES        NULL        
+character_maximum_length    INT    YES        NULL        
+character_octet_length    INT    YES        NULL        
+numeric_precision    BIGINT    YES        NULL        
+numeric_scale    BIGINT    YES        NULL        
+datetime_precision    BIGINT    YES        NULL        
 character_set_name    VARCHAR    YES        NULL        
 collation_name    VARCHAR    YES        NULL        
-column_type    BLOB    YES        NULL        
+column_type    VARCHAR    YES        NULL        
 column_key    VARCHAR    YES        NULL        
 extra    VARCHAR    YES        NULL        
 PRIVILEGES    VARCHAR    YES        NULL        
-column_comment    TEXT    YES        NULL        
-generation_expression    BLOB    YES        NULL        
-srs_id    INT UNSIGNED    YES        NULL        
+column_comment    VARCHAR    YES        NULL        
+generation_expression    VARCHAR    YES        NULL        
+srs_id    BIGINT    YES        NULL        
 select table_name, column_name from columns;
 table_name    column_name
+mo_database    dat_id
+mo_database    datname
+mo_database    dat_catalog_name
+mo_database    dat_createsql
+mo_database    owner
+mo_database    creator
+mo_database    created_time
+mo_database    account_id
+mo_tables    rel_id
+mo_tables    relname
+mo_tables    reldatabase
+mo_tables    reldatabase_id
+mo_tables    relpersistence
+mo_tables    relkind
+mo_tables    rel_comment
+mo_tables    rel_createsql
+mo_tables    created_time
+mo_tables    creator
+mo_tables    owner
+mo_tables    account_id
+mo_tables    partitioned
+mo_tables    viewdef
+mo_columns    att_uniq_name
+mo_columns    account_id
+mo_columns    att_database_id
+mo_columns    att_database
+mo_columns    att_relname_id
+mo_columns    att_relname
+mo_columns    attname
+mo_columns    atttyp
+mo_columns    attnum
+mo_columns    att_length
+mo_columns    attnotnull
+mo_columns    atthasdef
+mo_columns    att_default
+mo_columns    attisdropped
+mo_columns    att_constraint_type
+mo_columns    att_is_unsigned
+mo_columns    att_is_auto_increment
+mo_columns    att_comment
+mo_columns    att_is_hidden
+mo_columns    attr_has_update
+mo_columns    attr_update
+mo_user    user_id
+mo_user    user_host
+mo_user    user_name
+mo_user    authentication_string
+mo_user    status
+mo_user    created_time
+mo_user    expired_time
+mo_user    login_type
+mo_user    creator
+mo_user    owner
+mo_user    default_role
+mo_account    account_id
+mo_account    account_name
+mo_account    status
+mo_account    created_time
+mo_account    comments
+mo_role    role_id
+mo_role    role_name
+mo_role    creator
+mo_role    owner
+mo_role    created_time
+mo_role    comments
+mo_user_grant    role_id
+mo_user_grant    user_id
+mo_user_grant    granted_time
+mo_user_grant    with_grant_option
+mo_role_grant    granted_id
+mo_role_grant    grantee_id
+mo_role_grant    operation_role_id
+mo_role_grant    operation_user_id
+mo_role_grant    granted_time
+mo_role_grant    with_grant_option
+mo_role_privs    role_id
+mo_role_privs    role_name
+mo_role_privs    obj_type
+mo_role_privs    obj_id
+mo_role_privs    privilege_id
+mo_role_privs    privilege_name
+mo_role_privs    privilege_level
+mo_role_privs    operation_user_id
+mo_role_privs    granted_time
+mo_role_privs    with_grant_option
+sys_async_task    task_id
+sys_async_task    task_metadata_id
+sys_async_task    task_metadata_executor
+sys_async_task    task_metadata_context
+sys_async_task    task_metadata_option
+sys_async_task    task_parent_id
+sys_async_task    task_status
+sys_async_task    task_runner
+sys_async_task    task_epoch
+sys_async_task    last_heartbeat
+sys_async_task    result_code
+sys_async_task    error_msg
+sys_async_task    create_at
+sys_async_task    end_at
+sys_cron_task    cron_task_id
+sys_cron_task    task_metadata_id
+sys_cron_task    task_metadata_executor
+sys_cron_task    task_metadata_context
+sys_cron_task    task_metadata_option
+sys_cron_task    cron_expr
+sys_cron_task    next_time
+sys_cron_task    trigger_times
+sys_cron_task    create_at
+sys_cron_task    update_at
+key_column_usage    constraint_catalog
+key_column_usage    constraint_schema
+key_column_usage    constraint_name
+key_column_usage    table_catalog
+key_column_usage    table_schema
+key_column_usage    table_name
+key_column_usage    column_name
+key_column_usage    ordinal_position
+key_column_usage    position_in_unique_constraint
+key_column_usage    referenced_table_schema
+key_column_usage    referenced_table_name
+key_column_usage    referenced_column_name
+columns    table_catalog
+columns    table_schema
+columns    table_name
+columns    column_name
+columns    ordinal_position
+columns    column_default
+columns    is_nullable
+columns    data_type
+columns    character_maximum_length
+columns    character_octet_length
+columns    numeric_precision
+columns    numeric_scale
+columns    datetime_precision
+columns    character_set_name
+columns    collation_name
+columns    column_type
+columns    column_key
+columns    extra
+columns    PRIVILEGES
+columns    column_comment
+columns    generation_expression
+columns    srs_id
+profiling    query_id
+profiling    seq
+profiling    state
+profiling    duration
+profiling    cpu_user
+profiling    cpu_system
+profiling    context_voluntary
+profiling    context_involuntary
+profiling    block_ops_in
+profiling    block_ops_out
+profiling    messages_sent
+profiling    messages_received
+profiling    page_faults_major
+profiling    page_faults_minor
+profiling    swaps
+profiling    source_function
+profiling    source_file
+profiling    source_line
+PROCESSLIST    id
+PROCESSLIST    user
+PROCESSLIST    host
+PROCESSLIST    db
+PROCESSLIST    command
+PROCESSLIST    time
+PROCESSLIST    state
+PROCESSLIST    info
+user_privileges    grantee
+user_privileges    table_catalog
+user_privileges    privilege_type
+user_privileges    is_grantable
+schemata    catalog_name
+schemata    schema_name
+schemata    default_character_set_name
+schemata    default_collation_name
+schemata    sql_path
+schemata    default_encryption
+character_sets    character_set_name
+character_sets    default_collate_name
+character_sets    description
+character_sets    maxlen
+triggers    trigger_catalog
+triggers    trigger_schema
+triggers    trigger_name
+triggers    event_manipulation
+triggers    event_object_catalog
+triggers    event_object_schema
+triggers    event_object_table
+triggers    action_order
+triggers    action_condition
+triggers    action_statement
+triggers    action_orientation
+triggers    action_timing
+triggers    action_reference_old_table
+triggers    action_reference_new_table
+triggers    action_reference_old_row
+triggers    action_reference_new_row
+triggers    created
+triggers    sql_mode
+triggers    definer
+triggers    character_set_client
+triggers    collation_connection
+triggers    database_collation
+tables    table_catalog
+tables    table_schema
+tables    table_name
+tables    table_type
+tables    engine
+tables    version
+tables    row_format
+tables    table_rows
+tables    avg_row_length
+tables    data_length
+tables    max_data_length
+tables    index_length
+tables    data_free
+tables    AUTO_INCREMENT
+tables    create_time
+tables    update_time
+tables    check_time
+tables    table_collation
+tables    checksum
+tables    create_options
+tables    table_comment
+engines    engine
+engines    support
+engines    comment
+engines    transactions
+engines    xa
+engines    savepoints
+user    host
+user    user
+user    select_priv
+user    insert_priv
+user    update_priv
+user    delete_priv
+user    create_priv
+user    drop_priv
+user    reload_priv
+user    shutdown_priv
+user    process_priv
+user    file_priv
+user    grant_priv
+user    references_priv
+user    index_priv
+user    alter_priv
+user    show_db_priv
+user    super_priv
+user    create_tmp_table_priv
+user    lock_tables_priv
+user    execute_priv
+user    repl_slave_priv
+user    repl_client_priv
+user    create_view_priv
+user    show_view_priv
+user    create_routine_priv
+user    alter_routine_priv
+user    create_user_priv
+user    event_priv
+user    trigger_priv
+user    create_tablespace_priv
+user    ssl_type
+user    ssl_cipher
+user    x509_issuer
+user    x509_subject
+user    max_questions
+user    max_updates
+user    max_connections
+user    max_user_connections
+user    plugin
+user    authentication_string
+user    password_expired
+user    password_last_changed
+user    password_lifetime
+user    account_locked
+user    create_role_priv
+user    drop_role_priv
+user    password_reuse_history
+user    password_reuse_time
+user    password_require_current
+user    user_attributes
+user    __mo_cpkey_004host004user
+db    host
+db    db
+db    user
+db    select_priv
+db    insert_priv
+db    update_priv
+db    delete_priv
+db    create_priv
+db    drop_priv
+db    grant_priv
+db    references_priv
+db    index_priv
+db    alter_priv
+db    create_tmp_table_priv
+db    lock_tables_priv
+db    create_view_priv
+db    show_view_priv
+db    create_routine_priv
+db    alter_routine_priv
+db    execute_priv
+db    event_priv
+db    trigger_priv
+db    __mo_cpkey_004host002db004user
+procs_priv    host
+procs_priv    db
+procs_priv    user
+procs_priv    routine_name
+procs_priv    routine_type
+procs_priv    grantor
+procs_priv    proc_priv
+procs_priv    timestamp
+procs_priv    __mo_cpkey_004host002db004user012routine_name012routine_type
+columns_priv    host
+columns_priv    db
+columns_priv    user
+columns_priv    table_name
+columns_priv    column_name
+columns_priv    timestamp
+columns_priv    column_priv
+columns_priv    __mo_cpkey_004host002db004user010table_name011column_name
+tables_priv    host
+tables_priv    db
+tables_priv    user
+tables_priv    table_name
+tables_priv    grantor
+tables_priv    timestamp
+tables_priv    table_priv
+tables_priv    column_priv
+tables_priv    __mo_cpkey_004host002db004user010table_name
+metric    metric_name
+metric    collecttime
+metric    value
+metric    node
+metric    role
+metric    account
+metric    type
+sql_statement_total    collecttime
+sql_statement_total    value
+sql_statement_total    node
+sql_statement_total    role
+sql_statement_total    account
+sql_statement_total    type
+sql_statement_errors    collecttime
+sql_statement_errors    value
+sql_statement_errors    node
+sql_statement_errors    role
+sql_statement_errors    account
+sql_statement_errors    type
+sql_transaction_total    collecttime
+sql_transaction_total    value
+sql_transaction_total    node
+sql_transaction_total    role
+sql_transaction_total    account
+sql_transaction_errors    collecttime
+sql_transaction_errors    value
+sql_transaction_errors    node
+sql_transaction_errors    role
+sql_transaction_errors    account
+sql_transaction_errors    type
+server_connections    collecttime
+server_connections    value
+server_connections    node
+server_connections    role
+server_connections    account
+process_cpu_percent    collecttime
+process_cpu_percent    value
+process_cpu_percent    node
+process_cpu_percent    role
+process_cpu_percent    account
+process_resident_memory_bytes    collecttime
+process_resident_memory_bytes    value
+process_resident_memory_bytes    node
+process_resident_memory_bytes    role
+process_resident_memory_bytes    account
+process_open_fds    collecttime
+process_open_fds    value
+process_open_fds    node
+process_open_fds    role
+process_open_fds    account
+sys_cpu_seconds_total    collecttime
+sys_cpu_seconds_total    value
+sys_cpu_seconds_total    node
+sys_cpu_seconds_total    role
+sys_cpu_seconds_total    account
+sys_cpu_combined_percent    collecttime
+sys_cpu_combined_percent    value
+sys_cpu_combined_percent    node
+sys_cpu_combined_percent    role
+sys_cpu_combined_percent    account
+sys_memory_used    collecttime
+sys_memory_used    value
+sys_memory_used    node
+sys_memory_used    role
+sys_memory_used    account
+sys_memory_available    collecttime
+sys_memory_available    value
+sys_memory_available    node
+sys_memory_available    role
+sys_memory_available    account
+sys_disk_read_bytes    collecttime
+sys_disk_read_bytes    value
+sys_disk_read_bytes    node
+sys_disk_read_bytes    role
+sys_disk_read_bytes    account
+sys_disk_write_bytes    collecttime
+sys_disk_write_bytes    value
+sys_disk_write_bytes    node
+sys_disk_write_bytes    role
+sys_disk_write_bytes    account
+sys_net_recv_bytes    collecttime
+sys_net_recv_bytes    value
+sys_net_recv_bytes    node
+sys_net_recv_bytes    role
+sys_net_recv_bytes    account
+sys_net_sent_bytes    collecttime
+sys_net_sent_bytes    value
+sys_net_sent_bytes    node
+sys_net_sent_bytes    role
+sys_net_sent_bytes    account
+statement_info    statement_id
+statement_info    transaction_id
+statement_info    session_id
+statement_info    account
+statement_info    user
+statement_info    host
+statement_info    database
+statement_info    statement
+statement_info    statement_tag
+statement_info    statement_fingerprint
+statement_info    node_uuid
+statement_info    node_type
+statement_info    request_at
+statement_info    response_at
+statement_info    duration
+statement_info    status
+statement_info    err_code
+statement_info    error
+statement_info    exec_plan
+statement_info    rows_read
+statement_info    bytes_scan
+rawlog    raw_item
+rawlog    node_uuid
+rawlog    node_type
+rawlog    span_id
+rawlog    statement_id
+rawlog    logger_name
+rawlog    timestamp
+rawlog    level
+rawlog    caller
+rawlog    message
+rawlog    extra
+rawlog    err_code
+rawlog    error
+rawlog    stack
+rawlog    span_name
+rawlog    parent_span_id
+rawlog    start_time
+rawlog    end_time
+rawlog    duration
+rawlog    resource
+log_info    statement_id
+log_info    span_id
+log_info    node_uuid
+log_info    node_type
+log_info    timestamp
+log_info    logger_name
+log_info    level
+log_info    caller
+log_info    message
+log_info    extra
+error_info    timestamp
+error_info    err_code
+error_info    error
+error_info    node_uuid
+error_info    node_type
+error_info    stack
+span_info    statement_id
+span_info    span_id
+span_info    parent_span_id
+span_info    node_uuid
+span_info    node_type
+span_info    span_name
+span_info    start_time
+span_info    end_time
+span_info    duration
+span_info    resource
+t    a
+t    b
+t    c
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT    NO        0        
@@ -178,9 +669,9 @@ source_line    INT    YES        null
 select seq, state from profiling;
 seq    state
 desc PROCESSLIST;
-[unknown result because it is related to issue#6036]
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " PROCESSLIST;";
 select * from PROCESSLIST limit 2;
-[unknown result because it is related to issue#6036]
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " PROCESSLIST limit 2;";
 desc user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment
 grantee    VARCHAR    NO        NULL        

@@ -185,7 +185,7 @@ var (
 			"att_comment as COLUMN_COMMENT," +
 			"'' as GENERATION_EXPRESSION," +
 			"0 as SRS_ID " +
-			"from mo_catalog.mo_columns;",
+			"from mo_catalog.mo_columns where att_relname!='%!%mo_increment_columns' and att_relname not like '__mo_cpkey%' and attname != '__mo_rowid'",
 		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
 		//	"TABLE_CATALOG varchar(64)," +
 		//	"TABLE_SCHEMA varchar(64)," +
