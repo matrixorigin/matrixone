@@ -33,15 +33,15 @@
 
     文件夹将创建产生一个 *.pem* 文件。
 
-    /mo_keys
-    ├── ca-key.pem
-    ├── ca.pem
-    ├── client-cert.pem
-    ├── client-key.pem
-    ├── private_key.pem
-    ├── public_key.pem
-    ├── server-cert.pem
-    └── server-key.pem
+    /mo_keys<br>
+    ├── ca-key.pem<br>
+    ├── ca.pem<br>
+    ├── client-cert.pem<br>
+    ├── client-key.pem<br>
+    ├── private_key.pem<br>
+    ├── public_key.pem<br>
+    ├── server-cert.pem<br>
+    └── server-key.pem<br>
 
 2. 在 MatrixOne 目录下的 *etc/launch-tae-logservice/cn1.toml* 文件内的 `[cn.front]` 部分插入以下代码段：
 

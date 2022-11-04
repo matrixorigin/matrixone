@@ -151,3 +151,5 @@ insert into t1 select * from t;
 ## You can also select a column from the external table file to import into the MatrixOne's table
 insert into t1 select a from t;
 ```
+
+For more information, see [CREATE EXTERNAL TABLE](../../../Reference/SQL-Reference/Data-Definition-Statements/create-external-table.md).

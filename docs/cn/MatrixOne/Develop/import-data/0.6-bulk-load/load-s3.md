@@ -152,3 +152,5 @@ insert into t1 select * from t;
 ## 也可以选取外部表文件中某一列导入内表
 insert into t1 select a from t;
 ```
+
+有关外部表更多信息，参见 [CREATE EXTERNAL TABLE](../../../Reference/SQL-Reference/Data-Definition-Statements/create-external-table.md)。

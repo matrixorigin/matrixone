@@ -33,15 +33,15 @@ To create the SSL keys, perform the following steps:
 
     You'll see in this folder a list of `.pem` files.
 
-    /mo_keys
-    ├── ca-key.pem
-    ├── ca.pem
-    ├── client-cert.pem
-    ├── client-key.pem
-    ├── private_key.pem
-    ├── public_key.pem
-    ├── server-cert.pem
-    └── server-key.pem
+    /mo_keys<br>
+    ├── ca-key.pem<br>
+    ├── ca.pem<br>
+    ├── client-cert.pem<br>
+    ├── client-key.pem<br>
+    ├── private_key.pem<br>
+    ├── public_key.pem<br>
+    ├── server-cert.pem<br>
+    └── server-key.pem<br>
 
 2. Insert the following lines in the `[cn.frontend]` section of the `etc/launch-tae-logservice/cn1.toml` file in MatrixOne folder:
 
