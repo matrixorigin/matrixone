@@ -251,11 +251,13 @@ type column struct {
 }
 
 type blockReader struct {
-	blks     []BlockMeta
-	ctx      context.Context
-	fs       fileservice.FileService
-	ts       timestamp.Timestamp
-	tableDef *plan.TableDef
+	blks       []BlockMeta
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         timestamp.Timestamp
+	tableDef   *plan.TableDef
+	primaryIdx int
+	expr       *plan.Expr
 }
 
 type blockMergeReader struct {
