@@ -309,6 +309,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 			}
 			cacheFileData.Reset()
 		}
+		reader.Close()
 	}
 	if !cacheFileData.IsEmpty() {
 		if err := cacheFileData.Flush(newFileWriter); err != nil {
@@ -385,10 +386,10 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 }
 
 func (s *ContentReader) Close() {
-	for _, row := range s.content {
-		for idx := range row {
-			row[idx] = ""
-		}
+	capLen := cap(s.content)
+	s.content = s.content[:capLen]
+	for idx := range s.content {
+		s.content[idx] = nil
 	}
 }
 
