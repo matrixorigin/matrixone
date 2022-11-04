@@ -228,7 +228,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
 		txn, err2 = handler.GetTxn()
 		if err2 != nil {
-			logutil.Errorf("RecordParseErrorStatement. error:%v", err)
+			logutil.Errorf("RecordParseErrorStatement. error:%v", err2)
 		} else {
 			copy(txnID[:], txn.Txn().ID)
 		}
