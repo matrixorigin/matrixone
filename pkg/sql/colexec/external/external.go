@@ -79,8 +79,6 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-
-	fmt.Println("wangjian sql3 is", param.FileList)
 	if len(param.FileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.Fileparam.End = true

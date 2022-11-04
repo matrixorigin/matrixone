@@ -522,21 +522,17 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	if mcpu < 1 {
 		mcpu = 1
 	}
-	fmt.Println("wangjian sql2a is")
 	ss := make([]*Scope, mcpu)
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
-		fmt.Println("wangjian sql2b is", err)
 		panic(err)
 	}
-	fmt.Println("wangjian sql2c is", param.Filepath)
+	param.FileService = c.proc.FileService
 	fileList, err := external.ReadDir(param)
 	if err != nil {
-		fmt.Println("wangjian sql2d is", err)
 		panic(err)
 	}
-	fmt.Println("wangjian sql2 is", fileList)
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
 	index := 0
@@ -544,10 +540,10 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		ss[i] = c.ConstructScope()
 		var fileListTmp []string
 		if i < tag {
-			fileListTmp = fileList[index:index+cnt+1]
-			index += cnt+1
+			fileListTmp = fileList[index : index+cnt+1]
+			index += cnt + 1
 		} else {
-			fileListTmp = fileList[index:index+cnt]
+			fileListTmp = fileList[index : index+cnt]
 			index += cnt
 		}
 		ss[i].appendInstruction(vm.Instruction{
