@@ -65,7 +65,7 @@ jobs:
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then kill -s SIGINT $(pgrep -d',' -f mo-service); else echo 'current mo-service has already crashed'; exit 1; fi
       
       - name: generate upload files
         if: ${{ always() }}
@@ -74,11 +74,12 @@ jobs:
           mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/cpu.prof ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() || cancelled()}}
+        if: ${{ always() }}
         continue-on-error: true
         with:
           name: e2e_linux_x86_reports
