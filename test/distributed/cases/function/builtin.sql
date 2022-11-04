@@ -443,6 +443,3 @@ select * from t1 where second(a) between 10 and 36;
 
 -- @teardown
 drop table if exists t1;
-
---version
-select version();
