@@ -67,24 +67,26 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
+
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
 		colName := exprImpl.Col.Name
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
-		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
 	}
 }
 
 func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
 	columnMap := make(map[int]int)
-	getColumnMapByExpr(expr, tableDef, columnMap)
+	getColumnMapByExpr(expr, tableDef, &columnMap)
 	return columnMap
 }
 
@@ -182,10 +184,13 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 			return nil, nil, err
 		}
 
-		datas[i] = [2]any{
-			zm.GetMin(),
-			zm.GetMax(),
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			// that's fine, not a bug. if nil just read the block
+			return nil, nil, moerr.NewInternalError("zonemap is nil")
 		}
+		datas[i] = [2]any{min, max}
 	}
 
 	return datas, dataTypes, nil
