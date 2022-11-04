@@ -159,7 +159,7 @@ func TestDynamicS3(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, _, err := GetForETL(nil, joinPath(
+		fs, _, err := GetForETL(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))

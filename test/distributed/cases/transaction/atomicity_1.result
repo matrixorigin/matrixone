@@ -179,6 +179,7 @@ KEY `org_no` (`org_no`)
 start transaction ;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',10);
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',20);
+Duplicate entry '18373453' for key 'code_id'
 commit ;
 Duplicate entry '18373453' for key 'code_id'
 select * from t_code_rule;

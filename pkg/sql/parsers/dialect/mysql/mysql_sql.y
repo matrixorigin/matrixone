@@ -240,7 +240,7 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8
+%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -432,7 +432,7 @@ import (
 //%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
 %type <str> sql_id charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -4530,13 +4530,40 @@ load_param_opt:
     	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
     		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
     		return 1
-    	    }
+    	}
     	$$ = &tree.ExternParam{
     	    Filepath: $5,
     	    CompressType: $9,
     	    Format: strings.ToLower($13),
     	    JsonData: strings.ToLower($17),
     	}
+    }
+|   URL S3OPTION '{' s3params '}'
+    {
+        $$ = &tree.ExternParam{
+            ScanType: tree.S3,
+            S3option: $4,
+        }
+    }
+
+s3params:
+    s3param
+    {
+        $$ = $1
+    }
+|   s3params ',' s3param
+    {
+        $$ = append($1, $3...)
+    }
+
+s3param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
     }
 
 tail_param_opt:
@@ -7805,6 +7832,7 @@ non_reserved_keyword:
 |   TRIGGERS
 |   HISTORY
 |   LOW_CARDINALITY
+|   S3OPTION
 
 func_not_keyword:
     DATE_ADD
