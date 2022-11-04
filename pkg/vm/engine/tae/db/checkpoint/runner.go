@@ -740,21 +740,19 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) Check(start, end types.TS) (ckpLoc []string, newStart, newEnd types.TS) {
+func (r *runner) GetCheckpoints(start, end types.TS) (locations []string, checkpointed types.TS) {
 	r.storage.RLock()
 	entries := r.storage.entries.Items()
 	r.storage.RUnlock()
-	ckpLoc = make([]string, 0)
-	newStart = start
-	newEnd = end
+	locations = make([]string, 0)
 	for _, entry := range entries {
 		if entry.end.Greater(start) || entry.start.LessEq(end) {
 			if entry.GetState() == ST_Finished {
-				ckpLoc = append(ckpLoc, entry.location)
-				newStart = entry.end.Next()
+				locations = append(locations, entry.location)
+				checkpointed = entry.end
 			}
 		}
-		if entry.end.Greater(end){
+		if entry.end.Greater(end) {
 			break
 		}
 	}
