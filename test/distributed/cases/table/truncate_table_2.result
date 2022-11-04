@@ -144,7 +144,7 @@ use information_schema;
 truncate table key_column_usage ;
 internal error: do not have privilege to execute the statement
 truncate table columns;
-internal error: do not have privilege to execute the statement
+no such table information_schema.columns
 truncate table profiling;
 internal error: do not have privilege to execute the statement
 truncate table `PROCESSLIST`;

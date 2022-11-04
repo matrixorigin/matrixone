@@ -74,7 +74,7 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
-select table_name, column_name from columns;
+select table_name, column_name from columns limit 2;
 desc profiling;
 select seq, state from profiling;
 
