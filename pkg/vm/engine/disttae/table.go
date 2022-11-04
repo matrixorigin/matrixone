@@ -331,11 +331,13 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     []BlockMeta{blks[i]},
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -350,19 +352,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step:],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step : (i+1)*step],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
 			}
 		}
 	}
@@ -379,7 +385,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
-		ok, v := getNonIntPkValueByExpr(expr, int32(tbl.primaryIdx),
+		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
 			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
 		if ok {
 			index = memtable.Tuple{
