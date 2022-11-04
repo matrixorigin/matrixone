@@ -42,6 +42,7 @@ type Runner interface {
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
 	DebugUpdateOptions(opts ...Option)
+	GetEntries() []*CheckpointEntry
 }
 
 type DirtyCtx struct {

@@ -64,15 +64,15 @@ func (r *replayer) replay() {
 	r.truncatedLogserviceLsn = r.d.getLogserviceTruncate()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			err := r.replayLogserviceEntry(r.replayedLsn + 1)
+			err := r.replayLogserviceEntry(r.replayedLsn+1, true)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = r.replayLogserviceEntry(r.replayedLsn + 1)
+	err = r.replayLogserviceEntry(r.replayedLsn+1, false)
 	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.replayedLsn + 1)
+		err = r.replayLogserviceEntry(r.replayedLsn+1, false)
 
 	}
 	r.d.lsns = make([]uint64, 0)
@@ -112,9 +112,15 @@ func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 		delete(r.driverLsnLogserviceLsnMap, lsn)
 	}
 }
-func (r *replayer) replayLogserviceEntry(lsn uint64) error {
+func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
+		if safe {
+			logutil.Infof("drlsn %d has been truncated", lsn)
+			r.minDriverLsn = r.replayedLsn
+			r.replayedLsn++
+			return nil
+		}
 		if len(r.driverLsnLogserviceLsnMap) == 0 {
 			return ErrAllRecordsRead
 		}
