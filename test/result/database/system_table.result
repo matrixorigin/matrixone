@@ -111,129 +111,129 @@ def    mo_task    sys_cron_task    next_time    7    null    YES    BIGINT    64
 def    mo_task    sys_cron_task    trigger_times    8    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1002-trigger_times                    0
 def    mo_task    sys_cron_task    create_at    9    null    YES    BIGINT    64    64    0    0    0    utf8    utf8_bin    BIGINT(64)    1002-create_at                    0
 def    mo_task    sys_cron_task    update_at    10    null    YES    BIGINT    64    64    0    0    0    utf8    utf8_bin    BIGINT(64)    1002-update_at                    0
-def    information_schema    key_column_usage    constraint_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-constraint_catalog                    0
-def    information_schema    key_column_usage    constraint_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-constraint_schema                    0
-def    information_schema    key_column_usage    constraint_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-constraint_name                    0
-def    information_schema    key_column_usage    table_catalog    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-table_catalog                    0
-def    information_schema    key_column_usage    table_schema    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-table_schema                    0
-def    information_schema    key_column_usage    table_name    6    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-table_name                    0
-def    information_schema    key_column_usage    column_name    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-column_name                    0
-def    information_schema    key_column_usage    ordinal_position    8    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1018-ordinal_position                    0
-def    information_schema    key_column_usage    position_in_unique_constraint    9    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1018-position_in_unique_constraint                    0
-def    information_schema    key_column_usage    referenced_table_schema    10    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-referenced_table_schema                    0
-def    information_schema    key_column_usage    referenced_table_name    11    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-referenced_table_name                    0
-def    information_schema    key_column_usage    referenced_column_name    12    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1018-referenced_column_name                    0
-def    information_schema    columns    table_catalog    1    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1019-table_catalog                    0
-def    information_schema    columns    table_schema    2    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1019-table_schema                    0
-def    information_schema    columns    table_name    3    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1019-table_name                    0
-def    information_schema    columns    column_name    4    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1019-column_name                    0
-def    information_schema    columns    ordinal_position    5    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1019-ordinal_position                    0
-def    information_schema    columns    column_default    6    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-column_default                    0
-def    information_schema    columns    is_nullable    7    null    YES    VARCHAR    2    2    0    0    0    utf8    utf8_bin    VARCHAR(2)    1019-is_nullable                    0
-def    information_schema    columns    data_type    8    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-data_type                    0
-def    information_schema    columns    character_maximum_length    9    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1019-character_maximum_length                    0
-def    information_schema    columns    character_octet_length    10    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1019-character_octet_length                    0
-def    information_schema    columns    numeric_precision    11    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1019-numeric_precision                    0
-def    information_schema    columns    numeric_scale    12    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1019-numeric_scale                    0
-def    information_schema    columns    datetime_precision    13    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1019-datetime_precision                    0
-def    information_schema    columns    character_set_name    14    null    YES    VARCHAR    4    4    0    0    0    utf8    utf8_bin    VARCHAR(4)    1019-character_set_name                    0
-def    information_schema    columns    collation_name    15    null    YES    VARCHAR    8    8    0    0    0    utf8    utf8_bin    VARCHAR(8)    1019-collation_name                    0
-def    information_schema    columns    column_type    16    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-column_type                    0
-def    information_schema    columns    column_key    17    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1019-column_key                    0
-def    information_schema    columns    extra    18    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-extra                    0
-def    information_schema    columns    PRIVILEGES    19    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-PRIVILEGES                    0
-def    information_schema    columns    column_comment    20    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1019-column_comment                    0
-def    information_schema    columns    generation_expression    21    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1019-generation_expression                    0
-def    information_schema    columns    srs_id    22    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1019-srs_id                    0
-def    information_schema    profiling    query_id    1    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-query_id                    0
-def    information_schema    profiling    seq    2    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-seq                    0
-def    information_schema    profiling    state    3    null    NO    VARCHAR    30    30    0    0    0    utf8    utf8_bin    VARCHAR(30)    1020-state                    0
-def    information_schema    profiling    duration    4    0.000000    NO    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1020-duration                    0
-def    information_schema    profiling    cpu_user    5    null    YES    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1020-cpu_user                    0
-def    information_schema    profiling    cpu_system    6    null    YES    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1020-cpu_system                    0
-def    information_schema    profiling    context_voluntary    7    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-context_voluntary                    0
-def    information_schema    profiling    context_involuntary    8    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-context_involuntary                    0
-def    information_schema    profiling    block_ops_in    9    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-block_ops_in                    0
-def    information_schema    profiling    block_ops_out    10    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-block_ops_out                    0
-def    information_schema    profiling    messages_sent    11    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-messages_sent                    0
-def    information_schema    profiling    messages_received    12    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-messages_received                    0
-def    information_schema    profiling    page_faults_major    13    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-page_faults_major                    0
-def    information_schema    profiling    page_faults_minor    14    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-page_faults_minor                    0
-def    information_schema    profiling    swaps    15    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-swaps                    0
-def    information_schema    profiling    source_function    16    null    YES    VARCHAR    30    30    0    0    0    utf8    utf8_bin    VARCHAR(30)    1020-source_function                    0
-def    information_schema    profiling    source_file    17    null    YES    VARCHAR    20    20    0    0    0    utf8    utf8_bin    VARCHAR(20)    1020-source_file                    0
-def    information_schema    profiling    source_line    18    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-source_line                    0
-def    information_schema    PROCESSLIST    id    1    0    NO    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1021-id                    0
-def    information_schema    PROCESSLIST    user    2    null    NO    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1021-user                    0
-def    information_schema    PROCESSLIST    host    3    null    NO    VARCHAR    261    261    0    0    0    utf8    utf8_bin    VARCHAR(261)    1021-host                    0
-def    information_schema    PROCESSLIST    db    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1021-db                    0
-def    information_schema    PROCESSLIST    command    5    null    NO    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1021-command                    0
-def    information_schema    PROCESSLIST    time    6    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1021-time                    0
-def    information_schema    PROCESSLIST    state    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1021-state                    0
-def    information_schema    PROCESSLIST    info    8    null    YES    BLOB    0    0    0    0    0    utf8    utf8_bin    BLOB(0)    1021-info                    0
-def    information_schema    user_privileges    grantee    1    null    NO    VARCHAR    292    292    0    0    0    utf8    utf8_bin    VARCHAR(292)    1022-grantee                    0
-def    information_schema    user_privileges    table_catalog    2    null    NO    VARCHAR    512    512    0    0    0    utf8    utf8_bin    VARCHAR(512)    1022-table_catalog                    0
-def    information_schema    user_privileges    privilege_type    3    null    NO    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1022-privilege_type                    0
-def    information_schema    user_privileges    is_grantable    4    null    NO    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1022-is_grantable                    0
-def    information_schema    schemata    catalog_name    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-catalog_name                    0
-def    information_schema    schemata    schema_name    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-schema_name                    0
-def    information_schema    schemata    default_character_set_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-default_character_set_name                    0
-def    information_schema    schemata    default_collation_name    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-default_collation_name                    0
-def    information_schema    schemata    sql_path    5    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1023-sql_path                    0
-def    information_schema    schemata    default_encryption    6    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1023-default_encryption                    0
-def    information_schema    character_sets    character_set_name    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-character_set_name                    0
-def    information_schema    character_sets    default_collate_name    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-default_collate_name                    0
-def    information_schema    character_sets    description    3    null    YES    VARCHAR    2048    2048    0    0    0    utf8    utf8_bin    VARCHAR(2048)    1024-description                    0
-def    information_schema    character_sets    maxlen    4    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1024-maxlen                    0
-def    information_schema    triggers    trigger_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-trigger_catalog                    0
-def    information_schema    triggers    trigger_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-trigger_schema                    0
-def    information_schema    triggers    trigger_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-trigger_name                    0
-def    information_schema    triggers    event_manipulation    4    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1025-event_manipulation                    0
-def    information_schema    triggers    event_object_catalog    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-event_object_catalog                    0
-def    information_schema    triggers    event_object_schema    6    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-event_object_schema                    0
-def    information_schema    triggers    event_object_table    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-event_object_table                    0
-def    information_schema    triggers    action_order    8    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1025-action_order                    0
-def    information_schema    triggers    action_condition    9    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1025-action_condition                    0
-def    information_schema    triggers    action_statement    10    null    YES    BLOB    0    0    0    0    0    utf8    utf8_bin    BLOB(0)    1025-action_statement                    0
-def    information_schema    triggers    action_orientation    11    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1025-action_orientation                    0
-def    information_schema    triggers    action_timing    12    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1025-action_timing                    0
-def    information_schema    triggers    action_reference_old_table    13    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1025-action_reference_old_table                    0
-def    information_schema    triggers    action_reference_new_table    14    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1025-action_reference_new_table                    0
-def    information_schema    triggers    action_reference_old_row    15    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1025-action_reference_old_row                    0
-def    information_schema    triggers    action_reference_new_row    16    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1025-action_reference_new_row                    0
-def    information_schema    triggers    created    17    null    YES    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1025-created                    0
-def    information_schema    triggers    sql_mode    18    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1025-sql_mode                    0
-def    information_schema    triggers    definer    19    null    YES    VARCHAR    288    288    0    0    0    utf8    utf8_bin    VARCHAR(288)    1025-definer                    0
-def    information_schema    triggers    character_set_client    20    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-character_set_client                    0
-def    information_schema    triggers    collation_connection    21    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-collation_connection                    0
-def    information_schema    triggers    database_collation    22    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-database_collation                    0
-def    information_schema    tables    table_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-table_catalog                    0
-def    information_schema    tables    table_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-table_schema                    0
-def    information_schema    tables    table_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-table_name                    0
-def    information_schema    tables    table_type    4    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1026-table_type                    0
-def    information_schema    tables    engine    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-engine                    0
-def    information_schema    tables    version    6    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1026-version                    0
-def    information_schema    tables    row_format    7    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1026-row_format                    0
-def    information_schema    tables    table_rows    8    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-table_rows                    0
-def    information_schema    tables    avg_row_length    9    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-avg_row_length                    0
-def    information_schema    tables    data_length    10    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-data_length                    0
-def    information_schema    tables    max_data_length    11    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-max_data_length                    0
-def    information_schema    tables    index_length    12    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-index_length                    0
-def    information_schema    tables    data_free    13    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-data_free                    0
-def    information_schema    tables    AUTO_INCREMENT    14    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1026-AUTO_INCREMENT                    0
-def    information_schema    tables    create_time    15    null    YES    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1026-create_time                    0
-def    information_schema    tables    update_time    16    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1026-update_time                    0
-def    information_schema    tables    check_time    17    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1026-check_time                    0
-def    information_schema    tables    table_collation    18    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-table_collation                    0
-def    information_schema    tables    checksum    19    null    YES    BIGINT    64    64    0    0    0    utf8    utf8_bin    BIGINT(64)    1026-checksum                    0
-def    information_schema    tables    create_options    20    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1026-create_options                    0
-def    information_schema    tables    table_comment    21    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1026-table_comment                    0
-def    information_schema    engines    engine    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1027-engine                    0
-def    information_schema    engines    support    2    null    YES    VARCHAR    8    8    0    0    0    utf8    utf8_bin    VARCHAR(8)    1027-support                    0
-def    information_schema    engines    comment    3    null    YES    VARCHAR    160    160    0    0    0    utf8    utf8_bin    VARCHAR(160)    1027-comment                    0
-def    information_schema    engines    transactions    4    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1027-transactions                    0
-def    information_schema    engines    xa    5    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1027-xa                    0
-def    information_schema    engines    savepoints    6    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1027-savepoints                    0
+def    information_schema    key_column_usage    constraint_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-constraint_catalog                    0
+def    information_schema    key_column_usage    constraint_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-constraint_schema                    0
+def    information_schema    key_column_usage    constraint_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-constraint_name                    0
+def    information_schema    key_column_usage    table_catalog    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-table_catalog                    0
+def    information_schema    key_column_usage    table_schema    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-table_schema                    0
+def    information_schema    key_column_usage    table_name    6    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-table_name                    0
+def    information_schema    key_column_usage    column_name    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-column_name                    0
+def    information_schema    key_column_usage    ordinal_position    8    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1017-ordinal_position                    0
+def    information_schema    key_column_usage    position_in_unique_constraint    9    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1017-position_in_unique_constraint                    0
+def    information_schema    key_column_usage    referenced_table_schema    10    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-referenced_table_schema                    0
+def    information_schema    key_column_usage    referenced_table_name    11    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-referenced_table_name                    0
+def    information_schema    key_column_usage    referenced_column_name    12    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1017-referenced_column_name                    0
+def    information_schema    columns    table_catalog    1    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1018-table_catalog                    0
+def    information_schema    columns    table_schema    2    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1018-table_schema                    0
+def    information_schema    columns    table_name    3    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1018-table_name                    0
+def    information_schema    columns    column_name    4    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1018-column_name                    0
+def    information_schema    columns    ordinal_position    5    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1018-ordinal_position                    0
+def    information_schema    columns    column_default    6    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-column_default                    0
+def    information_schema    columns    is_nullable    7    null    YES    VARCHAR    2    2    0    0    0    utf8    utf8_bin    VARCHAR(2)    1018-is_nullable                    0
+def    information_schema    columns    data_type    8    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-data_type                    0
+def    information_schema    columns    character_maximum_length    9    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1018-character_maximum_length                    0
+def    information_schema    columns    character_octet_length    10    null    YES    INT    0    0    0    0    0    utf8    utf8_bin    INT(0)    1018-character_octet_length                    0
+def    information_schema    columns    numeric_precision    11    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1018-numeric_precision                    0
+def    information_schema    columns    numeric_scale    12    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1018-numeric_scale                    0
+def    information_schema    columns    datetime_precision    13    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1018-datetime_precision                    0
+def    information_schema    columns    character_set_name    14    null    YES    VARCHAR    4    4    0    0    0    utf8    utf8_bin    VARCHAR(4)    1018-character_set_name                    0
+def    information_schema    columns    collation_name    15    null    YES    VARCHAR    8    8    0    0    0    utf8    utf8_bin    VARCHAR(8)    1018-collation_name                    0
+def    information_schema    columns    column_type    16    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-column_type                    0
+def    information_schema    columns    column_key    17    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1018-column_key                    0
+def    information_schema    columns    extra    18    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-extra                    0
+def    information_schema    columns    PRIVILEGES    19    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-PRIVILEGES                    0
+def    information_schema    columns    column_comment    20    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1018-column_comment                    0
+def    information_schema    columns    generation_expression    21    null    YES    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1018-generation_expression                    0
+def    information_schema    columns    srs_id    22    null    YES    BIGINT    0    0    0    0    0    utf8    utf8_bin    BIGINT(0)    1018-srs_id                    0
+def    information_schema    profiling    query_id    1    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-query_id                    0
+def    information_schema    profiling    seq    2    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-seq                    0
+def    information_schema    profiling    state    3    null    NO    VARCHAR    30    30    0    0    0    utf8    utf8_bin    VARCHAR(30)    1019-state                    0
+def    information_schema    profiling    duration    4    0.000000    NO    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1019-duration                    0
+def    information_schema    profiling    cpu_user    5    null    YES    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1019-cpu_user                    0
+def    information_schema    profiling    cpu_system    6    null    YES    DECIMAL64    9    9    0    0    0    utf8    utf8_bin    DECIMAL64(9)    1019-cpu_system                    0
+def    information_schema    profiling    context_voluntary    7    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-context_voluntary                    0
+def    information_schema    profiling    context_involuntary    8    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-context_involuntary                    0
+def    information_schema    profiling    block_ops_in    9    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-block_ops_in                    0
+def    information_schema    profiling    block_ops_out    10    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-block_ops_out                    0
+def    information_schema    profiling    messages_sent    11    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-messages_sent                    0
+def    information_schema    profiling    messages_received    12    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-messages_received                    0
+def    information_schema    profiling    page_faults_major    13    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-page_faults_major                    0
+def    information_schema    profiling    page_faults_minor    14    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-page_faults_minor                    0
+def    information_schema    profiling    swaps    15    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-swaps                    0
+def    information_schema    profiling    source_function    16    null    YES    VARCHAR    30    30    0    0    0    utf8    utf8_bin    VARCHAR(30)    1019-source_function                    0
+def    information_schema    profiling    source_file    17    null    YES    VARCHAR    20    20    0    0    0    utf8    utf8_bin    VARCHAR(20)    1019-source_file                    0
+def    information_schema    profiling    source_line    18    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1019-source_line                    0
+def    information_schema    PROCESSLIST    id    1    0    NO    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1020-id                    0
+def    information_schema    PROCESSLIST    user    2    null    NO    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1020-user                    0
+def    information_schema    PROCESSLIST    host    3    null    NO    VARCHAR    261    261    0    0    0    utf8    utf8_bin    VARCHAR(261)    1020-host                    0
+def    information_schema    PROCESSLIST    db    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1020-db                    0
+def    information_schema    PROCESSLIST    command    5    null    NO    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1020-command                    0
+def    information_schema    PROCESSLIST    time    6    0    NO    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1020-time                    0
+def    information_schema    PROCESSLIST    state    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1020-state                    0
+def    information_schema    PROCESSLIST    info    8    null    YES    BLOB    0    0    0    0    0    utf8    utf8_bin    BLOB(0)    1020-info                    0
+def    information_schema    user_privileges    grantee    1    null    NO    VARCHAR    292    292    0    0    0    utf8    utf8_bin    VARCHAR(292)    1021-grantee                    0
+def    information_schema    user_privileges    table_catalog    2    null    NO    VARCHAR    512    512    0    0    0    utf8    utf8_bin    VARCHAR(512)    1021-table_catalog                    0
+def    information_schema    user_privileges    privilege_type    3    null    NO    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1021-privilege_type                    0
+def    information_schema    user_privileges    is_grantable    4    null    NO    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1021-is_grantable                    0
+def    information_schema    schemata    catalog_name    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1022-catalog_name                    0
+def    information_schema    schemata    schema_name    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1022-schema_name                    0
+def    information_schema    schemata    default_character_set_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1022-default_character_set_name                    0
+def    information_schema    schemata    default_collation_name    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1022-default_collation_name                    0
+def    information_schema    schemata    sql_path    5    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1022-sql_path                    0
+def    information_schema    schemata    default_encryption    6    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1022-default_encryption                    0
+def    information_schema    character_sets    character_set_name    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-character_set_name                    0
+def    information_schema    character_sets    default_collate_name    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1023-default_collate_name                    0
+def    information_schema    character_sets    description    3    null    YES    VARCHAR    2048    2048    0    0    0    utf8    utf8_bin    VARCHAR(2048)    1023-description                    0
+def    information_schema    character_sets    maxlen    4    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1023-maxlen                    0
+def    information_schema    triggers    trigger_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-trigger_catalog                    0
+def    information_schema    triggers    trigger_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-trigger_schema                    0
+def    information_schema    triggers    trigger_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-trigger_name                    0
+def    information_schema    triggers    event_manipulation    4    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1024-event_manipulation                    0
+def    information_schema    triggers    event_object_catalog    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-event_object_catalog                    0
+def    information_schema    triggers    event_object_schema    6    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-event_object_schema                    0
+def    information_schema    triggers    event_object_table    7    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-event_object_table                    0
+def    information_schema    triggers    action_order    8    null    YES    INT UNSIGNED    32    32    0    0    0    utf8    utf8_bin    INT UNSIGNED(32)    1024-action_order                    0
+def    information_schema    triggers    action_condition    9    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1024-action_condition                    0
+def    information_schema    triggers    action_statement    10    null    YES    BLOB    0    0    0    0    0    utf8    utf8_bin    BLOB(0)    1024-action_statement                    0
+def    information_schema    triggers    action_orientation    11    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1024-action_orientation                    0
+def    information_schema    triggers    action_timing    12    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1024-action_timing                    0
+def    information_schema    triggers    action_reference_old_table    13    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1024-action_reference_old_table                    0
+def    information_schema    triggers    action_reference_new_table    14    null    YES    VARCHAR    1    1    0    0    0    utf8    utf8_bin    VARCHAR(1)    1024-action_reference_new_table                    0
+def    information_schema    triggers    action_reference_old_row    15    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1024-action_reference_old_row                    0
+def    information_schema    triggers    action_reference_new_row    16    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1024-action_reference_new_row                    0
+def    information_schema    triggers    created    17    null    YES    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1024-created                    0
+def    information_schema    triggers    sql_mode    18    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1024-sql_mode                    0
+def    information_schema    triggers    definer    19    null    YES    VARCHAR    288    288    0    0    0    utf8    utf8_bin    VARCHAR(288)    1024-definer                    0
+def    information_schema    triggers    character_set_client    20    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-character_set_client                    0
+def    information_schema    triggers    collation_connection    21    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-collation_connection                    0
+def    information_schema    triggers    database_collation    22    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1024-database_collation                    0
+def    information_schema    tables    table_catalog    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-table_catalog                    0
+def    information_schema    tables    table_schema    2    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-table_schema                    0
+def    information_schema    tables    table_name    3    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-table_name                    0
+def    information_schema    tables    table_type    4    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1025-table_type                    0
+def    information_schema    tables    engine    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-engine                    0
+def    information_schema    tables    version    6    null    YES    INT    32    32    0    0    0    utf8    utf8_bin    INT(32)    1025-version                    0
+def    information_schema    tables    row_format    7    null    YES    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1025-row_format                    0
+def    information_schema    tables    table_rows    8    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-table_rows                    0
+def    information_schema    tables    avg_row_length    9    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-avg_row_length                    0
+def    information_schema    tables    data_length    10    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-data_length                    0
+def    information_schema    tables    max_data_length    11    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-max_data_length                    0
+def    information_schema    tables    index_length    12    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-index_length                    0
+def    information_schema    tables    data_free    13    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-data_free                    0
+def    information_schema    tables    AUTO_INCREMENT    14    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1025-AUTO_INCREMENT                    0
+def    information_schema    tables    create_time    15    null    YES    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1025-create_time                    0
+def    information_schema    tables    update_time    16    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1025-update_time                    0
+def    information_schema    tables    check_time    17    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1025-check_time                    0
+def    information_schema    tables    table_collation    18    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1025-table_collation                    0
+def    information_schema    tables    checksum    19    null    YES    BIGINT    64    64    0    0    0    utf8    utf8_bin    BIGINT(64)    1025-checksum                    0
+def    information_schema    tables    create_options    20    null    YES    VARCHAR    256    256    0    0    0    utf8    utf8_bin    VARCHAR(256)    1025-create_options                    0
+def    information_schema    tables    table_comment    21    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1025-table_comment                    0
+def    information_schema    engines    engine    1    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1026-engine                    0
+def    information_schema    engines    support    2    null    YES    VARCHAR    8    8    0    0    0    utf8    utf8_bin    VARCHAR(8)    1026-support                    0
+def    information_schema    engines    comment    3    null    YES    VARCHAR    160    160    0    0    0    utf8    utf8_bin    VARCHAR(160)    1026-comment                    0
+def    information_schema    engines    transactions    4    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1026-transactions                    0
+def    information_schema    engines    xa    5    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1026-xa                    0
+def    information_schema    engines    savepoints    6    null    YES    VARCHAR    3    3    0    0    0    utf8    utf8_bin    VARCHAR(3)    1026-savepoints                    0
 def    mysql    user    host    1    null    NO    CHAR    255    255    0    0    0    utf8    utf8_bin    CHAR(255)    1012-host                    0
 def    mysql    user    user    2    null    NO    CHAR    32    32    0    0    0    utf8    utf8_bin    CHAR(32)    1012-user                    0
 def    mysql    user    select_priv    3    N    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1012-select_priv                    0
@@ -318,180 +318,180 @@ def    mysql    procs_priv    grantor    6    null    NO    VARCHAR    288    28
 def    mysql    procs_priv    proc_priv    7    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1014-proc_priv                    0
 def    mysql    procs_priv    timestamp    8    current_timestamp()    NO    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1014-timestamp                    0
 def    mysql    procs_priv    __mo_cpkey_004host002db004user012routine_name012routine_type    9    null    NO    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1014-__mo_cpkey_004host002db004user012routine_name012routine_type                    0
-def    mysql    columns_priv    host    1    null    NO    CHAR    255    255    0    0    0    utf8    utf8_bin    CHAR(255)    1016-host                    0
-def    mysql    columns_priv    db    2    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1016-db                    0
-def    mysql    columns_priv    user    3    null    NO    CHAR    32    32    0    0    0    utf8    utf8_bin    CHAR(32)    1016-user                    0
-def    mysql    columns_priv    table_name    4    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1016-table_name                    0
-def    mysql    columns_priv    column_name    5    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1016-column_name                    0
-def    mysql    columns_priv    timestamp    6    current_timestamp()    NO    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1016-timestamp                    0
-def    mysql    columns_priv    column_priv    7    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1016-column_priv                    0
-def    mysql    columns_priv    __mo_cpkey_004host002db004user010table_name011column_name    8    null    NO    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1016-__mo_cpkey_004host002db004user010table_name011column_name                    0
-def    mysql    tables_priv    host    1    null    NO    CHAR    255    255    0    0    0    utf8    utf8_bin    CHAR(255)    1017-host                    0
-def    mysql    tables_priv    db    2    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1017-db                    0
-def    mysql    tables_priv    user    3    null    NO    CHAR    32    32    0    0    0    utf8    utf8_bin    CHAR(32)    1017-user                    0
-def    mysql    tables_priv    table_name    4    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1017-table_name                    0
-def    mysql    tables_priv    grantor    5    null    NO    VARCHAR    288    288    0    0    0    utf8    utf8_bin    VARCHAR(288)    1017-grantor                    0
-def    mysql    tables_priv    timestamp    6    current_timestamp()    NO    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1017-timestamp                    0
-def    mysql    tables_priv    table_priv    7    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1017-table_priv                    0
-def    mysql    tables_priv    column_priv    8    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1017-column_priv                    0
-def    mysql    tables_priv    __mo_cpkey_004host002db004user010table_name    9    null    NO    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1017-__mo_cpkey_004host002db004user010table_name                    0
-def    system_metrics    metric    metric_name    1    unknown    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1029-metric_name            metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...        0
-def    system_metrics    metric    collecttime    2    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1029-collecttime            metric data collect time        0
-def    system_metrics    metric    value    3    0.0    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1029-value            metric value        0
-def    system_metrics    metric    node    4    monolithic    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1029-node            mo node uuid        0
-def    system_metrics    metric    role    5    monolithic    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1029-role            mo node role, like: CN, DN, LOG        0
-def    system_metrics    metric    account    6    sys    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1029-account            account name        0
-def    system_metrics    metric    type    7    null    NO    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1029-type            sql type, like: insert, select, ...        0
-def    system_metrics    sql_statement_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1030-collecttime                    0
-def    system_metrics    sql_statement_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1030-value                    0
-def    system_metrics    sql_statement_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1030-node                    0
-def    system_metrics    sql_statement_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1030-role                    0
-def    system_metrics    sql_statement_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1030-account                    0
-def    system_metrics    sql_statement_total    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1030-type                    0
-def    system_metrics    sql_statement_errors    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1031-collecttime                    0
-def    system_metrics    sql_statement_errors    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1031-value                    0
-def    system_metrics    sql_statement_errors    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1031-node                    0
-def    system_metrics    sql_statement_errors    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1031-role                    0
-def    system_metrics    sql_statement_errors    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1031-account                    0
-def    system_metrics    sql_statement_errors    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1031-type                    0
-def    system_metrics    sql_transaction_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1032-collecttime                    0
-def    system_metrics    sql_transaction_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1032-value                    0
-def    system_metrics    sql_transaction_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1032-node                    0
-def    system_metrics    sql_transaction_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1032-role                    0
-def    system_metrics    sql_transaction_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1032-account                    0
-def    system_metrics    sql_transaction_errors    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1033-collecttime                    0
-def    system_metrics    sql_transaction_errors    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1033-value                    0
-def    system_metrics    sql_transaction_errors    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1033-node                    0
-def    system_metrics    sql_transaction_errors    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1033-role                    0
-def    system_metrics    sql_transaction_errors    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1033-account                    0
-def    system_metrics    sql_transaction_errors    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1033-type                    0
-def    system_metrics    server_connections    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1034-collecttime                    0
-def    system_metrics    server_connections    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1034-value                    0
-def    system_metrics    server_connections    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1034-node                    0
-def    system_metrics    server_connections    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1034-role                    0
-def    system_metrics    server_connections    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1034-account                    0
-def    system_metrics    process_cpu_percent    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1035-collecttime                    0
-def    system_metrics    process_cpu_percent    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1035-value                    0
-def    system_metrics    process_cpu_percent    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1035-node                    0
-def    system_metrics    process_cpu_percent    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1035-role                    0
-def    system_metrics    process_cpu_percent    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1035-account                    0
-def    system_metrics    process_resident_memory_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1036-collecttime                    0
-def    system_metrics    process_resident_memory_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1036-value                    0
-def    system_metrics    process_resident_memory_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1036-node                    0
-def    system_metrics    process_resident_memory_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1036-role                    0
-def    system_metrics    process_resident_memory_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1036-account                    0
-def    system_metrics    process_open_fds    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1037-collecttime                    0
-def    system_metrics    process_open_fds    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1037-value                    0
-def    system_metrics    process_open_fds    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1037-node                    0
-def    system_metrics    process_open_fds    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1037-role                    0
-def    system_metrics    process_open_fds    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1037-account                    0
-def    system_metrics    sys_cpu_seconds_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1038-collecttime                    0
-def    system_metrics    sys_cpu_seconds_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1038-value                    0
-def    system_metrics    sys_cpu_seconds_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1038-node                    0
-def    system_metrics    sys_cpu_seconds_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1038-role                    0
-def    system_metrics    sys_cpu_seconds_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1038-account                    0
-def    system_metrics    sys_cpu_combined_percent    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1039-collecttime                    0
-def    system_metrics    sys_cpu_combined_percent    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1039-value                    0
-def    system_metrics    sys_cpu_combined_percent    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1039-node                    0
-def    system_metrics    sys_cpu_combined_percent    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1039-role                    0
-def    system_metrics    sys_cpu_combined_percent    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1039-account                    0
-def    system_metrics    sys_memory_used    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1040-collecttime                    0
-def    system_metrics    sys_memory_used    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1040-value                    0
-def    system_metrics    sys_memory_used    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1040-node                    0
-def    system_metrics    sys_memory_used    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1040-role                    0
-def    system_metrics    sys_memory_used    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1040-account                    0
-def    system_metrics    sys_memory_available    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1041-collecttime                    0
-def    system_metrics    sys_memory_available    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1041-value                    0
-def    system_metrics    sys_memory_available    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1041-node                    0
-def    system_metrics    sys_memory_available    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1041-role                    0
-def    system_metrics    sys_memory_available    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1041-account                    0
-def    system_metrics    sys_disk_read_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1042-collecttime                    0
-def    system_metrics    sys_disk_read_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1042-value                    0
-def    system_metrics    sys_disk_read_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1042-node                    0
-def    system_metrics    sys_disk_read_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1042-role                    0
-def    system_metrics    sys_disk_read_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1042-account                    0
-def    system_metrics    sys_disk_write_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1043-collecttime                    0
-def    system_metrics    sys_disk_write_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1043-value                    0
-def    system_metrics    sys_disk_write_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1043-node                    0
-def    system_metrics    sys_disk_write_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1043-role                    0
-def    system_metrics    sys_disk_write_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1043-account                    0
-def    system_metrics    sys_net_recv_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1045-collecttime                    0
-def    system_metrics    sys_net_recv_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1045-value                    0
-def    system_metrics    sys_net_recv_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1045-node                    0
-def    system_metrics    sys_net_recv_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1045-role                    0
-def    system_metrics    sys_net_recv_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1045-account                    0
-def    system_metrics    sys_net_sent_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1046-collecttime                    0
-def    system_metrics    sys_net_sent_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1046-value                    0
-def    system_metrics    sys_net_sent_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1046-node                    0
-def    system_metrics    sys_net_sent_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1046-role                    0
-def    system_metrics    sys_net_sent_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1046-account                    0
-def    system    statement_info    statement_id    1    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-statement_id            statement uniq id        0
-def    system    statement_info    transaction_id    2    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-transaction_id            txn uniq id        0
-def    system    statement_info    session_id    3    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-session_id            session uniq id        0
-def    system    statement_info    account    4    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-account            account name        0
-def    system    statement_info    user    5    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-user            user name        0
-def    system    statement_info    host    6    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-host            user client ip        0
-def    system    statement_info    database    7    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-database            what database current session stay in.        0
-def    system    statement_info    statement    8    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1048-statement            sql statement        0
-def    system    statement_info    statement_tag    9    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1048-statement_tag            note tag in statement(Reserved)        0
-def    system    statement_info    statement_fingerprint    10    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1048-statement_fingerprint            note tag in statement(Reserved)        0
-def    system    statement_info    node_uuid    11    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-node_uuid            node uuid, which node gen this data.        0
-def    system    statement_info    node_type    12    node    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1048-node_type            node type in MO, val in [DN, CN, LOG]        0
-def    system    statement_info    request_at    13    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1048-request_at            request accept datetime        0
-def    system    statement_info    response_at    14    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1048-response_at            response send datetime        0
-def    system    statement_info    duration    15    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1048-duration            exec time, unit: ns        0
-def    system    statement_info    status    16    Running    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1048-status            sql statement running status, enum: Running, Success, Failed        0
-def    system    statement_info    err_code    17    0    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-err_code                    0
-def    system    statement_info    error    18    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1048-error            error message        0
-def    system    statement_info    exec_plan    19    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1048-exec_plan            statement execution plan        0
-def    system    statement_info    rows_read    20    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1048-rows_read            rows read total        0
-def    system    statement_info    bytes_scan    21    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1048-bytes_scan            bytes scan total        0
-def    system    rawlog    raw_item    1    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-raw_item            raw log item        0
-def    system    rawlog    node_uuid    2    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1049-node_uuid            node uuid, which node gen this data.        0
-def    system    rawlog    node_type    3    node    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1049-node_type            node type in MO, val in [DN, CN, LOG]        0
-def    system    rawlog    span_id    4    0    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1049-span_id            span uniq id        0
-def    system    rawlog    statement_id    5    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1049-statement_id            statement uniq id        0
-def    system    rawlog    logger_name    6    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-logger_name            logger name        0
-def    system    rawlog    timestamp    7    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1049-timestamp            timestamp of action        0
-def    system    rawlog    level    8    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-level            log level, enum: debug, info, warn, error, panic, fatal        0
-def    system    rawlog    caller    9    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-caller            where it log, like: package/file.go:123        0
-def    system    rawlog    message    10    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1049-message            log message        0
-def    system    rawlog    extra    11    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1049-extra            log dynamic fields        0
-def    system    rawlog    err_code    12    0    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-err_code                    0
-def    system    rawlog    error    13    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1049-error            error message        0
-def    system    rawlog    stack    14    null    NO    VARCHAR    4096    4096    0    0    0    utf8    utf8_bin    VARCHAR(4096)    1049-stack                    0
-def    system    rawlog    span_name    15    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-span_name            span name, for example: step name of execution plan, function name in code, ...        0
-def    system    rawlog    parent_span_id    16    0    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1049-parent_span_id            parent span uniq id        0
-def    system    rawlog    start_time    17    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1049-start_time                    0
-def    system    rawlog    end_time    18    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1049-end_time                    0
-def    system    rawlog    duration    19    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1049-duration            exec time, unit: ns        0
-def    system    rawlog    resource    20    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1049-resource            static resource information        0
-def    system    log_info    statement_id    1    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1050-statement_id                    0
-def    system    log_info    span_id    2    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1050-span_id                    0
-def    system    log_info    node_uuid    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1050-node_uuid                    0
-def    system    log_info    node_type    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1050-node_type                    0
-def    system    log_info    timestamp    5    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1050-timestamp                    0
-def    system    log_info    logger_name    6    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1050-logger_name                    0
-def    system    log_info    level    7    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1050-level                    0
-def    system    log_info    caller    8    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1050-caller                    0
-def    system    log_info    message    9    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1050-message                    0
-def    system    log_info    extra    10    null    YES    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1050-extra                    0
-def    system    error_info    timestamp    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1051-timestamp                    0
-def    system    error_info    err_code    2    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1051-err_code                    0
-def    system    error_info    error    3    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1051-error                    0
-def    system    error_info    node_uuid    4    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1051-node_uuid                    0
-def    system    error_info    node_type    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1051-node_type                    0
-def    system    error_info    stack    6    null    YES    VARCHAR    4096    4096    0    0    0    utf8    utf8_bin    VARCHAR(4096)    1051-stack                    0
-def    system    span_info    statement_id    1    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1052-statement_id                    0
-def    system    span_info    span_id    2    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1052-span_id                    0
-def    system    span_info    parent_span_id    3    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1052-parent_span_id                    0
-def    system    span_info    node_uuid    4    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1052-node_uuid                    0
-def    system    span_info    node_type    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1052-node_type                    0
-def    system    span_info    span_name    6    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1052-span_name                    0
-def    system    span_info    start_time    7    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1052-start_time                    0
-def    system    span_info    end_time    8    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1052-end_time                    0
-def    system    span_info    duration    9    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1052-duration                    0
-def    system    span_info    resource    10    null    YES    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1052-resource                    0
+def    mysql    columns_priv    host    1    null    NO    CHAR    255    255    0    0    0    utf8    utf8_bin    CHAR(255)    1015-host                    0
+def    mysql    columns_priv    db    2    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1015-db                    0
+def    mysql    columns_priv    user    3    null    NO    CHAR    32    32    0    0    0    utf8    utf8_bin    CHAR(32)    1015-user                    0
+def    mysql    columns_priv    table_name    4    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1015-table_name                    0
+def    mysql    columns_priv    column_name    5    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1015-column_name                    0
+def    mysql    columns_priv    timestamp    6    current_timestamp()    NO    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1015-timestamp                    0
+def    mysql    columns_priv    column_priv    7    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1015-column_priv                    0
+def    mysql    columns_priv    __mo_cpkey_004host002db004user010table_name011column_name    8    null    NO    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1015-__mo_cpkey_004host002db004user010table_name011column_name                    0
+def    mysql    tables_priv    host    1    null    NO    CHAR    255    255    0    0    0    utf8    utf8_bin    CHAR(255)    1016-host                    0
+def    mysql    tables_priv    db    2    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1016-db                    0
+def    mysql    tables_priv    user    3    null    NO    CHAR    32    32    0    0    0    utf8    utf8_bin    CHAR(32)    1016-user                    0
+def    mysql    tables_priv    table_name    4    null    NO    CHAR    64    64    0    0    0    utf8    utf8_bin    CHAR(64)    1016-table_name                    0
+def    mysql    tables_priv    grantor    5    null    NO    VARCHAR    288    288    0    0    0    utf8    utf8_bin    VARCHAR(288)    1016-grantor                    0
+def    mysql    tables_priv    timestamp    6    current_timestamp()    NO    TIMESTAMP    0    0    0    0    0    utf8    utf8_bin    TIMESTAMP(0)    1016-timestamp                    0
+def    mysql    tables_priv    table_priv    7    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1016-table_priv                    0
+def    mysql    tables_priv    column_priv    8    null    NO    VARCHAR    10    10    0    0    0    utf8    utf8_bin    VARCHAR(10)    1016-column_priv                    0
+def    mysql    tables_priv    __mo_cpkey_004host002db004user010table_name    9    null    NO    VARCHAR    0    0    0    0    0    utf8    utf8_bin    VARCHAR(0)    1016-__mo_cpkey_004host002db004user010table_name                    0
+def    system_metrics    metric    metric_name    1    unknown    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1028-metric_name            metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...        0
+def    system_metrics    metric    collecttime    2    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1028-collecttime            metric data collect time        0
+def    system_metrics    metric    value    3    0.0    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1028-value            metric value        0
+def    system_metrics    metric    node    4    monolithic    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1028-node            mo node uuid        0
+def    system_metrics    metric    role    5    monolithic    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1028-role            mo node role, like: CN, DN, LOG        0
+def    system_metrics    metric    account    6    sys    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1028-account            account name        0
+def    system_metrics    metric    type    7    null    NO    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1028-type            sql type, like: insert, select, ...        0
+def    system_metrics    sql_statement_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1029-collecttime                    0
+def    system_metrics    sql_statement_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1029-value                    0
+def    system_metrics    sql_statement_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1029-node                    0
+def    system_metrics    sql_statement_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1029-role                    0
+def    system_metrics    sql_statement_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1029-account                    0
+def    system_metrics    sql_statement_total    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1029-type                    0
+def    system_metrics    sql_statement_errors    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1030-collecttime                    0
+def    system_metrics    sql_statement_errors    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1030-value                    0
+def    system_metrics    sql_statement_errors    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1030-node                    0
+def    system_metrics    sql_statement_errors    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1030-role                    0
+def    system_metrics    sql_statement_errors    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1030-account                    0
+def    system_metrics    sql_statement_errors    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1030-type                    0
+def    system_metrics    sql_transaction_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1031-collecttime                    0
+def    system_metrics    sql_transaction_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1031-value                    0
+def    system_metrics    sql_transaction_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1031-node                    0
+def    system_metrics    sql_transaction_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1031-role                    0
+def    system_metrics    sql_transaction_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1031-account                    0
+def    system_metrics    sql_transaction_errors    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1032-collecttime                    0
+def    system_metrics    sql_transaction_errors    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1032-value                    0
+def    system_metrics    sql_transaction_errors    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1032-node                    0
+def    system_metrics    sql_transaction_errors    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1032-role                    0
+def    system_metrics    sql_transaction_errors    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1032-account                    0
+def    system_metrics    sql_transaction_errors    type    6    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1032-type                    0
+def    system_metrics    server_connections    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1033-collecttime                    0
+def    system_metrics    server_connections    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1033-value                    0
+def    system_metrics    server_connections    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1033-node                    0
+def    system_metrics    server_connections    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1033-role                    0
+def    system_metrics    server_connections    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1033-account                    0
+def    system_metrics    process_cpu_percent    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1034-collecttime                    0
+def    system_metrics    process_cpu_percent    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1034-value                    0
+def    system_metrics    process_cpu_percent    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1034-node                    0
+def    system_metrics    process_cpu_percent    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1034-role                    0
+def    system_metrics    process_cpu_percent    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1034-account                    0
+def    system_metrics    process_resident_memory_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1035-collecttime                    0
+def    system_metrics    process_resident_memory_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1035-value                    0
+def    system_metrics    process_resident_memory_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1035-node                    0
+def    system_metrics    process_resident_memory_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1035-role                    0
+def    system_metrics    process_resident_memory_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1035-account                    0
+def    system_metrics    process_open_fds    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1036-collecttime                    0
+def    system_metrics    process_open_fds    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1036-value                    0
+def    system_metrics    process_open_fds    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1036-node                    0
+def    system_metrics    process_open_fds    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1036-role                    0
+def    system_metrics    process_open_fds    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1036-account                    0
+def    system_metrics    sys_cpu_seconds_total    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1037-collecttime                    0
+def    system_metrics    sys_cpu_seconds_total    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1037-value                    0
+def    system_metrics    sys_cpu_seconds_total    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1037-node                    0
+def    system_metrics    sys_cpu_seconds_total    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1037-role                    0
+def    system_metrics    sys_cpu_seconds_total    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1037-account                    0
+def    system_metrics    sys_cpu_combined_percent    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1038-collecttime                    0
+def    system_metrics    sys_cpu_combined_percent    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1038-value                    0
+def    system_metrics    sys_cpu_combined_percent    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1038-node                    0
+def    system_metrics    sys_cpu_combined_percent    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1038-role                    0
+def    system_metrics    sys_cpu_combined_percent    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1038-account                    0
+def    system_metrics    sys_memory_used    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1039-collecttime                    0
+def    system_metrics    sys_memory_used    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1039-value                    0
+def    system_metrics    sys_memory_used    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1039-node                    0
+def    system_metrics    sys_memory_used    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1039-role                    0
+def    system_metrics    sys_memory_used    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1039-account                    0
+def    system_metrics    sys_memory_available    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1040-collecttime                    0
+def    system_metrics    sys_memory_available    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1040-value                    0
+def    system_metrics    sys_memory_available    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1040-node                    0
+def    system_metrics    sys_memory_available    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1040-role                    0
+def    system_metrics    sys_memory_available    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1040-account                    0
+def    system_metrics    sys_disk_read_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1041-collecttime                    0
+def    system_metrics    sys_disk_read_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1041-value                    0
+def    system_metrics    sys_disk_read_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1041-node                    0
+def    system_metrics    sys_disk_read_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1041-role                    0
+def    system_metrics    sys_disk_read_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1041-account                    0
+def    system_metrics    sys_disk_write_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1042-collecttime                    0
+def    system_metrics    sys_disk_write_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1042-value                    0
+def    system_metrics    sys_disk_write_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1042-node                    0
+def    system_metrics    sys_disk_write_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1042-role                    0
+def    system_metrics    sys_disk_write_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1042-account                    0
+def    system_metrics    sys_net_recv_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1043-collecttime                    0
+def    system_metrics    sys_net_recv_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1043-value                    0
+def    system_metrics    sys_net_recv_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1043-node                    0
+def    system_metrics    sys_net_recv_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1043-role                    0
+def    system_metrics    sys_net_recv_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1043-account                    0
+def    system_metrics    sys_net_sent_bytes    collecttime    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1044-collecttime                    0
+def    system_metrics    sys_net_sent_bytes    value    2    null    YES    DOUBLE    0    0    0    0    0    utf8    utf8_bin    DOUBLE(0)    1044-value                    0
+def    system_metrics    sys_net_sent_bytes    node    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1044-node                    0
+def    system_metrics    sys_net_sent_bytes    role    4    null    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1044-role                    0
+def    system_metrics    sys_net_sent_bytes    account    5    null    YES    VARCHAR    128    128    0    0    0    utf8    utf8_bin    VARCHAR(128)    1044-account                    0
+def    system    statement_info    statement_id    1    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1046-statement_id            statement uniq id        0
+def    system    statement_info    transaction_id    2    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1046-transaction_id            txn uniq id        0
+def    system    statement_info    session_id    3    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1046-session_id            session uniq id        0
+def    system    statement_info    account    4    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1046-account            account name        0
+def    system    statement_info    user    5    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1046-user            user name        0
+def    system    statement_info    host    6    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1046-host            user client ip        0
+def    system    statement_info    database    7    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1046-database            what database current session stay in.        0
+def    system    statement_info    statement    8    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1046-statement            sql statement        0
+def    system    statement_info    statement_tag    9    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1046-statement_tag            note tag in statement(Reserved)        0
+def    system    statement_info    statement_fingerprint    10    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1046-statement_fingerprint            note tag in statement(Reserved)        0
+def    system    statement_info    node_uuid    11    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1046-node_uuid            node uuid, which node gen this data.        0
+def    system    statement_info    node_type    12    node    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1046-node_type            node type in MO, val in [DN, CN, LOG]        0
+def    system    statement_info    request_at    13    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1046-request_at            request accept datetime        0
+def    system    statement_info    response_at    14    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1046-response_at            response send datetime        0
+def    system    statement_info    duration    15    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1046-duration            exec time, unit: ns        0
+def    system    statement_info    status    16    Running    YES    VARCHAR    32    32    0    0    0    utf8    utf8_bin    VARCHAR(32)    1046-status            sql statement running status, enum: Running, Success, Failed        0
+def    system    statement_info    err_code    17    0    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1046-err_code                    0
+def    system    statement_info    error    18    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1046-error            error message        0
+def    system    statement_info    exec_plan    19    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1046-exec_plan            statement execution plan        0
+def    system    statement_info    rows_read    20    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1046-rows_read            rows read total        0
+def    system    statement_info    bytes_scan    21    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1046-bytes_scan            bytes scan total        0
+def    system    rawlog    raw_item    1    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-raw_item            raw log item        0
+def    system    rawlog    node_uuid    2    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1047-node_uuid            node uuid, which node gen this data.        0
+def    system    rawlog    node_type    3    node    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1047-node_type            node type in MO, val in [DN, CN, LOG]        0
+def    system    rawlog    span_id    4    0    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1047-span_id            span uniq id        0
+def    system    rawlog    statement_id    5    0    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1047-statement_id            statement uniq id        0
+def    system    rawlog    logger_name    6    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-logger_name            logger name        0
+def    system    rawlog    timestamp    7    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1047-timestamp            timestamp of action        0
+def    system    rawlog    level    8    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-level            log level, enum: debug, info, warn, error, panic, fatal        0
+def    system    rawlog    caller    9    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-caller            where it log, like: package/file.go:123        0
+def    system    rawlog    message    10    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1047-message            log message        0
+def    system    rawlog    extra    11    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1047-extra            log dynamic fields        0
+def    system    rawlog    err_code    12    0    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-err_code                    0
+def    system    rawlog    error    13    null    NO    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1047-error            error message        0
+def    system    rawlog    stack    14    null    NO    VARCHAR    4096    4096    0    0    0    utf8    utf8_bin    VARCHAR(4096)    1047-stack                    0
+def    system    rawlog    span_name    15    null    NO    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1047-span_name            span name, for example: step name of execution plan, function name in code, ...        0
+def    system    rawlog    parent_span_id    16    0    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1047-parent_span_id            parent span uniq id        0
+def    system    rawlog    start_time    17    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1047-start_time                    0
+def    system    rawlog    end_time    18    null    NO    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1047-end_time                    0
+def    system    rawlog    duration    19    0    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1047-duration            exec time, unit: ns        0
+def    system    rawlog    resource    20    null    NO    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1047-resource            static resource information        0
+def    system    log_info    statement_id    1    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-statement_id                    0
+def    system    log_info    span_id    2    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1048-span_id                    0
+def    system    log_info    node_uuid    3    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1048-node_uuid                    0
+def    system    log_info    node_type    4    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1048-node_type                    0
+def    system    log_info    timestamp    5    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1048-timestamp                    0
+def    system    log_info    logger_name    6    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-logger_name                    0
+def    system    log_info    level    7    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-level                    0
+def    system    log_info    caller    8    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1048-caller                    0
+def    system    log_info    message    9    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1048-message                    0
+def    system    log_info    extra    10    null    YES    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1048-extra                    0
+def    system    error_info    timestamp    1    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1049-timestamp                    0
+def    system    error_info    err_code    2    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1049-err_code                    0
+def    system    error_info    error    3    null    YES    TEXT    0    0    0    0    0    utf8    utf8_bin    TEXT(0)    1049-error                    0
+def    system    error_info    node_uuid    4    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1049-node_uuid                    0
+def    system    error_info    node_type    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1049-node_type                    0
+def    system    error_info    stack    6    null    YES    VARCHAR    4096    4096    0    0    0    utf8    utf8_bin    VARCHAR(4096)    1049-stack                    0
+def    system    span_info    statement_id    1    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1050-statement_id                    0
+def    system    span_info    span_id    2    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1050-span_id                    0
+def    system    span_info    parent_span_id    3    null    YES    VARCHAR    16    16    0    0    0    utf8    utf8_bin    VARCHAR(16)    1050-parent_span_id                    0
+def    system    span_info    node_uuid    4    null    YES    VARCHAR    36    36    0    0    0    utf8    utf8_bin    VARCHAR(36)    1050-node_uuid                    0
+def    system    span_info    node_type    5    null    YES    VARCHAR    64    64    0    0    0    utf8    utf8_bin    VARCHAR(64)    1050-node_type                    0
+def    system    span_info    span_name    6    null    YES    VARCHAR    1024    1024    0    0    0    utf8    utf8_bin    VARCHAR(1024)    1050-span_name                    0
+def    system    span_info    start_time    7    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1050-start_time                    0
+def    system    span_info    end_time    8    null    YES    DATETIME    0    0    0    0    0    utf8    utf8_bin    DATETIME(0)    1050-end_time                    0
+def    system    span_info    duration    9    null    YES    BIGINT UNSIGNED    64    64    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(64)    1050-duration                    0
+def    system    span_info    resource    10    null    YES    JSON    0    0    0    0    0    utf8    utf8_bin    JSON(0)    1050-resource                    0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
