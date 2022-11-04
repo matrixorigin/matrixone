@@ -532,3 +532,73 @@ insert into t1 values(0.999999999999999995);
 truncated type DECIMAL128 value 0.999999999999999995 for column a, 1
 insert into t1 values(-0.999999999999999995);
 truncated type DECIMAL128 value -0.999999999999999995 for column a, 1
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a + 4589.6 from t1;
+a + 4589.6
+306523.87
+select a + 4589.60 from t1;
+a + 4589.60
+306523.87
+select 4589.6 + a from t1;
+4589.6 + a
+306523.87
+select 4589.60 + a from t1;
+4589.60 + a
+306523.87
+drop table t1;
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a - 4589.6 from t1;
+a - 4589.6
+297344.67
+select a - 4589.60 from t1;
+a - 4589.60
+297344.67
+select 4589.6 - a from t1;
+4589.6 - a
+-297344.67
+select 4589.60 - a from t1;
+4589.60 - a
+-297344.67
+drop table t1;
+drop table if exists t1;
+create table t1 (a decimal(12,2));
+insert into t1 values (301934.27);
+select a * 4589.6 from t1;
+a * 4589.6
+1385757525.592
+select a * 4589.60 from t1;
+a * 4589.60
+1385757525.5920
+select a * 54545.5 from t1;
+a * 54545.5
+16469155724.285
+select a * 54545.50 from t1;
+a * 54545.50
+16469155724.2850
+select a * 54545.8 from t1;
+a * 54545.8
+16469246304.566
+select a * 54545.80 from t1;
+a * 54545.80
+16469246304.5660
+drop table t1;
+drop table if exists t1;
+create table t1 (a decimal(12,2), b decimal(12, 2));
+insert into t1 values (301934.27, 301934.27);
+select a / 4589.6 from t1;
+a / 4589.6
+65.786620
+select a / 4589.60 from t1;
+a / 4589.60
+65.786620
+select 4589.6 / a from t1;
+4589.6 / a
+0.01520
+select 4589.60 / a from t1;
+4589.60 / a
+0.015201
+drop table t1;
