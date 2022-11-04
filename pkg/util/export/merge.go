@@ -219,7 +219,7 @@ func (m *Merge) Main(ts time.Time) error {
 			totalSize += f.Size
 			files = append(files, filepath)
 			if totalSize > m.MaxFileSize {
-				if err = m.doMergeFiles(account.Name, files); err != nil {
+				if err = m.doMergeFiles(account.Name, files, totalSize); err != nil {
 					return err
 				}
 				files = files[:0]
@@ -227,7 +227,7 @@ func (m *Merge) Main(ts time.Time) error {
 			}
 		}
 
-		if err = m.doMergeFiles(account.Name, files); err != nil {
+		if err = m.doMergeFiles(account.Name, files, 0); err != nil {
 			logutil.Errorf("err: %v\n", err)
 		}
 	}
@@ -240,7 +240,7 @@ func (m *Merge) Main(ts time.Time) error {
 // Step 2. make new filename, file writer
 // Step 3. read file data(valid format), and write down new file
 // Step 4. delete old files.
-func (m *Merge) doMergeFiles(account string, paths []string) error {
+func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) error {
 
 	// Control task concurrency
 	m.runningJobs <- struct{}{}
@@ -272,11 +272,17 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 	timestampStart := timestamps[0]
 	timestampEnd := timestamps[len(timestamps)-1]
 
+	// new buffer
+	if bufferSize <= 0 {
+		bufferSize = m.MaxFileSize
+	}
+	buf := make([]byte, 0, bufferSize)
+
 	// Step 2. new filename, file writer
 	prefix := m.pathBuilder.Build(account, MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
 	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd)
 	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath)
+	newFileWriter, _ := NewCSVWriter(m.ctx, m.FS, mergeFilepath, buf)
 
 	// Step 3. do simple merge
 	cacheFileData := m.Table.NewRowCache()
@@ -424,8 +430,8 @@ type ContentWriter struct {
 	parser *csv.Writer
 }
 
-func NewContentWriter(writer io.StringWriter) *ContentWriter {
-	buf := bytes.NewBuffer(nil)
+func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {
+	buf := bytes.NewBuffer(buffer)
 	return &ContentWriter{
 		writer: writer,
 		buf:    buf,
@@ -446,12 +452,12 @@ func (w *ContentWriter) FlushAndClose() error {
 	return err
 }
 
-func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string) (CSVWriter, error) {
+func NewCSVWriter(ctx context.Context, fs fileservice.FileService, path string, buf []byte) (CSVWriter, error) {
 
 	factory := GetFSWriterFactory(fs, "", "")
 	fsWriter := factory(ctx, "", nil, WithFilePath(path))
 
-	return NewContentWriter(fsWriter), nil
+	return NewContentWriter(fsWriter, buf), nil
 }
 
 type Cache interface {
