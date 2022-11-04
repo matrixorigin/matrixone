@@ -311,17 +311,10 @@ false
 true
 false
 delete from t8 where col12 is not NULL;
-insert into t8(col12) values ('true');
-insert into t8(col12) values ('trUe');
-insert into t8(col12) values ('falSe');
-select cast(col12 as bool) from t8;
-cast(col12 as bool)
-true
-true
-false
 insert into t8(col12) values ('hello');
 select cast(col12 as bool) from t8;
-invalid input: 'hello' is not a valid bool expression
+cast(col12 as bool)
+false
 delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;

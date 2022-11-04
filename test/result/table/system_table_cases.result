@@ -25,10 +25,6 @@ count()
 SELECT COUNT(NULL) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 count(null)
 0
-SELECT * FROM rawlog LIMIT 1;
-[unknown result because it is related to issue#5892]
-SELECT * FROM log_info LIMIT 1;
-[unknown result because it is related to issue#5892]
 SELECT COUNT(*) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 count(*)
 10

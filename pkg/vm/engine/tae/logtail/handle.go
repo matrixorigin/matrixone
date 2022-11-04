@@ -125,6 +125,10 @@ func (b *CatalogLogtailRespBuilder) Close() {
 
 func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	entry.RLock()
+	if shouldIgnoreDBInLogtail(entry.ID) {
+		entry.RUnlock()
+		return nil
+	}
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
@@ -144,6 +148,10 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 
 func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	entry.RLock()
+	if shouldIgnoreTblInLogtail(entry.ID) {
+		entry.RUnlock()
+		return nil
+	}
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
 	for _, node := range mvccNodes {
