@@ -27,7 +27,7 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name : echo dn.toml
