@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -779,6 +780,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cols:          t.Es.Cols,
 			Name2ColIndex: name2ColIndexSlice,
 			CreateSql:     t.Es.CreateSql,
+			FileList:      t.Es.FileList,
 		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1015,6 +1017,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CreateSql:     t.CreateSql,
 				Name2ColIndex: name2ColIndex,
 				Fileparam:     new(external.ExternalFileparam),
+				FileList:      t.FileList,
 			},
 		}
 	default:

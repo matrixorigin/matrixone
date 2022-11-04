@@ -171,6 +171,7 @@ message ExternalScan {
   repeated plan.ColDef cols = 2;
   repeated ExternalName2ColIndex name2_col_index = 3;
   string create_sql = 4;
+  repeated string file_list = 5;
 }
 
 message Instruction{
