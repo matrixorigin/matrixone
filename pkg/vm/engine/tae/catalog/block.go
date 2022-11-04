@@ -187,22 +187,6 @@ func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (entry *BlockEntry) MakeLogEntry() *EntryCommand {
-	return newBlockCmd(0, CmdLogBlock, entry)
-}
-
-func (entry *BlockEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &BlockEntry{
-		MetaBaseEntry: ret.(*MetaBaseEntry),
-		state:         entry.state,
-		segment:       entry.segment,
-	}
-}
-
 func (entry *BlockEntry) DestroyData() (err error) {
 	if entry.blkData == nil {
 		return
@@ -212,6 +196,26 @@ func (entry *BlockEntry) DestroyData() (err error) {
 
 func (entry *BlockEntry) MakeKey() []byte {
 	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
+}
+
+// PrepareCompact is performance insensitive
+// a block can be compacted:
+// 1. no uncommited node
+// 2. at least one committed node
+// 3. not compacted
+func (entry *BlockEntry) PrepareCompact() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.HasUncommittedNode() {
+		return false
+	}
+	if !entry.HasCommittedNode() {
+		return false
+	}
+	if entry.HasDropCommittedLocked() {
+		return false
+	}
+	return true
 }
 
 // IsActive is coarse API: no consistency check

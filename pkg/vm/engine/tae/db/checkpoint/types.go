@@ -33,11 +33,16 @@ type Runner interface {
 	Start()
 	Stop()
 	EnqueueWait(any) error
+	Replay(catalog.DataFactory) (types.TS, error)
+	MaxLSN() uint64
+
+	MockCheckpoint(end types.TS)
 	FlushTable(dbID, tableID uint64, ts types.TS) error
 
 	// for test, delete in next phase
 	TestCheckpoint(entry *CheckpointEntry)
 	DebugUpdateOptions(opts ...Option)
+	GetEntries() []*CheckpointEntry
 }
 
 type DirtyCtx struct {

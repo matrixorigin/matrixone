@@ -150,7 +150,7 @@ func (n *nodeList[T]) TxnGetNodeLocked(ts types.TS) (
 	}
 	n.ForEachNodes(fn)
 	if dn == nil && err == nil {
-		err = moerr.NewNotFound()
+		err = moerr.GetOkExpectedEOB()
 	}
 	return
 }

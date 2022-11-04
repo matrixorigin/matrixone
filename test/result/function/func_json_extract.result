@@ -107,3 +107,30 @@ json_extract(t1.a, $**.a)
 select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;
 json_extract(t1.a, $.a[*].a)
 4
+drop table t1;
+create table t1 (a json);
+insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
+drop table if exists t2;
+create table t2 (a varchar);
+insert into t2 values ('$[0]'),('$.a');
+select json_extract(t1.a,t2.a) qqq,t1.a,t2.a from t2, t1;
+qqq	a	a
+{"a": 1}	{"a": 1}	$[0]
+1	{"a": 1}	$.a
+1	[1, 2]	$[0]
+null	[1, 2]	$.a
+{"xa": 1}	{"xa": 1}	$[0]
+null	{"xa": 1}	$.a
+drop table if exists json_table_1;
+create table json_table_1 (j1 json);
+insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),('{"芝士面包": "12abc", "123456": "中文mo"}'),('{"": "", "123456": "中文mo"}'),('{"a 1": "b 1", "123456": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
+select json_extract('{"a":"a1","b":"b1"}','$.*') from json_table_1;
+json_extract({"a":"a1","b":"b1"}, $.*)
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]
+["a1", "b1"]

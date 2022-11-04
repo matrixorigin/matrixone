@@ -100,3 +100,30 @@ insert into cpk_table_42 select * from cpk_table_43;
 -- @bvt:issue#5868
 select clo4, col14,col20 from cpk_table_43;
 -- @bvt:issue
+
+-- test cases for external table with null values
+drop table if exists rawlog_withnull;
+CREATE external TABLE rawlog_withnull (
+`raw_item` VARCHAR(1024),
+`node_uuid` VARCHAR(36),
+`node_type` VARCHAR(64),
+`span_id` VARCHAR(16),
+`statement_id` VARCHAR(36),
+`logger_name` VARCHAR(1024),
+`timestamp` DATETIME,
+`level` VARCHAR(1024),
+`caller` VARCHAR(1024),
+`message` TEXT,
+`extra` JSON,
+`err_code` VARCHAR(1024),
+`error` TEXT,
+`stack` VARCHAR(4096),
+`span_name` VARCHAR(1024),
+`parent_span_id` VARCHAR(16),
+`start_time` DATETIME,
+`end_time` DATETIME,
+`duration` BIGINT UNSIGNED,
+`resource` JSON)
+infile{"filepath"='$resources/external_table_file/rawlog_withnull.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select raw_item,node_uuid,node_type,span_id,statement_id,logger_name,timestamp from rawlog_withnull order by 1 limit 1;
+drop table if exists rawlog_withnull;

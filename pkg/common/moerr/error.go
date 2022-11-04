@@ -36,7 +36,11 @@ const (
 	OkStopCurrRecur uint16 = 1
 	OkExpectedEOF   uint16 = 2 // Expected End Of File
 	OkExpectedEOB   uint16 = 3 // Expected End of Batch
-	OkMax           uint16 = 99
+	OkExpectedDup   uint16 = 4 // Expected Duplicate
+
+	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
+
+	OkMax uint16 = 99
 
 	// 100 - 200 is Info
 	ErrInfo     uint16 = 100
@@ -70,6 +74,7 @@ const (
 	ErrConstraintViolation uint16 = 20304
 	ErrDuplicate           uint16 = 20305
 	ErrRoleGrantedToSelf   uint16 = 20306
+	ErrDuplicateEntry      uint16 = 20307
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -111,6 +116,7 @@ const (
 	ErrDragonboatInvalidRange       uint16 = 20436
 	ErrDragonboatShardNotFound      uint16 = 20437
 	ErrDragonboatOtherSystemError   uint16 = 20438
+	ErrDropNonExistsDB              uint16 = 20439
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -205,6 +211,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -246,6 +253,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatInvalidRange:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -288,43 +296,23 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
 	var err *Error
-	// We should try to find the corresponding error information and error code in mysql_error_define, in order to be more compatible with MySQL.
-	// you can customize moerr if you can't find it.
-	if t, ok := MysqlErrorMsgRefer[uint16(code)]; ok {
-		if len(args) == 0 {
-			err = &Error{
-				code:      code,
-				mysqlCode: code,
-				message:   t.ErrorMsgOrFormat,
-				sqlState:  MysqlErrorMsgRefer[code].SqlStates[0],
-			}
-		} else {
-			err = &Error{
-				code:      code,
-				mysqlCode: code,
-				message:   fmt.Sprintf(t.ErrorMsgOrFormat, args...),
-				sqlState:  MysqlErrorMsgRefer[code].SqlStates[0],
-			}
+	item, has := errorMsgRefer[code]
+	if !has {
+		panic(NewInternalError("not exist MOErrorCode: %d", code))
+	}
+	if len(args) == 0 {
+		err = &Error{
+			code:      code,
+			mysqlCode: item.mysqlCode,
+			message:   item.errorMsgOrFormat,
+			sqlState:  item.sqlStates[0],
 		}
 	} else {
-		item, has := errorMsgRefer[code]
-		if !has {
-			panic(NewInternalError("not exist MOErrorCode: %d", code))
-		}
-		if len(args) == 0 {
-			err = &Error{
-				code:      code,
-				mysqlCode: item.mysqlCode,
-				message:   item.errorMsgOrFormat,
-				sqlState:  item.sqlStates[0],
-			}
-		} else {
-			err = &Error{
-				code:      code,
-				mysqlCode: item.mysqlCode,
-				message:   fmt.Sprintf(item.errorMsgOrFormat, args...),
-				sqlState:  item.sqlStates[0],
-			}
+		err = &Error{
+			code:      code,
+			mysqlCode: item.mysqlCode,
+			message:   fmt.Sprintf(item.errorMsgOrFormat, args...),
+			sqlState:  item.sqlStates[0],
 		}
 	}
 	_ = errutil.WithContextWithDepth(ctx, err, 2)
@@ -458,6 +446,8 @@ func (e *Error) Succeeded() bool {
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
 var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
+var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
+var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -478,6 +468,14 @@ func GetOkExpectedEOF() *Error {
 
 func GetOkExpectedEOB() *Error {
 	return &errOkExptededEOB
+}
+
+func GetOkExpectedDup() *Error {
+	return &errOkExpectedDup
+}
+
+func GetOkExpectedPossibleDup() *Error {
+	return &errOkExpectedPossibleDup
 }
 
 func NewInfo(msg string) *Error {
@@ -772,6 +770,10 @@ func NewDragonboatOtherSystemError(msg string, args ...any) *Error {
 	return newWithDepth(Context(), ErrDragonboatOtherSystemError, xmsg)
 }
 
+func NewErrDropNonExistsDB(name string) *Error {
+	return newWithDepth(Context(), ErrDropNonExistsDB, name)
+}
+
 func NewTAERead() *Error {
 	return newWithDepth(Context(), ErrTAERead)
 }
@@ -829,6 +831,10 @@ func NewNotFound() *Error {
 
 func NewDuplicate() *Error {
 	return newWithDepth(Context(), ErrDuplicate)
+}
+
+func NewDuplicateEntry(entry string, key string) *Error {
+	return newWithDepth(Context(), ErrDuplicateEntry, entry, key)
 }
 
 func NewRoleGrantedToSelf(from, to string) *Error {

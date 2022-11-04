@@ -19,16 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type EntryType uint8
-
-const (
-	ETDatabase EntryType = iota
-	ETTable
-	ETSegment
-	ETBlock
-	ETColDef
-)
-
 var (
 	PhyAddrColumnType types.Type
 )
