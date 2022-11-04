@@ -660,3 +660,6 @@ select * from t1 where second(a) between 10 and 36;
 a    b
 2011-01-31 12:32:11    1979-10-22 00:00:00
 drop table if exists t1;
+select version();
+version()
+8.0.30-MatrixOne-v0.6.0
