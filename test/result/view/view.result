@@ -66,10 +66,3 @@ a
 1
 1
 drop view vvvv;
-select data_type,column_type,IS_NULLABLE,COLUMN_DEFAULT from information_schema.columns where table_name ='mo_tables' limit 5;
-data_type	column_type	is_nullable	column_default
-BIGINT UNSIGNED	BIGINT UNSIGNED(0)	NO	NULL
-VARCHAR	VARCHAR(100)	YES	NULL
-VARCHAR	VARCHAR(100)	YES	NULL
-BIGINT UNSIGNED	BIGINT UNSIGNED(0)	YES	NULL
-VARCHAR	VARCHAR(100)	YES	NULL
