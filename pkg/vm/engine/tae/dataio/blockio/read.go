@@ -185,7 +185,7 @@ func readColumnBatchByMetaloc(
 			bat.AddVector(colNames[i], rowidData)
 		} else {
 			vec := vector.New(colTyps[i])
-			err := vec.Read(entry[0].Data)
+			err := vec.Read(entry[0].Object.([]byte))
 			if err != nil {
 				return nil, err
 			}
@@ -213,7 +213,7 @@ func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileserv
 	}
 	for i, entry := range ioResult.Entries {
 		vec := vector.New(colTypes[i])
-		err := vec.Read(entry.Data)
+		err := vec.Read(entry.Object.([]byte))
 		if err != nil {
 			return nil, err
 		}
