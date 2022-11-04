@@ -15,6 +15,8 @@
 package model
 
 import (
+	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +35,7 @@ type BlockT[R RowsT[R]] interface {
 	Append(R) error
 	IsAppendable() bool
 	Length() int
+	String() string
 	Close()
 }
 
@@ -55,6 +58,20 @@ func NewAOT[B BlockT[R], R RowsT[R]](
 	}
 }
 
+func (aot *AOT[B, R]) Iter() btree.GenericIter[B] {
+	aot.Lock()
+	cpy := aot.blocks.Copy()
+	aot.Unlock()
+	return cpy.Iter()
+}
+
+func (aot *AOT[B, R]) Scan(fn func(_ B) bool) {
+	aot.Lock()
+	cpy := aot.blocks.Copy()
+	aot.Unlock()
+	cpy.Scan(fn)
+}
+
 func (aot *AOT[B, R]) Close() {
 	aot.Lock()
 	defer aot.Unlock()
@@ -63,6 +80,21 @@ func (aot *AOT[B, R]) Close() {
 		return true
 	})
 	aot.blocks.Clear()
+}
+
+func (aot *AOT[B, R]) String() string {
+	aot.Lock()
+	cpy := aot.blocks.Copy()
+	aot.Unlock()
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("AOT[Len=%d]", cpy.Len()))
+	cpy.Scan(func(block B) bool {
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(block.String())
+		return true
+	})
+
+	return w.String()
 }
 
 func (aot *AOT[B, R]) BlockCount() int {
@@ -201,6 +233,10 @@ func (blk *TimedSliceBlock[R]) IsAppendable() bool {
 
 func (blk *TimedSliceBlock[R]) Length() int {
 	return len(blk.Rows)
+}
+
+func (blk *TimedSliceBlock[R]) String() string {
+	return "TODO"
 }
 
 func (blk *TimedSliceBlock[R]) Close() {
