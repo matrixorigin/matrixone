@@ -17,7 +17,6 @@ package external
 import (
 	"context"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,7 +50,6 @@ type ExternalFileparam struct {
 	FileCnt   int
 	FileFin   int
 	FileIndex int
-	mu        sync.Mutex
 }
 
 type Argument struct {

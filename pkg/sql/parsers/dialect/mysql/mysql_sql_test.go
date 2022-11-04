@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
-		output: "select * from (select * from (select 1, 2, 3)) as t1",
+		input:  "show index from t1 from db",
+		output: "show index from db.t1",
 	}
 )
 
@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "show index from t1 from db",
+		output: "show index from db.t1",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {
