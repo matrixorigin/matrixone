@@ -57,11 +57,15 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
 	serviceDir := path.Join(dirname, "data")
-	if opts.Fs == nil {
+	if opts.MainFS == nil {
 		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(path.Join(dirname, "data"))
+		opts.MainFS = objectio.TmpNewFileservice(path.Join(dirname, "data"))
 	}
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
+	if opts.TempFS == nil {
+		// TODO:fileservice needs to be passed in as a parameter
+		opts.TempFS = objectio.TmpNewFileservice(path.Join(dirname, "temp-data"))
+	}
+	fs := objectio.NewObjectFS(opts.MainFS, opts.TempFS, serviceDir)
 
 	db = &DB{
 		Dir:       dirname,

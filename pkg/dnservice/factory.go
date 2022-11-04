@@ -139,7 +139,13 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.FileService)
+	// use s3 as main file service
+	mainFS, err := fileservice.Get[fileservice.FileService](s.fileService, s3FileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	// use local as temp file service
+	tempFS, err := fileservice.Get[fileservice.FileService](s.fileService, localFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +153,8 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		s.cfg.Txn.Storage.dataDir,
 		shard,
 		factory,
-		fs,
+		mainFS,
+		tempFS,
 		s.clock,
 		ckpcfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))

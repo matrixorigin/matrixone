@@ -140,7 +140,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	assert.True(t, nb0 == pool.CurrNB())
 
-	fs := NewObjectFS(service, dir)
+	fs := NewObjectFS(service, testutil.NewFS(), dir)
 	dirs, err := fs.ListDir("")
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(dirs))
