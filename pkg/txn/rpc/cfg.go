@@ -28,6 +28,7 @@ var (
 	defaultMaxIdleDuration = time.Minute
 	defaultSendQueueSize   = 10240
 	defaultBufferSize      = 1024
+	defaultMaxMessageSize  = 1024 * 1024 * 10
 )
 
 // Config txn sender config
@@ -50,6 +51,8 @@ type Config struct {
 	WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
 	// ReadBufferSize buffer size for read messages per connection. Default is 1kb
 	ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 }
 
 func (c *Config) adjust() {
@@ -70,6 +73,9 @@ func (c *Config) adjust() {
 	}
 	if c.MaxIdleDuration.Duration == 0 {
 		c.MaxIdleDuration.Duration = defaultMaxIdleDuration
+	}
+	if c.MaxMessageSize == 0 {
+		c.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	}
 }
 
