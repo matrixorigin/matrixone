@@ -1105,14 +1105,14 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
-		if rv.Typ.Oid != types.T_text && len(source[0]) > int(rv.Typ.Width) {
+		if rv.Typ.Oid != types.T_text && int(rv.Typ.Width) != 0 && len(source[0]) > int(rv.Typ.Width) {
 			errInfo := fmt.Sprintf(" Src length %v is larger than Dest length %v", len(source[0]), rv.Typ.Width)
 			return nil, formatCastError(lv, rv.Typ, errInfo)
 		}
 		return vector.NewConstString(rv.Typ, lv.Length(), source[0], proc.Mp()), nil
 	}
 	destLen := int(rv.Typ.Width)
-	if rv.Typ.Oid != types.T_text {
+	if rv.Typ.Oid != types.T_text && destLen != 0 {
 		for i, str := range source {
 			if nulls.Contains(lv.Nsp, uint64(i)) {
 				continue
