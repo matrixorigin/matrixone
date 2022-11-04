@@ -65,6 +65,8 @@ type Merge struct {
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
 	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 16 MB
+	//
+	// Deprecated: useless while NOT support multiParts upload
 	FileCacheSize int64
 
 	// flow ctrl
@@ -131,7 +133,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 1,
-		FileCacheSize: 128 * mpool.MB,
+		FileCacheSize: mpool.PB, // disable it by set very large
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
@@ -215,9 +217,8 @@ func (m *Merge) Main(ts time.Time) error {
 			filepath := path.Join(rootPath, f.Name)
 			totalSize += f.Size
 			files = append(files, filepath)
-			if totalSize > m.FileCacheSize {
+			if totalSize > m.MaxFileSize {
 				if err = m.doMergeFiles(account.Name, files); err != nil {
-					logutil.Errorf("err: %v\n", err)
 					return err
 				}
 				files = files[:0]
@@ -293,11 +294,19 @@ func (m *Merge) doMergeFiles(account string, paths []string) error {
 		if err != nil {
 			return err
 		}
+		// check cache size
+		if cacheFileData.Size() > m.FileCacheSize {
+			if err = cacheFileData.Flush(newFileWriter); err != nil {
+				logutil.Errorf("merge file meet flush error: %v", err)
+				return err
+			}
+			cacheFileData.Reset()
+		}
 	}
 	if !cacheFileData.IsEmpty() {
 		if err := cacheFileData.Flush(newFileWriter); err != nil {
-			// fixme: handle error situation
 			logutil.Errorf("merge file meet flush error: %v", err)
+			return err
 		}
 		cacheFileData.Reset()
 	}
