@@ -586,6 +586,9 @@ func (data *CheckpointData) GetBlkBatchs() (*containers.Batch, *containers.Batch
 }
 
 func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
+	if entry.IsSystemDB() {
+		return nil
+	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
@@ -617,6 +620,9 @@ func (collector *IncrementalCollector) VisitDB(entry *catalog.DBEntry) error {
 }
 
 func (collector *IncrementalCollector) VisitTable(entry *catalog.TableEntry) (err error) {
+	if entry.GetDB().IsSystemDB() {
+		return nil
+	}
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()

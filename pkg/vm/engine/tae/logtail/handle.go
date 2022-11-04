@@ -56,7 +56,7 @@ func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catal
 		return api.SyncLogTailResp{
 			CkpLocation: verifiedCheckpoint,
 		}, err
-	} else {
+	} else if verifiedCheckpoint != "" {
 		start = lastEnd.Next()
 	}
 

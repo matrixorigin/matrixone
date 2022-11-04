@@ -746,7 +746,6 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
 	locs := make([]string, 0)
-	minTS := types.TS{}
 
 	tree.Scan(func(item *CheckpointEntry) bool {
 		item.RLock()
@@ -755,9 +754,6 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 			return false
 		}
 		if item.end.GreaterEq(start) {
-			if len(locs) == 0 {
-				minTS = item.start
-			}
 			locs = append(locs, item.location)
 			checkpointed = item.end
 		}
@@ -766,7 +762,6 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 	if len(locs) == 0 {
 		return "", types.TS{}
 	}
-	locs = append(locs, minTS.ToString())
 	locations = strings.Join(locs, ";")
 	return
 }

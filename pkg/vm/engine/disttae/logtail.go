@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -90,10 +89,6 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 		return nil, nil
 	}
 	ckps := strings.Split(ckpt, ";")
-	minTSStr := ckps[len(ckps)-1]
-	minTS := types.StringToTS(minTSStr)
-	logutil.Infof("mints is %v", minTS.ToString())
-	ckps = ckps[:len(ckps)-1]
 	entries := make([]*api.Entry, 0)
 	for _, ckp := range ckps {
 		reader, err := blockio.NewCheckpointReader(fs, ckp)
