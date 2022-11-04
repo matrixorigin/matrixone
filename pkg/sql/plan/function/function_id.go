@@ -448,6 +448,7 @@ var functionIdRegister = map[string]int32{
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
+	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

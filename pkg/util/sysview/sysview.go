@@ -168,9 +168,9 @@ var (
 			"att_relname AS TABLE_NAME," +
 			"attname AS COLUMN_NAME," +
 			"attnum AS ORDINAL_POSITION," +
-			"att_default as COLUMN_DEFAULT," +
+			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT," +
 			"(case when attnotnull=0 then 'NO' else 'YES' end) as IS_NULLABLE," +
-			"atttyp as DATA_TYPE," +
+			"mo_show_visible_bin(atttyp,2) as DATA_TYPE," +
 			"att_length as CHARACTER_MAXIMUM_LENGTH," +
 			"att_length as CHARACTER_OCTET_LENGTH," +
 			"0 as NUMERIC_PRECISION," +
@@ -178,7 +178,7 @@ var (
 			"0 as DATETIME_PRECISION," +
 			"'utf8' as CHARACTER_SET_NAME," +
 			"'utf8_bin' as COLLATION_NAME," +
-			"atttyp as COLUMN_TYPE," +
+			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE," +
 			"att_uniq_name as COLUMN_KEY," +
 			"'' as EXTRA," +
 			"'' as `PRIVILEGES`," +

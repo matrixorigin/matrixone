@@ -15,14 +15,12 @@
 package binary
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"io"
 )
 
 const (
@@ -53,9 +51,9 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 	case defaultExpr:
 		ret, err = showExpr(srcSlice, byDefault)
 	case typNormal:
-		ret = showType(srcSlice, false)
+		ret, err = showType(srcSlice, false)
 	case typWithLen:
-		ret = showType(srcSlice, true)
+		ret, err = showType(srcSlice, true)
 	default:
 		return nil, moerr.NewNotSupported(fmt.Sprintf("show visible bin, the second argument must be in [0, 3], but got %d", tp))
 	}
@@ -63,7 +61,7 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 		return nil, err
 	}
 	for i := range ret {
-		err = resultVec.Append(ret[i], len(ret[i]) == 0, proc.Mp())
+		err = resultVec.Append([]byte(ret[i]), len(ret[i]) == 0, proc.Mp())
 		if err != nil {
 			return nil, err
 		}
@@ -71,44 +69,45 @@ func ShowVisibleBin(vec []*vector.Vector, proc *process.Process) (*vector.Vector
 	return resultVec, nil
 }
 
-func showType(s [][]byte, showLen bool) []string {
+func showType(s [][]byte, showLen bool) ([]string, error) {
 	ret := make([]string, len(s))
-	for i, v := range s {
-		tp := types.DecodeType(v)
+	for i := range s {
+		tp := new(types.Type)
+		err := types.Decode(s[i], tp)
+		if err != nil {
+			return nil, err
+		}
 		if showLen {
 			ret[i] = fmt.Sprintf("%s(%d)", tp.String(), tp.Width)
 		} else {
 			ret[i] = tp.String()
 		}
 	}
-	return ret
+	return ret, nil
 }
 
-func byOnUpdate(r io.Reader) (string, error) {
-	tmp := catalog.OnUpdate{}
-	_, err := catalog.UnMarshalOnUpdate(r, &tmp)
+func byOnUpdate(s []byte) (string, error) {
+	update := new(plan.OnUpdate)
+	err := types.Decode(s, update)
 	if err != nil {
 		return "", err
 	}
-	return tmp.OriginString, nil
+	return update.OriginString, nil
 }
-func byDefault(r io.Reader) (string, error) {
-	tmp := catalog.Default{}
-	_, err := catalog.UnMarshalDefault(r, &tmp)
+func byDefault(s []byte) (string, error) {
+	def := new(plan.Default)
+	err := types.Decode(s, def)
 	if err != nil {
 		return "", err
 	}
-	return tmp.OriginString, nil
+	return def.OriginString, nil
 }
 
-func showExpr(s [][]byte, fn func(r io.Reader) (string, error)) ([]string, error) {
+func showExpr(s [][]byte, fn func(ss []byte) (string, error)) ([]string, error) {
 	ret := make([]string, len(s))
-	r := bytes.NewBuffer(nil)
 	var err error
-	for i, v := range s {
-		r.Reset()
-		r.Write(v)
-		ret[i], err = fn(r)
+	for i := range s {
+		ret[i], err = fn(s[i])
 		if err != nil {
 			return nil, err
 		}
