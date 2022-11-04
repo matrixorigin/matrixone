@@ -257,11 +257,12 @@ create temporary table dis_temp_01(a int,b varchar,primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
 select * from dis_temp_01;
-a    b
+SQL parser error: table "dis_temp_01" does not exist
 select * from dis_temp_01;
 a    b
 233    uuuu
 truncate table dis_temp_01;
+no such table isolation_2.dis_temp_01
 rollback ;
 select * from dis_temp_01;
 a    b

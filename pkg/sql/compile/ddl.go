@@ -171,6 +171,24 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	if err := tmpDBSource.Create(c.ctx, dbName+"-"+tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
+
+	// build index table
+	for _, def := range qry.IndexTables {
+		planCols = def.GetCols()
+		exeCols = planColsToExeCols(planCols)
+		planDefs = def.GetDefs()
+		exeDefs, err = planDefsToExeDefs(planDefs)
+		if err != nil {
+			return err
+		}
+		if _, err := tmpDBSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(def.Name)
+		}
+		if err := tmpDBSource.Create(c.ctx, dbName+"-"+def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+	}
+
 	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, "temp-db", dbName+"-"+tblName)
 }
 

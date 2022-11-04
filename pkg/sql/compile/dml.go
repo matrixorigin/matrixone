@@ -182,10 +182,12 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if isTemp {
 		// e := c.e.(*engine.EntireEngine).TempEngine
 		p.TblName = p.DbName + "-" + p.TblName
+		o := p.DbName
 		p.DbName = "temp-db"
-		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, "temp-db", p.TblName); err != nil {
 			return 0, err
 		}
+		p.DbName = o
 	} else {
 		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 			return 0, err
@@ -207,8 +209,15 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
+
 	for _, indexInfo := range p.IndexInfos {
-		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
+		var indexRelation engine.Relation
+		var err error
+		if isTemp {
+			indexRelation, err = dbSource.Relation(c.ctx, p.DbName+"-"+indexInfo.TableName)
+		} else {
+			indexRelation, err = dbSource.Relation(c.ctx, indexInfo.TableName)
+		}
 		if err != nil {
 			return 0, err
 		}
