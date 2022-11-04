@@ -100,13 +100,9 @@ select count(*) from mo_catalog.mo_account where account_name in ('test:account'
 -- 7.account初始accountamdin权限验证：查询系统表;创建db，user，table;sys租户下root看不到account下的系统表数据
 create account account_1 admin_name='admin' identified by '123456';
 -- @session:id=2&user=account_1:admin:accountadmin&password=123456
--- @bvt:issue#6041
 show databases;
--- @bvt:issue
 use mo_catalog;
--- @bvt:issue#6041
 show tables;
--- @bvt:issue
 select user_name,authentication_string,owner from mo_user;
 -- @bvt:issue#6054
 select role_name,obj_type,privilege_name,privilege_level from mo_role_privs;
