@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -80,15 +79,15 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.LocalFileServiceName,
+		Name:    localFileServiceName,
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.S3FileServiceName,
+		Name:    s3FileServiceName,
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.ETLFileServiceName,
+		Name:    etlFileServiceName,
 		Backend: "DISK-ETL",
 	})
 

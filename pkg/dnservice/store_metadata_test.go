@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -27,7 +26,7 @@ import (
 )
 
 func TestInitMetadata(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
 
 	s := &store{logger: logutil.GetPanicLogger(), metadataFileService: fs}
@@ -43,7 +42,7 @@ func TestInitMetadata(t *testing.T) {
 }
 
 func TestInitMetadataWithExistData(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
 	value := metadata.DNStore{
 		UUID: "dn1",
@@ -82,7 +81,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
+	fs, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
 	value := metadata.DNStore{
 		UUID: "dn1",
