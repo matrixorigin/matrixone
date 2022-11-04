@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -47,7 +46,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
 	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
+		Name:    "LOCAL",
 		Backend: "DISK",
 		DataDir: dir,
 	}
