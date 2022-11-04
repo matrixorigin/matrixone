@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -112,7 +111,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	setupGlobalComponents(cfg, stopper)
 
-	fs, err := cfg.createFileService(defines.LocalFileServiceName)
+	fs, err := cfg.createFileService(localFileServiceName)
 	if err != nil {
 		return err
 	}
