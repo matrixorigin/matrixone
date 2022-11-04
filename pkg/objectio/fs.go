@@ -17,7 +17,9 @@ package objectio
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -29,7 +31,7 @@ type ObjectFS struct {
 
 func TmpNewFileservice(dir string) fileservice.FileService {
 	c := fileservice.Config{
-		Name:    "LOCAL",
+		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}
