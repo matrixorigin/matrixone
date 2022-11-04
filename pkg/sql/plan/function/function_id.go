@@ -265,6 +265,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
+	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
