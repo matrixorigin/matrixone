@@ -172,3 +172,12 @@ type dumpTable struct {
 	attrs  []string
 	isView bool
 }
+
+// profile makes the debug info
+type profile interface {
+	makeProfile(profileTyp profileType)
+
+	getProfile(profileTyp profileType) string
+}
+
+var _ profile = &Session{}

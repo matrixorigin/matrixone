@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/pierrec/lz4"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,6 +76,13 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 		if err != nil {
 			return nil, err
 		}
+		originSize := len(buf)
+		// TODO:Now by default, lz4 compression must be used for Write,
+		// and parameters need to be passed in later to determine the compression type
+		data := make([]byte, lz4.CompressBlockBound(originSize))
+		if buf, err = compress.Compress(buf, data, compress.Lz4); err != nil {
+			return nil, err
+		}
 		offset, length, err := w.buffer.Write(buf)
 		if err != nil {
 			return nil, err
@@ -82,8 +91,9 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 			id:         block.GetMeta().header.blockId,
 			offset:     uint32(offset),
 			length:     uint32(length),
-			originSize: uint32(length),
+			originSize: uint32(originSize),
 		}
+		block.(*Block).columns[i].(*ColumnBlock).meta.alg = compress.Lz4
 	}
 	return block, nil
 }
