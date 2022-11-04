@@ -35,17 +35,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
-	logutil.Debugf("[Logtail] begin handle %v", req)
+// avoid import cycle
+type CkpChecker interface {
+	// Check finds reasonable
+	Check(start, end types.TS) (ckpLoc string, newStart, newEnd types.TS)
+}
+
+func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
+	logutil.Debugf("[Logtail] begin handle %v\n", req)
 	defer func() {
-		logutil.Debugf("[Logtail] end handle err %v", err)
+		logutil.Debugf("[Logtail] end handle err %v\n", err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
-	verifiedCheckpoint := ""
-	// TODO
-	// verifiedCheckpoint, start, end = db.CheckpointMgr.check(start, end)
+	verifiedCheckpoint, start, end := ckpChecker.Check(start, end)
+
+	if end.IsEmpty() {
+		logutil.Debugf("[Logtail] only send ckp %q\n", verifiedCheckpoint)
+		return api.SyncLogTailResp{
+			CkpLocation: verifiedCheckpoint,
+		}, err
+	}
 
 	scope := mgr.DecideScope(tid)
 

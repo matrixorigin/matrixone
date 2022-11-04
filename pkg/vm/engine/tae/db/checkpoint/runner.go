@@ -739,3 +739,7 @@ func (r *runner) Stop() {
 		r.waitQueue.Stop()
 	})
 }
+
+func (r *runner) Check(start, end types.TS) (ckpLoc string, newStart, newEnd types.TS) {
+	return "", start, end
+}
