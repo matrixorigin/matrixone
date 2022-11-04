@@ -36,12 +36,12 @@ import (
 )
 
 // avoid import cycle
-type CkpChecker interface {
+type CkpGetter interface {
 	// Check finds reasonable
-	Check(start, end types.TS) (ckpLoc []string, newStart, newEnd types.TS)
+	GetCheckpoints(start, end types.TS) (ckpLoc string, lastEnd types.TS)
 }
 
-func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
+func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
 	logutil.Debugf("[Logtail] begin handle %v\n", req)
 	defer func() {
 		logutil.Debugf("[Logtail] end handle err %v\n", err)
@@ -49,13 +49,15 @@ func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Cat
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
-	verifiedCheckpoint, start, end := ckpChecker.Check(start, end)
+	verifiedCheckpoint, lastEnd := ckpGetter.GetCheckpoints(start, end)
 
-	if end.IsEmpty() {
+	if lastEnd.GreaterEq(end) {
 		logutil.Debugf("[Logtail] only send ckp %q\n", verifiedCheckpoint)
 		return api.SyncLogTailResp{
-			CkpLocation: verifiedCheckpoint[0],
+			CkpLocation: verifiedCheckpoint,
 		}, err
+	} else {
+		start = lastEnd.Next()
 	}
 
 	scope := mgr.DecideScope(tid)
@@ -70,9 +72,9 @@ func HandleSyncLogTailReq(ckpChecker CkpChecker, mgr *LogtailMgr, c *catalog.Cat
 		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
 			return api.SyncLogTailResp{}, err
 		}
-		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint[0], start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
 	} else {
-		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint[0], start, end)
+		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
 	}
 	defer visitor.Close()
 
