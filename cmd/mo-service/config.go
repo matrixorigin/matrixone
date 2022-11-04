@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -38,10 +39,6 @@ const (
 	cnServiceType  = "CN"
 	dnServiceType  = "DN"
 	logServiceType = "LOG"
-
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
 )
 
 var (
@@ -135,7 +132,7 @@ func (c *Config) validate() error {
 	}
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
-		case localFileServiceName, etlFileServiceName:
+		case defines.LocalFileServiceName, defines.ETLFileServiceName:
 			if c.FileServices[idx].DataDir == "" {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
@@ -171,20 +168,20 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// ensure local exists
-	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure s3 exists
-	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure etl exists, for trace & metric
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
 		if err != nil {
 			return nil, moerr.ConvertPanicError(err)
 		}
