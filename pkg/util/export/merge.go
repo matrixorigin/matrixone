@@ -286,6 +286,7 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 
 	// Step 3. do simple merge
 	cacheFileData := m.Table.NewRowCache()
+	row := m.Table.GetRow()
 	for _, path := range paths {
 		reader, err := NewCSVReader(m.ctx, m.FS, path)
 		if err != nil {
@@ -295,7 +296,9 @@ func (m *Merge) doMergeFiles(account string, paths []string, bufferSize int64) e
 		}
 		var line []string
 		for line, err = reader.ReadLine(); line != nil && err == nil; line, err = reader.ReadLine() {
-			row := m.Table.ParseRow(line)
+			if err = row.ParseRow(line); err != nil {
+				continue
+			}
 			cacheFileData.Put(row)
 		}
 		if err != nil {
@@ -469,13 +472,13 @@ type Cache interface {
 }
 
 type SliceCache struct {
-	m    []*Row
+	m    [][]string
 	size int64
 }
 
 func (c *SliceCache) Flush(writer CSVWriter) error {
 	for _, record := range c.m {
-		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+		if err := writer.WriteStrings(record); err != nil {
 			return err
 		}
 	}
@@ -483,8 +486,8 @@ func (c *SliceCache) Flush(writer CSVWriter) error {
 }
 
 func (c *SliceCache) Reset() {
-	for _, row := range c.m {
-		row.Reset()
+	for idx := range c.m {
+		c.m[idx] = nil
 	}
 	c.m = c.m[:]
 	c.size = 0
@@ -495,7 +498,7 @@ func (c *SliceCache) IsEmpty() bool {
 }
 
 func (c *SliceCache) Put(r *Row) {
-	c.m = append(c.m, r)
+	c.m = append(c.m, r.ToRawStrings())
 	c.size += r.Size()
 }
 
@@ -504,13 +507,13 @@ func (c *SliceCache) Size() int64 { return c.size }
 func (c *MapCache) Size() int64 { return c.size }
 
 type MapCache struct {
-	m    map[string]*Row
+	m    map[string][]string
 	size int64
 }
 
 func (c *MapCache) Flush(writer CSVWriter) error {
 	for _, record := range c.m {
-		if err := writer.WriteStrings(record.ToStrings()); err != nil {
+		if err := writer.WriteStrings(record); err != nil {
 			return err
 		}
 	}
@@ -519,8 +522,7 @@ func (c *MapCache) Flush(writer CSVWriter) error {
 
 func (c *MapCache) Reset() {
 	c.size = 0
-	for key, row := range c.m {
-		row.Reset()
+	for key := range c.m {
 		delete(c.m, key)
 	}
 }
@@ -530,7 +532,7 @@ func (c *MapCache) IsEmpty() bool {
 }
 
 func (c *MapCache) Put(r *Row) {
-	c.m[r.PrimaryKey()] = r
+	c.m[r.PrimaryKey()] = r.ToRawStrings()
 	c.size += r.Size()
 }
 
@@ -538,14 +540,13 @@ func (tbl *Table) NewRowCache() Cache {
 	if len(tbl.PrimaryKeyColumn) == 0 {
 		return &SliceCache{}
 	} else {
-		return &MapCache{m: make(map[string]*Row)}
+		return &MapCache{m: make(map[string][]string)}
 	}
 }
 
-func (tbl *Table) ParseRow(cols []string) *Row {
-	r := tbl.GetRow()
-	copy(r.Columns[:], cols[:])
-	return r
+func (r *Row) ParseRow(cols []string) error {
+	r.Columns = cols
+	return nil
 }
 
 func (r *Row) PrimaryKey() string {

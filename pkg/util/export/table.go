@@ -304,6 +304,11 @@ func (r *Row) ToStrings() []string {
 	return r.Columns
 }
 
+// ToRawStrings not format
+func (r *Row) ToRawStrings() []string {
+	return r.Columns
+}
+
 var _ TableOptions = (*NoopTableOptions)(nil)
 
 type NoopTableOptions struct{}
