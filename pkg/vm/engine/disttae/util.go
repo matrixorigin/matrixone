@@ -185,6 +185,7 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		min := zm.GetMin()
 		max := zm.GetMax()
 		if min == nil || max == nil {
+			// that's fine, not a bug. if nil just read the block
 			return nil, nil, moerr.NewInternalError("zonemap is nil")
 		}
 		datas[i] = [2]any{min, max}
