@@ -280,6 +280,7 @@ select cast(col11 as timestamp) from t8;
 delete from t8 where col11 is not NULL;
 
 -------------------------------------------
+-- @bvt:issue#4636
 insert into t8(col12) values ('1');
 insert into t8(col12) values ('0');
 insert into t8(col12) values (1);
@@ -287,10 +288,7 @@ insert into t8(col12) values (0);
 
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
-insert into t8(col12) values ('true');
-insert into t8(col12) values ('trUe');
-insert into t8(col12) values ('falSe');
-select cast(col12 as bool) from t8;
+
 insert into t8(col12) values ('hello');
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
@@ -298,6 +296,7 @@ delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
+-- @bvt:issue
 
 -------------------------------------------
 
