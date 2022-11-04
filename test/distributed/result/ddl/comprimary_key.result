@@ -39,10 +39,10 @@ create  table  cpk_table_3(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_3 select * from ex_table_cpk;
 select col2,col9,col14,col20 from cpk_table_3;
 col2    col9    col14    col20
-11    3.4365    1975-09-10 07:59:59    comment balabalabalabalabala
-20    7.2914    1985-01-13 07:59:59    aaaabbbbbbccccc
-9    1.1559    2034-02-10 08:00:00    .STU-_+=VWXYZab
-20    7.2914    1985-01-13 07:59:59    bbbbbbccccc
+11    3.4365    1975-09-09 23:59:59    comment balabalabalabalabala
+20    7.2914    1985-01-12 23:59:59    aaaabbbbbbccccc
+9    1.1559    2034-02-10 00:00:00    .STU-_+=VWXYZab
+20    7.2914    1985-01-12 23:59:59    bbbbbbccccc
 create  table  cpk_table_3_pk(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(col2,col9,col14,col19));
 insert into cpk_table_3_pk select * from ex_table_cpk;
 tae data: duplicate
@@ -55,7 +55,7 @@ col4    col5    col13    col10    col16
 20    1    1998-01-21 23:59:59    6.5635    439.95
 7    1    1998-12-30 00:00:00    1.1732    428.14
 insert into cpk_table_4 select * from ex_table_cpk;
-Duplicate entry '3b15023c150f421bdff4c48ba3a00021c0163c6a7ef9db233d160258' for key '__mo_cpkey_004col4004col5005col13005col10004col6'
+tae data: duplicate
 create  table  cpk_table_5(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 char(255),col19 varchar(255),col20 varchar(255),primary key(col6,col7,col8,col18,col16,col19));
 insert into cpk_table_5 select * from ex_table_cpk;
 select col6,col7,col8,col18,col16,col19 from cpk_table_5;
@@ -65,7 +65,7 @@ col6    col7    col8    col18    col16    col19
 500    2    4    OPQR.STU-_+=VWXYZa    439.95    U-_+=VWXYZabcdefghigklmno
 700    600    20    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012    428.14    r@sina.com
 insert into cpk_table_5 select * from ex_table_cpk;
-Duplicate entry '3d1602583e1602bc40153846016d65737361676500440153810100ff00ff00ff302200460173403132362e636f6d00' for key '__mo_cpkey_004col6004col7004col8005col18005col16005col19'
+tae data: duplicate
 show create table cpk_table_5;
 Table    Create Table
 cpk_table_5    CREATE TABLE `cpk_table_5` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\n`col5` TINYINT UNSIGNED DEFAULT NULL,\n`col6` SMALLINT UNSIGNED DEFAULT NULL,\n`col7` INT UNSIGNED DEFAULT NULL,\n`col8` BIGINT UNSIGNED DEFAULT NULL,\n`col9` FLOAT DEFAULT NULL,\n`col10` DOUBLE DEFAULT NULL,\n`col11` VARCHAR(255) DEFAULT NULL,\n`col12` DATE DEFAULT NULL,\n`col13` DATETIME DEFAULT NULL,\n`col14` TIMESTAMP DEFAULT NULL,\n`col15` BOOL DEFAULT NULL,\n`col16` DECIMAL(5,2) DEFAULT NULL,\n`col17` TEXT DEFAULT NULL,\n`col18` CHAR(255) DEFAULT NULL,\n`col19` VARCHAR(255) DEFAULT NULL,\n`col20` VARCHAR(255) DEFAULT NULL\n)
@@ -73,10 +73,10 @@ create  table  cpk_table_6(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_6 select * from ex_table_cpk;
 select * from cpk_table_6;
 col1    col2    col3    col4    col5    col6    col7    col8    col9    col10    col11    col12    col13    col14    col15    col16    col17    col18    col19    col20
-1    11    1    2    15    600    700    56    3.4365    5.559    math    2020-04-30    1998-08-07 00:00:00    1975-09-10 07:59:59    true    602.53    abcdefg    message    s@126.com    comment balabalabalabalabala
-2    20    3    4    21    220    1    3    7.2914    6.5836    art    2020-02-22    1998-06-04 00:00:00    1985-01-13 07:59:59    false    878.09    abcdefg    message    r@sina.com    aaaabbbbbbccccc
-3    9    5    20    1    500    2    4    1.1559    6.5635    english    2020-02-16    1998-01-21 23:59:59    2034-02-10 08:00:00    true    439.95    EF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh    OPQR.STU-_+=VWXYZa    U-_+=VWXYZabcdefghigklmno    .STU-_+=VWXYZab
-3    20    3    7    1    700    600    20    7.2914    1.1732    science    2020-05-08    1998-12-30 00:00:00    1985-01-13 07:59:59    false    428.14    U-_+=VWXYZabcdefghigklmnopqrstuvwxy    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012    r@sina.com    bbbbbbccccc
+1    11    1    2    15    600    700    56    3.4365    5.559    math    2020-04-30    1998-08-07 00:00:00    1975-09-09 23:59:59    true    602.53    abcdefg    message    s@126.com    comment balabalabalabalabala
+2    20    3    4    21    220    1    3    7.2914    6.5836    art    2020-02-22    1998-06-04 00:00:00    1985-01-12 23:59:59    false    878.09    abcdefg    message    r@sina.com    aaaabbbbbbccccc
+3    9    5    20    1    500    2    4    1.1559    6.5635    english    2020-02-16    1998-01-21 23:59:59    2034-02-10 00:00:00    true    439.95    EF,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh    OPQR.STU-_+=VWXYZa    U-_+=VWXYZabcdefghigklmno    .STU-_+=VWXYZab
+3    20    3    7    1    700    600    20    7.2914    1.1732    science    2020-05-08    1998-12-30 00:00:00    1985-01-12 23:59:59    false    428.14    U-_+=VWXYZabcdefghigklmnopqrstuvwxy    L/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxyz012    r@sina.com    bbbbbbccccc
 insert into cpk_table_6 select * from ex_table_cpk;
 tae data: duplicate
 create table cpk_table_7(a int,b float,c char(20),primary key(a,d));
@@ -101,25 +101,25 @@ create table cpk_table_43(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 t
 insert into cpk_table_43 select * from cpk_table_42;
 select clo4, col14,col20 from cpk_table_43;
 clo4    col14    col20
-2    1975-09-10 07:59:59    comment balabalabalabalabala
-4    1985-01-13 07:59:59    aaaabbbbbbccccc
-20    2034-02-10 08:00:00    .STU-_+=VWXYZab
-7    1985-01-13 07:59:59    bbbbbbccccc
+2    1975-09-09 23:59:59    comment balabalabalabalabala
+4    1985-01-12 23:59:59    aaaabbbbbbccccc
+20    2034-02-10 00:00:00    .STU-_+=VWXYZab
+7    1985-01-12 23:59:59    bbbbbbccccc
 insert into cpk_table_43 values(8,11,1,9,15,600,700,56,3.4365,5.5590,"math","2020-04-30","1999-08-07 00:00:00","1975-09-09 23:59:59",true,602.53,"abcdefg","message","s@126.com","balabalabalabalabala");
 select clo4, col14,col20 from cpk_table_43;
 clo4    col14    col20
-2    1975-09-10 07:59:59    comment balabalabalabalabala
-4    1985-01-13 07:59:59    aaaabbbbbbccccc
-20    2034-02-10 08:00:00    .STU-_+=VWXYZab
-7    1985-01-13 07:59:59    bbbbbbccccc
+2    1975-09-09 23:59:59    comment balabalabalabalabala
+4    1985-01-12 23:59:59    aaaabbbbbbccccc
+20    2034-02-10 00:00:00    .STU-_+=VWXYZab
+7    1985-01-12 23:59:59    bbbbbbccccc
 9    1975-09-09 23:59:59    balabalabalabalabala
 insert into cpk_table_42 select * from cpk_table_43;
 select clo4, col14,col20 from cpk_table_43;
 clo4    col14    col20
-2    1975-09-10 07:59:59    comment balabalabalabalabala
-4    1985-01-13 07:59:59    aaaabbbbbbccccc
-20    2034-02-10 08:00:00    .STU-_+=VWXYZab
-7    1985-01-13 07:59:59    bbbbbbccccc
+2    1975-09-09 23:59:59    comment balabalabalabalabala
+4    1985-01-12 23:59:59    aaaabbbbbbccccc
+20    2034-02-10 00:00:00    .STU-_+=VWXYZab
+7    1985-01-12 23:59:59    bbbbbbccccc
 9    1975-09-09 23:59:59    balabalabalabalabala
 drop table if exists rawlog_withnull;
 CREATE external TABLE rawlog_withnull (

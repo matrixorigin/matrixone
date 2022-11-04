@@ -18,7 +18,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -141,8 +140,6 @@ func (db *database) GetDatabaseId(ctx context.Context) string {
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
-	defer cancel()
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err

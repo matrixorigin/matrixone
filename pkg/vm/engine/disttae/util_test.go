@@ -292,21 +292,21 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 			}), types.T_char},
 	}
 
-	t.Run("test getNonIntPkValueByExpr", func(t *testing.T) {
+	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := getNonIntPkValueByExpr(testCase.expr, 0, testCase.typ)
+			result, data := getPkValueByExpr(testCase.expr, 0, testCase.typ)
 			if result != testCase.result {
-				t.Fatalf("test getNonIntPkValueByExpr at cases[%d], get result is different with expected", i)
+				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}
 			if result {
 				if a, ok := data.([]byte); ok {
 					b := testCase.data.([]byte)
 					if !bytes.Equal(a, b) {
-						t.Fatalf("test getNonIntPkValueByExpr at cases[%d], data is not match", i)
+						t.Fatalf("test getPkValueByExpr at cases[%d], data is not match", i)
 					}
 				} else {
 					if data != testCase.data {
-						t.Fatalf("test getNonIntPkValueByExpr at cases[%d], data is not match", i)
+						t.Fatalf("test getPkValueByExpr at cases[%d], data is not match", i)
 					}
 				}
 			}
