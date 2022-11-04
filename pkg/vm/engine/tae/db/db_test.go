@@ -3781,7 +3781,7 @@ func TestBlockRead(t *testing.T) {
 		colNulls = append(colNulls, col.NullAbility)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.Fs.Service
+	fs := tae.DB.Fs.MainFS
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(

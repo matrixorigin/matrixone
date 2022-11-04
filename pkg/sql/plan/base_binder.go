@@ -17,9 +17,10 @@ package plan
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
