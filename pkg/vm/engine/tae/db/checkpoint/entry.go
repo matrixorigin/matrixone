@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -117,9 +118,24 @@ func (e *CheckpointEntry) Replay(
 	}
 
 	data := logtail.NewCheckpointData()
+	defer data.Close()
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	err = data.ApplyReplayTo(c, dataFactory)
+	return
+}
+
+func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del *containers.Batch, err error) {
+	reader, err := blockio.NewCheckpointReader(fs, e.location)
+	if err != nil {
+		return
+	}
+	data := logtail.NewCheckpointData()
+	data.Close()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	ins, del = data.GetTableData(tid)
 	return
 }

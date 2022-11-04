@@ -39,7 +39,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -67,7 +67,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -95,7 +95,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -125,7 +125,7 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
@@ -197,7 +197,7 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
@@ -271,7 +271,7 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
