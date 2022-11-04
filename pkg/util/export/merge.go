@@ -198,6 +198,7 @@ func (m *Merge) Main(ts time.Time) error {
 		logutil.Info("merge find empty data")
 		return nil
 	}
+	logutil.Debugf("merge task with max file: %v MB", m.MaxFileSize/mpool.MB)
 	for _, account := range accounts {
 		if !account.IsDir {
 			logutil.Warnf("path is not dir: %s", account.Name)
@@ -597,8 +598,10 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		}
 
 		// handle metric
-		opts = append(opts, WithTable(table))
-		merge := NewMerge(ctx, opts...)
+		newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
+		newOptions = append(newOptions, opts...)
+		newOptions = append(newOptions, WithTable(table))
+		merge := NewMerge(ctx, newOptions...)
 		if err := merge.Main(ts); err != nil {
 			logutil.Errorf("merge metric failed: %v", err)
 			return err
@@ -683,5 +686,19 @@ func InitCronExpr(duration time.Duration) error {
 			MergeTaskCronExpr = fmt.Sprintf("0 0 %s * * *", strings.Join(hours, ","))
 		}
 	}
+	return nil
+}
+
+var maxFileSize atomic.Int64
+
+func InitMerge(mergeCycle time.Duration, filesize int) error {
+	var err error
+	if mergeCycle > 0 {
+		err = InitCronExpr(mergeCycle)
+		if err != nil {
+			return err
+		}
+	}
+	maxFileSize.Store(int64(filesize * mpool.MB))
 	return nil
 }

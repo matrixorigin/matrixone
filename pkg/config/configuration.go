@@ -121,7 +121,8 @@ var (
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
-	// defaultMergeFile
+	// defaultMaxFileSize default: 128 MB
+	defaultMaxFileSize = 128
 
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
@@ -413,6 +414,9 @@ type ObservabilityParameters struct {
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
+
+	// MergeMaxFileSize default: 128 (MB)
+	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
 
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
