@@ -2,7 +2,7 @@ show variables like 'auto%';
 Variable_name    Value
 auto_increment_increment    1
 auto_increment_offset    1
-autocommit    1
+autocommit    on
 show variables like 'auto_increment_increment';
 Variable_name    Value
 auto_increment_increment    1
@@ -26,10 +26,10 @@ Variable_name    Value
 init_connect    
 show variables like 'interactive%';
 Variable_name    Value
-interactive_timeout    30100
+interactive_timeout    28800
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    30100
+interactive_timeout    28800
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -90,14 +90,16 @@ show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
 drop table if exists t;
+[unknown result because it is related to issue#6034]
 create table t(
 a int,
 b int,
 c int,
 primary key(a)
 );
+[unknown result because it is related to issue#6034]
 show indexes from t;
-internal error: do not have privilege to execute the statement
+[unknown result because it is related to issue#6034]
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -129,28 +131,28 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR    YES        NULL        
-table_schema    VARCHAR    YES        NULL        
-table_name    VARCHAR    YES        NULL        
-column_name    VARCHAR    YES        NULL        
-ordinal_position    INT    YES        NULL        
-column_default    VARCHAR    YES        NULL        
-is_nullable    VARCHAR    YES        NULL        
-data_type    VARCHAR    YES        NULL        
-character_maximum_length    INT    YES        NULL        
-character_octet_length    INT    YES        NULL        
-numeric_precision    BIGINT    YES        NULL        
-numeric_scale    BIGINT    YES        NULL        
-datetime_precision    BIGINT    YES        NULL        
-character_set_name    VARCHAR    YES        NULL        
-collation_name    VARCHAR    YES        NULL        
-column_type    VARCHAR    YES        NULL        
-column_key    VARCHAR    YES        NULL        
-extra    VARCHAR    YES        NULL        
-PRIVILEGES    VARCHAR    YES        NULL        
-column_comment    VARCHAR    YES        NULL        
-generation_expression    VARCHAR    YES        NULL        
-srs_id    BIGINT    YES        NULL        
+numeric_scale    BIGINT    YES        NULL
+column_default    VARCHAR    YES        NULL
+is_nullable    VARCHAR    YES        NULL
+table_catalog    VARCHAR    YES        NULL
+data_type    VARCHAR    YES        NULL
+extra    VARCHAR    YES        NULL
+srs_id    BIGINT    YES        NULL
+character_maximum_length    INT    YES        NULL
+column_key    VARCHAR    YES        NULL
+table_name    VARCHAR    YES        NULL
+collation_name    VARCHAR    YES        NULL
+PRIVILEGES    VARCHAR    YES        NULL
+table_schema    VARCHAR    YES        NULL
+ordinal_position    INT    YES        NULL
+character_set_name    VARCHAR    YES        NULL
+generation_expression    VARCHAR    YES        NULL
+numeric_precision    BIGINT    YES        NULL
+datetime_precision    BIGINT    YES        NULL
+column_name    VARCHAR    YES        NULL
+column_type    VARCHAR    YES        NULL
+character_octet_length    INT    YES        NULL
+column_comment    VARCHAR    YES        NULL
 select table_name, column_name from columns limit 2;
 table_name    column_name
 mo_database    dat_id
@@ -178,9 +180,9 @@ source_line    INT    YES        null
 select seq, state from profiling;
 seq    state
 desc PROCESSLIST;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " PROCESSLIST;";
+[unknown result because it is related to issue#6036]
 select * from PROCESSLIST limit 2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " PROCESSLIST limit 2;";
+[unknown result because it is related to issue#6036]
 desc user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment
 grantee    VARCHAR    NO        NULL        

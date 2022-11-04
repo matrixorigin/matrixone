@@ -87,6 +87,9 @@ func showType(s [][]byte, showLen bool) ([]string, error) {
 }
 
 func byOnUpdate(s []byte) (string, error) {
+	if len(s) == 0 {
+		return "", nil
+	}
 	update := new(plan.OnUpdate)
 	err := types.Decode(s, update)
 	if err != nil {
@@ -95,6 +98,9 @@ func byOnUpdate(s []byte) (string, error) {
 	return update.OriginString, nil
 }
 func byDefault(s []byte) (string, error) {
+	if len(s) == 0 {
+		return "", nil
+	}
 	def := new(plan.Default)
 	err := types.Decode(s, def)
 	if err != nil {
