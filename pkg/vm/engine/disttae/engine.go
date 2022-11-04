@@ -34,9 +34,7 @@ import (
 func New(
 	ctx context.Context,
 	mp *mpool.MPool,
-	allFS fileservice.FileService,
-	mainFS fileservice.FileService,
-	tempFS fileservice.FileService,
+	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 	getClusterDetails engine.GetClusterDetailsFunc,
@@ -52,9 +50,7 @@ func New(
 	return &Engine{
 		db:                db,
 		mp:                mp,
-		allFS:             allFS,
-		mainFS:            mainFS,
-		tempFS:            tempFS,
+		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -105,7 +101,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		db := &database{
 			txn:          txn,
 			db:           e.db,
-			fs:           e.mainFS,
+			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -119,7 +115,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
-		fs:           e.mainFS,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}
@@ -154,7 +150,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		db = &database{
 			txn:          txn,
 			db:           e.db,
-			fs:           e.mainFS,
+			fs:           e.fs,
 			databaseId:   id,
 			databaseName: name,
 		}
@@ -223,7 +219,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.mp,
 		e.cli,
 		op,
-		e.allFS,
+		e.fs,
 		e.getClusterDetails,
 	)
 	txn := &Transaction{

@@ -98,6 +98,8 @@ type Config struct {
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend StorageType `toml:"backend"`
+			// FileService tae used fileservice, default is LOCAL
+			FileService string `toml:"fileservice"`
 			// LogBackend the backend used to store logs
 			LogBackend string `toml:"log-backend"`
 		}
@@ -121,6 +123,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
+	}
+	if c.Txn.Storage.FileService == "" {
+		c.Txn.Storage.FileService = localFileServiceName
 	}
 	if c.Txn.Storage.LogBackend == "" {
 		c.Txn.Storage.LogBackend = defaultLogBackend
