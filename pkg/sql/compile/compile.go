@@ -283,7 +283,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -334,7 +334,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -1187,7 +1187,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	rel, err = db.Relation(c.ctx, n.TableDef.Name)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return nil, e
 		}

@@ -88,7 +88,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 	if err == nil {
 		if _, err := tmpDBSource.Relation(c.ctx, dbName+"-"+tblName); err == nil {
 			if qry.GetIfNotExists() {
@@ -143,7 +143,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine
-	tmpDBSource, err := c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, "temp-db", dbName+"-"+tblName)
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, engine.TEMPORARY_DBNAME, dbName+"-"+tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -208,7 +208,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tblName := tqry.GetTable()
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return err
 		}
@@ -256,7 +256,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	tblName := qry.GetTable()
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if dbSource == nil && qry.GetIfExists() {
 			return nil
 		} else if e != nil {
@@ -281,7 +281,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				return err
 			}
 		}
-		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, "temp-db", rel.GetTableID(c.ctx))
+		return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, engine.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
 	} else {
 		if err := dbSource.Delete(c.ctx, tblName); err != nil {
 			return err

@@ -1302,7 +1302,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	*/
 	tableHandler, err = dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
-		dbHandler, err = ses.GetStorage().Database(requestCtx, "temp-db", txnHandler.GetTxn())
+		dbHandler, err = ses.GetStorage().Database(requestCtx, engine.TEMPORARY_DBNAME, txnHandler.GetTxn())
 		if err != nil {
 			return moerr.NewNoSuchTable(loadDb, loadTable)
 		}
@@ -1312,7 +1312,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 			//echo client. no such table
 			return moerr.NewNoSuchTable(loadDb, loadTable)
 		}
-		loadDb = "temp-db"
+		loadDb = engine.TEMPORARY_DBNAME
 		load.Table.ObjectName = tree.Identifier(loadTable)
 	}
 
@@ -2222,7 +2222,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		e := cwft.ses.GetStorage().(*engine.EntireEngine)
 
 		// 2. init temp-db to store temporary relations
-		err = e.TempEngine.Create(requestCtx, "temp-db", txnOp)
+		err = e.TempEngine.Create(requestCtx, engine.TEMPORARY_DBNAME, txnOp)
 		if err != nil {
 			return nil, err
 		}
@@ -2233,7 +2233,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		txnop := cwft.proc.TxnOperator.(*client.EntireTxnOperator)
 
 		txnop.SetTemp(txnOp)
-		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, "temp-db")
+		colexec.CreateAutoIncrTable(e, requestCtx, cwft.proc, engine.TEMPORARY_DBNAME)
 		txnOp.Commit(requestCtx)
 
 		txnOp2, err := mc.New()

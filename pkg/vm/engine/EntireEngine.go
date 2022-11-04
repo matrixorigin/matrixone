@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+var TEMPORARY_DBNAME = "%!%mo_temp_db"
+
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 	return e.Engine.New(ctx, op)
 }
@@ -46,9 +48,9 @@ func (e *EntireEngine) Databases(ctx context.Context, op client.TxnOperator) (da
 }
 
 func (e *EntireEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error) {
-	if databaseName == "temp-db" {
+	if databaseName == TEMPORARY_DBNAME {
 		if e.TempEngine != nil {
-			return e.TempEngine.Database(ctx, "temp-db", op.(*client.EntireTxnOperator).GetTemp())
+			return e.TempEngine.Database(ctx, TEMPORARY_DBNAME, op.(*client.EntireTxnOperator).GetTemp())
 		} else {
 			return nil, moerr.NewInternalError("temporary engine not init yet")
 		}

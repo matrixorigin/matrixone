@@ -157,7 +157,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		rel, err = db.Relation(c.ctx, s.DataSource.RelationName)
 		if err != nil {
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, "temp-db", s.Proc.TxnOperator)
+			db, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}

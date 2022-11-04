@@ -267,7 +267,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 		relation, err = dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			var e error
-			dbSource, e = eg.Database(ctx, "temp-db", txnOperator)
+			dbSource, e = eg.Database(ctx, engine.TEMPORARY_DBNAME, txnOperator)
 			if e != nil {
 				return nil, err
 			}
@@ -304,16 +304,19 @@ func constructDeletion(n *plan.Node, eg engine.Engine,
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine,
-	ctx context.Context, txnOperator TxnOperator) (*insert.Argument, error) {
-	db, err := eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
+func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*insert.Argument, error) {
+	ctx := context.TODO()
+	var db engine.Database
+	var relation engine.Relation
+	var err error
+	db, err = eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
 	if err != nil {
 		return nil, err
 	}
 	relation, err = db.Relation(ctx, n.TableDef.Name)
 	if err != nil {
 		var e error
-		db, e = eg.Database(ctx, "temp-db", txnOperator)
+		db, e = eg.Database(ctx, engine.TEMPORARY_DBNAME, txnOperator)
 		if e != nil {
 			return nil, err
 		}
@@ -362,7 +365,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine,
 		relation, err = dbSource.Relation(ctx, updateCtx.TblName)
 		if err != nil {
 			var e error
-			dbSource, e = eg.Database(ctx, "temp-db", txnOperator)
+			dbSource, e = eg.Database(ctx, engine.TEMPORARY_DBNAME, txnOperator)
 			if e != nil {
 				return nil, err
 			}

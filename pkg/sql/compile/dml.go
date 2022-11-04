@@ -53,7 +53,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 
 		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
 			var e error
-			dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+			dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 			if e != nil {
 				return 0, err
 			}
@@ -70,7 +70,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			if err != nil {
 				origin := dbSource
 				var e error // avoid contamination of error messages
-				dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+				dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 				if e != nil {
 					return 0, err
 				}
@@ -87,7 +87,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			if err != nil {
 				return 0, err
 			}
-			err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].DbName+"-"+arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, "temp-db")
+			err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].DbName+"-"+arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, engine.TEMPORARY_DBNAME)
 		} else {
 			err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 			if err != nil {
@@ -140,7 +140,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	relation, err = dbSource.Relation(c.ctx, p.TblName)
 	if err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, "temp-db", c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.ctx, engine.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return 0, e
 		}
@@ -183,8 +183,8 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		// e := c.e.(*engine.EntireEngine).TempEngine
 		p.TblName = p.DbName + "-" + p.TblName
 		o := p.DbName
-		p.DbName = "temp-db"
-		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, "temp-db", p.TblName); err != nil {
+		p.DbName = engine.TEMPORARY_DBNAME
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, engine.TEMPORARY_DBNAME, p.TblName); err != nil {
 			return 0, err
 		}
 		p.DbName = o
