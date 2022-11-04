@@ -64,9 +64,7 @@ type Merge struct {
 	//
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
-	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 16 MB
-	//
-	// Deprecated: useless while NOT support multiParts upload
+	// FileCacheSize 控制Merge 过程中, 允许缓存的文件大小，default: 32 MB
 	FileCacheSize int64
 
 	// flow ctrl
@@ -133,7 +131,7 @@ func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 		MaxFileSize:   128 * mpool.MB,
 		MaxMergeJobs:  16,
 		MinFilesMerge: 1,
-		FileCacheSize: mpool.PB, // disable it by set very large
+		FileCacheSize: 32 * mpool.MB,
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {

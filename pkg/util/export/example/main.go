@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -179,6 +180,8 @@ func main() {
 	httpWG.Wait()
 	time.Sleep(time.Second)
 
+	go traceMemStats()
+
 	mergeTable(ctx, fs, dummyStatementTable)
 	mergeTable(ctx, fs, dummyRawlogTable)
 
@@ -221,4 +224,13 @@ func writeAllocsProfile(suffix string) {
 		panic(err)
 	}
 	logutil.Infof("Allocs profile written to %s", profilePath)
+}
+
+func traceMemStats() {
+	var ms runtime.MemStats
+	for {
+		<-time.After(time.Second)
+		runtime.ReadMemStats(&ms)
+		logutil.Infof("Alloc:%10d(bytes) HeapIdle:%10d(bytes) HeapReleased:%10d(bytes)", ms.Alloc, ms.HeapIdle, ms.HeapReleased)
+	}
 }
