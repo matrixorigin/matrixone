@@ -19,6 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -46,11 +48,25 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
+	// use s3 as main file service
+	mainFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
+	if err != nil {
+		return err
+	}
+
+	// use local as temp file service
+	tempFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,
 		mp,
 		s.fileService,
+		mainFS,
+		tempFS,
 		client,
 		hakeeper,
 		pu.GetClusterDetails,

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -414,7 +415,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
-	fs := objectio.NewObjectFS(service, serviceDir)
+	fs := objectio.NewObjectFS(service, testutil.NewFS(), serviceDir)
 	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
