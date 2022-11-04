@@ -107,7 +107,7 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 		return nil, err
 	}
 
-	srcBuf := fsVector.Entries[0].Data
+	srcBuf := fsVector.Entries[0].Object.([]byte)
 	v := vector.New(n.typ)
 	v.Read(srcBuf)
 	return containers.NewVectorWithSharedMemory(v, false /* rowid committs abort are all non-nullable */), nil
