@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"net"
@@ -41,7 +42,7 @@ const (
 
 type Request struct {
 	//the command type from the client
-	cmd int
+	cmd CommandType
 	// sequence num
 	seq uint8
 	//the data from the client
@@ -56,11 +57,11 @@ func (req *Request) SetData(data interface{}) {
 	req.data = data
 }
 
-func (req *Request) GetCmd() int {
+func (req *Request) GetCmd() CommandType {
 	return req.cmd
 }
 
-func (req *Request) SetCmd(cmd int) {
+func (req *Request) SetCmd(cmd CommandType) {
 	req.cmd = cmd
 }
 
@@ -90,11 +91,11 @@ func NewResponse(category, status, cmd int, d interface{}) *Response {
 	}
 }
 
-func NewGeneralErrorResponse(cmd uint8, err error) *Response {
+func NewGeneralErrorResponse(cmd CommandType, err error) *Response {
 	return NewResponse(ErrorResponse, 0, int(cmd), err)
 }
 
-func NewGeneralOkResponse(cmd uint8) *Response {
+func NewGeneralOkResponse(cmd CommandType) *Response {
 	return NewResponse(OkResponse, 0, int(cmd), nil)
 }
 
@@ -137,6 +138,7 @@ func (resp *Response) SetCategory(category int) {
 }
 
 type Protocol interface {
+	profile
 	IsEstablished() bool
 
 	SetEstablished()
@@ -150,8 +152,8 @@ type Protocol interface {
 	// ConnectionID the identity of the client
 	ConnectionID() uint32
 
-	// Peer gets the address [Host:Port] of the client
-	Peer() (string, string)
+	// Peer gets the address [Host:Port,Host:Port] of the client and the server
+	Peer() (string, string, string, string)
 
 	GetDatabaseName() string
 
@@ -186,6 +188,57 @@ type ProtocolImpl struct {
 
 	// whether the tls handshake succeeded
 	tlsEstablished atomic.Bool
+
+	profiles [8]string
+}
+
+func (cpi *ProtocolImpl) makeProfile(profileTyp profileType) {
+	var mask profileType
+	var profile string
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		switch mask & profileTyp {
+		case profileTypeConnectionWithId:
+			if cpi.tcpConn != nil {
+				profile = fmt.Sprintf("connectionId %d", cpi.connectionID)
+			}
+		case profileTypeConnectionWithIp:
+			if cpi.tcpConn != nil {
+				client := cpi.tcpConn.RemoteAddress()
+				profile = "client " + client
+			}
+		default:
+			profile = ""
+		}
+		cpi.profiles[i] = profile
+	}
+}
+
+func (cpi *ProtocolImpl) getProfile(profileTyp profileType) string {
+	var mask profileType
+	sb := bytes.Buffer{}
+	for i := uint8(0); i < 8; i++ {
+		mask = 1 << i
+		if mask&profileTyp != 0 {
+			if sb.Len() != 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(cpi.profiles[i])
+		}
+	}
+	return sb.String()
+}
+
+func (cpi *ProtocolImpl) MakeProfile() {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
+	cpi.makeProfile(profileTypeAll)
+}
+
+func (cpi *ProtocolImpl) GetConciseProfile() string {
+	cpi.lock.Lock()
+	defer cpi.lock.Unlock()
+	return cpi.getProfile(profileTypeConcise)
 }
 
 func (cpi *ProtocolImpl) GetSalt() []byte {
@@ -199,7 +252,7 @@ func (cpi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (cpi *ProtocolImpl) SetEstablished() {
-	logutil.Debugf("SWITCH ESTABLISHED to true")
+	logDebugf(cpi.GetConciseProfile(), "SWITCH ESTABLISHED to true")
 	cpi.established.Store(true)
 }
 
@@ -226,7 +279,6 @@ func (cpi *ProtocolImpl) Quit() {
 	defer cpi.lock.Unlock()
 	if cpi.tcpConn != nil {
 		if !cpi.tcpConn.Connected() {
-			logutil.Warn("close tcp meet conn not Connected")
 			return
 		}
 		err := cpi.tcpConn.Close()
@@ -246,19 +298,33 @@ func (cpi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
 	return cpi.tcpConn
 }
 
-func (cpi *ProtocolImpl) Peer() (string, string) {
-	addr := cpi.GetTcpConnection().RemoteAddress()
+func (cpi *ProtocolImpl) Peer() (string, string, string, string) {
+	tcp := cpi.GetTcpConnection()
+	if tcp == nil {
+		return "", "", "", ""
+	}
+	addr := tcp.RemoteAddress()
+	rawConn := tcp.RawConn()
+	var local net.Addr
+	if rawConn != nil {
+		local = rawConn.LocalAddr()
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		logutil.Errorf("get peer host:port failed. error:%v ", err)
-		return "failed", "0"
+		return "failed", "0", "", ""
 	}
-	return host, port
+	localHost, localPort, err := net.SplitHostPort(local.String())
+	if err != nil {
+		logutil.Errorf("get peer host:port failed. error:%v ", err)
+		return "failed", "0", "failed", "0"
+	}
+	return host, port, localHost, localPort
 }
 
 func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
 	req := &Request{
-		cmd:  int(payload[0]),
+		cmd:  CommandType(payload[0]),
 		data: payload[1:],
 	}
 
@@ -321,6 +387,13 @@ type FakeProtocol struct {
 	database string
 }
 
+func (fp *FakeProtocol) makeProfile(profileTyp profileType) {
+}
+
+func (fp *FakeProtocol) getProfile(profileTyp profileType) string {
+	return ""
+}
+
 func (fp *FakeProtocol) SendPrepareResponse(stmt *PrepareStmt) error {
 	return nil
 }
@@ -381,8 +454,8 @@ func (fp *FakeProtocol) ConnectionID() uint32 {
 	return fakeConnectionID
 }
 
-func (fp *FakeProtocol) Peer() (string, string) {
-	return "", ""
+func (fp *FakeProtocol) Peer() (string, string, string, string) {
+	return "", "", "", ""
 }
 
 func (fp *FakeProtocol) GetDatabaseName() string {

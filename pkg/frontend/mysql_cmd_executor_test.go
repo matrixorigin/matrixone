@@ -90,6 +90,7 @@ func Test_mce(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -235,7 +236,7 @@ func Test_mce(t *testing.T) {
 		mce.PrepareSessionBeforeExecRequest(ses)
 
 		req := &Request{
-			cmd:  int(COM_QUERY),
+			cmd:  COM_QUERY,
 			data: []byte("test anywhere"),
 		}
 
@@ -244,7 +245,7 @@ func Test_mce(t *testing.T) {
 		convey.So(resp, convey.ShouldBeNil)
 
 		req = &Request{
-			cmd:  int(COM_QUERY),
+			cmd:  COM_QUERY,
 			data: []byte("kill"),
 		}
 		resp, err = mce.ExecRequest(ctx, req)
@@ -252,7 +253,7 @@ func Test_mce(t *testing.T) {
 		convey.So(resp, convey.ShouldNotBeNil)
 
 		req = &Request{
-			cmd:  int(COM_QUERY),
+			cmd:  COM_QUERY,
 			data: []byte("kill 10"),
 		}
 		mce.SetRoutineManager(&RoutineManager{})
@@ -261,7 +262,7 @@ func Test_mce(t *testing.T) {
 		convey.So(resp, convey.ShouldNotBeNil)
 
 		req = &Request{
-			cmd:  int(COM_INIT_DB),
+			cmd:  COM_INIT_DB,
 			data: []byte("test anywhere"),
 		}
 
@@ -271,7 +272,7 @@ func Test_mce(t *testing.T) {
 		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
 		req = &Request{
-			cmd:  int(COM_PING),
+			cmd:  COM_PING,
 			data: []byte("test anywhere"),
 		}
 
@@ -280,7 +281,7 @@ func Test_mce(t *testing.T) {
 		convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
 		req = &Request{
-			cmd:  int(COM_QUIT),
+			cmd:  COM_QUIT,
 			data: []byte("test anywhere"),
 		}
 
@@ -324,6 +325,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -364,6 +366,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -442,7 +445,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		req := &Request{
-			cmd:  int(COM_FIELD_LIST),
+			cmd:  COM_FIELD_LIST,
 			data: []byte{'A', 0},
 		}
 
@@ -468,6 +471,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -546,6 +550,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -707,6 +712,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -750,6 +756,7 @@ func Test_handleShowVariables(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -799,6 +806,7 @@ func Test_handleShowColumns(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -851,6 +859,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -943,6 +952,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -1035,6 +1045,8 @@ func Test_handleLoadData(t *testing.T) {
 		}
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		proc := &process.Process{}
 
@@ -1070,6 +1082,7 @@ func TestHandleDump(t *testing.T) {
 		}
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		mce := NewMysqlCmdExecutor()
@@ -1122,6 +1135,7 @@ func TestDump2File(t *testing.T) {
 		}
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		mce := NewMysqlCmdExecutor()
