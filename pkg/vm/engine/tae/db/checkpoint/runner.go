@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -740,21 +741,25 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) GetCheckpoints(start, end types.TS) (locations []string, checkpointed types.TS) {
-	r.storage.RLock()
-	entries := r.storage.entries.Items()
-	r.storage.RUnlock()
-	locations = make([]string, 0)
-	for _, entry := range entries {
-		if entry.end.Greater(start) || entry.start.LessEq(end) {
-			if entry.GetState() == ST_Finished {
-				locations = append(locations, entry.location)
-				checkpointed = entry.end
-			}
+func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpointed types.TS) {
+	r.storage.Lock()
+	tree := r.storage.entries.Copy()
+	r.storage.Unlock()
+	locs := make([]string, 0)
+
+	tree.Scan(func(item *CheckpointEntry) bool {
+		item.RLock()
+		defer item.RUnlock()
+		if item.state != ST_Finished || item.start.Greater(end) {
+			return false
 		}
-		if entry.end.Greater(end) {
-			break
+		if item.end.GreaterEq(start) {
+			locs = append(locs, item.location)
+			checkpointed = item.end
 		}
-	}
+		return true
+	})
+
+	locations = strings.Join(locs, ";")
 	return
 }

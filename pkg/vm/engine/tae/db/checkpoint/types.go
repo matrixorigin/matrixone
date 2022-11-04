@@ -30,7 +30,6 @@ const (
 )
 
 type Runner interface {
-	// logtail.CkpChecker
 	Start()
 	Stop()
 	EnqueueWait(any) error
@@ -44,6 +43,7 @@ type Runner interface {
 	TestCheckpoint(entry *CheckpointEntry)
 	DebugUpdateOptions(opts ...Option)
 	GetEntries() []*CheckpointEntry
+	GetCheckpoints(start, end types.TS) (ckpLoc string, lastEnd types.TS)
 }
 
 type DirtyCtx struct {
