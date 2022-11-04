@@ -247,7 +247,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +256,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +265,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -298,7 +298,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +307,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -316,7 +316,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Ctx, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
