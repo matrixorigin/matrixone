@@ -42,7 +42,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.Service)
+	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.MainFS)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func NewCheckpointReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(name, fs.Service)
+	reader, err := objectio.NewObjectReader(name, fs.MainFS)
 	if err != nil {
 		return nil, err
 	}

@@ -92,7 +92,9 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	mp                *mpool.MPool
-	fs                fileservice.FileService
+	allFS             fileservice.FileService
+	mainFS            fileservice.FileService
+	tempFS            fileservice.FileService
 	db                *DB
 	cli               client.TxnClient
 	idGen             IDGenerator
@@ -251,11 +253,13 @@ type column struct {
 }
 
 type blockReader struct {
-	blks     []BlockMeta
-	ctx      context.Context
-	fs       fileservice.FileService
-	ts       timestamp.Timestamp
-	tableDef *plan.TableDef
+	blks       []BlockMeta
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         timestamp.Timestamp
+	tableDef   *plan.TableDef
+	primaryIdx int
+	expr       *plan.Expr
 }
 
 type blockMergeReader struct {

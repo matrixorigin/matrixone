@@ -38,14 +38,16 @@ func NewTAEStorage(
 	dataDir string,
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
-	fs fileservice.FileService,
+	mainFS fileservice.FileService,
+	tempFS fileservice.FileService,
 	clock clock.Clock,
 	ckpCfg *options.CheckpointCfg,
 	logStore options.LogstoreType,
 ) (*taeStorage, error) {
 	opt := &options.Options{
 		Clock:         clock,
-		Fs:            fs,
+		MainFS:        mainFS,
+		TempFS:        tempFS,
 		Lc:            logservicedriver.LogServiceClientFactory(factory),
 		Shard:         shard,
 		CheckpointCfg: ckpCfg,

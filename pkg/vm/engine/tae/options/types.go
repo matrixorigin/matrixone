@@ -66,7 +66,8 @@ type Options struct {
 	Catalog       *catalog.Catalog
 
 	Clock     clock.Clock
-	Fs        fileservice.FileService
+	MainFS    fileservice.FileService
+	TempFS    fileservice.FileService
 	Lc        logservicedriver.LogServiceClientFactory
 	Shard     metadata.DNShard
 	LogStoreT LogstoreType

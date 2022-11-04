@@ -142,7 +142,7 @@ func (idx *nonPkMutIndex) Close() error {
 	return nil
 }
 func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
-func (idx *nonPkMutIndex) String() string                     { panic("not support") }
+func (idx *nonPkMutIndex) String() string                     { return "nonpk" }
 func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
 	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
