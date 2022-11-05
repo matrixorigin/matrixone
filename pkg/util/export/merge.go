@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -127,7 +128,7 @@ func NewMergeService(ctx context.Context, opts ...MergeOption) (*Merge, bool) {
 
 func NewMerge(ctx context.Context, opts ...MergeOption) *Merge {
 	m := &Merge{
-		FSName:        etlFileServiceName,
+		FSName:        defines.ETLFileServiceName,
 		datetime:      time.Now(),
 		pathBuilder:   NewAccountDatePathBuilder(),
 		MaxFileSize:   128 * mpool.MB,
