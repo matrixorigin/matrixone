@@ -16,7 +16,6 @@ package update
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -64,8 +63,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 	}
 	defer bat.Clean(proc.Mp())
-
-	ctx := context.TODO()
 
 	// do null check
 	for i, updateCtx := range p.UpdateCtxs {
@@ -141,7 +138,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			attrs = append(attrs, updateCtx.IndexAttrs...)
 			oldBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs[int(idx)+1:], attrs, info.Cols, proc)
 			if rowNum != 0 {
-				err := rel.Delete(ctx, oldBatch, info.ColNames[0])
+				err := rel.Delete(proc.Ctx, oldBatch, info.ColNames[0])
 				if err != nil {
 					delBat.Clean(proc.Mp())
 					tmpBat.Clean(proc.Mp())
@@ -153,7 +150,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 
 		// delete old rows
-		err := updateCtx.TableSource.Delete(ctx, delBat, updateCtx.HideKey)
+		err := updateCtx.TableSource.Delete(proc.Ctx, delBat, updateCtx.HideKey)
 		if err != nil {
 			delBat.Clean(proc.Mp())
 			tmpBat.Clean(proc.Mp())
@@ -161,7 +158,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 		delBat.Clean(proc.Mp())
 
-		if err := colexec.UpdateInsertBatch(p.Engine, ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
+		if err := colexec.UpdateInsertBatch(p.Engine, proc.Ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i], p.DBName[i], p.TblName[i]); err != nil {
 			tmpBat.Clean(proc.Mp())
 			return false, err
 		}
@@ -170,7 +167,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			rel := updateCtx.IndexTables[i]
 			b, rowNum := util.BuildUniqueKeyBatch(tmpBat.Vecs, tmpBat.Attrs, info.Cols, proc)
 			if rowNum != 0 {
-				err = rel.Write(ctx, b)
+				err = rel.Write(proc.Ctx, b)
 				if err != nil {
 					b.Clean(proc.Mp())
 					tmpBat.Clean(proc.Mp())
@@ -190,7 +187,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 		tmpBat.SetZs(tmpBat.GetVector(0).Length(), proc.Mp())
 
-		err = updateCtx.TableSource.Write(ctx, tmpBat)
+		err = updateCtx.TableSource.Write(proc.Ctx, tmpBat)
 		if err != nil {
 			tmpBat.Clean(proc.Mp())
 			return false, err

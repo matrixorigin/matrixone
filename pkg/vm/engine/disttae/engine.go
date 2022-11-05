@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,9 +35,7 @@ import (
 func New(
 	ctx context.Context,
 	mp *mpool.MPool,
-	allFS fileservice.FileService,
-	mainFS fileservice.FileService,
-	tempFS fileservice.FileService,
+	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
 	getClusterDetails engine.GetClusterDetailsFunc,
@@ -52,9 +51,7 @@ func New(
 	return &Engine{
 		db:                db,
 		mp:                mp,
-		allFS:             allFS,
-		mainFS:            mainFS,
-		tempFS:            tempFS,
+		fs:                fs,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -85,7 +82,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
 	return nil
@@ -105,7 +102,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		db := &database{
 			txn:          txn,
 			db:           e.db,
-			fs:           e.mainFS,
+			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -119,7 +116,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
-		fs:           e.mainFS,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}
@@ -154,7 +151,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		db = &database{
 			txn:          txn,
 			db:           e.db,
-			fs:           e.mainFS,
+			fs:           e.fs,
 			databaseId:   id,
 			databaseName: name,
 		}
@@ -174,7 +171,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
 	return nil
@@ -223,7 +220,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.mp,
 		e.cli,
 		op,
-		e.allFS,
+		e.fs,
 		e.getClusterDetails,
 	)
 	txn := &Transaction{
@@ -234,6 +231,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:           op.Txn(),
 		idGen:          e.idGen,
 		rowId:          [2]uint64{math.MaxUint64, 0},
+		workspace:      memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
 		dnStores:       cluster.DNStores,
 		fileMap:        make(map[string]uint64),
 		tableMap:       new(sync.Map),

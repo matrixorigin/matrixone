@@ -48,14 +48,8 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	// use s3 as main file service
-	mainFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
-	if err != nil {
-		return err
-	}
-
-	// use local as temp file service
-	tempFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
 	if err != nil {
 		return err
 	}
@@ -64,9 +58,7 @@ func (s *service) initDistributedTAE(
 	pu.StorageEngine = disttae.New(
 		ctx,
 		mp,
-		s.fileService,
-		mainFS,
-		tempFS,
+		fs,
 		client,
 		hakeeper,
 		pu.GetClusterDetails,

@@ -42,7 +42,7 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.MainFS)
+	reader, err := objectio.NewObjectReader(meta.GetKey(), fs.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func NewCheckpointReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(name, fs.MainFS)
+	reader, err := objectio.NewObjectReader(name, fs.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (r *Reader) LoadBlkColumnsByMeta(
 			return bat, err
 		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Data); err != nil && !errors.Is(err, io.EOF) {
+		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil && !errors.Is(err, io.EOF) {
 			return bat, err
 		}
 		var vec containers.Vector

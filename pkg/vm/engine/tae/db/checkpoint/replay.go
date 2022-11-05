@@ -55,7 +55,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.MainFS)
+	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.Service)
 	if err != nil {
 		return
 	}
@@ -81,7 +81,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			return types.TS{}, err2
 		}
 		pkgVec := vector.New(colTypes[i])
-		if err = pkgVec.Read(data.Entries[0].Data); err != nil {
+		if err = pkgVec.Read(data.Entries[0].Object.([]byte)); err != nil {
 			return
 		}
 		var vec containers.Vector

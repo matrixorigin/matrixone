@@ -101,6 +101,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 		LogShardID:       shard.LogShardID,
 		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
 
@@ -134,22 +135,18 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
 		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}
-	// use s3 as main file service
-	mainFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
+
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	// use local as temp file service
-	tempFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
-	if err != nil {
-		return nil, err
-	}
+
 	return taestorage.NewTAEStorage(
 		s.cfg.Txn.Storage.dataDir,
 		shard,
 		factory,
-		mainFS,
-		tempFS,
+		fs,
 		s.clock,
 		ckpcfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))

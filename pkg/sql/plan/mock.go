@@ -256,8 +256,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 						Width:     col.Width,
 						Precision: col.Precision,
 					},
-					Name:  col.Name,
-					Pkidx: 1,
+					Name:    col.Name,
+					Pkidx:   1,
+					Default: &plan.Default{},
 				})
 			}
 
