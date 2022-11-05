@@ -94,6 +94,7 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 commit;
 update dis_table_02 set a=90;
+Duplicate entry '90' for key 'a'
 commit;
 Duplicate entry '90' for key 'a'
 select * from dis_table_02;
@@ -304,6 +305,7 @@ SQL parser error: table "dis_view_02" does not exist
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 insert into dis_table_02 values (2,'oooo','1802-03-20');
+Duplicate entry '2' for key 'a'
 commit;
 select * from dis_table_02;
 a    b    c
@@ -540,6 +542,7 @@ a    b    c    d
 insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
+Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00

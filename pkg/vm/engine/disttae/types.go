@@ -133,16 +133,19 @@ type Transaction struct {
 	blockId uint64
 	// use for solving halloween problem
 	statementId uint64
-	meta        txn.TxnMeta
-	op          client.TxnOperator
+	// local timestamp for workspace operations
+	localTS timestamp.Timestamp
+	meta    txn.TxnMeta
+	op      client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes   [][]Entry
-	dnStores []DNStore
-	proc     *process.Process
+	writes    [][]Entry
+	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	dnStores  []DNStore
+	proc      *process.Process
 
 	idGen IDGenerator
 
@@ -216,7 +219,7 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	primaryIdx int
+	primaryIdx int // -1 means no primary key
 	viewdef    string
 	comment    string
 	partition  string
@@ -295,4 +298,28 @@ func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
 	return a.Info.BlockID == b.Info.BlockID
+}
+
+type workspaceRow struct {
+	rowID   RowID
+	tableID uint64
+	indexes []memtable.Tuple
+}
+
+var _ memtable.Row[RowID, *workspaceRow] = new(workspaceRow)
+
+func (w *workspaceRow) Key() RowID {
+	return w.rowID
+}
+
+func (w *workspaceRow) Value() *workspaceRow {
+	return w
+}
+
+func (w *workspaceRow) Indexes() []memtable.Tuple {
+	return w.indexes
+}
+
+func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
+	return nil
 }
