@@ -237,6 +237,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
+	text := SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
@@ -245,7 +246,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),
-		Statement:            envStmt,
+		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            envBegin,
