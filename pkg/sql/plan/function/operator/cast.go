@@ -1099,6 +1099,11 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // blob -> blob
 // we need to consider the visiblity of 0xXXXX, the rule is a little complex,
 // please do that in the future
+// the rule is, if src string len is larger than the dest string len, report an error
+// for example: select cast('aaaaaaa' as char(1)); will report an error here.
+// insert into col(varchar(1) values 'aaaaa', report an error
+// for other cases, where col(varchar(1))='aaaaa', do not report error, just return empty result. maybe we can optimize this to false?
+// sometimes, the dest len is 0, then do not report error here. maybe a bug and need to fix in the future?
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	source := vector.MustStrCols(lv)
 	if lv.IsScalar() {

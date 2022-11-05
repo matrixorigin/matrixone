@@ -779,6 +779,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			} else {
 				targetArgType = argsCastType[0]
 			}
+			// if string union string, different length may cause error. use text type as the output
 			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
 				targetArgType = types.T_text.ToType()
 			}
