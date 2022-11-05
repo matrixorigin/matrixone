@@ -178,8 +178,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
+	var txn TxnOperator
+	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		copy(txnID[:], handler.GetTxn().Txn().ID)
+		txn, err = handler.GetTxn()
+		if err != nil {
+			logutil.Errorf("RecordStatement. error:%v", err)
+		} else {
+			copy(txnID[:], txn.Txn().ID)
+		}
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
@@ -202,6 +209,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
 	}
+	if !stm.IsZeroTxnID() {
+		stm.Report(ctx)
+	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
@@ -217,8 +227,15 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	stmID, _ := uuid.NewUUID()
 	var txnID uuid.UUID
+	var txn TxnOperator
+	var err2 error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		copy(txnID[:], handler.GetTxn().Txn().ID)
+		txn, err2 = handler.GetTxn()
+		if err2 != nil {
+			logutil.Errorf("RecordParseErrorStatement. error:%v", err2)
+		} else {
+			copy(txnID[:], txn.Txn().ID)
+		}
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
@@ -238,15 +255,26 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	trace.EndStatement(ctx, err)
+	incStatementCounter(tenant.GetTenant(), nil)
+	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
 }
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
+	var err error
+	var txn TxnOperator
 	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-			stm.SetTxnID(handler.GetTxn().Txn().ID)
+			txn, err = handler.GetTxn()
+			if err != nil {
+				logutil.Errorf("RecordStatementTxnID. error:%v", err)
+			} else {
+				stm.SetTxnID(txn.Txn().ID)
+			}
+
 		}
+		stm.Report(ctx)
 	}
 }
 
@@ -929,8 +957,14 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db string) error {
 	ses := mce.GetSession()
 	txnHandler := ses.GetTxnHandler()
+	var txn TxnOperator
+	var err error
+	txn, err = txnHandler.GetTxn()
+	if err != nil {
+		return err
+	}
 	//TODO: check meta data
-	if _, err := ses.GetParameterUnit().StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
+	if _, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(db)
 	}
@@ -974,7 +1008,12 @@ func (mce *MysqlCmdExecutor) dumpData(requestCtx context.Context, dump *tree.MoD
 		dbDDL     string
 		tables    []string
 	)
-	if db, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, dbName, txnHandler.GetTxn()); err != nil {
+	var txn TxnOperator
+	txn, err = txnHandler.GetTxn()
+	if err != nil {
+		return err
+	}
+	if db, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, dbName, txn); err != nil {
 		return moerr.NewBadDB(dbName)
 	}
 	err = bh.Exec(requestCtx, fmt.Sprintf("use `%s`", dbName))
@@ -1196,6 +1235,7 @@ handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *process.Process, load *tree.Import) error {
 	var err error
+	var txn TxnOperator
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
@@ -1244,7 +1284,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	if ses.InMultiStmtTransactionMode() {
 		return moerr.NewInternalError("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
-	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
+	txn, err = txnHandler.GetTxn()
+	if err != nil {
+		return err
+	}
+	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txn)
 	if err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(loadDb)
@@ -2038,6 +2082,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
+	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2098,7 +2143,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if cwft.plan.GetQuery().GetLoadTag() {
 		cwft.proc.TxnOperator = txnHandler.GetTxnOnly()
 	} else if cwft.plan.NeedImplicitTxn() {
-		cwft.proc.TxnOperator = txnHandler.GetTxn()
+		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+		if err != nil {
+			return nil, err
+		}
 	}
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
@@ -2110,7 +2158,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 

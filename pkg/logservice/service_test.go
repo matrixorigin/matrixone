@@ -39,6 +39,7 @@ const (
 	testServiceAddress     = "127.0.0.1:9000"
 	testGossipAddress      = "127.0.0.1:9010"
 	dummyGossipSeedAddress = "127.0.0.1:9100"
+	testServerMaxMsgSize   = 200
 )
 
 func getServiceTestConfig() Config {
@@ -55,6 +56,7 @@ func getServiceTestConfig() Config {
 		DisableWorkers:       true,
 		UseTeeLogDB:          true,
 	}
+	c.RPC.MaxMessageSize = testServerMaxMsgSize
 	c.Fill()
 	return c
 }
