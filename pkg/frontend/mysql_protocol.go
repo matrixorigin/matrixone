@@ -1060,8 +1060,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	logutil.Debugf("server calculated %v\n", hash1)
-	logutil.Debugf("client calculated %v\n", auth)
+	logDebugf(mp.getProfile(profileTypeConcise), "server calculated %v", hash1)
+	logDebugf(mp.getProfile(profileTypeConcise), "client calculated %v", auth)
 
 	return bytes.Equal(hash1, auth)
 }
@@ -1074,21 +1074,21 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
-		logutil.Debugf("authenticate user 1")
+		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
-		logutil.Debugf("authenticate user 2")
+		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logutil.Infof("check password succeeded\n")
+			logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
 		} else {
 			return moerr.NewInternalError("check password failed")
 		}
 	} else {
-		logutil.Debugf("skip authenticate user")
+		logDebugf(mp.getProfile(profileTypeConcise), "skip authenticate user")
 		//Get tenant info
 		tenant, err = GetTenantInfo(mp.GetUserName())
 		if err != nil {
@@ -1100,7 +1100,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logutil.Infof("check password succeeded\n")
+				logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
 			} else {
 				return moerr.NewInternalError("check password failed")
 			}
@@ -1126,7 +1126,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
-		logutil.Debugf("analyse handshake response")
+		logDebugf(mp.getProfile(profileTypeConcise), "analyse handshake response")
 		if ok2, resp41, err = mp.analyseHandshakeResponse41(payload); !ok2 {
 			return false, err
 		}
@@ -1173,7 +1173,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp320.database
 	}
 
-	logutil.Debugf("authenticate user")
+	logDebugf(mp.getProfile(profileTypeConcise), "authenticate user")
 	if err = mp.authenticateUser(authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
@@ -1185,7 +1185,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		return false, err
 	}
 
-	logutil.Debugf("handle handshake end")
+	logDebugf(mp.getProfile(profileTypeConcise), "handle handshake end")
 	err = mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return false, err
@@ -1744,7 +1744,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	//int<2>              filler [00] [00]
 	pos = mp.io.WriteUint16(data, pos, 0)
 
-	if uint8(cmd) == COM_FIELD_LIST {
+	if CommandType(cmd) == COM_FIELD_LIST {
 		pos = mp.writeIntLenEnc(data, pos, uint64(len(column.DefaultValue())))
 		pos = mp.writeCountOfBytes(data, pos, column.DefaultValue())
 	}
@@ -2111,7 +2111,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 
 	binary := false
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	if cmd == int(COM_STMT_EXECUTE) {
+	if CommandType(cmd) == COM_STMT_EXECUTE {
 		binary = true
 	}
 
@@ -2208,7 +2208,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
 	if mp.enableLog {
-		logutil.Infof("openPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+		logutil.Infof("openPacket curWriteIdx %d", outbuf.GetWriteIndex())
 	}
 	return nil
 }
@@ -2216,7 +2216,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 // fill the packet with data
 func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	if mp.enableLog {
-		logutil.Infof("fillPacket len %d\n", len(elems))
+		logutil.Infof("fillPacket len %d", len(elems))
 	}
 	outbuf := mp.tcpConn.OutBuf()
 	n := len(elems)
@@ -2248,7 +2248,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		mp.bytesInOutBuffer += curLen
 		outbuf.SetWriteIndex(writeIdx)
 		if mp.enableLog {
-			logutil.Infof("fillPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+			logutil.Infof("fillPacket curWriteIdx %d", outbuf.GetWriteIndex())
 		}
 
 		//> 16MB, split it
@@ -2280,7 +2280,7 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
 	if mp.enableLog {
-		logutil.Infof("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+		logutil.Infof("closePacket curWriteIdx %d", outbuf.GetWriteIndex())
 	}
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return moerr.NewInternalError("invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
@@ -2607,6 +2607,8 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		},
 		SV: SV,
 	}
+
+	mysql.MakeProfile()
 
 	if SV.EnableTls {
 		mysql.capability = mysql.capability | CLIENT_SSL

@@ -22,6 +22,7 @@ import (
 	"compress/zlib"
 	"container/list"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,10 +67,11 @@ func Prepare(proc *process.Process, arg any) error {
 		param.Fileparam.End = true
 		return err
 	}
-	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
-		param.End = true
-		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	}*/
+	if param.extern.ScanType == tree.S3 {
+		if err := InitS3Param(param.extern); err != nil {
+			return err
+		}
+	}
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -117,6 +119,45 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.S3option); i += 2 {
+		switch strings.ToLower(param.S3option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.S3option[i+1]
+		case "region":
+			param.S3Param.Region = param.S3option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.S3option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.S3option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.S3option[i+1]
+		case "filepath":
+			param.Filepath = param.S3option[i+1]
+		case "compression":
+			param.CompressType = param.S3option[i+1]
+		default:
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
+		}
+	}
+	return nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		if err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	ctx := context.TODO()
 
@@ -133,7 +174,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
-			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
+			fs, readPath, err := GetForETLWithType(param, prefix)
 			if err != nil {
 				return nil, err
 			}
@@ -166,7 +207,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(param.FileService, param.Filepath)
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
