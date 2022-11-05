@@ -159,7 +159,7 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			continue
 		}
 		var tmp *plan.Expr
-		if tableDef.Cols[i].Default == nil || tableDef.Cols[i].Default.NullAbility {
+		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
 			tmp = makePlan2NullConstExprWithType()
 		} else {
 			tmp = &plan.Expr{

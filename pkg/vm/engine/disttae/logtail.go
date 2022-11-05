@@ -41,7 +41,7 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 		return err
 	}
 	for i := range logTails {
-		if consumerLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+		if consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
 			return err
 		}
 	}
@@ -65,13 +65,13 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 	return logTails, nil
 }
 
-func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
-	if err := consumerCheckPoint(logTail.CkpLocation); err != nil {
+	if err := consumeCheckPoint(logTail.CkpLocation); err != nil {
 		return err
 	}
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err := consumerEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err := consumeEntry(idx, primaryIdx, tbl, ts, ctx,
 			db, mvcc, logTail.Commands[i]); err != nil {
 			return err
 		}
@@ -79,12 +79,12 @@ func consumerLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	return nil
 }
 
-func consumerCheckPoint(ckpt string) error {
+func consumeCheckPoint(ckpt string) error {
 	// TODO
 	return nil
 }
 
-func consumerEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
+func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	ctx context.Context, db *DB, mvcc MVCC, e *api.Entry) error {
 	if e.EntryType == api.Entry_Insert {
 		if isMetaTable(e.TableName) {

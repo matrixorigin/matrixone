@@ -95,7 +95,7 @@ func ParsePathAtService(s string, serviceName string) (path Path, err error) {
 	return
 }
 
-func joinPath(serviceName string, path string) string {
+func JoinPath(serviceName string, path string) string {
 	buf := new(strings.Builder)
 	buf.WriteString(serviceName)
 	buf.WriteString(ServiceNameSeparator)
