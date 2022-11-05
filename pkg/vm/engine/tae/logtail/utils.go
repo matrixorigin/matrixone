@@ -81,6 +81,7 @@ type CheckpointData struct {
 	blkDNMetaInsTxnBatch *containers.Batch
 	blkDNMetaDelBatch    *containers.Batch
 	blkDNMetaDelTxnBatch *containers.Batch
+	blkCNMetaInsBatch    *containers.Batch
 }
 
 func NewCheckpointData() *CheckpointData {
@@ -109,6 +110,7 @@ func NewCheckpointData() *CheckpointData {
 		blkDNMetaInsTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
 		blkDNMetaDelBatch:    makeRespBatchFromSchema(DelSchema),
 		blkDNMetaDelTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
+		blkCNMetaInsBatch:    makeRespBatchFromSchema(BlkMetaSchema),
 	}
 }
 
@@ -171,8 +173,8 @@ func (data *CheckpointData) ReplayMeta() {
 		// logutil.Infof("ReplayMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
 	}
 }
-func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err error) {
-	var insTaeBat, delTaeBat *containers.Batch
+func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch, err error) {
+	var insTaeBat, delTaeBat, cnInsTaeBat *containers.Batch
 	switch tid {
 	case pkgcatalog.MO_DATABASE_ID:
 		insTaeBat = data.dbInsBatch
@@ -229,7 +231,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 	}
 	meta, ok := data.meta[tid]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	insInterval := meta.blkInsertOffset
 	if insInterval != nil {
@@ -242,6 +244,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		delOffset := delInterval.Start
 		delLength := delInterval.End - delInterval.Start
 		delTaeBat = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
+		cnInsTaeBat = data.blkCNMetaInsBatch.Window(int(delOffset), int(delLength))
 	}
 	if insTaeBat != nil {
 		// logutil.Infof("[TID=%d] INSERT-BLK %s", tid, insTaeBat.String())
@@ -252,6 +255,10 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 	}
 	if delTaeBat != nil {
 		del, err = containersBatchToProtoBatch(delTaeBat)
+		if err != nil {
+			return
+		}
+		cnIns, err = containersBatchToProtoBatch(cnInsTaeBat)
 		if err != nil {
 			return
 		}
@@ -378,6 +385,9 @@ func (data *CheckpointData) WriteTo(
 		return
 	}
 	if _, err = writer.WriteBlock(data.blkDNMetaDelTxnBatch); err != nil {
+		return
+	}
+	if _, err = writer.WriteBlock(data.blkCNMetaInsBatch); err != nil {
 		return
 	}
 	blks, err = writer.Sync()
@@ -552,6 +562,13 @@ func (data *CheckpointData) ReadFrom(
 		metas[22]); err != nil {
 		return
 	}
+	if data.blkCNMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
+		append(BaseTypes, BlkMetaSchema.Types()...),
+		append(BaseAttr, BlkMetaSchema.AllNames()...),
+		append([]bool{false, false}, BlkMetaSchema.AllNullables()...),
+		metas[23]); err != nil {
+		return
+	}
 	return
 }
 
@@ -647,6 +664,10 @@ func (data *CheckpointData) Close() {
 	if data.blkDNMetaDelTxnBatch != nil {
 		data.blkDNMetaDelTxnBatch.Close()
 		data.blkDNMetaDelTxnBatch = nil
+	}
+	if data.blkCNMetaInsBatch != nil {
+		data.blkCNMetaInsBatch.Close()
+		data.blkCNMetaInsBatch = nil
 	}
 }
 func (data *CheckpointData) GetDBBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
@@ -798,7 +819,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			continue
 		}
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		if metaNode.MetaLoc == "" {
+		if metaNode.MetaLoc == "" || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
 				collector.data.blkDNMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
 				collector.data.blkDNMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
@@ -839,6 +860,20 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				metaNode.TxnMVCCNode.AppendTuple(collector.data.blkMetaDelTxnBatch)
 				collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 				collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+				is_sorted := false
+				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+					is_sorted = true
+				}
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(entry.GetSegment().ID)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
 			} else {
 				collector.data.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
 				collector.data.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())

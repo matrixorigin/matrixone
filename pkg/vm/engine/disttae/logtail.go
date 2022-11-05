@@ -109,7 +109,7 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 			return nil, err
 		}
-		ins, del, err := data.GetTableData(tbl.tableId)
+		ins, del, cnIns, err := data.GetTableData(tbl.tableId)
 		if err != nil {
 			return nil, err
 		}
@@ -125,6 +125,17 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 				DatabaseId:   tbl.db.databaseId,
 				DatabaseName: tbl.db.databaseName,
 				Bat:          ins,
+			}
+			entries = append(entries, entry)
+		}
+		if cnIns != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tbl.tableId,
+				TableName:    tblName,
+				DatabaseId:   tbl.db.databaseId,
+				DatabaseName: tbl.db.databaseName,
+				Bat:          cnIns,
 			}
 			entries = append(entries, entry)
 		}
