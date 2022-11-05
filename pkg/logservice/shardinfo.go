@@ -43,7 +43,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, address, respPool)
+	cc, err := getRPCClient(ctx, address, respPool, defaultMaxMessageSize)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}
