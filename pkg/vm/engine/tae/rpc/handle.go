@@ -30,6 +30,7 @@ import (
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -278,6 +279,8 @@ func (h *Handle) HandleCreateDatabase(
 	meta txn.TxnMeta,
 	req db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
+	_, span := trace.Start(ctx, "HandleCreateDatabase")
+	defer span.End()
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
