@@ -287,12 +287,15 @@ func (data *CheckpointData) prepareMeta() {
 }
 
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
+	if delEnd < delStart && insEnd < insStart {
+		return
+	}
 	meta, ok := data.meta[tid]
+	if !ok {
+		meta = NewCheckpointMeta()
+		data.meta[tid] = meta
+	}
 	if delEnd >= delStart {
-		if !ok {
-			meta = NewCheckpointMeta()
-			data.meta[tid] = meta
-		}
 		if meta.blkDeleteOffset == nil {
 			meta.blkDeleteOffset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
 		} else {
@@ -302,10 +305,6 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 		}
 	}
 	if insEnd >= insStart {
-		if !ok {
-			meta = NewCheckpointMeta()
-			data.meta[tid] = meta
-		}
 		if meta.blkInsertOffset == nil {
 			meta.blkInsertOffset = &common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}
 		} else {
