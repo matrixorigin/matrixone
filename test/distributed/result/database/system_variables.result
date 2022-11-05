@@ -129,30 +129,32 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR    YES        NULL
-table_schema    VARCHAR    YES        NULL
-table_name    VARCHAR    YES        NULL
-column_name    VARCHAR    YES        NULL
-ordinal_position    INT UNSIGNED    YES        NULL
-column_default    TEXT    YES        NULL
+numeric_scale    BIGINT    YES        NULL
+column_default    VARCHAR    YES        NULL
 is_nullable    VARCHAR    YES        NULL
-data_type    BLOB    YES        NULL
-character_maximum_length    BIGINT    YES        NULL
-character_octet_length    BIGINT    YES        NULL
-numeric_precision    BIGINT UNSIGNED    YES        NULL
-numeric_scale    BIGINT UNSIGNED    YES        NULL
-datetime_precision    INT UNSIGNED    YES        NULL
-character_set_name    VARCHAR    YES        NULL
-collation_name    VARCHAR    YES        NULL
-column_type    BLOB    YES        NULL
-column_key    VARCHAR    YES        NULL
+table_catalog    VARCHAR    YES        NULL
+data_type    VARCHAR    YES        NULL
 extra    VARCHAR    YES        NULL
+srs_id    BIGINT    YES        NULL
+character_maximum_length    INT    YES        NULL
+column_key    VARCHAR    YES        NULL
+table_name    VARCHAR    YES        NULL
+collation_name    VARCHAR    YES        NULL
 PRIVILEGES    VARCHAR    YES        NULL
-column_comment    TEXT    YES        NULL
-generation_expression    BLOB    YES        NULL
-srs_id    INT UNSIGNED    YES        NULL
-select table_name, column_name from columns;
-table_name    column_name
+table_schema    VARCHAR    YES        NULL
+ordinal_position    INT    YES        NULL
+character_set_name    VARCHAR    YES        NULL
+generation_expression    VARCHAR    YES        NULL
+numeric_precision    BIGINT    YES        NULL
+datetime_precision    BIGINT    YES        NULL
+column_name    VARCHAR    YES        NULL
+column_type    VARCHAR    YES        NULL
+character_octet_length    INT    YES        NULL
+column_comment    VARCHAR    YES        NULL
+select TABLE_CATALOG from `columns` LIMIT 2;
+table_catalog
+def
+def
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT    NO        0

@@ -317,13 +317,13 @@ count(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(*)
-0
+10
 SELECT COUNT(0) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(0)
-0
+10
 SELECT COUNT('') FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count()
-0
+10
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
 count(null)
 0
