@@ -207,7 +207,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
 			},
 		},
 	}
