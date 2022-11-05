@@ -232,6 +232,8 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 	for i := range ht.rawData2 {
 		newBlockIdx := blockNum + i
 		ht.rawData2 = append(ht.rawData2, nil)
+		ht.cells2 = append(ht.cells2, nil)
+
 		ht.rawData2[newBlockIdx], err = m.Alloc(int(ht.blockMaxCellCnt) * int(strCellSize))
 		if err != nil {
 			return err
