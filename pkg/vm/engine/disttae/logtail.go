@@ -170,7 +170,15 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					return err
+					ve := e.Bat.Vecs[1]
+					timeVec, err := vector.ProtoVectorToVector(ve)
+					if err != nil {
+						return err
+					}
+					timestamps := vector.MustTCols[types.TS](timeVec)
+					if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
+						return err
+					}
 				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)
