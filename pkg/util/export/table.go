@@ -140,7 +140,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(col.ToCreateSql())
 	}
 	// primary key
-	if len(tbl.PrimaryKeyColumn) > 0 {
+	if len(tbl.PrimaryKeyColumn) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(newLineCharacter)
 		sb.WriteString("PRIMARY KEY (")
 		for idx, col := range tbl.PrimaryKeyColumn {
