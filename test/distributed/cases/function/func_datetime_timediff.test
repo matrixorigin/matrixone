@@ -67,3 +67,4 @@ select timediff(NULL,'24:59:09');
 select timediff('20','24:59:09');
 select timediff('12:00','24:59:09');
 select timediff('-838:59:59','-1122');
+select timediff('12:00:00','24:59:09');
