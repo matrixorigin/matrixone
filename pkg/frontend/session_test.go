@@ -169,6 +169,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -224,6 +226,8 @@ func TestVariables(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -499,6 +503,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {

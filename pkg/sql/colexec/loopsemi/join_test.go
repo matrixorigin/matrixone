@@ -166,7 +166,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
 			},
 		},
 	}
