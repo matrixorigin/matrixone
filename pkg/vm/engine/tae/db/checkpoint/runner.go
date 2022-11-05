@@ -746,11 +746,11 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
 	locs := make([]string, 0)
-	items := tree.Items()
 	pivot := NewCheckpointEntry(start, end)
 
 	// checkpoints := make([]*CheckpointEntry, 0)
 	// defer func() {
+	//  items := tree.Items()
 	// 	logutil.Infof("GetCheckpoints: Pivot: %s", pivot.String())
 	// 	for i, item := range items {
 	// 		logutil.Infof("GetCheckpoints: Source[%d]: %s", i, item.String())
