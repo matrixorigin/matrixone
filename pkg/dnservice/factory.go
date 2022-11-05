@@ -106,6 +106,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 		LogShardID:       shard.LogShardID,
 		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
 
