@@ -221,7 +221,7 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.start.Less(b.start)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -746,21 +746,68 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
 	locs := make([]string, 0)
+	items := tree.Items()
+	pivot := NewCheckpointEntry(start, end)
 
-	tree.Scan(func(item *CheckpointEntry) bool {
-		item.RLock()
-		defer item.RUnlock()
-		if item.state != ST_Finished || item.start.Greater(end) {
-			return false
+	// checkpoints := make([]*CheckpointEntry, 0)
+	// defer func() {
+	// 	logutil.Infof("GetCheckpoints: Pivot: %s", pivot.String())
+	// 	for i, item := range items {
+	// 		logutil.Infof("GetCheckpoints: Source[%d]: %s", i, item.String())
+	// 	}
+	// 	for i, ckp := range checkpoints {
+	// 		logutil.Infof("GetCheckpoints: Found[%d]:%s", i, ckp.String())
+	// 	}
+	// 	logutil.Infof("GetCheckpoints: Checkpointed=%s", checkpointed.ToString())
+	// }()
+
+	iter := tree.Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(pivot); ok {
+		if ok = iter.Prev(); ok {
+			e := iter.Item()
+			if !e.IsCommitted() {
+				return
+			}
+			if e.HasOverlap(start, end) {
+				locs = append(locs, e.GetLocation())
+				checkpointed = e.GetEnd()
+				// checkpoints = append(checkpoints, e)
+			} else {
+			}
+			iter.Next()
 		}
-		if item.end.GreaterEq(start) {
-			locs = append(locs, item.location)
-			checkpointed = item.end
+		for {
+			e := iter.Item()
+			if !e.IsCommitted() || !e.HasOverlap(start, end) {
+				break
+			}
+			locs = append(locs, e.GetLocation())
+			checkpointed = e.GetEnd()
+			// checkpoints = append(checkpoints, e)
+			if ok = iter.Next(); !ok {
+				break
+			}
 		}
-		return true
-	})
+	} else {
+		// if it is empty, quick quit
+		if ok = iter.Last(); !ok {
+			return
+		}
+		// get last entry
+		e := iter.Item()
+		// if it is committed and visible, quick quit
+		if !e.IsCommitted() || !e.HasOverlap(start, end) {
+			return
+		}
+		locs = append(locs, e.GetLocation())
+		checkpointed = e.GetEnd()
+		// checkpoints = append(checkpoints, e)
+	}
+
 	if len(locs) == 0 {
-		return "", types.TS{}
+		return
 	}
 	locations = strings.Join(locs, ";")
 	return
