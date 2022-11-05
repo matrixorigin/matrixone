@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
@@ -66,7 +67,7 @@ func TestNewObjectWriter(t *testing.T) {
 	bat := newBatch(mp)
 	defer bat.Clean(mp)
 	c := fileservice.Config{
-		Name:    "LOCAL",
+		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}

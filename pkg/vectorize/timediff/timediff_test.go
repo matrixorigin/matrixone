@@ -111,11 +111,12 @@ func TestTimeDiffInTime(t *testing.T) {
 		require.NoError(t, err)
 
 		//result
-		res, err := timeDiff(firstV, secondV)
+		res, _ := timeDiff(firstV, secondV)
+		want, _ := types.ParseTime(v.want, 0)
 
 		//test
 		require.NoError(t, err)
-		require.Equal(t, res, v.want)
+		require.Equal(t, res, want)
 	}
 }
 
@@ -191,10 +192,11 @@ func TestTimeDiffInDateTime(t *testing.T) {
 		require.NoError(t, err)
 
 		//result
-		res, err := timeDiff(firstV, secondV)
+		res, _ := timeDiff(firstV, secondV)
+		want, _ := types.ParseTime(v.want, 0)
 
 		//test
 		require.NoError(t, err)
-		require.Equal(t, res, v.want)
+		require.Equal(t, res, want)
 	}
 }
