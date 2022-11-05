@@ -17,18 +17,20 @@ package export
 import (
 	"context"
 	"errors"
+	"path"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"path"
-	"strings"
-	"testing"
-	"time"
 )
 
 func init() {
@@ -153,7 +155,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, table *
 }
 
 func TestNewMerge(t *testing.T) {
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, t.TempDir())
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
@@ -170,7 +172,7 @@ func TestNewMerge(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx: context.Background(),
-				opts: []MergeOption{WithFileServiceName(etlFileServiceName),
+				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
 					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(mpool.PB), WithMaxMergeJobs(16)},
 			},
@@ -221,7 +223,7 @@ func TestNewMerge(t *testing.T) {
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, path.Join(t.TempDir(), t.Name()))
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
 	require.Nil(t, err)
 	targetDate := "2021-01-01"
 	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
@@ -329,7 +331,7 @@ func TestCreateCronTask(t *testing.T) {
 func TestNewMergeService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	defer cancel()
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, path.Join(t.TempDir(), t.Name()))
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
 	require.Nil(t, err)
 
 	type args struct {
