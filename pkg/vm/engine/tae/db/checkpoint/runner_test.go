@@ -33,11 +33,11 @@ func TestCkpCheck(t *testing.T) {
 		location: "loc-100",
 	})
 
-	loc, e := r.GetCheckpoints(types.BuildTS(4, 0), types.BuildTS(5, 0))
+	loc, e := r.CollectCheckpointsInRange(types.BuildTS(4, 0), types.BuildTS(5, 0))
 	assert.True(t, e.Equal(types.BuildTS(9, 0)))
 	assert.Equal(t, "loc-0", loc)
 
-	loc, e = r.GetCheckpoints(types.BuildTS(12, 0), types.BuildTS(25, 0))
+	loc, e = r.CollectCheckpointsInRange(types.BuildTS(12, 0), types.BuildTS(25, 0))
 	assert.True(t, e.Equal(types.BuildTS(29, 0)))
 	assert.Equal(t, "loc-10;loc-20", loc)
 }

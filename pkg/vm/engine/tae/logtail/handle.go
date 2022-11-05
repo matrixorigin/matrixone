@@ -35,13 +35,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-// avoid import cycle
-type CkpGetter interface {
-	// Check finds reasonable
-	GetCheckpoints(start, end types.TS) (ckpLoc string, lastEnd types.TS)
+type CheckpointClient interface {
+	CollectCheckpointsInRange(start, end types.TS) (location string, checkpointed types.TS)
 }
 
-func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
+func HandleSyncLogTailReq(
+	ckpClient CheckpointClient,
+	mgr *LogtailMgr,
+	c *catalog.Catalog,
+	req api.SyncLogTailReq) (resp api.SyncLogTailResp, err error) {
 	logutil.Debugf("[Logtail] begin handle %v\n", req)
 	defer func() {
 		logutil.Debugf("[Logtail] end handle err %v\n", err)
@@ -49,15 +51,16 @@ func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catal
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
-	verifiedCheckpoint, lastEnd := ckpGetter.GetCheckpoints(start, end)
 
-	if lastEnd.GreaterEq(end) {
-		logutil.Debugf("[Logtail] only send ckp %q\n", verifiedCheckpoint)
+	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
+
+	if checkpointed.GreaterEq(end) {
+		logutil.Debugf("[Logtail] only send ckp %q\n", ckpLoc)
 		return api.SyncLogTailResp{
-			CkpLocation: verifiedCheckpoint,
+			CkpLocation: ckpLoc,
 		}, err
-	} else if verifiedCheckpoint != "" {
-		start = lastEnd.Next()
+	} else if ckpLoc != "" {
+		start = checkpointed.Next()
 	}
 
 	scope := mgr.DecideScope(tid)
@@ -72,9 +75,9 @@ func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catal
 		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
 			return api.SyncLogTailResp{}, err
 		}
-		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
 	} else {
-		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
+		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
 	}
 	defer visitor.Close()
 

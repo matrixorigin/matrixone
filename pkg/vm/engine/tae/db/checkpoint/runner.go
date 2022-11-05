@@ -302,9 +302,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 }
 func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
-	r.storage.RLock()
-	entries := r.storage.entries.Items()
-	r.storage.RUnlock()
+	entries := r.GetAllCheckpoints()
 	for _, entry := range entries {
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
 		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
@@ -312,11 +310,11 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
-func (r *runner) GetEntries() []*CheckpointEntry {
-	r.storage.RLock()
-	entries := r.storage.entries.Items()
-	r.storage.RUnlock()
-	return entries
+func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
+	r.storage.Lock()
+	snapshot := r.storage.entries.Copy()
+	r.storage.Unlock()
+	return snapshot.Items()
 }
 func (r *runner) MaxLSN() uint64 {
 	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
@@ -741,7 +739,7 @@ func (r *runner) Stop() {
 	})
 }
 
-func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpointed types.TS) {
+func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
 	r.storage.Lock()
 	tree := r.storage.entries.Copy()
 	r.storage.Unlock()
@@ -751,14 +749,14 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 	// checkpoints := make([]*CheckpointEntry, 0)
 	// defer func() {
 	//  items := tree.Items()
-	// 	logutil.Infof("GetCheckpoints: Pivot: %s", pivot.String())
+	// 	logutil.Infof("CollectCheckpointsInRange: Pivot: %s", pivot.String())
 	// 	for i, item := range items {
-	// 		logutil.Infof("GetCheckpoints: Source[%d]: %s", i, item.String())
+	// 		logutil.Infof("CollectCheckpointsInRange: Source[%d]: %s", i, item.String())
 	// 	}
 	// 	for i, ckp := range checkpoints {
-	// 		logutil.Infof("GetCheckpoints: Found[%d]:%s", i, ckp.String())
+	// 		logutil.Infof("CollectCheckpointsInRange: Found[%d]:%s", i, ckp.String())
 	// 	}
-	// 	logutil.Infof("GetCheckpoints: Checkpointed=%s", checkpointed.ToString())
+	// 	logutil.Infof("CollectCheckpointsInRange: Checkpointed=%s", checkpointed.ToString())
 	// }()
 
 	iter := tree.Iter()
@@ -774,7 +772,6 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 				locs = append(locs, e.GetLocation())
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
-			} else {
 			}
 			iter.Next()
 		}

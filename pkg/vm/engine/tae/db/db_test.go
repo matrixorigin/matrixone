@@ -3150,7 +3150,7 @@ func TestUpdateAttr(t *testing.T) {
 
 type dummyCpkGetter struct{}
 
-func (c *dummyCpkGetter) GetCheckpoints(start, end types.TS) (string, types.TS) {
+func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string, types.TS) {
 	return "", types.TS{}
 }
 
@@ -3991,7 +3991,7 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	entries := tae.BGCheckpointRunner.GetEntries()
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, err := entry.GetByTableID(tae.Fs, tid)
@@ -4002,7 +4002,7 @@ func TestReadCheckpoint(t *testing.T) {
 		}
 	}
 	tae.restart()
-	entries = tae.BGCheckpointRunner.GetEntries()
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
 			ins, del, err := entry.GetByTableID(tae.Fs, tid)
