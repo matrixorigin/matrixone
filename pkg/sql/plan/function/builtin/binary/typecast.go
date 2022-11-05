@@ -833,6 +833,70 @@ func timeToDate(xs []types.Time, rs []types.Date) ([]types.Date, error) {
 	return rs, nil
 }
 
+func NumericToTime[T constraints.Integer](xs []T, rs []types.Time, precision int32) ([]types.Time, error) {
+	for i, x := range xs {
+		var err error
+		rs[i], err = types.ParseInt64ToTime(int64(x), precision)
+		if err != nil {
+			return rs, err
+		}
+	}
+	return rs, nil
+}
+
+func Decimal64ToTime(xs []types.Decimal64, rs []types.Time, precision int32) ([]types.Time, error) {
+	for i, x := range xs {
+		var err error
+		rs[i], err = types.ParseDecima64lToTime(x, precision)
+		if err != nil {
+			return rs, err
+		}
+	}
+	return rs, nil
+}
+
+func Decimal128ToTime(xs []types.Decimal128, rs []types.Time, precision int32) ([]types.Time, error) {
+	for i, x := range xs {
+		var err error
+		rs[i], err = types.ParseDecima128lToTime(x, precision)
+		if err != nil {
+			return rs, err
+		}
+	}
+	return rs, nil
+}
+
+func TimeToNumeric[T constraints.Integer](xs []types.Time, rs []T) ([]T, error) {
+	tmp := make([]int64, 0)
+	for _, x := range xs {
+		tmp = append(tmp, x.ToInt64())
+
+	}
+	return NumericToNumeric(tmp, rs)
+}
+
+func TimeToDecimal64(xs []types.Time, rs []types.Decimal64, width, precision int32) ([]types.Decimal64, error) {
+	for i, x := range xs {
+		var err error
+		rs[i], err = x.ToDecimal64(width, precision)
+		if err != nil {
+			return rs, err
+		}
+	}
+	return rs, nil
+}
+
+func TimeToDecimal128(xs []types.Time, rs []types.Decimal128, width, precision int32) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		var err error
+		rs[i], err = x.ToDecimal128(width, precision)
+		if err != nil {
+			return rs, err
+		}
+	}
+	return rs, nil
+}
+
 func uuidToBytes(xs []types.Uuid, rs []string) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.ToString()

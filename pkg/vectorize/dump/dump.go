@@ -16,18 +16,19 @@ package dump
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type quotedTp interface {
-	types.Datetime | types.Date | types.Decimal | string
+	types.Datetime | types.Time | types.Date | types.Decimal | string
 }
 
 type transTp interface {
-	[]byte | quotedTp | types.Datetime
+	[]byte | quotedTp | types.Datetime | types.Time
 }
 
 func ParseBool(xs []bool, nsp *nulls.Nulls, rs []string) ([]string, error) {

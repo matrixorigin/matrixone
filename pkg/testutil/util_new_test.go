@@ -76,6 +76,10 @@ func TestVector(t *testing.T) {
 		vec.Free(m)
 	}
 	{
+		vec := NewVector(Rows, types.New(types.T_time, 0, 0, 0), m, true, nil)
+		vec.Free(m)
+	}
+	{
 		vec := NewVector(Rows, types.New(types.T_datetime, 0, 0, 0), m, true, nil)
 		vec.Free(m)
 	}

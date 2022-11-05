@@ -4734,6 +4734,42 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_blob,
 				Fn:        operator.Cast,
 			},
+			{
+				Index:     330,
+				Args:      []types.T{types.T_time, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     331,
+				Args:      []types.T{types.T_time, types.T_decimal64},
+				ReturnTyp: types.T_decimal64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     332,
+				Args:      []types.T{types.T_time, types.T_decimal128},
+				ReturnTyp: types.T_decimal128,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     333,
+				Args:      []types.T{types.T_int64, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     334,
+				Args:      []types.T{types.T_decimal64, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     335,
+				Args:      []types.T{types.T_decimal128, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        operator.Cast,
+			},
 		},
 	},
 

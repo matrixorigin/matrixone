@@ -200,6 +200,8 @@ func (idx *simpleTableIndex) BatchInsert(
 		return InsertOp[types.Date](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_timestamp:
 		return InsertOp[types.Timestamp](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
+	case types.T_time:
+		return InsertOp[types.Time](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_datetime:
 		return InsertOp[types.Datetime](colType, attr, col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_TS:
@@ -270,6 +272,8 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		return DedupOp[float64](colType, attr, vals, idx.tree)
 	case types.T_date:
 		return DedupOp[types.Date](colType, attr, vals, idx.tree)
+	case types.T_time:
+		return DedupOp[types.Time](colType, attr, vals, idx.tree)
 	case types.T_datetime:
 		return DedupOp[types.Datetime](colType, attr, vals, idx.tree)
 	case types.T_timestamp:

@@ -94,7 +94,7 @@ func ParseTime(s string, precision int32) (Time, error) {
 		}
 		return dt.ToTime(precision), nil
 	} else {
-		// empty string equals to 00:00:00
+		// empty string "" equals to 00:00:00
 		if len(timeString) == 0 {
 			return Time(0), nil
 		}
@@ -171,6 +171,66 @@ func ParseTime(s string, precision int32) (Time, error) {
 	}
 
 	return FromTimeClock(isNegative, int32(hour), uint8(minute), uint8(sec+uint64(carry)), msec), nil
+}
+
+// Numeric 112233/112233.4444 should be treate like string and then
+// cast into time type
+// The integrity numeric is int64 while numeric with decimal is Decimal128
+// The number befre the decimal point is the hh:mm:ss part while
+// decimal part is the msec.
+// eg.
+//
+//	112233 -> "0112233" -> "11:22:33"
+//	123 -> "0000123" -> "00:01:23"
+//	112233.444 -> "112233.444" -> "11:22:33.444"
+
+func ParseInt64ToTime(input int64, precision int32) (Time, error) {
+	// the input must should in range [-838:59:59, 838:59:59]
+	if input >= 8390000 || input <= -8390000 {
+		return -1, moerr.NewInvalidInput("invalid time value %d", input)
+	}
+	s := strconv.Itoa(int(input))
+	return ParseTime(s, precision)
+}
+
+func ParseDecima64lToTime(input Decimal64, precision int32) (Time, error) {
+	s := input.ToStringWithScale(precision)
+	return ParseTime(s, precision)
+}
+
+func ParseDecima128lToTime(input Decimal128, precision int32) (Time, error) {
+	s := input.ToStringWithScale(precision)
+	return ParseTime(s, precision)
+}
+
+func (t Time) ToInt64() int64 {
+	h, m, s, _, isNeg := t.ClockFormat()
+	trans := int64(h*10000) + int64(m*100) + int64(s)
+	if isNeg {
+		trans = -trans
+	}
+
+	return trans
+}
+
+func (t Time) ToDecimal64(width, precision int32) (Decimal64, error) {
+	tToStr := t.String2(precision)
+	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
+	if err != nil {
+		return ret, moerr.NewInternalError("exsit time cant't cast to decimal64")
+	}
+
+	return ret, nil
+}
+
+func (t Time) ToDecimal128(width, precision int32) (Decimal128, error) {
+	tToStr := t.String2(precision)
+	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
+	if err != nil {
+		return ret, moerr.NewInternalError("exsit time cant't cast to decimal128")
+	}
+
+	return ret, nil
 }
 
 func FromTimeClock(isNegative bool, hour int32, minute, sec uint8, msec uint32) Time {
