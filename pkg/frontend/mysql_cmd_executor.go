@@ -2082,6 +2082,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
+	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2157,7 +2158,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
