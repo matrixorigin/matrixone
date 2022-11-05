@@ -105,7 +105,7 @@ func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]
 			return nil, err
 		}
 		data := logtail.NewCheckpointData()
-		data.Close()
+		defer data.Close()
 		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 			return nil, err
 		}

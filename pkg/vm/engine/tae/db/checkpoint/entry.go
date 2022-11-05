@@ -132,7 +132,7 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 		return
 	}
 	data := logtail.NewCheckpointData()
-	data.Close()
+	defer data.Close()
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
