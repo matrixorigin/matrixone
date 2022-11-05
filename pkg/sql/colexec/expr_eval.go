@@ -81,9 +81,9 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 		case *plan.Const_Dval:
 			vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 		case *plan.Const_Dateval:
-			vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
+			vec = vector.NewConstFixed(constDateType, length, types.Date(t.C.GetDateval()), proc.Mp())
 		case *plan.Const_Timeval:
-			vec = vector.NewConstFixed(constTimeType, length, t.C.GetTimeval(), proc.Mp())
+			vec = vector.NewConstFixed(constTimeType, length, types.Time(t.C.GetTimeval()), proc.Mp())
 		case *plan.Const_Datetimeval:
 			vec = vector.NewConstFixed(constDatetimeType, length, types.Datetime(t.C.GetDatetimeval()), proc.Mp())
 		case *plan.Const_Decimal64Val:
@@ -95,7 +95,7 @@ func getConstVec(proc *process.Process, expr *plan.Expr, length int) (*vector.Ve
 			d128 := types.Decimal128FromInt64Raw(cd128.A, cd128.B)
 			vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 		case *plan.Const_Timestampval:
-			vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
+			vec = vector.NewConstFixed(constTimestampType, length, types.Timestamp(t.C.GetTimestampval()), proc.Mp())
 		case *plan.Const_Sval:
 			sval := t.C.GetSval()
 			vec = vector.NewConstString(constSType, length, sval, proc.Mp())

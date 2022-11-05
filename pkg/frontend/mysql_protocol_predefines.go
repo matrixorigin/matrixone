@@ -344,37 +344,100 @@ const (
 	SERVER_SESSION_STATE_CHANGED       uint16 = 0x4000
 )
 
+type CommandType uint8
+
 // text protocol in mysql client protocol
 // iteration command
 const (
-	COM_SLEEP               uint8 = 0x00
-	COM_QUIT                uint8 = 0x01
-	COM_INIT_DB             uint8 = 0x02
-	COM_QUERY               uint8 = 0x03
-	COM_FIELD_LIST          uint8 = 0x04
-	COM_CREATE_DB           uint8 = 0x05
-	COM_DROP_DB             uint8 = 0x06
-	COM_REFRESH             uint8 = 0x07
-	COM_SHUTDOWN            uint8 = 0x08
-	COM_STATISTICS          uint8 = 0x09
-	COM_PROCESS_INFO        uint8 = 0x0a
-	COM_CONNECT             uint8 = 0x0b
-	COM_PROCESS_KILL        uint8 = 0x0c
-	COM_DEBUG               uint8 = 0x0d
-	COM_PING                uint8 = 0x0e
-	COM_TIME                uint8 = 0x0f
-	COM_DELAYED_INSERT      uint8 = 0x10
-	COM_CHANGE_USER         uint8 = 0x11
-	COM_STMT_PREPARE        uint8 = 0x16
-	COM_STMT_EXECUTE        uint8 = 0x17
-	COM_STMT_SEND_LONG_DATA uint8 = 0x18
-	COM_STMT_CLOSE          uint8 = 0x19
-	COM_STMT_RESET          uint8 = 0x1a
-	COM_SET_OPTION          uint8 = 0x1b
-	COM_STMT_FETCH          uint8 = 0x1c
-	COM_DAEMON              uint8 = 0x1d
-	COM_RESET_CONNECTION    uint8 = 0x1f
+	COM_SLEEP               CommandType = 0x00
+	COM_QUIT                CommandType = 0x01
+	COM_INIT_DB             CommandType = 0x02
+	COM_QUERY               CommandType = 0x03
+	COM_FIELD_LIST          CommandType = 0x04
+	COM_CREATE_DB           CommandType = 0x05
+	COM_DROP_DB             CommandType = 0x06
+	COM_REFRESH             CommandType = 0x07
+	COM_SHUTDOWN            CommandType = 0x08
+	COM_STATISTICS          CommandType = 0x09
+	COM_PROCESS_INFO        CommandType = 0x0a
+	COM_CONNECT             CommandType = 0x0b
+	COM_PROCESS_KILL        CommandType = 0x0c
+	COM_DEBUG               CommandType = 0x0d
+	COM_PING                CommandType = 0x0e
+	COM_TIME                CommandType = 0x0f
+	COM_DELAYED_INSERT      CommandType = 0x10
+	COM_CHANGE_USER         CommandType = 0x11
+	COM_STMT_PREPARE        CommandType = 0x16
+	COM_STMT_EXECUTE        CommandType = 0x17
+	COM_STMT_SEND_LONG_DATA CommandType = 0x18
+	COM_STMT_CLOSE          CommandType = 0x19
+	COM_STMT_RESET          CommandType = 0x1a
+	COM_SET_OPTION          CommandType = 0x1b
+	COM_STMT_FETCH          CommandType = 0x1c
+	COM_DAEMON              CommandType = 0x1d
+	COM_RESET_CONNECTION    CommandType = 0x1f
 )
+
+func (ct CommandType) String() string {
+	switch ct {
+	case COM_SLEEP:
+		return "COM_SLEEP"
+	case COM_QUIT:
+		return "COM_QUIT"
+	case COM_INIT_DB:
+		return "COM_INIT_DB"
+	case COM_QUERY:
+		return "COM_QUERY"
+	case COM_FIELD_LIST:
+		return "COM_FIELD_LIST"
+	case COM_CREATE_DB:
+		return "COM_CREATE_DB"
+	case COM_DROP_DB:
+		return "COM_DROP_DB"
+	case COM_REFRESH:
+		return "COM_REFRESH"
+	case COM_SHUTDOWN:
+		return "COM_SHUTDOWN"
+	case COM_STATISTICS:
+		return "COM_STATISTICS"
+	case COM_PROCESS_INFO:
+		return "COM_PROCESS_INFO"
+	case COM_CONNECT:
+		return "COM_CONNECT"
+	case COM_PROCESS_KILL:
+		return "COM_PROCESS_KILL"
+	case COM_DEBUG:
+		return "COM_DEBUG"
+	case COM_PING:
+		return "COM_PING"
+	case COM_TIME:
+		return "COM_TIME"
+	case COM_DELAYED_INSERT:
+		return "COM_DELAYED_INSERT"
+	case COM_CHANGE_USER:
+		return "COM_CHANGE_USER"
+	case COM_STMT_PREPARE:
+		return "COM_STMT_PREPARE"
+	case COM_STMT_EXECUTE:
+		return "COM_STMT_EXECUTE"
+	case COM_STMT_SEND_LONG_DATA:
+		return "COM_STMT_SEND_LONG_DATA"
+	case COM_STMT_CLOSE:
+		return "COM_STMT_CLOSE"
+	case COM_STMT_RESET:
+		return "COM_STMT_RESET"
+	case COM_SET_OPTION:
+		return "COM_SET_OPTION"
+	case COM_STMT_FETCH:
+		return "COM_STMT_FETCH"
+	case COM_DAEMON:
+		return "COM_DAEMON"
+	case COM_RESET_CONNECTION:
+		return "COM_RESET_CONNECTION"
+	default:
+		return ""
+	}
+}
 
 // reference to sql/query_options.h in mysql server 8.0.23
 const (

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 	"runtime"
 	"strconv"
@@ -471,10 +472,40 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
-		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
+}
+
+func logInfo(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Info(msg, fields...)
+}
+
+//func logDebug(info string, msg string, fields ...zap.Field) {
+//	fields = append(fields, zap.String("session_info", info))
+//	logutil.Debug(msg, fields...)
+//}
+
+func logError(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Error(msg, fields...)
+}
+
+func logInfof(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Infof(msg+" %s", fields...)
+}
+
+func logDebugf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Debugf(msg+" %s", fields...)
+}
+
+func logErrorf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Errorf(msg+" %s", fields...)
 }
 
 func fileExists(path string) (bool, error) {
