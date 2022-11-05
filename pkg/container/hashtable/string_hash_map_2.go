@@ -20,20 +20,22 @@ import (
 	"unsafe"
 )
 
-func (ht *StringHashMap) Free2(m *mpool.MPool) {
+func (ht *StringHashMap) Free(m *mpool.MPool) {
 	for i := range ht.rawData2 {
-		m.Free(ht.rawData2[i])
+		if len(ht.rawData2[i]) > 0 {
+			m.Free(ht.rawData2[i])
+		}
 		ht.rawData2[i], ht.cells2[i] = nil, nil
 	}
 	ht.rawData2, ht.cells2 = nil, nil
 }
 
-func (ht *StringHashMap) Init2(m *mpool.MPool) (err error) {
-	ht.cellCntBits = kInitialCellCntBits
+func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
+	ht.blockCellCntBits = kInitialCellCntBits
 	ht.blockMaxCellCnt = kInitialCellCnt
-	ht.allElemCnt = 0
-	ht.allCellCnt = 0
 	ht.blockMaxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	ht.elemCnt = 0
+	ht.allCellCnt = kInitialCellCnt
 
 	ht.rawData2 = make([][]byte, 1)
 	ht.cells2 = make([][]StringHashMapCell, 1)
@@ -43,27 +45,27 @@ func (ht *StringHashMap) Init2(m *mpool.MPool) (err error) {
 	return
 }
 
-func (ht *StringHashMap) InsertStringBatch2(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand2(uint64(len(keys)), m); err != nil {
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
 
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		if cell.Mapped == 0 {
-			ht.allElemCnt++
+			ht.elemCnt++
 			cell.HashState = states[i]
-			cell.Mapped = ht.allElemCnt
+			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
 	}
 	return nil
 }
 
-func (ht *StringHashMap) InsertStringBatchWithRing2(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand2(uint64(len(keys)), m); err != nil {
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
+	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
 
@@ -74,65 +76,65 @@ func (ht *StringHashMap) InsertStringBatchWithRing2(zValues []int64, states [][3
 			continue
 		}
 
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		if cell.Mapped == 0 {
-			ht.allElemCnt++
+			ht.elemCnt++
 			cell.HashState = states[i]
-			cell.Mapped = ht.allElemCnt
+			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
 	}
 	return nil
 }
 
-func (ht *StringHashMap) FindStringBatch2(states [][3]uint64, keys [][]byte, values []uint64) {
+func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *StringHashMap) FindString24Batch2(states [][3]uint64, keys [][3]uint64, values []uint64) {
+func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
 	Int192BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *StringHashMap) FindString32Batch2(states [][3]uint64, keys [][4]uint64, values []uint64) {
+func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
 	Int256BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *StringHashMap) FindString40Batch2(states [][3]uint64, keys [][5]uint64, values []uint64) {
+func (ht *StringHashMap) FindString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
 	Int320BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *StringHashMap) FindStringBatchWithRing2(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64) {
+func (ht *StringHashMap) FindStringBatchWithRing(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64) {
 	// XXX I think it is no use now.
 }
 
-func (ht *StringHashMap) FindHashStateBatch2(states [][3]uint64, values []uint64) {
+func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64) {
 	for i := range states {
-		cell := ht.findCell2(&states[i])
+		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *StringHashMap) findCell2(state *[3]uint64) *StringHashMapCell {
+func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 	mask := ht.allCellCnt - 1
 	if len(ht.rawData2) == 1 {
 		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
@@ -154,7 +156,7 @@ func (ht *StringHashMap) findCell2(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) findEmptyCell2(state *[3]uint64) *StringHashMapCell {
+func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	mask := ht.allCellCnt - 1
 	if len(ht.rawData2) == 1 {
 		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
@@ -176,15 +178,15 @@ func (ht *StringHashMap) findEmptyCell2(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) resizeOnDemand2(n uint64, m *mpool.MPool) error {
-	targetCnt := ht.allElemCnt + n
-	if targetCnt < uint64(len(ht.rawData2))*ht.blockMaxElemCnt {
+func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
+	targetCnt := ht.elemCnt + n
+	if targetCnt <= uint64(len(ht.rawData2))*ht.blockMaxElemCnt {
 		return nil
 	}
 
 	var err error
 	if len(ht.rawData2) == 1 {
-		newCellCntBits := ht.cellCntBits + 2
+		newCellCntBits := ht.blockCellCntBits + 2
 		newCellCnt := uint64(1 << newCellCntBits)
 		newBlockMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 		for newBlockMaxElemCnt < targetCnt {
@@ -200,7 +202,8 @@ func (ht *StringHashMap) resizeOnDemand2(n uint64, m *mpool.MPool) error {
 		newAlloc := int(newCellCnt) * int(strCellSize)
 		if newAlloc < mpool.GB {
 			// update hashTable cnt.
-			ht.cellCntBits = newCellCntBits
+			ht.blockCellCntBits = newCellCntBits
+			ht.allCellCnt = newCellCnt
 			ht.blockMaxCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newBlockMaxElemCnt
 
@@ -208,7 +211,7 @@ func (ht *StringHashMap) resizeOnDemand2(n uint64, m *mpool.MPool) error {
 			if err != nil {
 				return err
 			}
-			ht.cells2[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData2[0][0])), ht.cellCnt)
+			ht.cells2[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData2[0][0])), ht.blockMaxCellCnt)
 
 			// re the cell
 			for i := uint64(0); i < oldCellCnt; i++ {
@@ -235,14 +238,15 @@ func (ht *StringHashMap) resizeOnDemand2(n uint64, m *mpool.MPool) error {
 		}
 		ht.cells2[newBlockIdx] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData2[newBlockIdx][0])), ht.blockMaxCellCnt)
 	}
+	ht.allCellCnt = ht.blockMaxCellCnt * uint64(len(ht.rawData2))
 	return nil
 }
 
-func (ht *StringHashMap) Cardinality2() uint64 {
-	return ht.allElemCnt
+func (ht *StringHashMap) Cardinality() uint64 {
+	return ht.elemCnt
 }
 
-func (it *StringHashMapIterator) Next2() (cell *StringHashMapCell, err error) {
+func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 	for it.pos < it.table.allCellCnt {
 		blockId := it.pos / it.table.blockMaxCellCnt
 		cellId := it.pos % it.table.blockMaxCellCnt
