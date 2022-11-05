@@ -195,7 +195,6 @@ func TestTimeDiffInDateTime(t *testing.T) {
 		res, _ := timeDiff(firstV, secondV)
 		want, _ := types.ParseTime(v.want, 0)
 
-
 		//test
 		require.NoError(t, err)
 		require.Equal(t, res, want)
