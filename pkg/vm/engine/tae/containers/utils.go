@@ -99,8 +99,14 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	typ := vec.GetType()
 
 	if vec.GetType().IsVarlen() {
-		header := make([]types.Varlena, len(bs.Header))
-		copy(header, bs.Header)
+		var header []types.Varlena
+		if bs.AsWindow {
+			header = make([]types.Varlena, bs.WinLength)
+			copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
+		} else {
+			header = make([]types.Varlena, len(bs.Header))
+			copy(header, bs.Header)
+		}
 		storage := make([]byte, len(bs.Storage))
 		if len(storage) > 0 {
 			copy(storage, bs.Storage)
