@@ -41,7 +41,7 @@ func (ht *Int64HashMap) Init(m *mpool.MPool) (err error) {
 	ht.rawData2 = make([][]byte, 1)
 	ht.cells2 = make([][]Int64HashMapCell, 1)
 	if ht.rawData2[0], err = m.Alloc(int(ht.blockMaxCellCnt) * int(intCellSize)); err == nil {
-		ht.cells2[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData2[0])), ht.blockMaxCellCnt)
+		ht.cells2[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData2[0][0])), ht.blockMaxCellCnt)
 	}
 	return
 }
