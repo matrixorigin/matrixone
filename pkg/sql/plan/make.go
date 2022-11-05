@@ -193,7 +193,7 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: id},
+				Func: &ObjectRef{Obj: id, ObjName: "cast"},
 				Args: []*Expr{expr, t},
 			},
 		},

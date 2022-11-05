@@ -298,6 +298,24 @@ func ensureBinaryOperatorWithSamePrecision(targets []types.Type, hasSet []bool) 
 func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 	if len(targets) != 0 {
 		hasSet := make([]bool, len(sources))
+
+		//ensure that we will not lost the origin scale
+		maxScale := int32(0)
+		for i := range sources {
+			if sources[i].Oid == types.T_decimal64 || sources[i].Oid == types.T_decimal128 {
+				if sources[i].Scale > maxScale {
+					maxScale = sources[i].Scale
+				}
+			}
+		}
+		for i := range sources {
+			if targets[i].Oid == types.T_decimal64 || targets[i].Oid == types.T_decimal128 {
+				if sources[i].Scale < maxScale {
+					sources[i].Scale = maxScale
+				}
+			}
+		}
+
 		for i := range targets {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
 			// ensure that we will not lose the original precision.

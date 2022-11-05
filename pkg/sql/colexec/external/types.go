@@ -17,7 +17,6 @@ package external
 import (
 	"context"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,9 +42,7 @@ type ExternalParam struct {
 	// tag indicate the fileScan is finished
 	Fileparam *ExternalFileparam
 	FileList  []string
-	batchSize int
 	reader    io.ReadCloser
-	records   [][]string
 }
 
 type ExternalFileparam struct {
@@ -53,7 +50,6 @@ type ExternalFileparam struct {
 	FileCnt   int
 	FileFin   int
 	FileIndex int
-	mu        sync.Mutex
 }
 
 type Argument struct {
