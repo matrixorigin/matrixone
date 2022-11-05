@@ -144,9 +144,6 @@ func (s *sender) adjust() {
 	if s.options.payloadCopyBufferSize == 0 {
 		s.options.payloadCopyBufferSize = 16 * 1024
 	}
-	if s.options.maxMessageSize == 0 {
-		s.options.maxMessageSize = defaultMaxMessageSize
-	}
 	s.options.backendCreateOptions = append(s.options.backendCreateOptions,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendLogger(s.logger))

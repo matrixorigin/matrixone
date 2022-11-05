@@ -30,6 +30,8 @@ var (
 	flagPayloadMessage byte = 1
 	flagWithChecksum   byte = 2
 	flagCustomHeader   byte = 4
+
+	defaultMaxMessageSize = 1024 * 1024 * 100
 )
 
 // WithCodecEnableChecksum enable checksum
@@ -56,6 +58,9 @@ func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
 // WithCodecMaxBodySize set rpc max body size
 func WithCodecMaxBodySize(size int) CodecOption {
 	return func(c *messageCodec) {
+		if size == 0 {
+			size = defaultMaxMessageSize
+		}
 		c.codec = length.NewWithSize(c.bc, 0, 0, 0, size)
 	}
 }
@@ -70,7 +75,7 @@ func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Code
 	bc := &baseCodec{
 		messageFactory: messageFactory,
 	}
-	c := &messageCodec{codec: length.New(bc), bc: bc}
+	c := &messageCodec{codec: length.NewWithSize(bc, 0, 0, 0, defaultMaxMessageSize), bc: bc}
 	c.AddHeaderCodec(&deadlineContextCodec{})
 	c.AddHeaderCodec(&traceCodec{})
 

@@ -28,7 +28,6 @@ var (
 	defaultMaxIdleDuration = time.Minute
 	defaultSendQueueSize   = 10240
 	defaultBufferSize      = 1024
-	defaultMaxMessageSize  = 1024 * 1024 * 10
 )
 
 // Config txn sender config
@@ -73,9 +72,6 @@ func (c *Config) adjust() {
 	}
 	if c.MaxIdleDuration.Duration == 0 {
 		c.MaxIdleDuration.Duration = defaultMaxIdleDuration
-	}
-	if c.MaxMessageSize == 0 {
-		c.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	}
 }
 

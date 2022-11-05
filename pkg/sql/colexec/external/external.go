@@ -22,6 +22,7 @@ import (
 	"compress/zlib"
 	"container/list"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,10 +67,11 @@ func Prepare(proc *process.Process, arg any) error {
 		param.Fileparam.End = true
 		return err
 	}
-	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
-		param.End = true
-		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	}*/
+	if param.extern.ScanType == tree.S3 {
+		if err := InitS3Param(param.extern); err != nil {
+			return err
+		}
+	}
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -79,19 +81,12 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := ReadDir(param.extern)
-	if err != nil {
-		param.Fileparam.End = true
-		return err
-	}
-
-	if len(fileList) == 0 {
+	if len(param.FileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.Fileparam.End = true
 	}
-	param.FileList = fileList
 	param.extern.Filepath = ""
-	param.Fileparam.FileCnt = len(fileList)
+	param.Fileparam.FileCnt = len(param.FileList)
 	return nil
 }
 
@@ -101,22 +96,18 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	defer anal.Stop()
 	anal.Input(nil)
 	param := arg.(*Argument).Es
-	param.Fileparam.mu.Lock()
 	if param.Fileparam.End {
-		param.Fileparam.mu.Unlock()
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if param.extern.Filepath == "" {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
-			param.Fileparam.mu.Unlock()
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		param.extern.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	param.Fileparam.mu.Unlock()
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
 		param.Fileparam.End = true
@@ -126,6 +117,45 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Output(bat)
 	anal.Alloc(int64(bat.Size()))
 	return false, nil
+}
+
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.S3option); i += 2 {
+		switch strings.ToLower(param.S3option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.S3option[i+1]
+		case "region":
+			param.S3Param.Region = param.S3option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.S3option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.S3option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.S3option[i+1]
+		case "filepath":
+			param.Filepath = param.S3option[i+1]
+		case "compression":
+			param.CompressType = param.S3option[i+1]
+		default:
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
+		}
+	}
+	return nil
+}
+
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		if err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
 }
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
@@ -144,7 +174,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
-			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
+			fs, readPath, err := GetForETLWithType(param, prefix)
 			if err != nil {
 				return nil, err
 			}
@@ -177,7 +207,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(param.FileService, param.Filepath)
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -388,13 +418,11 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			}
 			plh.simdCsvReader.Close()
 			param.plh = nil
-			param.Fileparam.mu.Lock()
 			param.Fileparam.FileFin++
 			param.extern.Filepath = ""
 			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 				param.Fileparam.End = true
 			}
-			param.Fileparam.mu.Unlock()
 			break
 		}
 	}
