@@ -33,8 +33,10 @@
 
 // Time
 #define Type_DATE       50
+#define Type_TIME       51
 #define Type_DATETIME   52
 #define Type_TIMESTAMP  53
+
 
 
 /*
@@ -172,6 +174,8 @@ int32_t Numeric_VecEq(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_EQ, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_EQ, int32_t);
+    } else if (type == Type_TIME) {
+        MO_COMPARE_T(COMPARE_EQ, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_EQ, int64_t);
     } else if (type == Type_TIMESTAMP) {
@@ -209,6 +213,8 @@ int32_t Numeric_VecNe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_NE, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_NE, int32_t);
+    } else if (type == Type_TIME){
+        MO_COMPARE_T(COMPARE_NE, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_NE, int64_t);
     } else if (type == Type_TIMESTAMP) {
@@ -246,6 +252,8 @@ int32_t Numeric_VecGt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_GT, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_GT, int32_t);
+    } else if (type == Type_TIME) {
+        MO_COMPARE_T(COMPARE_GT, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_GT, int64_t);
     } else if (type == Type_TIMESTAMP) {
@@ -282,6 +290,8 @@ int32_t Numeric_VecGe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_GE, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_GE, int32_t);
+    } else if (type == Type_TIME) {
+        MO_COMPARE_T(COMPARE_GE, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_GE, int64_t);
     } else if (type == Type_TIMESTAMP) {
@@ -320,6 +330,8 @@ int32_t Numeric_VecLt(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_LT, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_LT, int32_t);
+    } else if (type == Type_TIME) {
+        MO_COMPARE_T(COMPARE_LT, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_LT, int64_t);
     } else if (type == Type_TIMESTAMP) {
@@ -357,6 +369,8 @@ int32_t Numeric_VecLe(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, i
         MO_COMPARE_T(COMPARE_LE, double);
     } else if (type == Type_DATE) {
         MO_COMPARE_T(COMPARE_LE, int32_t);
+    } else if (type == Type_TIME) {
+        MO_COMPARE_T(COMPARE_LE, int64_t);
     } else if (type == Type_DATETIME) {
         MO_COMPARE_T(COMPARE_LE, int64_t);
     } else if (type == Type_TIMESTAMP) {
