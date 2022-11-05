@@ -168,6 +168,7 @@ func (data *CheckpointData) ReplayMeta() {
 			}
 		}
 		data.meta[tid] = meta
+		// logutil.Infof("ReplayMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
 	}
 }
 func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err error) {
@@ -193,6 +194,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		insTaeBat = data.tblInsBatch
 		delTaeBat = data.tblDelBatch
 		if insTaeBat != nil {
+			// logutil.Infof("INSERT-TABLE %s", insTaeBat.String())
 			ins, err = containersBatchToProtoBatch(insTaeBat)
 			if err != nil {
 				return
@@ -242,6 +244,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		delTaeBat = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
 	}
 	if insTaeBat != nil {
+		// logutil.Infof("[TID=%d] INSERT-BLK %s", tid, insTaeBat.String())
 		ins, err = containersBatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
@@ -859,8 +862,8 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			}
 		}
 	}
-	insEnd := collector.data.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Length() - 1
-	delEnd := collector.data.blkMetaDelBatch.GetVectorByName(catalog.AttrRowID).Length() - 1
+	insEnd := collector.data.blkMetaInsBatch.GetVectorByName(catalog.AttrRowID).Length()
+	delEnd := collector.data.blkMetaDelBatch.GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 	return nil
 }
