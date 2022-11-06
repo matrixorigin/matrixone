@@ -16,6 +16,7 @@ package txn
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -64,7 +65,7 @@ func (c *cluster) GetLogger() *zap.Logger {
 
 func (c *cluster) Start() {
 	if err := c.env.Start(); err != nil {
-		assert.FailNow(c.t, "start testing cluster failed")
+		assert.FailNow(c.t, fmt.Sprintf("start testing cluster failed, %v", err))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
