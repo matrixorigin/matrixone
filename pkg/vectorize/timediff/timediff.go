@@ -25,8 +25,7 @@ type DiffT interface {
 	types.Time | types.Datetime
 }
 
-func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, v1N, v2N *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, vectorLen int) error {
-	rs := make([]string, vectorLen)
+func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, vectorLen int) error {
 	if len(v1) == 1 && len(v2) == 1 {
 		for i := 0; i < vectorLen; i++ {
 			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(0)) {
@@ -39,7 +38,6 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, v1N, v2N *nulls.Nulls, resultVector
 			}
 			rs[0] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(v1) == 1 {
 		for i := 0; i < vectorLen; i++ {
 			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(i)) {
@@ -52,7 +50,6 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, v1N, v2N *nulls.Nulls, resultVector
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(v2) == 1 {
 		for i := 0; i < vectorLen; i++ {
 			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(0)) {
@@ -65,7 +62,6 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, v1N, v2N *nulls.Nulls, resultVector
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
 	} else {
 		for i := 0; i < vectorLen; i++ {
 			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(i)) {
@@ -78,21 +74,19 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, v1N, v2N *nulls.Nulls, resultVector
 			}
 			rs[i] = res
 		}
-		vector.AppendString(resultVector, rs, proc.Mp())
 	}
 	return nil
 }
 
-func timeDiff[T DiffT](v1, v2 T) (string, error) {
+func timeDiff[T DiffT](v1, v2 T) (types.Time, error) {
 	time := types.Time(int(v1) - int(v2))
 	hour, _, _, _, isNeg := time.ClockFormat()
 	if !types.ValidTime(uint64(hour), 0, 0) {
 		if isNeg {
-			return "-838:59:59", nil
+			return types.ParseTime("-838:59:59", 0)
 		} else {
-			return "838:59:59", nil
+			return types.ParseTime("838:59:59", 0)
 		}
 	}
-
-	return time.String(), nil
+	return time, nil
 }

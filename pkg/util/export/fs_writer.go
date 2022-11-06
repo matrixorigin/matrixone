@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
-
-const etlFileServiceName = "ETL"
 
 var _ stringWriter = (*FSWriter)(nil)
 
@@ -70,7 +69,7 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		nodeUUID:    "0",
 		nodeType:    "standalone",
 
-		fileServiceName: etlFileServiceName,
+		fileServiceName: defines.ETLFileServiceName,
 	}
 	for _, o := range opts {
 		o.Apply(w)

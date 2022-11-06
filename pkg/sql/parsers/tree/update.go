@@ -124,7 +124,12 @@ const (
 	ARRAY  = "array"
 )
 
+const (
+	S3 = 1
+)
+
 type ExternParam struct {
+	ScanType     int
 	Filepath     string
 	CompressType string
 	Format       string
@@ -132,6 +137,16 @@ type ExternParam struct {
 	Tail         *TailParameter
 	FileService  fileservice.FileService
 	NullMap      map[string]([]string)
+	S3option     []string
+	S3Param      *S3Parameter
+}
+
+type S3Parameter struct {
+	Endpoint  string `json:"s3-test-endpoint"`
+	Region    string `json:"s3-test-region"`
+	APIKey    string `json:"s3-test-key"`
+	APISecret string `json:"s3-test-secret"`
+	Bucket    string `json:"s3-test-bucket"`
 }
 
 type TailParameter struct {
@@ -175,6 +190,11 @@ func (node *Load) Format(ctx *FmtCtx) {
 	if (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) && node.Param.Format == CSV {
 		ctx.WriteString(" infile ")
 		ctx.WriteString(node.Param.Filepath)
+	} else if node.Param.ScanType == S3 {
+		ctx.WriteString(" url s3option ")
+		ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
+			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" +
+			node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
 	} else {
 		ctx.WriteString(" infile ")
 		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "', 'format':'" + strings.ToLower(node.Param.Format) + "'")

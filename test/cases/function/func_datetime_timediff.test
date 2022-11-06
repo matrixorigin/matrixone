@@ -53,7 +53,7 @@ drop table t1;
 
 drop table if exists t2;
 create table t2(a INT,  b datetime);
-insert into t2 values(1, '2012-12-12 22:22:22');
+insert into t2 values(1, '2012-12-12 23:22:22');
 insert into t2 values(2, '2012-12-10 11:11:11');
 insert into t2 values(3, '2012-12-14 11:11:11');
 insert into t2 values(4, '2012-12-20 11:11:11');
@@ -61,3 +61,10 @@ insert into t2 values(2, '2012-10-10 11:11:11');
 select a, timediff(cast('2012-12-12 22:22:21' as datetime), b) from t2;
 select a, timediff(b, cast('2012-12-12 22:22:21' as datetime)) from t2;
 drop table t2;
+
+select timediff('20',NULL);
+select timediff(NULL,'24:59:09');
+select timediff('20','24:59:09');
+select timediff('12:00','24:59:09');
+select timediff('-838:59:59','-1122');
+select timediff('12:00:00','24:59:09');
