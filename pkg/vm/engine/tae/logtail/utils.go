@@ -235,10 +235,10 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch
 
 	// For Debug
 	// if insTaeBat != nil {
-	// 	logutil.Infof("GetTableData: TID=%d, INS-DATA=%s", tid, insTaeBat)
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("INS-DATA", insTaeBat, true))
 	// }
 	// if delTaeBat != nil {
-	// 	logutil.Infof("GetTableData: TID=%d, DEL-DATA=%s", tid, delTaeBat)
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("DEL-DATA", delTaeBat, true))
 	// }
 
 	meta := data.GetTableMeta(tid)
@@ -262,7 +262,6 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch
 	}
 
 	if insTaeBat != nil {
-		// logutil.Infof("[TID=%d] INSERT-BLK %s", tid, insTaeBat.String())
 		ins, err = containersBatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
@@ -278,6 +277,17 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch
 			return
 		}
 	}
+
+	// For debug
+	// if insTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("INS-BLK-DATA", insTaeBat, true))
+	// }
+	// if delTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("DEL-BLK-DATA", delTaeBat, true))
+	// }
+	// if cnInsTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("CN-INS-DATA", cnInsTaeBat, true))
+	// }
 	return
 }
 
@@ -330,13 +340,14 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 	}
 }
 
-func (data *CheckpointData) Print() {
+func (data *CheckpointData) PrintData() {
 	logutil.Info(BatchToString("BLK-META-DEL-BAT", data.blkMetaDelBatch, true))
 	logutil.Info(BatchToString("BLK-META-INS-BAT", data.blkMetaInsBatch, true))
 }
 
 func (data *CheckpointData) WriteTo(
 	writer *blockio.Writer) (blks []objectio.BlockObject, err error) {
+	// data.PrintData()
 	if _, err = writer.WriteBlock(data.metaBatch); err != nil {
 		return
 	}
