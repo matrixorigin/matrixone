@@ -2399,6 +2399,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:          ses.GetUserName(),

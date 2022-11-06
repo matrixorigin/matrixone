@@ -93,6 +93,7 @@ func NewService(
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err

@@ -40,9 +40,10 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	Fileparam *ExternalFileparam
-	FileList  []string
-	reader    io.ReadCloser
+	Fileparam    *ExternalFileparam
+	FileList     []string
+	reader       io.ReadCloser
+	maxbatchSize uint64
 }
 
 type ExternalFileparam struct {
