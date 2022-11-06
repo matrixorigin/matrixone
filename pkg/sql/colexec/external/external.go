@@ -51,7 +51,6 @@ import (
 
 var (
 	ONE_BATCH_MAX_ROW  = 40000
-	ONE_BATCH_READ_ROW = 1000
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -399,34 +398,24 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	var curBatchSize uint64 = 0
-	records := make([][]string, ONE_BATCH_READ_ROW)
-	plh.simdCsvLineArray = nil
-	for curBatchSize <= param.maxBatchSize && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
-		records, cnt, err = plh.simdCsvReader.Read(ONE_BATCH_READ_ROW, proc.Ctx, records)
-		if err != nil {
-			return nil, err
-		}
+	finish := false
+	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
+	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
+	if err != nil {
+		return nil, err
+	}
 
-		plh.simdCsvLineArray = append(plh.simdCsvLineArray, records[:cnt]...)
-		for i := 0; i < len(records); i++ {
-			for j := 0; j < len(records[i]); j++ {
-				curBatchSize += uint64(len(records[i][j]))
-			}
+	if finish {
+		err := param.reader.Close()
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
 		}
-		if cnt < ONE_BATCH_READ_ROW {
-			err := param.reader.Close()
-			if err != nil {
-				logutil.Errorf("close file failed. err:%v", err)
-			}
-			plh.simdCsvReader.Close()
-			param.plh = nil
-			param.Fileparam.FileFin++
-			param.extern.Filepath = ""
-			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-				param.Fileparam.End = true
-			}
-			break
+		plh.simdCsvReader.Close()
+		param.plh = nil
+		param.Fileparam.FileFin++
+		param.extern.Filepath = ""
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
 		}
 	}
 
@@ -438,7 +427,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 		param.IgnoreLine = 0
 	}
-	plh.batchSize = len(plh.simdCsvLineArray)
+	plh.batchSize = cnt
 	bat, err = GetBatchData(param, plh, proc)
 	if err != nil {
 		return nil, err
