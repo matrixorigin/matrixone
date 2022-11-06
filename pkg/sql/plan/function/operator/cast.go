@@ -1099,13 +1099,34 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // blob -> blob
 // we need to consider the visiblity of 0xXXXX, the rule is a little complex,
 // please do that in the future
+// the rule is, if src string len is larger than the dest string len, report an error
+// for example: select cast('aaaaaaa' as char(1)); will report an error here.
+// insert into col(varchar(1) values 'aaaaa', report an error
+// for other cases, where col(varchar(1))='aaaaa', do not report error, just return empty result. maybe we can optimize this to false?
+// sometimes, the dest len is 0, then do not report error here. maybe a bug and need to fix in the future?
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	source := vector.MustStrCols(lv)
 	if lv.IsScalar() {
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
+		if rv.Typ.Oid != types.T_text && int(rv.Typ.Width) != 0 && len(source[0]) > int(rv.Typ.Width) {
+			errInfo := fmt.Sprintf(" Src length %v is larger than Dest length %v", len(source[0]), rv.Typ.Width)
+			return nil, formatCastError(lv, rv.Typ, errInfo)
+		}
 		return vector.NewConstString(rv.Typ, lv.Length(), source[0], proc.Mp()), nil
+	}
+	destLen := int(rv.Typ.Width)
+	if rv.Typ.Oid != types.T_text && destLen != 0 {
+		for i, str := range source {
+			if nulls.Contains(lv.Nsp, uint64(i)) {
+				continue
+			}
+			if len(str) > destLen {
+				errInfo := fmt.Sprintf(" Src length %v is larger than Dest length %v", len(str), destLen)
+				return nil, formatCastError(lv, rv.Typ, errInfo)
+			}
+		}
 	}
 	return vector.NewWithStrings(rv.Typ, source, lv.Nsp, proc.Mp()), nil
 }
