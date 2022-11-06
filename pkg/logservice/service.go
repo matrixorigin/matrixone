@@ -126,7 +126,8 @@ func NewService(
 	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf,
 		morpc.WithCodecPayloadCopyBufferSize(16*1024),
-		morpc.WithCodecEnableChecksum())
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)
@@ -431,5 +432,7 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
-	return nil
+	return []morpc.ClientOption{
+		morpc.WithClientTag("log-heartbeat"),
+	}
 }

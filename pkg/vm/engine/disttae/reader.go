@@ -17,8 +17,10 @@ package disttae
 import (
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 )
@@ -42,20 +44,42 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 	defer func() { r.blks = r.blks[1:] }()
 
 	info := &r.blks[0].Info
-	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+
+	if len(cols) != len(r.colIdxs) {
+		if len(r.colIdxs) == 0 {
+			r.colIdxs = make([]uint16, len(cols))
+			r.colTypes = make([]types.Type, len(cols))
+			r.colNulls = make([]bool, len(cols))
+			r.pkidxInColIdxs = -1
+			for i, column := range cols {
+				r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+				if r.colIdxs[i] == uint16(r.primaryIdx) {
+					r.pkidxInColIdxs = i
+				}
+				colDef := r.tableDef.Cols[r.colIdxs[i]]
+				r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+				if colDef.Default != nil {
+					r.colNulls[i] = colDef.Default.NullAbility
+				}
+			}
+		} else {
+			panic(moerr.NewInternalError("blockReader reads different number of columns"))
+		}
+	}
+
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.colIdxs, r.colTypes, r.colNulls, r.tableDef, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
 
 	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.primaryIdx == -1 || r.expr == nil {
+	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
-	pkIdx := int32(r.primaryIdx)
-	vec := bat.GetVector(pkIdx)
-	canCompute, v := getPkValueByExpr(r.expr, pkIdx, vec.Typ.Oid)
+	vec := bat.GetVector(int32(r.pkidxInColIdxs))
+	canCompute, v := getPkValueByExpr(r.expr, int32(r.primaryIdx), vec.Typ.Oid)
 	if canCompute {
 		row := findRowByPkValue(vec, v)
 		if row >= vec.Length() {
@@ -79,7 +103,26 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 	}
 	defer func() { r.blks = r.blks[1:] }()
 	info := &r.blks[0].meta.Info
-	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+
+	if len(cols) != len(r.colIdxs) {
+		if len(r.colIdxs) == 0 {
+			r.colIdxs = make([]uint16, len(cols))
+			r.colTypes = make([]types.Type, len(cols))
+			r.colNulls = make([]bool, len(cols))
+			for i, column := range cols {
+				r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+				colDef := r.tableDef.Cols[r.colIdxs[i]]
+				r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+				if colDef.Default != nil {
+					r.colNulls[i] = colDef.Default.NullAbility
+				}
+			}
+		} else {
+			panic(moerr.NewInternalError("blockReader reads different number of columns"))
+		}
+	}
+
+	bat, err := blockio.BlockRead(r.ctx, info, cols, r.colIdxs, r.colTypes, r.colNulls, r.tableDef, r.ts, r.fs, m)
 	if err != nil {
 		return nil, err
 	}
