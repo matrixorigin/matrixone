@@ -61,11 +61,11 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	if proc.Lim.MaxMsgSize == 0 {
-		param.maxbatchSize = uint64(morpc.GetMessageSize())
+		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
-		param.maxbatchSize = proc.Lim.MaxMsgSize
+		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
-	param.maxbatchSize = uint64(float64(morpc.GetMessageSize()) * 0.8)
+	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.8)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -402,7 +402,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	var curBatchSize uint64 = 0
 	records := make([][]string, ONE_BATCH_READ_ROW)
 	plh.simdCsvLineArray = nil
-	for curBatchSize <= param.maxbatchSize && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
+	for curBatchSize <= param.maxBatchSize && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
 		records, cnt, err = plh.simdCsvReader.Read(ONE_BATCH_READ_ROW, proc.Ctx, records)
 		if err != nil {
 			return nil, err
