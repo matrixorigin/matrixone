@@ -50,7 +50,7 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_ROW  = 40000
+	ONE_BATCH_MAX_ROW = 40000
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -398,8 +398,8 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	finish := false
 	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
+	finish := false
 	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
 	if err != nil {
 		return nil, err
@@ -418,12 +418,13 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 			param.Fileparam.End = true
 		}
 	}
-
 	if param.IgnoreLine != 0 {
-		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
-			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if cnt >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
+			cnt -= param.IgnoreLine
 		} else {
 			plh.simdCsvLineArray = nil
+			cnt = 0
 		}
 		param.IgnoreLine = 0
 	}
