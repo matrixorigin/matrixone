@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +69,14 @@ func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	}
 }
 
+func WithClientTag(tag string) ClientOption {
+	return func(c *client) {
+		c.tag = tag
+	}
+}
+
 type client struct {
+	tag         string
 	logger      *zap.Logger
 	stopper     *stopper.Stopper
 	factory     BackendFactory
@@ -103,7 +111,7 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 		opt(c)
 	}
 	c.adjust()
-	c.stopper = stopper.NewStopper("rpc client", stopper.WithLogger(c.logger))
+	c.stopper = stopper.NewStopper(c.tag, stopper.WithLogger(c.logger))
 
 	if err := c.maybeInitBackends(); err != nil {
 		c.Close()
@@ -125,7 +133,8 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 }
 
 func (c *client) adjust() {
-	c.logger = logutil.Adjust(c.logger)
+	c.tag = fmt.Sprintf("rpc-client[%s]", c.tag)
+	c.logger = logutil.Adjust(c.logger).Named(c.tag)
 	if c.createC == nil {
 		c.createC = make(chan string, 16)
 	}

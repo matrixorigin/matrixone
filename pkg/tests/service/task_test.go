@@ -75,6 +75,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -91,20 +92,24 @@ func TestTaskServiceCanCreate(t *testing.T) {
 	require.NoError(t, err)
 
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	require.NoError(t, c.Start())
 	defer func(c Cluster) {
-		_ = c.Close()
+		require.NoError(t, c.Close())
 	}(c)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 1)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 2)
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -116,13 +121,12 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	require.NoError(t, err)
 
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	require.NoError(t, c.Start())
 	defer func(c Cluster) {
-		_ = c.Close()
+		require.NoError(t, c.Close())
 	}(c)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
@@ -155,6 +159,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -180,11 +185,10 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	}
 
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	require.NoError(t, c.Start())
 	defer func(c Cluster, halt chan bool) {
 		halt <- true
-		_ = c.Close()
+		require.NoError(t, c.Close())
 	}(c, halt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
@@ -223,6 +227,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 }
 
 func TestTaskRunner(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -244,8 +249,11 @@ func TestTaskRunner(t *testing.T) {
 	require.NoError(t, err)
 
 	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
+	require.NoError(t, c.Start())
+	// close the cluster
+	defer func(c Cluster) {
+		require.NoError(t, c.Close())
+	}(c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -270,11 +278,10 @@ func TestTaskRunner(t *testing.T) {
 	case i := <-ch:
 		t.Logf("task %d is completed", i)
 	}
-	err = c.Close()
-	require.NoError(t, err)
 }
 
 func TestCronTask(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -285,27 +292,26 @@ func TestCronTask(t *testing.T) {
 	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
-	// start the cluster
-	err = c.Start()
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
 		select {
 		case ch <- int(task.ID):
 		case <-ctx.Done():
-			close(ch)
 			return nil
 		}
 		return nil
 	}
+
+	// start the cluster
+	require.NoError(t, c.Start())
+	defer func(c Cluster, ch chan int) {
+		//close(ch)
+		require.NoError(t, c.Close())
+	}(c, ch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	indexed, err := c.GetCNServiceIndexed(0)
