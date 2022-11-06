@@ -27,7 +27,13 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	secondVector := vectors[1]
 	firstValues := vector.MustTCols[T](firstVector)
 	secondValues := vector.MustTCols[T](secondVector)
-	resultType := types.T_varchar.ToType()
+	resultType := types.T_time.ToType()
+
+	resultPrecision := firstVector.Typ.Precision
+	if firstVector.Typ.Precision < secondVector.Typ.Precision {
+		resultPrecision = secondVector.Typ.Precision
+	}
+	resultType.Precision = resultPrecision
 
 	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
@@ -38,12 +44,13 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 		vectorLen = len(secondValues)
 	}
 
-	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	resultVector, err := proc.AllocVectorOfRows(resultType, int64(vectorLen), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, firstVector.Nsp, secondVector.Nsp, resultVector, proc, vectorLen); err != nil {
+	rs := vector.MustTCols[types.Time](resultVector)
+	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs, firstVector.Nsp, secondVector.Nsp, resultVector, proc, vectorLen); err != nil {
 		return nil, err
 	}
 	return resultVector, nil

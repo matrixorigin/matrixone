@@ -15,10 +15,9 @@
 package hashtable
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"unsafe"
 )
 
 type Int64HashMapCell struct {
@@ -27,14 +26,16 @@ type Int64HashMapCell struct {
 }
 
 type Int64HashMap struct {
-	cellCntBits uint8
-	cellCnt     uint64
-	cellCntMask uint64
-	elemCnt     uint64
-	maxElemCnt  uint64
-	cells       []Int64HashMapCell
-	rawData     []byte
+	blockCellCntBits uint8
+	blockMaxCellCnt  uint64
+	blockMaxElemCnt  uint64
+	cellCntMask      uint64
 	//confCnt     uint64
+
+	cellCnt uint64
+	elemCnt uint64
+	rawData [][]byte
+	cells   [][]Int64HashMapCell
 }
 
 var intCellSize int64
@@ -44,24 +45,28 @@ func init() {
 }
 
 func (ht *Int64HashMap) Free(m *mpool.MPool) {
-	if len(ht.rawData) > 0 {
-		m.Free(unsafe.Slice((*byte)(unsafe.Pointer(&ht.cells[0])), ht.cellCnt*uint64(intCellSize)))
-		ht.cells = nil
+	for i := range ht.rawData {
+		if len(ht.rawData[i]) > 0 {
+			m.Free(ht.rawData[i])
+		}
+		ht.rawData[i], ht.cells[i] = nil, nil
 	}
-	ht.rawData = nil
+	ht.rawData, ht.cells = nil, nil
 }
 
 func (ht *Int64HashMap) Init(m *mpool.MPool) (err error) {
-	ht.cellCntBits = kInitialCellCntBits
-	ht.cellCnt = kInitialCellCnt
+	ht.blockCellCntBits = kInitialCellCntBits
+	ht.blockMaxCellCnt = kInitialCellCnt
+	ht.blockMaxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
-	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	ht.cellCnt = kInitialCellCnt
 
-	if ht.rawData, err = m.Alloc(int(ht.cellCnt) * int(intCellSize)); err == nil {
-		ht.cells = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[0])), ht.cellCnt)
+	ht.rawData = make([][]byte, 1)
+	ht.cells = make([][]Int64HashMapCell, 1)
+	if ht.rawData[0], err = m.Alloc(int(ht.blockMaxCellCnt) * int(intCellSize)); err == nil {
+		ht.cells[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockMaxCellCnt)
 	}
-
 	return
 }
 
@@ -75,7 +80,6 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
-
 	for i, key := range keys {
 		cell := ht.findCell(hashes[i], key)
 		if cell.Mapped == 0 {
@@ -143,75 +147,98 @@ func (ht *Int64HashMap) FindBatchWithRing(n int, zValues []int64, hashes []uint6
 
 func (ht *Int64HashMap) findCell(hash uint64, key uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		cell := &ht.cells[idx]
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
 		if cell.Key == key || cell.Mapped == 0 {
 			return cell
 		}
-		//ht.confCnt++
 	}
-
 	return nil
 }
 
 func (ht *Int64HashMap) findEmptyCell(hash uint64, key uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		cell := &ht.cells[idx]
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
 		if cell.Mapped == 0 {
 			return cell
 		}
-		//ht.confCnt++
 	}
-
 	return nil
 }
 
 func (ht *Int64HashMap) resizeOnDemand(n int, m *mpool.MPool) error {
 	targetCnt := ht.elemCnt + uint64(n)
-	if targetCnt <= ht.maxElemCnt {
+	if targetCnt < uint64(len(ht.rawData))*ht.blockMaxElemCnt {
 		return nil
 	}
 
-	newCellCntBits := ht.cellCntBits + 2
-	newCellCnt := uint64(1) << newCellCntBits
-	newMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	for newMaxElemCnt < targetCnt {
-		newCellCntBits++
-		newCellCnt <<= 1
-		newMaxElemCnt = newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	}
+	var err error
+	if len(ht.rawData) == 1 {
+		newCellCntBits := ht.blockCellCntBits + 2
+		newCellCnt := uint64(1 << newCellCntBits)
+		newBlockMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+		for newBlockMaxElemCnt < targetCnt {
+			newCellCntBits++
+			newCellCnt <<= 1
+			newBlockMaxElemCnt = newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+		}
 
-	oldCellCnt := ht.cellCnt
-	oldCells := ht.cells
-	oldData := ht.rawData
+		oldCellCnt := ht.blockMaxCellCnt
+		oldCells0 := ht.cells[0]
+		oldData0 := ht.rawData[0]
 
-	ht.cellCntBits = newCellCntBits
-	ht.cellCnt = newCellCnt
-	ht.cellCntMask = newCellCnt - 1
-	ht.maxElemCnt = newMaxElemCnt
-	if newData, err := m.Alloc(int(newCellCnt) * int(intCellSize)); err != nil {
-		return err
-	} else {
-		ht.rawData = newData
-		ht.cells = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&newData[0])), newCellCnt)
-	}
+		newAlloc := int(newCellCnt) * int(intCellSize)
+		if newAlloc < mpool.GB {
+			// update hashTable cnt.
+			ht.blockCellCntBits = newCellCntBits
+			ht.blockMaxCellCnt = newCellCnt
+			ht.blockMaxElemCnt = newBlockMaxElemCnt
+			ht.cellCnt = newCellCnt
+			ht.cellCntMask = newCellCnt - 1
 
-	var hashes [256]uint64
-
-	var i uint64
-	for i = 0; i < oldCellCnt; i += 256 {
-		cells := oldCells[i : i+256]
-		Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
-		for j := range cells {
-			cell := &cells[j]
-			if cell.Mapped != 0 {
-				newCell := ht.findEmptyCell(hashes[j], cell.Key)
-				*newCell = *cell
+			ht.rawData[0], err = m.Alloc(newAlloc)
+			if err != nil {
+				return err
 			}
+			ht.cells[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockMaxCellCnt)
+
+			// re the cell
+			var hashes [256]uint64
+			for i := uint64(0); i < oldCellCnt; i += 256 {
+				cells := oldCells0[i : i+256]
+				Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
+				for j := range cells {
+					cell := &cells[j]
+					if cell.Mapped != 0 {
+						newCell := ht.findEmptyCell(hashes[j], cell.Key)
+						*newCell = *cell
+					}
+				}
+			}
+
+			m.Free(oldData0)
+			return nil
 		}
 	}
 
-	m.Free(oldData)
+	// double the block
+	blockNum := len(ht.rawData)
+	for i := range ht.rawData {
+		newBlockIdx := blockNum + i
+		ht.rawData = append(ht.rawData, nil)
+		ht.cells = append(ht.cells, nil)
 
+		ht.rawData[newBlockIdx], err = m.Alloc(int(ht.blockMaxCellCnt) * int(intCellSize))
+		if err != nil {
+			return err
+		}
+		ht.cells[newBlockIdx] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[newBlockIdx][0])), ht.blockMaxCellCnt)
+	}
+	ht.cellCnt = ht.blockMaxCellCnt * uint64(len(ht.rawData))
+	ht.cellCntMask = ht.cellCnt - 1
 	return nil
 }
 
@@ -230,7 +257,9 @@ func (it *Int64HashMapIterator) Init(ht *Int64HashMap) {
 
 func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	for it.pos < it.table.cellCnt {
-		cell = &it.table.cells[it.pos]
+		blockId := it.pos / it.table.blockMaxCellCnt
+		cellId := it.pos % it.table.blockMaxCellCnt
+		cell = &it.table.cells[blockId][cellId]
 		if cell.Mapped != 0 {
 			break
 		}

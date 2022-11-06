@@ -68,6 +68,7 @@ func (h *poolHandler) doHandle(op iops.IOp) {
 }
 
 func (h *poolHandler) Close() error {
+	h.pool.Release()
 	h.BaseTaskHandler.Close()
 	h.wg.Wait()
 	return nil

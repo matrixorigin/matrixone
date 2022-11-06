@@ -157,11 +157,9 @@ create table t2 (
     time3 TIMESTAMP
 );
 
--- @bvt:issue#4510
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
 insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
--- @bvt:issue
 
 -- @bvt:issue#3703
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
@@ -173,9 +171,7 @@ insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 0
 insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
 insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:01.000000');
 
--- @bvt:issue#4510
 select * from t2;
--- @bvt:issue
 
 set @max_date='9999-12-31';
 set @min_date='1000-01-01';
@@ -238,9 +234,7 @@ execute s4 using @time1;
 execute s5 using @time2;
 execute s6 using @time3;
 
--- @bvt:issue#4510
 select * from t2;
--- @bvt:issue
 
 DEALLOCATE PREPARE s4;
 DEALLOCATE PREPARE s5;
