@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
-		output: "select * from (select * from (select 1, 2, 3)) as t1",
+		input:  "show index from t1 from db",
+		output: "show index from db.t1",
 	}
 )
 
@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "show index from t1 from db",
+		output: "show index from db.t1",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {
@@ -660,6 +663,57 @@ var (
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
 		output: "load data infile data.txt into table db.a",
+	}, {
+		input:  "create external table t (a int) infile 'data.txt'",
+		output: "create external table t (a int) infile 'data.txt'",
+	}, {
+		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
+		output: "create external table t (a int) infile 'data.txt'",
+	}, {
+		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
+		output: "create external table t (a int) infile 'data.txt'",
+	}, {
+		input:  "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
+		output: "create external table t (a int) infile {'filepath':'data.txt', 'compression':'lz4'}",
+	}, {
+		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
+		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
+	}, {
+		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		output: "create external table t (a int) url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+	}, {
+		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+	}, {
+		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+		output: "load data infile data.txt into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+		output: "load data infile data.txt into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'bzip2', 'format':'csv'} into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'flate', 'format':'csv'} into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'lzw', 'format':'csv'} into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'zlib', 'format':'csv'} into table db.a",
+	}, {
+		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+		output: "load data infile {'filepath':'data.txt', 'compression':'lz4', 'format':'csv'} into table db.a",
+	}, {
+		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		output: "load data url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
 		output: "load data infile {'filepath':'data.txt', 'compression':'gzip', 'format':'csv'} into table db.a",
@@ -1665,6 +1719,10 @@ var (
 		{
 			input:  `modump database t tables t1,t2 into 'a.sql' max_file_size 1`,
 			output: `modump database t tables t1, t2 into a.sql max_file_size 1`,
+		},
+		{
+			input:  `select mo_show_visible_bin('a',0) as m`,
+			output: `select mo_show_visible_bin(a, 0) as m`,
 		},
 	}
 )

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -91,19 +92,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default != nil {
-			if col.Default.Expr != nil {
-				originStr := col.Default.OriginString
-				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
-					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
-						originStr = fmt.Sprintf("'%s'", originStr)
-					}
-				}
-				nullOrNot = "DEFAULT " + originStr
-			} else if col.Default.NullAbility {
-				nullOrNot = "DEFAULT NULL"
+		// col.Default must be not nil
+		if len(col.Default.OriginString) > 0 {
+			str := col.Default.OriginString
+			if strings.ToUpper(str) != "NULL" && needQuoteType(types.T(col.Typ.Id)) && col.Default.Expr.GetC() != nil {
+				str = fmt.Sprintf("'%s'", str)
 			}
+			nullOrNot = "DEFAULT " + str
+		} else if col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
 		}
+
 		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
@@ -137,10 +136,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			pkDefs = append(pkDefs, colName)
 		}
 	}
+	if tableDef.CompositePkey != nil {
+		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
+	}
 	if len(pkDefs) != 0 {
 		pkStr := "PRIMARY KEY ("
-		for _, def := range pkDefs {
-			pkStr += fmt.Sprintf("`%s`", def)
+		for i, def := range pkDefs {
+			if i == len(pkDefs)-1 {
+				pkStr += fmt.Sprintf("`%s`", def)
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", def)
+			}
 		}
 		pkStr += ")"
 		if rowCount != 0 {

@@ -75,6 +75,7 @@
 /pkg/util/metric @aptend
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
+/pkg/util/export @xzxiong
 /pkg/catalog @nnsgmsone
 /pkg/objectio @LeftHandCold
 

@@ -41,6 +41,7 @@ const (
 	defaultLogDBBufferSize     = 768 * 1024
 	defaultTruncateInterval    = 10 * time.Second
 	defaultMaxExportedSnapshot = 20
+	defaultMaxMessageSize      = 1024 * 1024 * 100
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -105,6 +106,11 @@ type Config struct {
 	// TruncateInterval is the interval of how often log service should
 	// process truncate.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
+
+	RPC struct {
+		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
+		MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+	}
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
 	// procedure. It only needs to be specified for Log Stores selected to host
@@ -271,6 +277,9 @@ func (c *Config) Validate() error {
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfig("TruncateInterval not set")
 	}
+	if c.RPC.MaxMessageSize == 0 {
+		return moerr.NewBadConfig("MaxMessageSize not set")
+	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
@@ -364,6 +373,9 @@ func (c *Config) Fill() {
 	if c.TruncateInterval.Duration == 0 {
 		c.TruncateInterval.Duration = defaultTruncateInterval
 	}
+	if c.RPC.MaxMessageSize == 0 {
+		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.
@@ -390,6 +402,8 @@ func (c *HAKeeperClientConfig) Validate() error {
 
 // ClientConfig is the configuration for log service clients.
 type ClientConfig struct {
+	// Tag client tag
+	Tag string
 	// ReadOnly indicates whether this is a read-only client.
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
@@ -401,6 +415,8 @@ type ClientConfig struct {
 	// LogService nodes service addresses. This field is provided for testing
 	// purposes only.
 	ServiceAddresses []string
+	// MaxMessageSize is the max message size for RPC.
+	MaxMessageSize int
 }
 
 // Validate validates the ClientConfig.

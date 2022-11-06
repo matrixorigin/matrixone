@@ -106,6 +106,7 @@ func NewCNClient(cfg *ClientConfig) error {
 
 	client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientTag("cn-client"),
 	)
 	client.ready = true
 	return err
