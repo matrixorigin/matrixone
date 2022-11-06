@@ -200,6 +200,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
+	text := SubStringFromBegin(fmtCtx.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
@@ -208,7 +209,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),
-		Statement:            fmtCtx.String(),
+		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
@@ -243,6 +244,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
+	text := SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,
 		TransactionID:        txnID,
@@ -251,7 +253,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		User:                 tenant.GetUser(),
 		Host:                 sessInfo.GetHost(),
 		Database:             sessInfo.GetDatabase(),
-		Statement:            envStmt,
+		Statement:            text,
 		StatementFingerprint: "", // fixme: (Reserved)
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            envBegin,
@@ -2403,6 +2405,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:          ses.GetUserName(),
