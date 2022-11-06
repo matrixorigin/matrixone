@@ -56,6 +56,7 @@ func initTAE(
 				LogShardID:       pu.SV.LogShardID,
 				DNReplicaID:      pu.SV.DNReplicaID,
 				ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
+				MaxMessageSize:   int(cfg.RPC.MaxMessageSize),
 			})
 			cancel()
 			return lc, err

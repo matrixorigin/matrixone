@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -49,7 +50,7 @@ func NewService(
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +93,7 @@ func NewService(
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err

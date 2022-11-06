@@ -52,6 +52,7 @@ drop table if exists ex_table_cp2;
 drop table if exists ex_table_15;
 drop table if exists ex_table_drop;
 drop table if exists table_15;
+drop table if exists table_16;
 drop table if exists ex_table_yccs;
 
 --覆盖各数值类型正常值,极值，空值
@@ -225,10 +226,6 @@ drop table ex_table_drop;
 create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '' lines terminated by '\n';
 select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_drop;
 
---show create table
--- @bvt:issue#6102
-show create table ex_table_15;
--- @bvt:issue
 --内部表和外部表关联
 -- @bvt:issue#6171
 select count(*) from ex_table_15,table_15 where ex_table_15.clo1=table_15.clo1;
@@ -238,6 +235,10 @@ create external table ex_table_yccs(char_1 char(20),char_2 varchar(10),date_1 da
 insert into ex_table_yccs select 'yellow','apple','2020-09-30','2020-09-30 10:20:08','2020-09-30 10:20:08.09834';
 update ex_table_yccs set char_1="cat123";
 delete from ex_table_yccs;
+
+create table table_16(a int);
+insert into table_16 values(99);
+select * from table_16, ex_table_gzip;
 
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;

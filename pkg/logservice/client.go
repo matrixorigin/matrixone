@@ -312,7 +312,7 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, cfg.Tag)
+		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.Tag)
 		if err != nil {
 			e = err
 			continue
@@ -498,7 +498,7 @@ func (c *client) doGetTruncatedLsn(ctx context.Context) (Lsn, error) {
 	return resp.LogResponse.Lsn, nil
 }
 
-func getRPCClient(ctx context.Context, target string, pool *sync.Pool, tag ...string) (morpc.RPCClient, error) {
+func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessageSize int, tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
 	}
@@ -525,7 +525,8 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, tag ...st
 	// to be attempted
 	codec := morpc.NewMessageCodec(mf,
 		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
-		morpc.WithCodecEnableChecksum())
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(maxMessageSize))
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

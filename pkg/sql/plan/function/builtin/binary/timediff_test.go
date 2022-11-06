@@ -112,7 +112,7 @@ func TestTimeDiffInTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, diff)
+			require.Equal(t, c.want.Col, diff.Col)
 		})
 	}
 }
@@ -186,7 +186,7 @@ func TestTimeDiffInDateTime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, diff)
+			require.Equal(t, c.want.Col, diff.Col)
 		})
 	}
 }
@@ -214,9 +214,7 @@ func makeTimeVectors(firstStr, secondStr string, mp *mpool.MPool) []*vector.Vect
 }
 
 func makeResultVector(res string, proc *process.Process) *vector.Vector {
-	resultVector, _ := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
-	result := make([]string, 1)
-	result[0] = res
-	vector.AppendString(resultVector, result, proc.Mp())
-	return resultVector
+
+	resData, _ := types.ParseTime(res, 0)
+	return vector.NewConstFixed(types.T_time.ToType(), 1, resData, proc.Mp())
 }
