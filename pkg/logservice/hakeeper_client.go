@@ -370,7 +370,7 @@ func connectToHAKeeper(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize)
+		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize, "connectToHAKeeper")
 		if err != nil {
 			e = err
 			continue

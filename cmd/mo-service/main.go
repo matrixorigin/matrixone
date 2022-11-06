@@ -294,11 +294,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if SV.MergeCycle.Duration > 0 {
-		err = export.InitCronExpr(SV.MergeCycle.Duration)
-		if err != nil {
-			return err
-		}
+	if err = export.InitMerge(SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+		return err
 	}
 	return nil
 }

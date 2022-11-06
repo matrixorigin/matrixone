@@ -36,6 +36,8 @@ type TxnClient interface {
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// Close closes client.sender
+	Close() error
 }
 
 // TxnOperator operator for transaction clients, handling read and write
