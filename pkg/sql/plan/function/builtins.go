@@ -2446,4 +2446,25 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	MO_SHOW_VISIBLE_BIN: {
+		Id:     MO_SHOW_VISIBLE_BIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_text, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
+			},
+		},
+	},
 }

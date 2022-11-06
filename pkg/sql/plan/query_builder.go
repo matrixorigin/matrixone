@@ -776,12 +776,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetType *plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
-				targetType = makePlan2Type(&tmpArgsType[0])
 				targetArgType = tmpArgsType[0]
 			} else {
-				targetType = makePlan2Type(&argsCastType[0])
 				targetArgType = argsCastType[0]
 			}
+			// if string union string, different length may cause error. use text type as the output
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+				targetArgType = types.T_text.ToType()
+			}
+			targetType = makePlan2Type(&targetArgType)
 
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
