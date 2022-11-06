@@ -252,6 +252,9 @@ type FrontendParameters struct {
 
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
+
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize uint64 `toml:"max-message-size"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -354,6 +357,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
 	}
+}
+
+func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
+	fp.MaxMessageSize = size
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {

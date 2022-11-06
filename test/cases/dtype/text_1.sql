@@ -236,7 +236,6 @@ delete from t8 where col9 is not NULL;
 
 -------------------------------------------
 
--- @bvt:issue#4634
 insert into t8(col10) values ('this is a char type');
 insert into t8(col10) values ('this is a varchar type');
 
@@ -247,7 +246,6 @@ select cast(col10 as char(1)) from t8;
 select cast(col10 as varchar(1)) from t8;
 
 delete from t8 where col10 is not NULL;
--- @bvt:issue
 
 -------------------------------------------
 insert into t8(col11) values ('2020-01-01');

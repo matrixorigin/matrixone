@@ -21,7 +21,6 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"container/list"
-	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -36,6 +35,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -50,7 +50,6 @@ import (
 )
 
 var (
-	ONE_BATCH_MAX_SIZE = 10 * 1024 * 1024 // 10M
 	ONE_BATCH_MAX_ROW  = 40000
 	ONE_BATCH_READ_ROW = 1000
 )
@@ -61,6 +60,12 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
+	if proc.Lim.MaxMsgSize == 0 {
+		param.maxbatchSize = uint64(morpc.GetMessageSize())
+	} else {
+		param.maxbatchSize = proc.Lim.MaxMsgSize
+	}
+	param.maxbatchSize = uint64(float64(morpc.GetMessageSize()) * 0.8)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -79,6 +84,7 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 	}
 	param.extern.FileService = proc.FileService
+	param.extern.Ctx = proc.Ctx
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
 	if len(param.FileList) == 0 {
@@ -159,8 +165,6 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 }
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
-	ctx := context.TODO()
-
 	filePath := strings.TrimSpace(param.Filepath)
 	pathDir := strings.Split(filePath, "/")
 	l := list.New()
@@ -178,7 +182,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 			if err != nil {
 				return nil, err
 			}
-			entries, err := fs.List(ctx, readPath)
+			entries, err := fs.List(param.Ctx, readPath)
 			if err != nil {
 				return nil, err
 			}
@@ -222,8 +226,7 @@ func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
 			},
 		},
 	}
-	ctx := context.TODO()
-	err = fs.Read(ctx, &vec)
+	err = fs.Read(param.Ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
@@ -396,10 +399,10 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	curBatchSize := 0
+	var curBatchSize uint64 = 0
 	records := make([][]string, ONE_BATCH_READ_ROW)
 	plh.simdCsvLineArray = nil
-	for curBatchSize < ONE_BATCH_MAX_SIZE && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
+	for curBatchSize <= param.maxbatchSize && len(plh.simdCsvLineArray) < ONE_BATCH_MAX_ROW {
 		records, cnt, err = plh.simdCsvReader.Read(ONE_BATCH_READ_ROW, proc.Ctx, records)
 		if err != nil {
 			return nil, err
@@ -408,7 +411,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		plh.simdCsvLineArray = append(plh.simdCsvLineArray, records[:cnt]...)
 		for i := 0; i < len(records); i++ {
 			for j := 0; j < len(records[i]); j++ {
-				curBatchSize += len(records[i][j])
+				curBatchSize += uint64(len(records[i][j]))
 			}
 		}
 		if cnt < ONE_BATCH_READ_ROW {
