@@ -16,6 +16,7 @@ package tree
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -139,6 +140,7 @@ type ExternParam struct {
 	NullMap      map[string]([]string)
 	S3option     []string
 	S3Param      *S3Parameter
+	Ctx          context.Context
 }
 
 type S3Parameter struct {
