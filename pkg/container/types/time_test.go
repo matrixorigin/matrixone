@@ -250,3 +250,130 @@ func TestTime_ParseTime(t *testing.T) {
 
 	}
 }
+
+func TestTime_CastBetweenTimeInt64(t *testing.T) {
+	testCases := []struct {
+		name      string
+		input     int64
+		expected  Time
+		precision int32
+		isErr     bool
+	}{
+		{
+			name: "TestParse-validInt64-01",
+			// 11:22:33
+			input:     112233,
+			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-02",
+			// -11:22:33
+			input:     -112233,
+			expected:  FromTimeClock(true, 11, 22, 33, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// -11:22:33
+			input:     -112,
+			expected:  FromTimeClock(true, 0, 1, 12, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// -11:22:33
+			input:     0,
+			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-invalidInt64",
+			// 8390000
+			input:     8390000,
+			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			precision: 0,
+			isErr:     true,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			// Int64 to Time
+			parsed, err := ParseInt64ToTime(c.input, c.precision)
+			if !c.isErr {
+				require.NoError(t, err)
+				require.Equal(t, parsed, c.expected)
+
+				// Time to Int64
+				toInt := c.expected.ToInt64()
+				require.Equal(t, toInt, c.input)
+			} else {
+				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %d", c.input))
+			}
+		})
+	}
+}
+
+func TestTime_ParseTimeFromDecimal128(t *testing.T) {
+	testCases := []struct {
+		name      string
+		dcmStr    string
+		expected  Time
+		expected2 string
+		precision int32
+		isCarry   bool
+		isErr     bool
+	}{
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "112233.444",
+			expected:  FromTimeClock(false, 11, 22, 33, 444000),
+			precision: 3,
+			isCarry:   false,
+			isErr:     false,
+		},
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "112233.44455",
+			expected:  FromTimeClock(false, 11, 22, 33, 445000),
+			expected2: "112233.445",
+			precision: 3,
+			isCarry:   true,
+			isErr:     false,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			// decimal128 to Time
+			dcm, err := Decimal128_FromString(c.dcmStr)
+			println("the decimal is ", dcm.String())
+			require.NoError(t, err)
+			if !c.isErr {
+				parsed, err := ParseDecima128lToTime(dcm, c.precision)
+				require.NoError(t, err)
+				require.Equal(t, parsed, c.expected)
+
+				// Time to Decimal
+				toDcm, err := c.expected.ToDecimal128(34, c.precision)
+				println("the toDecimal is ", toDcm.String())
+				require.NoError(t, err)
+				if c.isCarry {
+					// if the precision cause carry
+					// must compare it with decimal from c.expected2
+					newdcm, err := Decimal128_FromString(c.expected2)
+					require.NoError(t, err)
+					require.Equal(t, toDcm, newdcm)
+				} else {
+					require.Equal(t, toDcm, dcm)
+				}
+
+			}
+		})
+	}
+}

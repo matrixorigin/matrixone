@@ -4783,6 +4783,115 @@ func TestCastStringToTime(t *testing.T) {
 
 }
 
+func TestCastInt64ToTime(t *testing.T) {
+	makeTempVectors := func(src int64, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, false)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		precision  int32
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors(112233, true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			wantType:   types.T_time,
+			precision:  0,
+			wantScalar: false,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors(-223344, true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(true, 22, 33, 44, 0)},
+			wantType:   types.T_time,
+			precision:  2,
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			c.vecs[1].Typ.Precision = c.precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+}
+
+func TestCastDecimal128ToTime(t *testing.T) {
+	makeTempVectors := func(dcmStr string, isScalar bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		dcm, _ := types.Decimal128_FromString(dcmStr)
+		dcmType := types.Type{Oid: types.T_decimal128, Size: 8, Width: 34, Scale: 6}
+
+		if isScalar {
+			vectors[0] = vector.NewConstFixed(dcmType, 1, dcm, testutil.TestUtilMp)
+		} else {
+			vectors[0] = vector.NewWithFixed(dcmType, []types.Decimal128{dcm}, nil, testutil.TestUtilMp)
+		}
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		precision  int32
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("112233.4444", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(false, 11, 22, 33, 444000)},
+			wantType:   types.T_time,
+			precision:  3,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("-223344.4445", true, types.T_time),
+			proc:       procs,
+			wantValues: []types.Time{types.FromTimeClock(true, 22, 33, 44, 444000)},
+			wantType:   types.T_time,
+			precision:  3,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// setting precision
+			c.vecs[1].Typ.Precision = c.precision
+			castRes, err := Cast(c.vecs, c.proc)
+			require.NoError(t, err)
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+}
+
 func TestCastDateAndDatetimeToTime(t *testing.T) {
 	makeTempVectors := func(src string, srcIsConst bool, precision int32, srcType types.T) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)

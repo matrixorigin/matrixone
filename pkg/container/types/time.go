@@ -32,6 +32,7 @@ var (
 )
 
 // no msec part
+// Format: hh:mm:ss
 func (t Time) String() string {
 	h, m, s, _, isNeg := t.ClockFormat()
 	if isNeg {
@@ -40,6 +41,7 @@ func (t Time) String() string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
+// Format: hh:mm:ss.msec
 func (t Time) String2(precision int32) string {
 	var symbol string
 	h, m, s, ms, isNeg := t.ClockFormat()
@@ -52,6 +54,21 @@ func (t Time) String2(precision int32) string {
 		return fmt.Sprintf("%s%02d:%02d:%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d:%02d:%02d", symbol, h, m, s)
+}
+
+// Format: hhmmss.msec
+func (t Time) NumericString(precision int32) string {
+	var symbol string
+	h, m, s, ms, isNeg := t.ClockFormat()
+	if isNeg {
+		symbol = "-"
+	}
+	if precision > 0 {
+		msecInstr := fmt.Sprintf("%06d\n", ms)
+		msecInstr = msecInstr[:precision]
+		return fmt.Sprintf("%s%02d%02d%02d"+"."+msecInstr, symbol, h, m, s)
+	}
+	return fmt.Sprintf("%s%02d%02d%02d", symbol, h, m, s)
 }
 
 // The Time type holds number of microseconds for hh:mm:ss(.msec)
@@ -205,7 +222,7 @@ func ParseDecima128lToTime(input Decimal128, precision int32) (Time, error) {
 
 func (t Time) ToInt64() int64 {
 	h, m, s, _, isNeg := t.ClockFormat()
-	trans := int64(h*10000) + int64(m*100) + int64(s)
+	trans := int64(h*10000) + int64(m)*100 + int64(s)
 	if isNeg {
 		trans = -trans
 	}
@@ -214,7 +231,7 @@ func (t Time) ToInt64() int64 {
 }
 
 func (t Time) ToDecimal64(width, precision int32) (Decimal64, error) {
-	tToStr := t.String2(precision)
+	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal64(tToStr, width, precision, false)
 	if err != nil {
 		return ret, moerr.NewInternalError("exsit time cant't cast to decimal64")
@@ -224,7 +241,7 @@ func (t Time) ToDecimal64(width, precision int32) (Decimal64, error) {
 }
 
 func (t Time) ToDecimal128(width, precision int32) (Decimal128, error) {
-	tToStr := t.String2(precision)
+	tToStr := t.NumericString(precision)
 	ret, err := ParseStringToDecimal128(tToStr, width, precision, false)
 	if err != nil {
 		return ret, moerr.NewInternalError("exsit time cant't cast to decimal128")
