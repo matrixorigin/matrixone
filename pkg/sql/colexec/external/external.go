@@ -65,7 +65,7 @@ func Prepare(proc *process.Process, arg any) error {
 	} else {
 		param.maxBatchSize = proc.Lim.MaxMsgSize
 	}
-	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.8)
+	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
