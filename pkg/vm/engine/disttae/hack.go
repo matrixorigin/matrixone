@@ -20,4 +20,5 @@ func init() {
 	_ = genModifedBlocks
 	_ = needRead
 	_ = inBlockList
+	_ = findRowByPkValue
 }

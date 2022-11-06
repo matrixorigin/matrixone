@@ -42,31 +42,34 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 	defer func() { r.blks = r.blks[1:] }()
 
 	info := &r.blks[0].Info
-	bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
-	if err != nil {
-		return nil, err
-	}
-
-	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.primaryIdx == -1 || r.expr == nil {
-		return bat, nil
-	}
-
-	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
-	pkIdx := int32(r.primaryIdx)
-	vec := bat.GetVector(pkIdx)
-	canCompute, v := getPkValueByExpr(r.expr, pkIdx, vec.Typ.Oid)
-	if canCompute {
-		row := findRowByPkValue(vec, v)
-		if row >= vec.Length() {
-			// can not find row.
-			bat.Shrink([]int64{})
-		} else if row > -1 {
-			// maybe find row.
-			bat.Shrink([]int64{int64(row)})
+	return blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+	/*
+		bat, err := blockio.BlockRead(r.ctx, info, cols, r.tableDef, r.ts, r.fs, m)
+		if err != nil {
+			return nil, err
 		}
-	}
-	return bat, nil
+
+		// if it's not sorted, just return
+		if !r.blks[0].Info.Sorted || r.primaryIdx == -1 || r.expr == nil {
+			return bat, nil
+		}
+
+		// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
+		pkIdx := int32(r.primaryIdx)
+		vec := bat.GetVector(pkIdx)
+		canCompute, v := getPkValueByExpr(r.expr, pkIdx, vec.Typ.Oid)
+		if canCompute {
+			row := findRowByPkValue(vec, v)
+			if row >= vec.Length() {
+				// can not find row.
+				bat.Shrink([]int64{})
+			} else if row > -1 {
+				// maybe find row.
+				bat.Shrink([]int64{int64(row)})
+			}
+		}
+		return bat, nil
+	*/
 }
 
 func (r *blockMergeReader) Close() error {
