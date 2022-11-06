@@ -62,9 +62,6 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 					r.colNulls[i] = colDef.Default.NullAbility
 				}
 			}
-			if r.primaryIdx != -1 && r.pkidxInColIdxs == -1 {
-				panic(moerr.NewInternalError("primary index not found in proj list"))
-			}
 		} else {
 			panic(moerr.NewInternalError("blockReader reads different number of columns"))
 		}
@@ -76,7 +73,7 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 	}
 
 	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.primaryIdx == -1 || r.expr == nil {
+	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
