@@ -1548,7 +1548,7 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_float64},
 				ReturnTyp: types.T_float64,
-				Fn:        multi.UnixTimestampVarcharToFloat64,
+				Fn:        multi.UnixTimestampVarcharToDecimal128,
 			},
 		},
 	},
