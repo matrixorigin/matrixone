@@ -121,6 +121,9 @@ var (
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
+	// defaultMaxFileSize default: 128 MB
+	defaultMaxFileSize = 128
+
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
 
@@ -419,6 +422,9 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
+	// MergeMaxFileSize default: 128 (MB)
+	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
+
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
 }
@@ -456,6 +462,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.PathBuilder == "" {
 		op.PathBuilder = defaultPathBuilder
+	}
+
+	if op.MergeMaxFileSize <= 0 {
+		op.MergeMaxFileSize = defaultMaxFileSize
 	}
 }
 
