@@ -210,6 +210,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		StatementTag:         "", // fixme: (Reserved)
 		RequestAt:            requestAt,
 	}
+	if !stm.IsZeroTxnID() {
+		stm.Report(ctx)
+	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
@@ -254,6 +257,8 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
 	ctx = trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 	trace.EndStatement(ctx, err)
+	incStatementCounter(tenant.GetTenant(), nil)
+	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx
 }
 
@@ -271,6 +276,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 			}
 
 		}
+		stm.Report(ctx)
 	}
 }
 
@@ -2078,6 +2084,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
+	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	if err != nil {
 		return nil, err
@@ -2153,7 +2160,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
-	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
@@ -2395,6 +2401,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:          ses.GetUserName(),
