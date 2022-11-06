@@ -16,22 +16,17 @@ package disttae
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -72,86 +67,32 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 }
 
 func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
+	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
 	var entries []*api.Entry
-	var err error
-	if entries, err = consumerCheckPoint(logTail.CkpLocation, tbl, tbl.db.fs); err != nil {
-		return err
+
+	if entries, err = logtail.LoadCheckpointEntries(
+		logTail.CkpLocation,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+		tbl.db.fs); err != nil {
+		return
 	}
 	for _, e := range entries {
-		if err := consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
 			db, mvcc, e); err != nil {
-			return err
+			return
 		}
 	}
+
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err := consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
 			db, mvcc, logTail.Commands[i]); err != nil {
-			return err
+			return
 		}
 	}
 	return nil
-}
-
-func consumerCheckPoint(ckpt string, tbl *table, fs fileservice.FileService) ([]*api.Entry, error) {
-	if ckpt == "" {
-		return nil, nil
-	}
-	ckps := strings.Split(ckpt, ";")
-	entries := make([]*api.Entry, 0)
-	for _, ckp := range ckps {
-		reader, err := blockio.NewCheckpointReader(fs, ckp)
-		if err != nil {
-			return nil, err
-		}
-		data := logtail.NewCheckpointData()
-		defer data.Close()
-		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
-			return nil, err
-		}
-		ins, del, cnIns, err := data.GetTableData(tbl.tableId)
-		if err != nil {
-			return nil, err
-		}
-		tblName := tbl.tableName
-		if tblName != catalog.MO_DATABASE && tblName != catalog.MO_COLUMNS && tblName != catalog.MO_TABLES {
-			tblName = fmt.Sprintf("_%d_meta", tbl.tableId)
-		}
-		if ins != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
-				TableId:      tbl.tableId,
-				TableName:    tblName,
-				DatabaseId:   tbl.db.databaseId,
-				DatabaseName: tbl.db.databaseName,
-				Bat:          ins,
-			}
-			entries = append(entries, entry)
-		}
-		if cnIns != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
-				TableId:      tbl.tableId,
-				TableName:    tblName,
-				DatabaseId:   tbl.db.databaseId,
-				DatabaseName: tbl.db.databaseName,
-				Bat:          cnIns,
-			}
-			entries = append(entries, entry)
-		}
-		if del != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
-				TableId:      tbl.tableId,
-				TableName:    tblName,
-				DatabaseId:   tbl.db.databaseId,
-				DatabaseName: tbl.db.databaseName,
-				Bat:          del,
-			}
-			entries = append(entries, entry)
-		}
-	}
-	return entries, nil
 }
 
 func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
