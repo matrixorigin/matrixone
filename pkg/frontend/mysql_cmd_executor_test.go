@@ -1007,10 +1007,10 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
-		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
-		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeTrue)
-		convey.So(IsStatementToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
-		convey.So(IsStatementToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
 }
 

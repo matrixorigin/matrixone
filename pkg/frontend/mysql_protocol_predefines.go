@@ -441,20 +441,21 @@ func (ct CommandType) String() string {
 
 // reference to sql/query_options.h in mysql server 8.0.23
 const (
-	OPTION_AUTOCOMMIT        uint32 = 1 << 8
-	OPTION_BIG_SELECTS       uint32 = 1 << 9
-	OPTION_LOG_OFF           uint32 = 1 << 10
-	OPTION_QUOTE_SHOW_CREATE uint32 = 1 << 11
-	TMP_TABLE_ALL_COLUMNS    uint32 = 1 << 12
-	OPTION_WARNINGS          uint32 = 1 << 13
-	OPTION_AUTO_IS_NULL      uint32 = 1 << 14
-	OPTION_FOUND_COMMENT     uint32 = 1 << 15
-	OPTION_SAFE_UPDATES      uint32 = 1 << 16
-	OPTION_BUFFER_RESULT     uint32 = 1 << 17
-	OPTION_BIN_LOG           uint32 = 1 << 18
-	OPTION_NOT_AUTOCOMMIT    uint32 = 1 << 19
-	OPTION_BEGIN             uint32 = 1 << 20
-	OPTION_TABLE_LOCK        uint32 = 1 << 21
-	OPTION_QUICK             uint32 = 1 << 22
-	OPTION_NO_CONST_TABLES   uint32 = 1 << 23
+	OPTION_AUTOCOMMIT                     uint32 = 1 << 8
+	OPTION_BIG_SELECTS                    uint32 = 1 << 9
+	OPTION_LOG_OFF                        uint32 = 1 << 10
+	OPTION_QUOTE_SHOW_CREATE              uint32 = 1 << 11
+	TMP_TABLE_ALL_COLUMNS                 uint32 = 1 << 12
+	OPTION_WARNINGS                       uint32 = 1 << 13
+	OPTION_AUTO_IS_NULL                   uint32 = 1 << 14
+	OPTION_FOUND_COMMENT                  uint32 = 1 << 15
+	OPTION_SAFE_UPDATES                   uint32 = 1 << 16
+	OPTION_BUFFER_RESULT                  uint32 = 1 << 17
+	OPTION_BIN_LOG                        uint32 = 1 << 18
+	OPTION_NOT_AUTOCOMMIT                 uint32 = 1 << 19
+	OPTION_BEGIN                          uint32 = 1 << 20
+	OPTION_TABLE_LOCK                     uint32 = 1 << 21
+	OPTION_QUICK                          uint32 = 1 << 22
+	OPTION_NO_CONST_TABLES                uint32 = 1 << 23
+	OPTION_ATTACH_ABORT_TRANSACTION_ERROR uint32 = 1 << 24 //defined in mo
 )
