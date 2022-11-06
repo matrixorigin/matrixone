@@ -57,6 +57,7 @@ func (t Time) String2(precision int32) string {
 }
 
 // Format: hhmmss.msec
+// TODO: add the carry when truncate
 func (t Time) NumericString(precision int32) string {
 	var symbol string
 	h, m, s, ms, isNeg := t.ClockFormat()

@@ -45,6 +45,29 @@ t
 11:22:33.445000000
 -11:22:33.445000000
 drop table if exists t1;
+create table t1(t time);
+insert into t1 values(1), (11), (112), (1122), (11223),(112233),(-1), (-11), (-112), (-1122), (-11223),(-112233);
+select * from t1;
+t
+00:00:01
+00:00:11
+00:01:12
+00:11:22
+01:12:23
+11:22:33
+00:00:01
+00:00:11
+00:01:12
+00:11:22
+-1:12:23
+-11:22:33
+drop table if exists t1;
+create table t1(t time(3));
+insert into t1 values(112233.4445);
+select * from t1;
+t
+11:22:33.445000000
+drop table if exists t1;
 drop table if exists myd;
 create table myd(d date);
 create table t1(t time);
@@ -106,3 +129,42 @@ adddate(time(100:00:00), interval(-100, minute))
 select adddate(time'100:00:00', interval -1000 second);
 adddate(time(100:00:00), interval(-1000, second))
 99:43:20
+select cast(time("11:22:33") as BIGINT);
+cast(time(11:22:33) as bigint)
+112233
+select cast(time("-11:22:33") as BIGINT);
+cast(time(-11:22:33) as bigint)
+-112233
+select cast(time("11:22:33") as DECIMAL);
+cast(time(11:22:33) as decimal(34))
+112233
+select cast(time("-11:22:33") as DECIMAL);
+cast(time(-11:22:33) as decimal(34))
+-112233
+drop table if exists t1;
+create table t1(t time);
+insert into t1 values("0"), ("10"), ("50"), ("1000"), ("5500"), ("100000"), ("990000");
+insert into t1 values("-10"), ("-50"), ("-1000"), ("-5500"), ("-100000"), ("-990000");
+select * from t1 where t > 100000;
+t
+99:00:00
+select * from t1 where t < -100000;
+t
+-99:00:00
+select * from t1 where t >= 0;
+t 
+00:00:00
+00:00:10
+00:00:50
+00:10:00
+00:55:00
+10:00:00
+99:00:00
+select * from t1 where t < 0;
+t 
+00:00:10
+00:00:50
+00:10:00
+00:55:00
+-10:00:00
+-99:00:00
