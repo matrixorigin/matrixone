@@ -7,7 +7,7 @@ drop table if exists dis_table_06;
 drop table if exists dis_table_07;
 drop table if exists dis_view_01;
 drop table if exists dis_view_02;
-drop table if exists dis_temp_01;;
+drop table if exists dis_temp_01;
 drop table if exists iso_table_0001;
 create table dis_table_01(a int,b varchar(25));
 insert into dis_table_01 select 20,'apple';
@@ -88,6 +88,7 @@ a    b    c
 start transaction ;
 insert into dis_table_02 values (5,null,'1345-09-23');
 constraint violation: Column 'b' cannot be null
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
@@ -95,8 +96,8 @@ a    b    c
 commit;
 update dis_table_02 set a=90;
 Duplicate entry '90' for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
-Duplicate entry '90' for key 'a'
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
@@ -132,43 +133,26 @@ select * from ex_table_dis;
 SQL parser error: table "ex_table_dis" does not exist
 update ex_table_dis set num_col1=1000;
 internal error: the external table is not support update operation
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select num_col1,num_col2 from ex_table_dis;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+SQL parser error: table "ex_table_dis" does not exist
 commit;
 select num_col1,num_col2 from ex_table_dis;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+SQL parser error: table "ex_table_dis" does not exist
 insert into dis_table_01 select num_col1,'fffff' from ex_table_dis;
+SQL parser error: table "ex_table_dis" does not exist
 select * from dis_table_01;
 a    b
 21    orange
 19    apple
-60    fffff
--128    fffff
-127    fffff
-null    fffff
 select num_col1,num_col2 from ex_table_dis;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+SQL parser error: table "ex_table_dis" does not exist
 drop table ex_table_dis;
+no such table isolation_2.ex_table_dis
 select * from dis_table_01;
 a    b
 21    orange
 19    apple
-60    fffff
--128    fffff
-127    fffff
-null    fffff
 begin;
 create view  aaa as select * from dis_table_02;
 show create table aaa ;
@@ -238,13 +222,13 @@ a    b    c
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
 constraint violation: Column 'a' cannot be null
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
 91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-93    oppo    1009-11-11 00:00:00
 use dis_db_02;
 invalid database dis_db_02
 select * from dis_table_02;
@@ -252,7 +236,6 @@ a    b    c
 1    aaaa    2020-09-08 00:00:00
 91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-93    oppo    1009-11-11 00:00:00
 insert into dis_table_02(b,c) values ('','1999-06-04');
 create temporary table dis_temp_01(a int,b varchar,primary key(a));
 begin ;
@@ -275,7 +258,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-93    pppp    1009-11-11 00:00:00
 94    pppp    1999-06-04 00:00:00
 5    pppp    1897-04-29 00:00:00
 6    pppp    2030-12-29 00:00:00
@@ -284,7 +266,6 @@ a    b    c
 1    aaaa    2020-09-08 00:00:00
 91    vvv    2000-09-08 00:00:00
 2    aaaa    2222-07-12 00:00:00
-93    oppo    1009-11-11 00:00:00
 94        1999-06-04 00:00:00
 begin ;
 create view dis_view_02 as select * from dis_table_02;
@@ -295,7 +276,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-93    pppp    1009-11-11 00:00:00
 94    pppp    1999-06-04 00:00:00
 5    pppp    1897-04-29 00:00:00
 6    pppp    2030-12-29 00:00:00
@@ -304,15 +284,16 @@ select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into dis_table_02 values (2,'oooo','1802-03-20');
 Duplicate entry '2' for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-93    pppp    1009-11-11 00:00:00
 94    pppp    1999-06-04 00:00:00
 5    pppp    1897-04-29 00:00:00
 6    pppp    2030-12-29 00:00:00
@@ -325,10 +306,6 @@ select * from dis_table_01;
 a    b
 21    orange
 19    apple
-60    fffff
--128    fffff
-127    fffff
-null    fffff
 truncate table dis_table_01;
 insert into dis_table_01 select 9999,'abcdefg';
 select * from dis_table_01;
@@ -350,7 +327,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    pppp    2000-09-08 00:00:00
 2    pppp    2222-07-12 00:00:00
-93    pppp    1009-11-11 00:00:00
 94    pppp    1999-06-04 00:00:00
 5    pppp    1897-04-29 00:00:00
 6    pppp    2030-12-29 00:00:00
@@ -360,7 +336,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    tittttt    2000-09-08 00:00:00
 2    tittttt    2222-07-12 00:00:00
-93    tittttt    1009-11-11 00:00:00
 94    tittttt    1999-06-04 00:00:00
 5    tittttt    1897-04-29 00:00:00
 6    tittttt    2030-12-29 00:00:00
@@ -368,17 +343,15 @@ select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 start transaction ;
-Duplicate entry '1' for key 'a'
 update dis_table_02 set b='catttteee' where a>1;
 select * from dis_table_02;
 a    b    c
-1    pppp    2020-09-08 00:00:00
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-93    catttteee    1009-11-11 00:00:00
 94    catttteee    1999-06-04 00:00:00
 5    catttteee    1897-04-29 00:00:00
 6    catttteee    2030-12-29 00:00:00
+1    pppp    2020-09-08 00:00:00
 commit;
 commit;
 w-w conflict
@@ -387,7 +360,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-93    catttteee    1009-11-11 00:00:00
 94    catttteee    1999-06-04 00:00:00
 5    catttteee    1897-04-29 00:00:00
 6    catttteee    2030-12-29 00:00:00
@@ -396,7 +368,6 @@ a    b    c
 1    pppp    2020-09-08 00:00:00
 91    catttteee    2000-09-08 00:00:00
 2    catttteee    2222-07-12 00:00:00
-93    catttteee    1009-11-11 00:00:00
 94    catttteee    1999-06-04 00:00:00
 5    catttteee    1897-04-29 00:00:00
 6    catttteee    2030-12-29 00:00:00
@@ -410,14 +381,15 @@ use iso_db_02;
 create table iso_table_0001(a int);
 insert into iso_table_0001 values (2);
 invalid input: insert table is invalid 'iso_table_0001'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 use iso_db_02;
 create table iso_table_0001(a int);
 drop database iso_db_02;
 commit;
 w-w conflict
 create table iso_table_0001(a int);
+ExpectedEOB
 commit;
-w-w conflict
 use iso_db_02;
 invalid database iso_db_02
 select * from iso_table_0001;
@@ -543,6 +515,7 @@ insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
 Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00
@@ -550,11 +523,10 @@ a    b    c    d
 2    blue    12.0    2024-01-20 00:00:00
 select * from dis_table_07;
 a    b    c    d
-2    blue    11.0    2024-01-20 00:00:00
-2    blue    12.0    2024-01-20 00:00:00
 1    yellow    20.09    2020-09-27 00:00:00
+2    blue    11.0    2021-01-20 00:00:00
+2    blue    12.0    2024-01-20 00:00:00
 commit;
-Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00
