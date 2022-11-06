@@ -146,46 +146,26 @@ func (ht *Int64HashMap) FindBatchWithRing(n int, zValues []int64, hashes []uint6
 }
 
 func (ht *Int64HashMap) findCell(hash uint64, key uint64) *Int64HashMapCell {
-	if len(ht.rawData) == 1 {
-		for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-			cell := &ht.cells[0][idx]
-			if cell.Key == key || cell.Mapped == 0 {
-				return cell
-			}
-		}
-	} else {
-		for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-			blockId := idx / ht.blockMaxCellCnt
-			cellId := idx % ht.blockMaxCellCnt
-			cell := &ht.cells[blockId][cellId]
-			if cell.Key == key || cell.Mapped == 0 {
-				return cell
-			}
+	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
+		if cell.Key == key || cell.Mapped == 0 {
+			return cell
 		}
 	}
-
 	return nil
 }
 
 func (ht *Int64HashMap) findEmptyCell(hash uint64, key uint64) *Int64HashMapCell {
-	if len(ht.rawData) == 1 {
-		for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-			cell := &ht.cells[0][idx]
-			if cell.Mapped == 0 {
-				return cell
-			}
-		}
-	} else {
-		for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-			blockId := idx / ht.blockMaxCellCnt
-			cellId := idx % ht.blockMaxCellCnt
-			cell := &ht.cells[blockId][cellId]
-			if cell.Mapped == 0 {
-				return cell
-			}
+	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
+		if cell.Mapped == 0 {
+			return cell
 		}
 	}
-
 	return nil
 }
 

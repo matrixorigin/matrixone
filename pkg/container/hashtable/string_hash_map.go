@@ -166,21 +166,12 @@ func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64)
 
 func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 	mask := ht.cellCnt - 1
-	if len(ht.rawData) == 1 {
-		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
-			cell := &ht.cells[0][idx]
-			if cell.Mapped == 0 || cell.HashState == *state {
-				return cell
-			}
-		}
-	} else {
-		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
-			blockId := idx / ht.blockMaxCellCnt
-			cellId := idx % ht.blockMaxCellCnt
-			cell := &ht.cells[blockId][cellId]
-			if cell.Mapped == 0 || cell.HashState == *state {
-				return cell
-			}
+	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
+		if cell.Mapped == 0 || cell.HashState == *state {
+			return cell
 		}
 	}
 	return nil
@@ -188,21 +179,12 @@ func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 
 func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	mask := ht.cellCnt - 1
-	if len(ht.rawData) == 1 {
-		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
-			cell := &ht.cells[0][idx]
-			if cell.Mapped == 0 {
-				return cell
-			}
-		}
-	} else {
-		for idx := state[0] & mask; true; idx = (idx + 1) & mask {
-			blockId := idx / ht.blockMaxCellCnt
-			cellId := idx % ht.blockMaxCellCnt
-			cell := &ht.cells[blockId][cellId]
-			if cell.Mapped == 0 {
-				return cell
-			}
+	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+		blockId := idx / ht.blockMaxCellCnt
+		cellId := idx % ht.blockMaxCellCnt
+		cell := &ht.cells[blockId][cellId]
+		if cell.Mapped == 0 {
+			return cell
 		}
 	}
 	return nil
