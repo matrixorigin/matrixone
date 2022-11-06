@@ -53,6 +53,17 @@ func HandleSyncLogTailReq(ckpGetter CkpGetter, mgr *LogtailMgr, c *catalog.Catal
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
+	dbEntry, err := c.GetDatabaseByID(did)
+	if err != nil {
+		return
+	}
+	tableEntry, err := dbEntry.GetTableEntryByID(tid)
+	if err != nil {
+		return
+	}
+	if start.Less(tableEntry.GetCreatedAt()) {
+		start = tableEntry.GetCreatedAt()
+	}
 	verifiedCheckpoint, lastEnd := ckpGetter.GetCheckpoints(start, end)
 
 	if lastEnd.GreaterEq(end) {
