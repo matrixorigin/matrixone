@@ -753,7 +753,7 @@ func (r *runner) GetCheckpoints(start, end types.TS) (locations string, checkpoi
 		if item.state != ST_Finished || item.start.Greater(end) {
 			return false
 		}
-		if item.end.GreaterEq(start) {
+		if item.end.GreaterEq(start) && item.start.LessEq(end) {
 			locs = append(locs, item.location)
 			checkpointed = item.end
 		}
