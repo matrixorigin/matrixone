@@ -192,19 +192,6 @@ type runner struct {
 	onceStop  sync.Once
 }
 
-func MockRunner(fs *objectio.ObjectFS, c *catalog.Catalog) *runner {
-	r := &runner{
-		fs:      fs,
-		catalog: c,
-	}
-	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
-	return r
-}
-
 func NewRunner(
 	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
@@ -746,9 +733,10 @@ func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations strin
 	locs := make([]string, 0)
 	pivot := NewCheckpointEntry(start, end)
 
+	// For debug
 	// checkpoints := make([]*CheckpointEntry, 0)
 	// defer func() {
-	//  items := tree.Items()
+	// 	items := tree.Items()
 	// 	logutil.Infof("CollectCheckpointsInRange: Pivot: %s", pivot.String())
 	// 	for i, item := range items {
 	// 		logutil.Infof("CollectCheckpointsInRange: Source[%d]: %s", i, item.String())

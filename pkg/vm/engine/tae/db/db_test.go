@@ -3994,7 +3994,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(ins)
@@ -4005,7 +4005,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(ins)

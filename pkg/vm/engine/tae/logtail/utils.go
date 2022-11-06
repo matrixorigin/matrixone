@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -81,6 +82,7 @@ type CheckpointData struct {
 	blkDNMetaInsTxnBatch *containers.Batch
 	blkDNMetaDelBatch    *containers.Batch
 	blkDNMetaDelTxnBatch *containers.Batch
+	blkCNMetaInsBatch    *containers.Batch
 }
 
 func NewCheckpointData() *CheckpointData {
@@ -109,6 +111,7 @@ func NewCheckpointData() *CheckpointData {
 		blkDNMetaInsTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
 		blkDNMetaDelBatch:    makeRespBatchFromSchema(DelSchema),
 		blkDNMetaDelTxnBatch: makeRespBatchFromSchema(BlkDNSchema),
+		blkCNMetaInsBatch:    makeRespBatchFromSchema(BlkMetaSchema),
 	}
 }
 
@@ -147,14 +150,18 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayBlockBatch(ins, dnins, del, dndel, dataFactory)
 	return
 }
-func (data *CheckpointData) ReplayMeta() {
+func (data *CheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta) {
+	if len(data.meta) != 0 {
+		meta = data.meta[tableID]
+		return
+	}
 	for i := 0; i < data.metaBatch.GetVectorByName(SnapshotMetaAttr_Tid).Length(); i++ {
 		tid := data.metaBatch.GetVectorByName(SnapshotMetaAttr_Tid).Get(i).(uint64)
 		insStart := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Get(i).(int32)
 		insEnd := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Get(i).(int32)
 		delStart := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Get(i).(int32)
 		delEnd := data.metaBatch.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Get(i).(int32)
-		meta := &CheckpointMeta{}
+		meta := new(CheckpointMeta)
 		if insStart != -1 {
 			meta.blkInsertOffset = &common.ClosedInterval{
 				Start: uint64(insStart),
@@ -168,11 +175,13 @@ func (data *CheckpointData) ReplayMeta() {
 			}
 		}
 		data.meta[tid] = meta
-		// logutil.Infof("ReplayMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
+		// logutil.Infof("GetTableMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
 	}
+	meta = data.meta[tableID]
+	return
 }
-func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err error) {
-	var insTaeBat, delTaeBat *containers.Batch
+func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch, err error) {
+	var insTaeBat, delTaeBat, cnInsTaeBat *containers.Batch
 	switch tid {
 	case pkgcatalog.MO_DATABASE_ID:
 		insTaeBat = data.dbInsBatch
@@ -194,7 +203,6 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		insTaeBat = data.tblInsBatch
 		delTaeBat = data.tblDelBatch
 		if insTaeBat != nil {
-			// logutil.Infof("INSERT-TABLE %s", insTaeBat.String())
 			ins, err = containersBatchToProtoBatch(insTaeBat)
 			if err != nil {
 				return
@@ -224,27 +232,36 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		}
 		return
 	}
-	if len(data.meta) == 0 {
-		data.ReplayMeta()
+
+	// For Debug
+	// if insTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("INS-DATA", insTaeBat, true))
+	// }
+	// if delTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("DEL-DATA", delTaeBat, true))
+	// }
+
+	meta := data.GetTableMeta(tid)
+	if meta == nil {
+		return nil, nil, nil, nil
 	}
-	meta, ok := data.meta[tid]
-	if !ok {
-		return nil, nil, nil
-	}
+
 	insInterval := meta.blkInsertOffset
 	if insInterval != nil {
 		insOffset := insInterval.Start
 		insLength := insInterval.End - insInterval.Start
 		insTaeBat = data.blkMetaInsBatch.Window(int(insOffset), int(insLength))
 	}
+
 	delInterval := meta.blkDeleteOffset
 	if delInterval != nil {
 		delOffset := delInterval.Start
 		delLength := delInterval.End - delInterval.Start
 		delTaeBat = data.blkMetaDelBatch.Window(int(delOffset), int(delLength))
+		cnInsTaeBat = data.blkCNMetaInsBatch.Window(int(delOffset), int(delLength))
 	}
+
 	if insTaeBat != nil {
-		// logutil.Infof("[TID=%d] INSERT-BLK %s", tid, insTaeBat.String())
 		ins, err = containersBatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
@@ -255,7 +272,22 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del *api.Batch, err e
 		if err != nil {
 			return
 		}
+		cnIns, err = containersBatchToProtoBatch(cnInsTaeBat)
+		if err != nil {
+			return
+		}
 	}
+
+	// For debug
+	// if insTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("INS-BLK-DATA", insTaeBat, true))
+	// }
+	// if delTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("DEL-BLK-DATA", delTaeBat, true))
+	// }
+	// if cnInsTaeBat != nil {
+	// 	logutil.Infof("GetTableData: TID=%d %s", tid, BatchToString("CN-INS-DATA", cnInsTaeBat, true))
+	// }
 	return
 }
 
@@ -280,12 +312,15 @@ func (data *CheckpointData) prepareMeta() {
 }
 
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
+	if delEnd < delStart && insEnd < insStart {
+		return
+	}
 	meta, ok := data.meta[tid]
+	if !ok {
+		meta = NewCheckpointMeta()
+		data.meta[tid] = meta
+	}
 	if delEnd >= delStart {
-		if !ok {
-			meta = NewCheckpointMeta()
-			data.meta[tid] = meta
-		}
 		if meta.blkDeleteOffset == nil {
 			meta.blkDeleteOffset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
 		} else {
@@ -295,10 +330,6 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 		}
 	}
 	if insEnd >= insStart {
-		if !ok {
-			meta = NewCheckpointMeta()
-			data.meta[tid] = meta
-		}
 		if meta.blkInsertOffset == nil {
 			meta.blkInsertOffset = &common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}
 		} else {
@@ -309,8 +340,14 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 	}
 }
 
+func (data *CheckpointData) PrintData() {
+	logutil.Info(BatchToString("BLK-META-DEL-BAT", data.blkMetaDelBatch, true))
+	logutil.Info(BatchToString("BLK-META-INS-BAT", data.blkMetaInsBatch, true))
+}
+
 func (data *CheckpointData) WriteTo(
 	writer *blockio.Writer) (blks []objectio.BlockObject, err error) {
+	// data.PrintData()
 	if _, err = writer.WriteBlock(data.metaBatch); err != nil {
 		return
 	}
@@ -378,6 +415,9 @@ func (data *CheckpointData) WriteTo(
 		return
 	}
 	if _, err = writer.WriteBlock(data.blkDNMetaDelTxnBatch); err != nil {
+		return
+	}
+	if _, err = writer.WriteBlock(data.blkCNMetaInsBatch); err != nil {
 		return
 	}
 	blks, err = writer.Sync()
@@ -552,6 +592,13 @@ func (data *CheckpointData) ReadFrom(
 		metas[22]); err != nil {
 		return
 	}
+	if data.blkCNMetaInsBatch, err = reader.LoadBlkColumnsByMeta(
+		append(BaseTypes, BlkMetaSchema.Types()...),
+		append(BaseAttr, BlkMetaSchema.AllNames()...),
+		append([]bool{false, false}, BlkMetaSchema.AllNullables()...),
+		metas[23]); err != nil {
+		return
+	}
 	return
 }
 
@@ -647,6 +694,10 @@ func (data *CheckpointData) Close() {
 	if data.blkDNMetaDelTxnBatch != nil {
 		data.blkDNMetaDelTxnBatch.Close()
 		data.blkDNMetaDelTxnBatch = nil
+	}
+	if data.blkCNMetaInsBatch != nil {
+		data.blkCNMetaInsBatch.Close()
+		data.blkCNMetaInsBatch = nil
 	}
 }
 func (data *CheckpointData) GetDBBatchs() (*containers.Batch, *containers.Batch, *containers.Batch, *containers.Batch) {
@@ -798,7 +849,7 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 			continue
 		}
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		if metaNode.MetaLoc == "" {
+		if metaNode.MetaLoc == "" || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
 				collector.data.blkDNMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
 				collector.data.blkDNMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
@@ -839,6 +890,20 @@ func (collector *IncrementalCollector) VisitBlk(entry *catalog.BlockEntry) (err 
 				metaNode.TxnMVCCNode.AppendTuple(collector.data.blkMetaDelTxnBatch)
 				collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
 				collector.data.blkMetaDelTxnBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.MetaLoc))
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.DeltaLoc))
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd())
+				is_sorted := false
+				if !entry.IsAppendable() && entry.GetSchema().HasPK() {
+					is_sorted = true
+				}
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(entry.GetSegment().ID)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt)
+				collector.data.blkCNMetaInsBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(entry.ID))
 			} else {
 				collector.data.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID)
 				collector.data.blkMetaInsBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable())

@@ -23,15 +23,19 @@ an application on logtail mgr: build reponse to SyncLogTailRequest
 import (
 	"fmt"
 	"hash/fnv"
+	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -51,6 +55,17 @@ func HandleSyncLogTailReq(
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
+	dbEntry, err := c.GetDatabaseByID(did)
+	if err != nil {
+		return
+	}
+	tableEntry, err := dbEntry.GetTableEntryByID(tid)
+	if err != nil {
+		return
+	}
+	if start.Less(tableEntry.GetCreatedAt()) {
+		start = tableEntry.GetCreatedAt()
+	}
 
 	ckpLoc, checkpointed := ckpClient.CollectCheckpointsInRange(start, end)
 
@@ -210,17 +225,17 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
 	var tblID uint64
-	var tblName string
+	var tableName string
 	switch b.scope {
 	case ScopeDatabases:
 		tblID = pkgcatalog.MO_DATABASE_ID
-		tblName = pkgcatalog.MO_DATABASE
+		tableName = pkgcatalog.MO_DATABASE
 	case ScopeTables:
 		tblID = pkgcatalog.MO_TABLES_ID
-		tblName = pkgcatalog.MO_TABLES
+		tableName = pkgcatalog.MO_TABLES
 	case ScopeColumns:
 		tblID = pkgcatalog.MO_COLUMNS_ID
-		tblName = pkgcatalog.MO_COLUMNS
+		tableName = pkgcatalog.MO_COLUMNS
 	}
 
 	if b.insBatch.Length() > 0 {
@@ -231,7 +246,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		insEntry := &api.Entry{
 			EntryType:    api.Entry_Insert,
 			TableId:      tblID,
-			TableName:    tblName,
+			TableName:    tableName,
 			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
 			DatabaseName: pkgcatalog.MO_CATALOG,
 			Bat:          bat,
@@ -246,7 +261,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		delEntry := &api.Entry{
 			EntryType:    api.Entry_Delete,
 			TableId:      tblID,
-			TableName:    tblName,
+			TableName:    tableName,
 			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
 			DatabaseName: pkgcatalog.MO_CATALOG,
 			Bat:          bat,
@@ -517,4 +532,73 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		CkpLocation: b.checkpoint,
 		Commands:    entries,
 	}, nil
+}
+
+func LoadCheckpointEntries(
+	metLoc string,
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+	fs fileservice.FileService) (entries []*api.Entry, err error) {
+	if metLoc == "" {
+		return
+	}
+
+	locations := strings.Split(metLoc, ";")
+	entries = make([]*api.Entry, 0)
+	for _, location := range locations {
+		reader, err := blockio.NewCheckpointReader(fs, location)
+		if err != nil {
+			return nil, err
+		}
+		data := NewCheckpointData()
+		defer data.Close()
+		if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+			return nil, err
+		}
+		ins, del, cnIns, err := data.GetTableData(tableID)
+		if err != nil {
+			return nil, err
+		}
+		if tableName != pkgcatalog.MO_DATABASE &&
+			tableName != pkgcatalog.MO_COLUMNS &&
+			tableName != pkgcatalog.MO_TABLES {
+			tableName = fmt.Sprintf("_%d_meta", tableID)
+		}
+		if ins != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tableID,
+				TableName:    tableName,
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          ins,
+			}
+			entries = append(entries, entry)
+		}
+		if cnIns != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tableID,
+				TableName:    tableName,
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          cnIns,
+			}
+			entries = append(entries, entry)
+		}
+		if del != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Delete,
+				TableId:      tableID,
+				TableName:    tableName,
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          del,
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return
 }
