@@ -71,7 +71,7 @@ func TestGetCheckpoints(t *testing.T) {
 	// ckp4[40,50(unfinished)]
 	timestamps := make([]types.TS, 0)
 	for i := 0; i < 6; i++ {
-		ts := types.BuildTS(int64(i), 0)
+		ts := types.BuildTS(int64(i*10), 0)
 		timestamps = append(timestamps, ts)
 	}
 	for i := 0; i < 5; i++ {
