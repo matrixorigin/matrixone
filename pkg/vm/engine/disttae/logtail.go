@@ -113,7 +113,11 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					return err
+					if moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+						err = nil
+					} else {
+						return err
+					}
 				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)

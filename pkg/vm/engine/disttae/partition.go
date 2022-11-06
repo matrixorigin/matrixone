@@ -404,12 +404,6 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
-		_, err := p.data.Get(tx, entry.Key)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		} else if err != nil {
-			return err
-		}
 		if err := p.data.Delete(tx, entry.Key); err != nil {
 			return err
 		}
