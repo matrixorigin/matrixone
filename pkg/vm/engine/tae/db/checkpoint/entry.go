@@ -49,6 +49,17 @@ func (e *CheckpointEntry) GetState() State {
 	defer e.RUnlock()
 	return e.state
 }
+func (e *CheckpointEntry) IsCommitted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Finished
+}
+func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
+	if e.start.Greater(to) || e.end.Less(from) {
+		return false
+	}
+	return true
+}
 
 func (e *CheckpointEntry) SetLocation(location string) {
 	e.Lock()
