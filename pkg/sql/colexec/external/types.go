@@ -43,7 +43,7 @@ type ExternalParam struct {
 	Fileparam    *ExternalFileparam
 	FileList     []string
 	reader       io.ReadCloser
-	maxbatchSize uint64
+	maxBatchSize uint64
 }
 
 type ExternalFileparam struct {
