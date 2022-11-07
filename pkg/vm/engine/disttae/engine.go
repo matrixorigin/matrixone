@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -326,6 +328,60 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
+}
+
+func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
+	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
+	rds := make([]engine.Reader, num)
+	blks := make([]BlockMeta, len(ranges))
+	for i := range ranges {
+		blks[i] = blockUnmarshal(ranges[i])
+	}
+	if len(ranges) < num {
+		for i := range ranges {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
+			}
+		}
+		for j := len(ranges); j < num; j++ {
+			rds[j] = &emptyReader{}
+		}
+		return rds, nil
+	}
+	step := len(ranges) / num
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < num; i++ {
+		if i == num-1 {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
+			}
+		} else {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
+			}
+		}
+	}
+	return rds, nil
 }
 
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
