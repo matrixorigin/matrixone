@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -208,6 +209,9 @@ type Engine interface {
 	// return value should not be cached
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
+
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
 }
 
 type Hints struct {
