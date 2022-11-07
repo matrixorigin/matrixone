@@ -89,13 +89,6 @@ func TestDatetimeToTime(t *testing.T) {
 			precision: 0,
 			success:   true,
 		},
-		{
-			name:      "TestDatetimeToTime05",
-			inputStr:  "20221212112233.1235",
-			want:      []types.Time{types.FromTimeClock(false, 11, 22, 33, 124000)},
-			precision: 3,
-			success:   true,
-		},
 	}
 
 	for _, v := range testCases {
@@ -114,7 +107,7 @@ func TestDatetimeToTime(t *testing.T) {
 	}
 }
 
-func TestDateStringToTime(t *testing.T) {
+func TestStringToTime(t *testing.T) {
 	testCases := []struct {
 		name     string
 		inputStr string
@@ -122,55 +115,55 @@ func TestDateStringToTime(t *testing.T) {
 		success  bool
 	}{
 		{
-			name:     "TestDateStringToTime01",
+			name:     "TestStringToTime01",
 			inputStr: "2022-12-12 11:22:33",
 			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime02",
+			name:     "TestStringToTime02",
 			inputStr: "2022-12-12 11:22:33",
 			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime03",
+			name:     "TestStringToTime02",
 			inputStr: "2022-12-12 11:22:33.1234",
 			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 123400)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime04",
+			name:     "TestStringToTime03",
 			inputStr: "2022-12-12 11:22:33.1235",
 			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 123500)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime05",
+			name:     "TestStringToTime04",
 			inputStr: "20221212112233",
-			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			want:     []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 0)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime06",
+			name:     "TestStringToTime05",
 			inputStr: "20221212112233.1235",
-			want:     []types.Time{types.FromTimeClock(false, 11, 22, 33, 123500)},
+			want:     []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 123500)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime07",
+			name:     "TestStringToTime06",
 			inputStr: "1122.1235",
 			want:     []types.Time{types.FromTimeClock(false, 0, 11, 22, 123500)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime07",
+			name:     "TestStringToTime07",
 			inputStr: "-1122.1235",
 			want:     []types.Time{types.FromTimeClock(true, 0, 11, 22, 123500)},
 			success:  true,
 		},
 		{
-			name:     "TestDateStringToTime08",
+			name:     "TestStringToTime08",
 			inputStr: "-3.1235",
 			want:     []types.Time{types.FromTimeClock(true, 0, 0, 3, 123500)},
 			success:  true,

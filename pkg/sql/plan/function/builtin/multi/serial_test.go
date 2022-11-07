@@ -278,11 +278,11 @@ func randTime() types.Time {
 	if tmp := rand.Intn(2); tmp == 0 {
 		isNeg = true
 	}
-	hour := rand.Intn(839)
+	hour := rand.Intn(2562047788)
 	minute := rand.Intn(60)
 	second := rand.Intn(60)
 	microSecond := rand.Intn(1e6)
-	return types.FromTimeClock(isNeg, int32(hour), uint8(minute), uint8(second), uint32(microSecond))
+	return types.FromTimeClock(isNeg, uint64(hour), uint8(minute), uint8(second), uint32(microSecond))
 }
 
 func randDatetime() types.Datetime {

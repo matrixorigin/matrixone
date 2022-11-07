@@ -116,3 +116,53 @@ func DateStringToTime(vectors []*vector.Vector, proc *process.Process) (*vector.
 		return resultVector, err
 	}
 }
+
+func Int64ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_time, Size: 8}
+	inputValues := vector.MustTCols[int64](inputVector)
+
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType, 1)
+		resultValues := make([]types.Time, 1)
+		result, err := time.Int64ToTime(inputValues, resultValues)
+		vector.SetCol(resultVector, result)
+		return resultVector, err
+	} else {
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		if err != nil {
+			return nil, err
+		}
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err = time.Int64ToTime(inputValues, resultValues)
+		return resultVector, err
+	}
+}
+
+func Decimal128ToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_time, Size: 8, Precision: inputVector.Typ.Scale}
+	inputValues := vector.MustTCols[types.Decimal128](inputVector)
+
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType, 1)
+		resultValues := make([]types.Time, 1)
+		result, err := time.Decimal128ToTime(inputValues, resultValues)
+		vector.SetCol(resultVector, result)
+		return resultVector, err
+	} else {
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
+		if err != nil {
+			return nil, err
+		}
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		_, err = time.Decimal128ToTime(inputValues, resultValues)
+		return resultVector, err
+	}
+}

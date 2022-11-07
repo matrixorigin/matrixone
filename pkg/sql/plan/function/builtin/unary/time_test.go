@@ -15,6 +15,7 @@
 package unary
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,15 +76,6 @@ func TestTime(t *testing.T) {
 			proc:    testutil.NewProc(),
 			want:    []types.Time{types.FromTimeClock(false, 16, 22, 44, 123500)},
 		},
-		{
-			name:    "TimeTest-FromDatetime03",
-			input:   "20220101224433.123456",
-			precise: 6,
-			isConst: false,
-			testTyp: types.T_datetime.ToType(),
-			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 22, 44, 33, 123456)},
-		},
 
 		//============================== DateString ==============================
 		// precise is default 6 when input
@@ -94,7 +86,7 @@ func TestTime(t *testing.T) {
 			isConst: false,
 			testTyp: types.T_varchar.ToType(),
 			proc:    testutil.NewProc(),
-			want:    []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+			want:    []types.Time{types.FromTimeClock(false, 2011010111, 22, 33, 0)},
 		},
 		{
 			name:    "TimeTest-FromDateString02",
@@ -132,6 +124,71 @@ func TestTime(t *testing.T) {
 			proc:    testutil.NewProc(),
 			want:    []types.Time{types.FromTimeClock(true, 0, 2, 33, 123000)},
 		},
+		//============================== Int64 ==============================
+		{
+			name:    "TimeTest-FromInt64-01",
+			input:   "112233",
+			precise: 0,
+			isConst: false,
+			testTyp: types.T_int64.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(false, 11, 22, 33, 0)},
+		},
+		{
+			name:    "TimeTest-FromInt64-02",
+			input:   "20221212112233",
+			precise: 0,
+			isConst: false,
+			testTyp: types.T_int64.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 0)},
+		},
+		{
+			name:    "TimeTest-FromInt64-03",
+			input:   "-20221212112233",
+			precise: 0,
+			isConst: false,
+			testTyp: types.T_int64.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 0)},
+		},
+		//============================== Decimal128 ==============================
+		{
+			name:    "TimeTest-FromDecimal128-01",
+			input:   "20221212112233.4444",
+			precise: 3,
+			isConst: false,
+			testTyp: types.T_decimal128.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 444000)},
+		},
+		{
+			name:    "TimeTest-FromDecimal128-02",
+			input:   "20221212112233.4446",
+			precise: 3,
+			isConst: false,
+			testTyp: types.T_decimal128.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(false, 2022121211, 22, 33, 445000)},
+		},
+		{
+			name:    "TimeTest-FromDecimal128-03",
+			input:   "-20221212112233.4444",
+			precise: 3,
+			isConst: false,
+			testTyp: types.T_decimal128.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 444000)},
+		},
+		{
+			name:    "TimeTest-FromDecimal128-04",
+			input:   "-20221212112233.4446",
+			precise: 3,
+			isConst: false,
+			testTyp: types.T_decimal128.ToType(),
+			proc:    testutil.NewProc(),
+			want:    []types.Time{types.FromTimeClock(true, 2022121211, 22, 33, 445000)},
+		},
 	}
 
 	for _, c := range cases {
@@ -142,6 +199,10 @@ func TestTime(t *testing.T) {
 			var result *vector.Vector
 			var err error
 			switch c.testTyp.Oid {
+			case types.T_int64:
+				result, err = Int64ToTime(vec, c.proc)
+			case types.T_decimal128:
+				result, err = Decimal128ToTime(vec, c.proc)
 			case types.T_date:
 				result, err = DateToTime(vec, c.proc)
 			case types.T_datetime:
@@ -160,6 +221,18 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 	vec := make([]*vector.Vector, 1)
 	if isConst {
 		switch typ.Oid {
+		case types.T_int64:
+			data, err := strconv.Atoi(str)
+			if err != nil {
+				return nil, moerr.ErrInvalidInput
+			}
+			vec[0] = vector.NewConstFixed(types.T_int64.ToType(), 1, data, testutil.TestUtilMp)
+		case types.T_decimal128:
+			data, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			if err != nil {
+				return nil, moerr.ErrInvalidInput
+			}
+			vec[0] = vector.NewConstFixed(types.T_decimal128.ToType(), 1, data, testutil.TestUtilMp)
 		case types.T_date:
 			data, err := types.ParseDate(str)
 			if err != nil {
@@ -180,6 +253,23 @@ func makeVectorForTimeTest(str string, precision int32, isConst bool, typ types.
 		input := make([]string, 0)
 		input = append(input, str)
 		switch typ.Oid {
+		case types.T_int64:
+			input := make([]int64, 0)
+			tmp, err := strconv.Atoi(str)
+			if err != nil {
+				return nil, moerr.ErrInvalidInput
+			}
+			input = append(input, int64(tmp))
+			vec[0] = testutil.MakeInt64Vector(input, nil)
+		case types.T_decimal128:
+			input := make([]types.Decimal128, 0)
+			tmp, err := types.ParseStringToDecimal128(str, 34, precision, false)
+			if err != nil {
+				return nil, moerr.ErrInvalidInput
+			}
+			input = append(input, tmp)
+			vec[0] = vector.NewWithFixed(typ, input, nil, testutil.TestUtilMp)
+
 		case types.T_date:
 			vec[0] = testutil.MakeDateVector(input, nil)
 		case types.T_datetime:

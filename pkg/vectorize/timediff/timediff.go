@@ -78,15 +78,12 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 	return nil
 }
 
+// TODO: how to handle overflow?
 func timeDiff[T DiffT](v1, v2 T) (types.Time, error) {
-	time := types.Time(int(v1) - int(v2))
+	time := types.Time(int64(v1) - int64(v2))
 	hour, _, _, _, isNeg := time.ClockFormat()
 	if !types.ValidTime(uint64(hour), 0, 0) {
-		if isNeg {
-			return types.ParseTime("-838:59:59", 0)
-		} else {
-			return types.ParseTime("838:59:59", 0)
-		}
+		return types.FromTimeClock(isNeg, types.MaxHourInTime, 59, 59, 0), nil
 	}
 	return time, nil
 }

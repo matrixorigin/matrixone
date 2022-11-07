@@ -43,3 +43,25 @@ func DateStringToTime(xs []string, rs []types.Time) ([]types.Time, error) {
 	}
 	return rs, nil
 }
+
+func Int64ToTime(xs []int64, rs []types.Time) ([]types.Time, error) {
+	for i, s := range xs {
+		t, e := types.ParseInt64ToTime(s, 0)
+		if e != nil {
+			return rs, moerr.NewOutOfRange("time", "'%d'", s)
+		}
+		rs[i] = t
+	}
+	return rs, nil
+}
+
+func Decimal128ToTime(xs []types.Decimal128, rs []types.Time) ([]types.Time, error) {
+	for i, s := range xs {
+		t, e := types.ParseDecima128lToTime(s, 6)
+		if e != nil {
+			return rs, moerr.NewOutOfRange("time", "'%s'", s)
+		}
+		rs[i] = t
+	}
+	return rs, nil
+}

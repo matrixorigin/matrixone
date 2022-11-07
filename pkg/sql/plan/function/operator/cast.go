@@ -2023,7 +2023,7 @@ func CastIntAsTime[T constraints.Signed](lv, rv *vector.Vector, proc *process.Pr
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Time, 1)
-		if int64(lvs[0]) <= -8390000 || int64(lvs[0]) >= 8390000 {
+		if int64(lvs[0]) < types.MinInputIntTime || int64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(lv.Nsp, 0)
 		}
 		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
@@ -2039,7 +2039,7 @@ func CastIntAsTime[T constraints.Signed](lv, rv *vector.Vector, proc *process.Pr
 	}
 	rs := vector.MustTCols[types.Time](vec)
 	for i := 0; i < len(lvs); i++ {
-		if int64(lvs[0]) <= -8390000 || int64(lvs[0]) >= 8390000 {
+		if int64(lvs[0]) < types.MinInputIntTime || int64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(vec.Nsp, uint64(i))
 		}
 	}
@@ -2054,7 +2054,7 @@ func CastUIntAsTime[T constraints.Unsigned](lv, rv *vector.Vector, proc *process
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Time, 1)
-		if uint64(lvs[0]) >= 8390000 {
+		if uint64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(lv.Nsp, 0)
 		}
 		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
@@ -2070,7 +2070,7 @@ func CastUIntAsTime[T constraints.Unsigned](lv, rv *vector.Vector, proc *process
 	}
 	rs := vector.MustTCols[types.Time](vec)
 	for i := 0; i < len(lvs); i++ {
-		if uint64(lvs[0]) >= 8390000 {
+		if uint64(lvs[0]) > types.MaxInputIntTime {
 			nulls.Add(vec.Nsp, uint64(i))
 		}
 	}
