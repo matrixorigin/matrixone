@@ -42,13 +42,7 @@ In MatrixOne, transactions are divided into explicit and implicit transactions:
 - In an explicit transaction, DML and DDL can exist simultaneously, but if the occurrence of DDL will affect the result of DML, such as `drop table` or `alter table`, the DDL will be judged to fail and report an error. Affected statements are committed or rolled back typically.
 - In an explicit transaction, other straightforward transactions cannot be nested. For example, if `START TANSACTIONS` is encountered after `START TANSACTIONS`, all statements between two `START TANSACTIONS` will be forced to commit, regardless of the value of `AUTOCOMMIT` 1 or 0.
 - In an explicit transaction, only DML and DDL can be included, and no parameter configuration or management commands can be modified, such as `set [parameter] = [value]`, `create user`, etc.
-
-### 隐式事务规则
-
-- 在 `AUTOCOMMIT` 发生变化的时候，之前所有未提交的DML语句都会自动提交。
-- 在 `AUTOCOMMIT=1` 的情况下，每一条 DML 语句都是一个单独的事务，在执行后立即提交。
-- 在 `AUTOCOMMIT=0` 的情况下，每一条 DML 语句都不会在执行后立即提交，需要手动进行 `COMMIT` 或 `ROLLBACK`，如果在尚未提交或回滚的状态下退出客户端，则默认回滚。
-- 在 `AUTOCOMMIT=0` 的情况下，在有未提交的 DML 的情况下，如果出现的 DDL 没有对之前DML的结果产生影响，那么 DDL 将会在提交时生效；如果对之前的 DML 产生影响，例如 `drop table` 或 `alter table`，则报错提示该条语句执行失败，在提交或回滚时，未受影响的语句正常提交或回滚。
+- In an explicit transaction, if an error occurs in a single statement, an error in a single statement forces the entire transaction to be rolled back to ensure the atomicity of the transaction.
 
 ### Implicit Transaction Rules
 
@@ -68,6 +62,8 @@ One solution is the Append Only mechanism, where all tuple versions of a table a
 Another similar scheme is called Time Travel, which stores the information of the version chain separately, while the main table maintains the main version data.
 
 The third option is to maintain the main version of the tuple in the main table, and maintain a series of delta versions in a separate database comparison tool (delta) store. This storage is called a rollback segment in MySQL and Oracle. To update an existing tuple, the database fetches a contiguous space from the delta store to create a new delta version. This delta version contains the original value of the modified property, not the entire tuple. Then the database directly updates the main version in the main table (In Place Update).
+
+![image-20221026152318567](https://github.com/matrixorigin/artwork/blob/main/docs/distributed-transaction/mvcc.jpg)
 
 ## MatrixOne transaction flow
 
