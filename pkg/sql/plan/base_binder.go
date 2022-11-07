@@ -927,10 +927,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 					if tp == types.T_int64 {
 						args = append(args, makePlan2Int64ConstExprWithType(0))
 					} else {
-						args = append(args, makePlan2Float64ConstExprWithType(0))
+						args = append(args, makePlan2Decimal128ConstNullExpr())
 					}
 				} else {
-					args = append(args, makePlan2Float64ConstExprWithType(0))
+					args = append(args, makePlan2Decimal128ConstNullExpr())
 				}
 			}
 		} else if len(args) > 1 {
