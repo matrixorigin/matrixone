@@ -76,9 +76,11 @@ SELECT 1 IS TRUE;
 1 is true
 true
 SELECT 2 IS TRUE;
-[unknown result because it is related to issue#5113]
+2 is true
+true
 SELECT -2 IS TRUE;
-[unknown result because it is related to issue#5113]
+2 is true
+true
 SELECT * FROM is_test WHERE big IS TRUE;
 tiny    small    int_test    big    tiny_un    small_un    int_test_un    big_un    float_32    float_64
 SELECT small_un FROM is_test WHERE small_un IS TRUE;
