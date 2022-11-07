@@ -29,9 +29,9 @@ import (
 )
 
 var (
-	initSqls = []string{
-		`create database if not exists %s`,
-		`create table if not exists %s.sys_async_task (
+	createDatabase = `create database if not exists %s`
+	createTables   = map[string]string{
+		"sys_async_task": `create table if not exists %s.sys_async_task (
 			task_id                     int primary key auto_increment,
 			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -46,7 +46,7 @@ var (
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
 			end_at                      bigint)`,
-		`create table if not exists %s.sys_cron_task (
+		"sys_cron_task": `create table if not exists %s.sys_cron_task (
 			cron_task_id				int primary key auto_increment,
     		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
@@ -57,7 +57,6 @@ var (
 			trigger_times				int,
 			create_at					bigint,
 			update_at					bigint)`,
-		`use %s`,
 	}
 
 	insertAsyncTask = `insert into %s.sys_async_task(
@@ -749,13 +748,32 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 }
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
-	if _, err := db.Exec("use " + m.dbname); err != nil {
+	for _, err := db.Exec("use " + m.dbname); err != nil; _, err = db.Exec("use " + m.dbname) {
 		me, ok := err.(*mysql.MySQLError)
 		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
 			return err
 		}
-		for _, s := range initSqls {
-			if _, err = db.Exec(fmt.Sprintf(s, m.dbname)); err != nil {
+		if _, err = db.Exec(fmt.Sprintf(createDatabase, m.dbname)); err != nil {
+			return multierr.Append(err, db.Close())
+		}
+	}
+	rows, err := db.Query("show tables")
+	if err != nil {
+		return err
+	}
+
+	tables := make(map[string]struct{}, len(createTables))
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return err
+		}
+		tables[table] = struct{}{}
+	}
+
+	for table, createSql := range createTables {
+		if _, ok := tables[table]; !ok {
+			if _, err = db.Exec(fmt.Sprintf(createSql, m.dbname)); err != nil {
 				return multierr.Append(err, db.Close())
 			}
 		}
