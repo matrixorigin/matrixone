@@ -49,13 +49,21 @@ type txnStore struct {
 	writeOps    atomic.Uint32
 }
 
-var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
+var TxnStoreFactory = func(
+	catalog *catalog.Catalog,
+	driver wal.Driver,
+	txnBufMgr base.INodeManager,
+	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
 		return newStore(catalog, driver, txnBufMgr, dataFactory)
 	}
 }
 
-func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) *txnStore {
+func newStore(
+	catalog *catalog.Catalog,
+	driver wal.Driver,
+	txnBufMgr base.INodeManager,
+	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		dbs:         make(map[uint64]*txnDB),
 		catalog:     catalog,

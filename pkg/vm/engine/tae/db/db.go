@@ -52,7 +52,8 @@ type DB struct {
 	MTBufMgr  base.INodeManager
 	TxnBufMgr base.INodeManager
 
-	TxnMgr     *txnbase.TxnManager
+	TxnMgr *txnbase.TxnManager
+
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 

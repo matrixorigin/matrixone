@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type TxnCommitListener interface {
@@ -79,6 +80,7 @@ type TxnManager struct {
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
+	TransferTable   *model.TransferTable
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -423,5 +425,8 @@ func (mgr *TxnManager) Start() {
 func (mgr *TxnManager) Stop() {
 	mgr.PreparingSM.Stop()
 	mgr.OnException(common.ErrClose)
+	if mgr.TransferTable != nil {
+		mgr.TransferTable.Close()
+	}
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

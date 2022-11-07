@@ -253,8 +253,19 @@ func (task *compactBlockTask) Execute() (err error) {
 			return err
 		}
 	}
-	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
-	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
+	txnEntry := txnentries.NewCompactBlockEntry(
+		task.txn,
+		task.compacted,
+		task.created,
+		task.scheduler,
+		task.mapping,
+		task.deletes)
+
+	if err = task.txn.LogTxnEntry(
+		table.GetDB().ID,
+		table.ID,
+		txnEntry,
+		[]*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}
 	logutil.Info("[Done]",

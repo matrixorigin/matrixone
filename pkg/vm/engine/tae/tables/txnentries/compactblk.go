@@ -38,7 +38,12 @@ type compactBlockEntry struct {
 	deletes   *roaring.Bitmap
 }
 
-func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler, sortIdx []uint32, deletes *roaring.Bitmap) *compactBlockEntry {
+func NewCompactBlockEntry(
+	txn txnif.AsyncTxn,
+	from, to handle.Block,
+	scheduler tasks.TaskScheduler,
+	sortIdx []uint32,
+	deletes *roaring.Bitmap) *compactBlockEntry {
 	mapping := make([]uint32, len(sortIdx))
 	for i, idx := range sortIdx {
 		mapping[idx] = uint32(i)

@@ -63,7 +63,12 @@ func (txn *OpTxn) Repr() string {
 	}
 }
 
-var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id []byte, startTS types.TS, info []byte) txnif.AsyncTxn {
+var DefaultTxnFactory = func(
+	mgr *TxnManager,
+	store txnif.TxnStore,
+	id []byte,
+	startTS types.TS,
+	info []byte) txnif.AsyncTxn {
 	return NewTxn(mgr, store, id, startTS, info)
 }
 
