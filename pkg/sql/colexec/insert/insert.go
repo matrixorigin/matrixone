@@ -173,6 +173,9 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 
 	n.Affected += uint64(len(bat.Zs))
 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
+		if err2 := RolllbackTxn(n, proc.TxnOperator, ctx); err2 != nil {
+			return false, err2
+		}
 		return false, err
 	}
 	return false, nil

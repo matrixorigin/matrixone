@@ -73,6 +73,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
 		return nil, err
 	}
+	if err := checkNullMap(stmt, tableDef.Cols); err != nil {
+		return nil, err
+	}
 
 	node3.TableDef = tableDef
 	node3.ObjRef = objRef
@@ -192,6 +195,21 @@ func InitNullMap(stmt *tree.Load) error {
 			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr3.String()))
 		}
 		stmt.Param.Tail.Assignments[i].Expr = nil
+	}
+	return nil
+}
+
+func checkNullMap(stmt *tree.Load, Cols []*ColDef) error {
+	for k := range stmt.Param.NullMap {
+		find := false
+		for i := 0; i < len(Cols); i++ {
+			if Cols[i].Name == k {
+				find = true
+			}
+		}
+		if !find {
+			return moerr.NewBadConfig("wrong col name '%s' in nullif function", k)
+		}
 	}
 	return nil
 }

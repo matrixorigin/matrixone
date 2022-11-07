@@ -348,7 +348,10 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
-		ss := c.compileExternScan(n)
+		ss, err := c.compileExternScan(n)
+		if err != nil {
+			return nil, err
+		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_TABLE_SCAN:
 		ss, err := c.compileTableScan(n)
@@ -517,7 +520,7 @@ func (c *Compile) ConstructScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
+func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	mcpu := c.NumCPU()
 	if mcpu < 1 {
 		mcpu = 1
@@ -526,12 +529,18 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
+	if param.ScanType == tree.S3 {
+		if err := external.InitS3Param(param); err != nil {
+			return nil, err
+		}
+	}
+
 	param.FileService = c.proc.FileService
 	fileList, err := external.ReadDir(param)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
@@ -552,7 +561,7 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 			Arg: constructExternal(n, c.ctx, fileListTmp),
 		})
 	}
-	return ss
+	return ss, nil
 }
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {

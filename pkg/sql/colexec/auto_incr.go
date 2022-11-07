@@ -115,6 +115,7 @@ loop:
 		step = append(step, s)
 	}
 	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
+		RolllbackTxn(param.eg, txn, param.ctx)
 		goto loop
 	}
 
@@ -439,6 +440,9 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			return err2
+		}
 		return err
 	}
 	return nil
@@ -481,6 +485,9 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			return err2
+		}
 		return err
 	}
 	return nil
@@ -536,6 +543,9 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			return err2
+		}
 		return err
 	}
 	return nil
@@ -589,6 +599,9 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			return err2
+		}
 		return err
 	}
 	return nil
