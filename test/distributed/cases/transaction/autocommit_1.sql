@@ -4,9 +4,9 @@
 -- @desc:Test echo autocommit
 -- @label:bvt
 
--- @bvt:issue#4626
+
 SELECT @@session.autocommit;
--- @bvt:issue
+
 
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;

@@ -64,6 +64,8 @@ func (h *poolHandler) doHandle(op iops.IOp) {
 	err := h.pool.Submit(closure(op, h.wg))
 	if err != nil {
 		logutil.Warnf("%v", err)
+		op.SetError(err)
+		h.wg.Done()
 	}
 }
 

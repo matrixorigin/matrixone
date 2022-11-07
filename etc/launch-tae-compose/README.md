@@ -23,8 +23,27 @@ docker-compose -f etc/launch-tae-compose/compose.yaml pull
 docker-compose -f etc/launch-tae-compose/compose.yaml up -d
 ```
 
+## Check log
+
+```shell
+# cn
+docker compose -f etc/launch-tae-compose/compose.yaml logs cn
+
+# dn
+docker compose -f etc/launch-tae-compose/compose.yaml logs dn
+
+# logService
+docker compose -f etc/launch-tae-compose/compose.yaml logs logService
+```
+
 ## down
 
 ```shell
 docker-compose -f etc/launch-tae-compose/compose.yaml down --remove-orphans
+```
+
+## clean dangling image
+
+```shell
+docker image prune -f
 ```

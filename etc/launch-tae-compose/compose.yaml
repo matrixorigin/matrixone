@@ -8,7 +8,7 @@ services:
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-adefec5d
+    image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/cn.toml"]
     ports:
       - "6001:6001"
@@ -31,7 +31,7 @@ services:
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-adefec5d
+    image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
     ports:
       - "41010"
@@ -54,7 +54,7 @@ services:
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-adefec5d
+    image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
     ports:
       - "32000"

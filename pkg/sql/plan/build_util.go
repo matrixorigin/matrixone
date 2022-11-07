@@ -297,7 +297,7 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 }
 
 func judgeUnixTimestampReturnType(timestr string) types.T {
-	retDecimal := -1
+	retDecimal := 0
 	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
 		retDecimal = len(timestr) - dotIdx - 1
 	}
