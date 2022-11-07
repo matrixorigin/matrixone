@@ -3,12 +3,12 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]
 service-addresses = [
-  "127.0.0.1:32000",
+  "127.0.0.1:32001",
 ]
 
 [[fileservice]]
@@ -17,7 +17,8 @@ backend = "DISK"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/s3"
 
 [[fileservice]]
 name = "ETL"
@@ -28,7 +29,7 @@ disableTrace = true
 disableMetric = true
 
 [cn]
-uuid = "cn1"
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
 [cn.Engine]
 type = "distributed-tae"

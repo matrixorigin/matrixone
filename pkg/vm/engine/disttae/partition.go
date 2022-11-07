@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -275,16 +277,20 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 			indexes = append(indexes, index)
 		}
 
-		err = p.data.Upsert(tx, &DataRow{
-			rowID:   rowID,
-			value:   dataValue,
-			indexes: indexes,
-		})
-		if err != nil {
-			return err
-		}
-
-		if err := tx.Commit(t); err != nil {
+		_, err := p.data.Get(tx, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = p.data.Upsert(tx, &DataRow{
+				rowID:   rowID,
+				value:   dataValue,
+				indexes: indexes,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Commit(t); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 	}
@@ -547,7 +553,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step:],
+				blks:     blks[(i-1)*step:],
 				sels:     make([]int64, 0, 1024),
 			}
 		} else {
@@ -556,7 +562,7 @@ func (p *Partition) NewReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tableDef,
-				blks:     blks[i*step : (i+1)*step],
+				blks:     blks[(i-1)*step : i*step],
 				sels:     make([]int64, 0, 1024),
 			}
 		}

@@ -36,6 +36,8 @@ type Collector interface {
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	GetAndRefreshMerged() *DirtyTreeEntry
 	Merge() *DirtyTreeEntry
+	GetMaxLSN(from, to types.TS) uint64
+	Init(maxts types.TS)
 }
 
 type DirtyEntryInterceptor = catalog.Processor
@@ -131,7 +133,9 @@ func NewDirtyCollector(
 	collector.merged.Store(NewEmptyDirtyTreeEntry())
 	return collector
 }
-
+func (d *dirtyCollector) Init(maxts types.TS) {
+	d.storage.maxTs = maxts
+}
 func (d *dirtyCollector) Run() {
 	from, to := d.findRange()
 
@@ -154,6 +158,10 @@ func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	return
 }
 
+func (d *dirtyCollector) GetMaxLSN(from, to types.TS) uint64 {
+	reader := d.sourcer.GetReader(from, to)
+	return reader.GetMaxLSN()
+}
 func (d *dirtyCollector) ScanInRange(from, to types.TS) (
 	entry *DirtyTreeEntry, count int) {
 	reader := d.sourcer.GetReader(from, to)
@@ -341,7 +349,7 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		if db, err = d.catalog.GetDatabaseByID(dirtyTable.DbID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
 				err = nil
 				continue
@@ -349,7 +357,7 @@ func (d *dirtyCollector) tryCompactTree(
 			break
 		}
 		if tbl, err = db.GetTableEntryByID(dirtyTable.ID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
 				err = nil
 				continue
@@ -364,7 +372,7 @@ func (d *dirtyCollector) tryCompactTree(
 				continue
 			}
 			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
 					err = nil
 					continue
@@ -373,7 +381,7 @@ func (d *dirtyCollector) tryCompactTree(
 			}
 			for id := range dirtySeg.Blks {
 				if blk, err = seg.GetBlockEntryByID(id); err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 						dirtySeg.Shrink(id)
 						err = nil
 						continue
@@ -381,6 +389,11 @@ func (d *dirtyCollector) tryCompactTree(
 					return
 				}
 				if blk.GetBlockData().RunCalibration() == 0 {
+					// TODO: may be put it to post replay process
+					// FIXME
+					if blk.HasPersistedData() {
+						blk.GetBlockData().FreeData()
+					}
 					dirtySeg.Shrink(id)
 					continue
 				}

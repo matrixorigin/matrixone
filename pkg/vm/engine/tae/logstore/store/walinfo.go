@@ -94,7 +94,7 @@ func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
 }
 
 func (w *StoreInfo) GetPendding(gid uint32) (cnt uint64) {
-	lsn := w.GetSynced(gid)
+	lsn := w.GetCurrSeqNum(gid)
 	w.ckpcntMu.RLock()
 	ckpcnt := w.ckpcnt[gid]
 	w.ckpcntMu.RUnlock()

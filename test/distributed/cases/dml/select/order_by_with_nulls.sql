@@ -155,11 +155,9 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t2 ORDER BY name;
 UNION
 (SELECT * FROM t2 WHERE id >= 3 ORDER BY nation ASC) ORDER BY id ASC;
 
--- @bvt:issue#5370
 (SELECT * FROM t1 WHERE id BETWEEN 1 AND 2 ORDER BY name)
 UNION ALL
 (SELECT * FROM t2 WHERE nation BETWEEN 'A' AND 'F' ORDER BY id DESC);
--- @bvt:issue
 
 -- UNION and UNION ALL, Multi table great than 2
 DROP TABLE IF EXISTS t1;

@@ -236,7 +236,6 @@ delete from t8 where col9 is not NULL;
 
 -------------------------------------------
 
--- @bvt:issue#4634
 insert into t8(col10) values ('this is a char type');
 insert into t8(col10) values ('this is a varchar type');
 
@@ -247,16 +246,10 @@ select cast(col10 as char(1)) from t8;
 select cast(col10 as varchar(1)) from t8;
 
 delete from t8 where col10 is not NULL;
--- @bvt:issue
 
 -------------------------------------------
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
-
--- @bvt:issue#4655
-insert into t8(col11) values (2020-01-01);
-insert into t8(col11) values (2020-01-01 13:10:10);
--- @bvt:issue
 
 select cast(col11 as date) from t8;
 delete from t8 where col11 is not NULL;
@@ -272,15 +265,10 @@ insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 insert into t8(col11) values ('2020-01-01 13:10:59.999999');
 
--- @bvt:issue#4655
-insert into t8(col11) values (2020-01-01 13:10:59.999999);
--- @bvt:issue
-
 select cast(col11 as timestamp) from t8;
 delete from t8 where col11 is not NULL;
 
 -------------------------------------------
--- @bvt:issue#4636
 insert into t8(col12) values ('1');
 insert into t8(col12) values ('0');
 insert into t8(col12) values (1);
@@ -288,7 +276,10 @@ insert into t8(col12) values (0);
 
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
-
+insert into t8(col12) values ('true');
+insert into t8(col12) values ('trUe');
+insert into t8(col12) values ('falSe');
+select cast(col12 as bool) from t8;
 insert into t8(col12) values ('hello');
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
@@ -296,7 +287,6 @@ delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;
 delete from t8 where col12 is not NULL;
--- @bvt:issue
 
 -------------------------------------------
 

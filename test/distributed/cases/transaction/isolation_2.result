@@ -94,8 +94,9 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 commit;
 update dis_table_02 set a=90;
+Duplicate entry '90' for key 'a'
 commit;
-tae data: duplicate
+Duplicate entry '90' for key 'a'
 select * from dis_table_02;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
@@ -108,7 +109,7 @@ insert into dis_table_04 values (4);
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 drop database dis_db_01;
-ExpectedEOB
+Can't drop database 'dis_db_01'; database doesn't exist
 delete from dis_table_04 where a=4;
 select * from dis_table_04;
 a
@@ -116,7 +117,7 @@ rollback ;
 select * from dis_db_01.dis_table_04;
 SQL parser error: table "dis_table_04" does not exist
 drop database dis_db_01;
-ExpectedEOB
+Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
 begin;
 use isolation_2;
@@ -304,6 +305,7 @@ SQL parser error: table "dis_view_02" does not exist
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 insert into dis_table_02 values (2,'oooo','1802-03-20');
+Duplicate entry '2' for key 'a'
 commit;
 select * from dis_table_02;
 a    b    c
@@ -366,7 +368,7 @@ select * from dis_table_02;
 a    b    c
 1    pppp    2020-09-08 00:00:00
 start transaction ;
-tae data: duplicate
+Duplicate entry '1' for key 'a'
 update dis_table_02 set b='catttteee' where a>1;
 select * from dis_table_02;
 a    b    c
@@ -485,14 +487,14 @@ a    b    c
 3    sun    0.0
 use isolation_2;
 insert into dis_table_06 values (3,'uuubbb',12.02);
-tae data: duplicate
+Duplicate entry '3' for key 'a'
 select * from dis_table_06;
 a    b    c
 2    moon    0.0
 3    sun    0.0
 insert into dis_table_06(a,b) values (4,'cookie');
 commit;
-tae data: duplicate
+Duplicate entry '3' for key 'a'
 select * from dis_table_06;
 a    b    c
 2    moon    0.0
@@ -540,6 +542,7 @@ a    b    c    d
 insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
+Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00
@@ -551,7 +554,7 @@ a    b    c    d
 2    blue    12.0    2024-01-20 00:00:00
 1    yellow    20.09    2020-09-27 00:00:00
 commit;
-tae data: duplicate
+Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_001a001b001d'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00

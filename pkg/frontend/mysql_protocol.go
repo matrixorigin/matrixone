@@ -51,7 +51,8 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 	CLIENT_MULTI_STATEMENTS |
 	CLIENT_MULTI_RESULTS |
 	CLIENT_PLUGIN_AUTH |
-	CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+	CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
+	CLIENT_DEPRECATE_EOF
 
 // DefaultClientConnStatus default server status
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
@@ -1059,8 +1060,8 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	logutil.Debugf("server calculated %v\n", hash1)
-	logutil.Debugf("client calculated %v\n", auth)
+	logDebugf(mp.getProfile(profileTypeConcise), "server calculated %v", hash1)
+	logDebugf(mp.getProfile(profileTypeConcise), "client calculated %v", auth)
 
 	return bytes.Equal(hash1, auth)
 }
@@ -1073,21 +1074,21 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 
 	ses := mp.GetSession()
 	if !mp.GetSkipCheckUser() {
-		logutil.Debugf("authenticate user 1")
+		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
 			return err
 		}
-		logutil.Debugf("authenticate user 2")
+		logDebugf(mp.getProfile(profileTypeConcise), "authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logutil.Infof("check password succeeded\n")
+			logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
 		} else {
 			return moerr.NewInternalError("check password failed")
 		}
 	} else {
-		logutil.Debugf("skip authenticate user")
+		logDebugf(mp.getProfile(profileTypeConcise), "skip authenticate user")
 		//Get tenant info
 		tenant, err = GetTenantInfo(mp.GetUserName())
 		if err != nil {
@@ -1099,7 +1100,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logutil.Infof("check password succeeded\n")
+				logInfof(mp.getProfile(profileTypeConcise), "check password succeeded")
 			} else {
 				return moerr.NewInternalError("check password failed")
 			}
@@ -1125,7 +1126,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
-		logutil.Debugf("analyse handshake response")
+		logDebugf(mp.getProfile(profileTypeConcise), "analyse handshake response")
 		if ok2, resp41, err = mp.analyseHandshakeResponse41(payload); !ok2 {
 			return false, err
 		}
@@ -1172,7 +1173,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.database = resp320.database
 	}
 
-	logutil.Debugf("authenticate user")
+	logDebugf(mp.getProfile(profileTypeConcise), "authenticate user")
 	if err = mp.authenticateUser(authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
@@ -1184,7 +1185,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		return false, err
 	}
 
-	logutil.Debugf("handle handshake end")
+	logDebugf(mp.getProfile(profileTypeConcise), "handle handshake end")
 	err = mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return false, err
@@ -1201,7 +1202,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
 	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, serverVersion.Load().(string))
+	pos = mp.writeStringNUL(data, pos, "8.0.30-MatrixOne-v"+serverVersion.Load().(string))
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
@@ -1560,6 +1561,34 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	return data[:pos]
 }
 
+func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
+	data := make([]byte, HeaderOffset+128+len(message)+10)
+	var pos = HeaderOffset
+	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
+	pos = mp.writeIntLenEnc(data, pos, affectedRows)
+	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
+		pos = mp.io.WriteUint16(data, pos, statusFlags)
+		pos = mp.io.WriteUint16(data, pos, warnings)
+	} else if (mp.capability & CLIENT_TRANSACTIONS) != 0 {
+		pos = mp.io.WriteUint16(data, pos, statusFlags)
+	}
+
+	if mp.capability&CLIENT_SESSION_TRACK != 0 {
+		//TODO:implement it
+	} else {
+		//string<lenenc> instead of string<EOF> in the manual of mysql
+		pos = mp.writeStringLenEnc(data, pos, message)
+		return data[:pos]
+	}
+	return data[:pos]
+}
+
+func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	okPkt := mp.makeOKPayloadWithEof(affectedRows, lastInsertId, status, warnings, message)
+	return mp.writePackets(okPkt)
+}
+
 // send OK packet to the client
 func (mp *MysqlProtocolImpl) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, message)
@@ -1634,7 +1663,7 @@ func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
 func (mp *MysqlProtocolImpl) sendEOFOrOkPacket(warnings, status uint16) error {
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		return mp.sendOKPacket(0, 0, status, 0, "")
+		return mp.sendOKPacketWithEof(0, 0, status, 0, "")
 	} else {
 		return mp.sendEOFPacket(warnings, status)
 	}
@@ -1715,7 +1744,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	//int<2>              filler [00] [00]
 	pos = mp.io.WriteUint16(data, pos, 0)
 
-	if uint8(cmd) == COM_FIELD_LIST {
+	if CommandType(cmd) == COM_FIELD_LIST {
 		pos = mp.writeIntLenEnc(data, pos, uint64(len(column.DefaultValue())))
 		pos = mp.writeCountOfBytes(data, pos, column.DefaultValue())
 	}
@@ -2082,7 +2111,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 
 	binary := false
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	if cmd == int(COM_STMT_EXECUTE) {
+	if CommandType(cmd) == COM_STMT_EXECUTE {
 		binary = true
 	}
 
@@ -2179,7 +2208,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
 	if mp.enableLog {
-		logutil.Infof("openPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+		logutil.Infof("openPacket curWriteIdx %d", outbuf.GetWriteIndex())
 	}
 	return nil
 }
@@ -2187,7 +2216,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 // fill the packet with data
 func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	if mp.enableLog {
-		logutil.Infof("fillPacket len %d\n", len(elems))
+		logutil.Infof("fillPacket len %d", len(elems))
 	}
 	outbuf := mp.tcpConn.OutBuf()
 	n := len(elems)
@@ -2219,7 +2248,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		mp.bytesInOutBuffer += curLen
 		outbuf.SetWriteIndex(writeIdx)
 		if mp.enableLog {
-			logutil.Infof("fillPacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+			logutil.Infof("fillPacket curWriteIdx %d", outbuf.GetWriteIndex())
 		}
 
 		//> 16MB, split it
@@ -2251,7 +2280,7 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
 	if mp.enableLog {
-		logutil.Infof("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+		logutil.Infof("closePacket curWriteIdx %d", outbuf.GetWriteIndex())
 	}
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return moerr.NewInternalError("invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
@@ -2419,7 +2448,7 @@ func (mp *MysqlProtocolImpl) sendResultSet(set ResultSet, cmd int, warnings, sta
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacket(0, 0, status, 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, status, 0, "")
 		if err != nil {
 			return err
 		}
@@ -2578,6 +2607,8 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		},
 		SV: SV,
 	}
+
+	mysql.MakeProfile()
 
 	if SV.EnableTls {
 		mysql.capability = mysql.capability | CLIENT_SSL

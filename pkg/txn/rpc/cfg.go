@@ -50,6 +50,8 @@ type Config struct {
 	WriteBufferSize toml.ByteSize `toml:"write-buffer-size"`
 	// ReadBufferSize buffer size for read messages per connection. Default is 1kb
 	ReadBufferSize toml.ByteSize `toml:"read-buffer-size"`
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 }
 
 func (c *Config) adjust() {
@@ -88,5 +90,6 @@ func (c Config) getClientOptions(logger *zap.Logger) []morpc.ClientOption {
 		morpc.WithClientLogger(logger),
 		morpc.WithClientMaxBackendPerHost(c.MaxConnections),
 		morpc.WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration),
+		morpc.WithClientTag("txn-rpc-sender"),
 	}
 }

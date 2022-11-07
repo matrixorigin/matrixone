@@ -44,6 +44,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
+		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -174,6 +175,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
 	}
+	for idx, expr := range node.TblFuncExprList {
+		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
+	}
 
 	return newNode
 }
@@ -190,6 +194,9 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 }
 
 func DeepCopyTyp(typ *plan.Type) *plan.Type {
+	if typ == nil {
+		return nil
+	}
 	return &plan.Type{
 		Id:        typ.Id,
 		Nullable:  typ.Nullable,
@@ -577,14 +584,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: &plan.Type{
-			Id:        expr.Typ.GetId(),
-			Nullable:  expr.Typ.GetNullable(),
-			Width:     expr.Typ.GetWidth(),
-			Precision: expr.Typ.GetPrecision(),
-			Size:      expr.Typ.GetSize(),
-			Scale:     expr.Typ.GetScale(),
-		},
+		Typ: DeepCopyTyp(expr.Typ),
 	}
 
 	switch item := expr.Expr.(type) {
@@ -661,6 +661,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Col: &plan.ColRef{
 				RelPos: item.Col.GetRelPos(),
 				ColPos: item.Col.GetColPos(),
+				Name:   item.Col.GetName(),
 			},
 		}
 
@@ -704,14 +705,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
 			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:        item.T.Typ.GetId(),
-					Nullable:  item.T.Typ.GetNullable(),
-					Width:     item.T.Typ.GetWidth(),
-					Precision: item.T.Typ.GetPrecision(),
-					Size:      item.T.Typ.GetSize(),
-					Scale:     item.T.Typ.GetScale(),
-				},
+				Typ: DeepCopyTyp(item.T.Typ),
 			},
 		}
 

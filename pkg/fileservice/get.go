@@ -15,13 +15,13 @@
 package fileservice
 
 import (
-	"context"
 	"net/url"
 	"path/filepath"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -113,7 +113,6 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 	endpoint := arguments[0]
 	region := arguments[1]
-	_ = region
 	bucket := arguments[2]
 	accessKey := arguments[3]
 	accessSecret := arguments[4]
@@ -132,6 +131,8 @@ func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 	}
 	endpoint = u.String()
 
+	credentialProvider := credentials.NewStaticCredentialsProvider(accessKey, accessSecret, "")
+
 	fs, err := newS3FS(
 		"",
 		name,
@@ -141,18 +142,17 @@ func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 		0,
 		[]func(*config.LoadOptions) error{
 			config.WithCredentialsProvider(
-				aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-					return aws.Credentials{
-						AccessKeyID:     accessKey,
-						SecretAccessKey: accessSecret,
-					}, nil
-				}),
+				credentialProvider,
 			),
 		},
 		[]func(*s3.Options){
 			s3.WithEndpointResolver(
 				s3.EndpointResolverFromURL(endpoint),
 			),
+			func(opt *s3.Options) {
+				opt.Credentials = credentialProvider
+				opt.Region = region
+			},
 		},
 	)
 	if err != nil {
@@ -201,6 +201,8 @@ func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
 		},
 	)
 
+	credentialProvider := credentials.NewStaticCredentialsProvider(accessKey, accessSecret, "")
+
 	fs, err := newS3FS(
 		"",
 		name,
@@ -210,18 +212,17 @@ func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
 		0,
 		[]func(*config.LoadOptions) error{
 			config.WithCredentialsProvider(
-				aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-					return aws.Credentials{
-						AccessKeyID:     accessKey,
-						SecretAccessKey: accessSecret,
-					}, nil
-				}),
+				credentialProvider,
 			),
 		},
 		[]func(*s3.Options){
 			s3.WithEndpointResolver(
 				endpointResolver,
 			),
+			func(opt *s3.Options) {
+				opt.Credentials = credentialProvider
+				opt.Region = region
+			},
 		},
 	)
 	if err != nil {

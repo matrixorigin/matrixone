@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -76,7 +77,12 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// logutil.Info(sql)
 
-	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	var createStr string
+	if tableDef.TableType == catalog.SystemOrdinaryRel {
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+	} else if tableDef.TableType == catalog.SystemExternalRel {
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+	}
 	rowCount := 0
 	var pkDefs []string
 
@@ -86,19 +92,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default != nil {
-			if col.Default.Expr != nil {
-				originStr := col.Default.OriginString
-				if _, ok := col.Default.Expr.Expr.(*plan.Expr_C); ok {
-					if strings.ToUpper(originStr) != "NULL" && needQuoteType(types.T(col.Typ.Id)) {
-						originStr = fmt.Sprintf("'%s'", originStr)
-					}
-				}
-				nullOrNot = "DEFAULT " + originStr
-			} else if col.Default.NullAbility {
-				nullOrNot = "DEFAULT NULL"
+		// col.Default must be not nil
+		if len(col.Default.OriginString) > 0 {
+			str := col.Default.OriginString
+			if strings.ToUpper(str) != "NULL" && needQuoteType(types.T(col.Typ.Id)) && col.Default.Expr.GetC() != nil {
+				str = fmt.Sprintf("'%s'", str)
 			}
+			nullOrNot = "DEFAULT " + str
+		} else if col.Default.NullAbility {
+			nullOrNot = "DEFAULT NULL"
 		}
+
 		if col.Typ.AutoIncr {
 			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
@@ -132,10 +136,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			pkDefs = append(pkDefs, colName)
 		}
 	}
+	if tableDef.CompositePkey != nil {
+		pkDefs = append(pkDefs, util.SplitCompositePrimaryKeyColumnName(tableDef.CompositePkey.Name)...)
+	}
 	if len(pkDefs) != 0 {
 		pkStr := "PRIMARY KEY ("
-		for _, def := range pkDefs {
-			pkStr += fmt.Sprintf("`%s`", def)
+		for i, def := range pkDefs {
+			if i == len(pkDefs)-1 {
+				pkStr += fmt.Sprintf("`%s`", def)
+			} else {
+				pkStr += fmt.Sprintf("`%s`,", def)
+			}
 		}
 		pkStr += ")"
 		if rowCount != 0 {
@@ -168,6 +179,42 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += comment
 	createStr += partition
+
+	if tableDef.TableType == catalog.SystemExternalRel {
+		param := tree.ExternParam{}
+		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
+		if err != nil {
+			return nil, err
+		}
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
+
+		escapedby := ""
+		if param.Tail.Fields.EscapedBy != byte(0) {
+			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		}
+
+		line := ""
+		if param.Tail.Lines.StartingBy != "" {
+			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+		}
+		lineEnd := ""
+		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
+			lineEnd = " TERMINATED BY '\\\\n'"
+		} else {
+			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+		}
+		if len(line) > 0 {
+			line += lineEnd
+		} else {
+			line = " LINES" + lineEnd
+		}
+
+		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
+		createStr += line
+		if param.Tail.IgnoredLines > 0 {
+			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
+		}
+	}
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
 	var buf bytes.Buffer
@@ -226,7 +273,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	}
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or account_id = 0", MO_CATALOG_DB_NAME, accountId)
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where account_id = %v or (account_id = 0 and datname = '%s' )", MO_CATALOG_DB_NAME, accountId, MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -263,12 +310,13 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNoDB()
 	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	var tableType string
+	var tableType, mustShowTable string
 	if stmt.Full {
 		tableType = ", case relkind when 'v' then 'VIEW' else 'BASE TABLE' end as Table_type"
 	}
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (account_id = %v or account_id = 0)",
-		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountId)
+	mustShowTable = "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (account_id = %v or (account_id = 0 and (%s)))",
+		dbName, tableType, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns", "__mo_cpkey_unique_0_%", accountId, mustShowTable)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

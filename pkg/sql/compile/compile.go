@@ -21,11 +21,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,7 +30,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -249,7 +248,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +257,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -267,7 +266,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -300,7 +299,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -309,7 +308,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -318,7 +317,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -344,16 +343,8 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsTableFunctionValueScan(n) {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
-			bat.Vecs[0].Col = make([]int64, 1)
-		}
+		bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64}, 1)
+		bat.Vecs[0].Col = make([]int64, 1)
 		bat.InitZsOne(1)
 		ds.DataSource = &Source{Bat: bat}
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
@@ -533,13 +524,33 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 		mcpu = 1
 	}
 	ss := make([]*Scope, mcpu)
-	fileparam := &external.ExternalFileparam{}
+	param := &tree.ExternParam{}
+	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	if err != nil {
+		panic(err)
+	}
+	param.FileService = c.proc.FileService
+	fileList, err := external.ReadDir(param)
+	if err != nil {
+		panic(err)
+	}
+	cnt := len(fileList) / mcpu
+	tag := len(fileList) % mcpu
+	index := 0
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.ConstructScope()
+		var fileListTmp []string
+		if i < tag {
+			fileListTmp = fileList[index : index+cnt+1]
+			index += cnt + 1
+		} else {
+			fileListTmp = fileList[index : index+cnt]
+			index += cnt
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.External,
 			Idx: c.anal.curr,
-			Arg: constructExternal(n, c.ctx, fileparam),
+			Arg: constructExternal(n, c.ctx, fileListTmp),
 		})
 	}
 	return ss
@@ -548,7 +559,7 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	switch n.TableDef.TblFunc.Name {
 	case "unnest":
-		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
+		return c.compileUnnest(n, ss)
 	case "generate_series":
 		return c.compileGenerateSeries(n, ss)
 	default:
@@ -556,16 +567,12 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	}
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
-	externParam := &unnest.ExternalParam{}
-	if err := json.Unmarshal(dt, externParam); err != nil {
-		return nil, err
-	}
+func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, externParam),
+			Arg: constructUnnest(n, c.ctx),
 		})
 	}
 	return ss, nil
@@ -596,16 +603,68 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
 	var s *Scope
+	var tblDef *plan.TableDef
+	var ts timestamp.Timestamp
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
+	if c.proc != nil && c.proc.TxnOperator != nil {
+		ts = c.proc.TxnOperator.Txn().SnapshotTS
+	}
+	{
+		var err error
+		var cols []*plan.ColDef
+
+		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(c.ctx, n.TableDef.Name)
+		if err != nil {
+			panic(err)
+		}
+		defs, err := rel.TableDefs(c.ctx)
+		if err != nil {
+			panic(err)
+		}
+		i := int32(0)
+		name2index := make(map[string]int32)
+		for _, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				name2index[attr.Attr.Name] = i
+				cols = append(cols, &plan.ColDef{
+					Name: attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:        int32(attr.Attr.Type.Oid),
+						Width:     attr.Attr.Type.Width,
+						Size:      attr.Attr.Type.Size,
+						Precision: attr.Attr.Type.Precision,
+						Scale:     attr.Attr.Type.Scale,
+						AutoIncr:  attr.Attr.AutoIncrement,
+					},
+					Primary:  attr.Attr.Primary,
+					Default:  attr.Attr.Default,
+					OnUpdate: attr.Attr.OnUpdate,
+					Comment:  attr.Attr.Comment,
+				})
+				i++
+			}
+		}
+		tblDef = &plan.TableDef{
+			Cols:          cols,
+			Name2ColIndex: name2index,
+			Name:          n.TableDef.Name,
+		}
+	}
 	s = &Scope{
 		Magic:    Remote,
 		NodeInfo: node,
 		DataSource: &Source{
+			Timestamp:    ts,
 			Attributes:   attrs,
+			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
@@ -829,7 +888,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		}
 		limit, offset := vec1.Col.([]int64)[0], vec2.Col.([]int64)[0]
 		topN := limit + offset
-		if topN <= 8192*4 {
+		if topN <= 8192*2 {
 			// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
 			return c.compileOffset(n, c.compileTop(n, topN, ss))
 		}

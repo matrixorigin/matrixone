@@ -326,7 +326,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name
-		entries, err = fs.List(ctx, joinPath(fsName, "qux/quux/"))
+		entries, err = fs.List(ctx, JoinPath(fsName, "qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -335,7 +335,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name and / prefix and suffix
-		entries, err = fs.List(ctx, joinPath(fsName, "/qux/quux/"))
+		entries, err = fs.List(ctx, JoinPath(fsName, "/qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -433,7 +433,7 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 		vector := IOVector{
-			FilePath: joinPath(fsName, "a#b#c"),
+			FilePath: JoinPath(fsName, "a#b#c"),
 			Entries: []IOEntry{
 				{Size: 1, Data: []byte("a")},
 			},
@@ -474,9 +474,14 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader) (any, int64, error) {
+					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+						bs, err := io.ReadAll(r)
+						assert.Nil(t, err)
+						if len(data) > 0 {
+							assert.Equal(t, bs, data)
+						}
 						var m map[int]int
-						if err := gob.NewDecoder(r).Decode(&m); err != nil {
+						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
 							return nil, 0, err
 						}
 						return m, 1, nil
@@ -537,7 +542,7 @@ func testFileService(
 
 		// write
 		err := fs.Write(ctx, IOVector{
-			FilePath: joinPath(fs.Name(), "foo"),
+			FilePath: JoinPath(fs.Name(), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: 4,
@@ -562,7 +567,7 @@ func testFileService(
 
 		// read with lower named path
 		vec = IOVector{
-			FilePath: joinPath(strings.ToLower(fs.Name()), "foo"),
+			FilePath: JoinPath(strings.ToLower(fs.Name()), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: -1,
@@ -575,7 +580,7 @@ func testFileService(
 
 		// read with upper named path
 		vec = IOVector{
-			FilePath: joinPath(strings.ToUpper(fs.Name()), "foo"),
+			FilePath: JoinPath(strings.ToUpper(fs.Name()), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: -1,
@@ -587,7 +592,7 @@ func testFileService(
 		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
 
 		// bad name
-		vec.FilePath = joinPath(fs.Name()+"abc", "foo")
+		vec.FilePath = JoinPath(fs.Name()+"abc", "foo")
 		err = fs.Read(ctx, &vec)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 		err = fs.Write(ctx, vec)
@@ -610,7 +615,7 @@ func testFileService(
 			},
 		})
 		assert.Nil(t, err)
-		entries, err := fs.List(ctx, joinPath(fsName, "/path"))
+		entries, err := fs.List(ctx, JoinPath(fsName, "/path"))
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, "to", entries[0].Name)

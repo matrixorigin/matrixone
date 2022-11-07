@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/debug"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 )
@@ -1539,9 +1539,16 @@ var builtins = map[int]Functions{
 			{
 				Index:     2,
 				Volatile:  true,
-				Args:      []types.T{types.T_varchar},
+				Args:      []types.T{types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.UnixTimestampVarchar,
+				Fn:        multi.UnixTimestampVarcharToInt64,
+			},
+			{
+				Index:     3,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_decimal128},
+				ReturnTyp: types.T_decimal128,
+				Fn:        multi.UnixTimestampVarcharToDecimal128,
 			},
 		},
 	},
@@ -2412,21 +2419,21 @@ var builtins = map[int]Functions{
 			{
 				Index:     0,
 				Volatile:  true,
-				Args:      []types.T{types.T_datetime, types.T_datetime},
-				ReturnTyp: types.T_varchar,
-				Fn:        binary.TimeDiff[types.Datetime],
+				Args:      []types.T{types.T_time, types.T_time},
+				ReturnTyp: types.T_time,
+				Fn:        binary.TimeDiff[types.Time],
 			},
 			{
 				Index:     1,
 				Volatile:  true,
-				Args:      []types.T{types.T_time, types.T_time},
-				ReturnTyp: types.T_varchar,
-				Fn:        binary.TimeDiff[types.Time],
+				Args:      []types.T{types.T_datetime, types.T_datetime},
+				ReturnTyp: types.T_time,
+				Fn:        binary.TimeDiff[types.Datetime],
 			},
 		},
 	},
-	MO_DEBUG: {
-		Id:     MO_DEBUG,
+	MO_CTL: {
+		Id:     MO_CTL,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		Overloads: []Function{
@@ -2435,7 +2442,28 @@ var builtins = map[int]Functions{
 				Volatile:  true,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
-				Fn:        debug.Handler,
+				Fn:        ctl.Handler,
+			},
+		},
+	},
+	MO_SHOW_VISIBLE_BIN: {
+		Id:     MO_SHOW_VISIBLE_BIN,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Args:      []types.T{types.T_varchar, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Args:      []types.T{types.T_text, types.T_uint8},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.ShowVisibleBin,
 			},
 		},
 	},

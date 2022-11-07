@@ -227,9 +227,17 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  arg.Es.Attrs,
-				Cols:   arg.Es.Cols,
-				Extern: arg.Es.Extern,
+				Attrs:    arg.Es.Attrs,
+				Cols:     arg.Es.Cols,
+				ExprList: arg.Es.ExprList,
+				ColName:  arg.Es.ColName,
+			},
+		}
+	case *generate_series.Argument:
+		rin.Arg = &generate_series.Argument{
+			Es: &generate_series.Param{
+				Attrs:    arg.Es.Attrs,
+				ExprList: arg.Es.ExprList,
 			},
 		}
 	default:
@@ -244,23 +252,22 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	}
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*deletion.Argument, error) {
-	ctx := context.TODO()
+func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	count := len(n.DeleteTablesCtx)
 	ds := make([]*deletion.DeleteCtx, count)
 	for i := 0; i < count; i++ {
-		dbSource, err := eg.Database(ctx, n.DeleteTablesCtx[i].DbName, txnOperator)
+		dbSource, err := eg.Database(proc.Ctx, n.DeleteTablesCtx[i].DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		relation, err := dbSource.Relation(ctx, n.DeleteTablesCtx[i].TblName)
+		relation, err := dbSource.Relation(proc.Ctx, n.DeleteTablesCtx[i].TblName)
 		if err != nil {
 			return nil, err
 		}
 
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.DeleteTablesCtx[i].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
+			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
 			if err != nil {
 				return nil, err
 			}
@@ -285,19 +292,18 @@ func constructDeletion(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) 
 	}, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*insert.Argument, error) {
-	ctx := context.TODO()
-	db, err := eg.Database(ctx, n.ObjRef.SchemaName, txnOperator)
+func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
+	db, err := eg.Database(proc.Ctx, n.ObjRef.SchemaName, proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	relation, err := db.Relation(ctx, n.TableDef.Name)
+	relation, err := db.Relation(proc.Ctx, n.TableDef.Name)
 	if err != nil {
 		return nil, err
 	}
 	indexTables := make([]engine.Relation, 0)
 	for _, info := range n.TableDef.IndexInfos {
-		indexTable, err := db.Relation(ctx, info.TableName)
+		indexTable, err := db.Relation(proc.Ctx, info.TableName)
 		if err != nil {
 			return nil, err
 		}
@@ -308,7 +314,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
 		DB:            db,
-		TableID:       relation.GetTableID(ctx),
+		TableID:       relation.GetTableID(proc.Ctx),
 		DBName:        n.ObjRef.SchemaName,
 		TableName:     n.TableDef.Name,
 		CPkeyColDef:   n.TableDef.CompositePkey,
@@ -317,25 +323,24 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	}, nil
 }
 
-func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
-	ctx := context.TODO()
+func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
 	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
 	dbName := make([]string, len(n.UpdateCtxs))
 	tblName := make([]string, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
+		dbSource, err := eg.Database(proc.Ctx, updateCtx.DbName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
 		db[i] = dbSource
-		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
+		relation, err := dbSource.Relation(proc.Ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
 		}
 
-		tableID[i] = relation.GetTableID(ctx)
+		tableID[i] = relation.GetTableID(proc.Ctx)
 		dbName[i] = updateCtx.DbName
 		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
@@ -351,7 +356,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 		indexTables := make([]engine.Relation, 0)
 		for _, info := range n.TableDefVec[k].IndexInfos {
-			indexTable, err := dbSource.Relation(ctx, info.TableName)
+			indexTable, err := dbSource.Relation(proc.Ctx, info.TableName)
 			if err != nil {
 				return nil, err
 			}
@@ -390,7 +395,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 	}
 }
 
-func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.ExternalFileparam) *external.Argument {
+func constructExternal(n *plan.Node, ctx context.Context, fileList []string) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -402,20 +407,22 @@ func constructExternal(n *plan.Node, ctx context.Context, fileparam *external.Ex
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			Fileparam:     fileparam,
+			FileList:      fileList,
+			Fileparam:     new(external.ExternalFileparam),
 		},
 	}
 }
-func constructUnnest(n *plan.Node, ctx context.Context, param *unnest.ExternalParam) *unnest.Argument {
+func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
 	return &unnest.Argument{
 		Es: &unnest.Param{
-			Attrs:  attrs,
-			Cols:   n.TableDef.Cols,
-			Extern: param,
+			Attrs:    attrs,
+			Cols:     n.TableDef.Cols,
+			ExprList: n.TblFuncExprList,
+			ColName:  string(n.TableDef.TblFunc.Param),
 		},
 	}
 }
@@ -427,8 +434,8 @@ func constructGenerateSeries(n *plan.Node, ctx context.Context) *generate_series
 	}
 	return &generate_series.Argument{
 		Es: &generate_series.Param{
-			Attrs: attrs,
-			Cols:  n.TableDef.Cols,
+			Attrs:    attrs,
+			ExprList: n.TblFuncExprList,
 		},
 	}
 }

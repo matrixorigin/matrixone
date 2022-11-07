@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -111,7 +112,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	setupGlobalComponents(cfg, stopper)
 
-	fs, err := cfg.createFileService(localFileServiceName)
+	fs, err := cfg.createFileService(defines.LocalFileServiceName)
 	if err != nil {
 		return err
 	}
@@ -205,7 +206,8 @@ func startLogService(
 	fileService fileservice.FileService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService)
+	s, err := logservice.NewService(lscfg, fileService,
+		logservice.WithLogger(logutil.GetGlobalLogger().Named("log-service").With(zap.String("uuid", lscfg.UUID))))
 	if err != nil {
 		panic(err)
 	}
@@ -292,11 +294,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			metric.WithExportInterval(SV.MetricExportInterval),
 			metric.WithMultiTable(SV.MetricMultiTable))
 	}
-	if SV.MergeCycle.Duration > 0 {
-		err = export.InitCronExpr(SV.MergeCycle.Duration)
-		if err != nil {
-			return err
-		}
+	if err = export.InitMerge(SV.MergeCycle.Duration, SV.MergeMaxFileSize); err != nil {
+		return err
 	}
 	return nil
 }

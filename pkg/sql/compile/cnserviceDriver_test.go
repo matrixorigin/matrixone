@@ -102,7 +102,7 @@ func TestInstructionSerializationCover(t *testing.T) {
 		{instruction: vm.Instruction{Op: vm.Intersect, Arg: &intersect.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.IntersectAll, Arg: &intersectall.Argument{}}},
 		{instruction: vm.Instruction{Op: vm.HashBuild, Arg: &hashbuild.Argument{}}},
-		{instruction: vm.Instruction{Op: vm.Unnest, Arg: &unnest.Argument{Es: &unnest.Param{Extern: &unnest.ExternalParam{}}}}},
+		{instruction: vm.Instruction{Op: vm.Unnest, Arg: &unnest.Argument{Es: &unnest.Param{}}}},
 		{instruction: vm.Instruction{Op: vm.GenerateSeries, Arg: &generate_series.Argument{Es: &generate_series.Param{}}}},
 	}
 	{

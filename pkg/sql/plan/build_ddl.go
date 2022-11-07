@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -184,6 +185,13 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.Param != nil {
+		for i := 0; i < len(stmt.Param.S3option); i += 2 {
+			switch strings.ToLower(stmt.Param.S3option[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
+			default:
+				return nil, moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
+			}
+		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
@@ -203,8 +211,24 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				Properties: &plan.PropertiesDef{
 					Properties: properties,
 				},
+			}})
+	} else {
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemOrdinaryRel,
 			},
-		})
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: ctx.GetRootSql(),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)

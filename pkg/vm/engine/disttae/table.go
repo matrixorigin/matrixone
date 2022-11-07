@@ -92,7 +92,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
 	_, ok := tbl.db.txn.createTableMap[tbl.tableId]
-	if !ok {
+	if !ok && !tbl.updated {
 		if err := tbl.db.txn.db.Update(ctx, dnStores, tbl, tbl.db.txn.op, tbl.primaryIdx,
 			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return nil, err
@@ -105,6 +105,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 			return nil, err
 		}
 		tbl.meta = meta
+		tbl.updated = true
 	}
 	ranges := make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
@@ -255,7 +256,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 		}
 		i := rand.Int() % len(tbl.db.txn.dnStores)
 		return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i])
+			tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[i], tbl.primaryIdx)
 	}
 	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
@@ -266,7 +267,7 @@ func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
 			return err
 		}
 	}
@@ -293,7 +294,7 @@ func (tbl *table) Delete(ctx context.Context, bat *batch.Batch, name string) err
 			continue
 		}
 		if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i], tbl.primaryIdx); err != nil {
 			return err
 		}
 	}
@@ -330,11 +331,13 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     []BlockMeta{blks[i]},
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -349,19 +352,23 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	for i := 0; i < num; i++ {
 		if i == num-1 {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step:],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
 			}
 		} else {
 			rds[i] = &blockReader{
-				fs:       tbl.db.fs,
-				tableDef: tableDef,
-				ts:       ts,
-				ctx:      ctx,
-				blks:     blks[i*step : (i+1)*step],
+				fs:         tbl.db.fs,
+				tableDef:   tableDef,
+				primaryIdx: tbl.primaryIdx,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
 			}
 		}
 	}
@@ -378,7 +385,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 		}
 	*/
 	if tbl.primaryIdx >= 0 && expr != nil {
-		ok, v := getNonIntPkValueByExpr(expr, int32(tbl.primaryIdx),
+		ok, v := getPkValueByExpr(expr, int32(tbl.primaryIdx),
 			types.T(tbl.tableDef.Cols[tbl.primaryIdx].Typ.Id))
 		if ok {
 			index = memtable.Tuple{
