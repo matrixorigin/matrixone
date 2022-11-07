@@ -184,6 +184,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Output(ctr.bat)
 		proc.SetInputBatch(ctr.bat)
+		ctr.bat = nil
 		bat.Clean(proc.Mp())
 		return false, nil
 	}

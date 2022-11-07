@@ -72,8 +72,9 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			ctr.state = End
 
 		case End:
-			ap.Free(proc, false)
 			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
+			ap.Free(proc, false)
 			return true, nil
 		}
 	}

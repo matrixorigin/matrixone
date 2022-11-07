@@ -45,6 +45,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if bat.Length() == 0 {

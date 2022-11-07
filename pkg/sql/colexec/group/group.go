@@ -109,10 +109,11 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
-	ctr.cleanAggVectors(proc.Mp())
+
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
 		return false, err
 	}
+	defer ctr.cleanAggVectors(proc.Mp())
 
 	if ctr.bat == nil {
 		var err error
@@ -180,12 +181,11 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
-	ctr.cleanAggVectors(proc.Mp())
+
 	if err := ctr.evalAggVector(bat, ap.Aggs, proc); err != nil {
 		return false, err
 	}
-
-	ctr.cleanGroupVectors(proc.Mp())
+	defer ctr.cleanAggVectors(proc.Mp())
 	if len(ctr.groupVecs) == 0 {
 		ctr.vecs = make([]*vector.Vector, len(ap.Exprs))
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
