@@ -64,6 +64,8 @@ MVCC（Multiversion Concurrency Control，多版本并发控制）应用于 Matr
 
 第三种方案，是在主表中维护 Tuple 的主版本，在一个单独的数据库对比工具（Delta）存储中维护一系列 Delta 版本。这种存储在 MySQL 和 Oracle 中被称为回滚段。为了更新一个现有的 Tuple，数据库从 Delta 存储中获取一个连续的空间来创建一个新的 Delta 版本。这个 Delta 版本包含修改过的属性的原始值，而不是整个 Tuple。然后数据库直接对主表中的主版本进行原地更新（In Place Update）。
 
+![image-20221026152318567](https://github.com/matrixorigin/artwork/blob/main/docs/distributed-transaction/mvcc.jpg)
+
 ## MatrixOne 事务的流程
 
 在 MatrixOne 中，CN（Coordinator Node，协调节点）与 DN（Data Node，数据节点）是重要的参与者，一个完整的事务流程如下：
