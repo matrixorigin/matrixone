@@ -309,6 +309,6 @@ func judgeUnixTimestampReturnType(timestr string) types.T {
 	if retDecimal == 0 {
 		return types.T_int64
 	} else {
-		return types.T_float64
+		return types.T_decimal128
 	}
 }
