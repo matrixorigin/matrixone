@@ -34,6 +34,7 @@ type CheckpointEntry struct {
 	state      State
 	location   string
 	hasGCed    bool
+	gcMu       sync.RWMutex
 }
 
 func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
@@ -157,13 +158,20 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	return
 }
 func (e *CheckpointEntry) HasGC() bool {
+	e.gcMu.RLock()
+	defer e.gcMu.RUnlock()
 	return e.hasGCed
+}
+func (e *CheckpointEntry) SetGC() {
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	e.hasGCed = true
 }
 func (e *CheckpointEntry) GCMeta(fs *objectio.ObjectFS) {
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
 	err := fs.Delete(name)
 	if err == nil {
-		e.hasGCed = true
+		e.SetGC()
 	} else {
 		logutil.Warnf("GC %s failed: %v", name, err)
 	}

@@ -156,7 +156,7 @@ func getUnGCCount(r *runner) int {
 	unGCEntries := make([]*CheckpointEntry, 0)
 	entries := r.GetAllCheckpoints()
 	for _, e := range entries {
-		if !e.hasGCed {
+		if !e.HasGC() {
 			unGCEntries = append(unGCEntries, e)
 		}
 	}

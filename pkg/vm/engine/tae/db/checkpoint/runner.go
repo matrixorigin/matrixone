@@ -437,7 +437,6 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 		// 1. broadcast event
 		r.observers.OnNewCheckpoint(entry.GetEnd())
 
-		// TODO:
 		// 2. remove previous checkpoint
 		ckpEntries := r.GetAllCheckpoints()
 		for _, ckpEntry := range ckpEntries {
