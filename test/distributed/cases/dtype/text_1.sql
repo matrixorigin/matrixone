@@ -251,11 +251,6 @@ delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 
--- @bvt:issue#4655
-insert into t8(col11) values (2020-01-01);
-insert into t8(col11) values (2020-01-01 13:10:10);
--- @bvt:issue
-
 select cast(col11 as date) from t8;
 delete from t8 where col11 is not NULL;
 
@@ -269,10 +264,6 @@ delete from t8 where col11 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 insert into t8(col11) values ('2020-01-01 13:10:59.999999');
-
--- @bvt:issue#4655
-insert into t8(col11) values (2020-01-01 13:10:59.999999);
--- @bvt:issue
 
 select cast(col11 as timestamp) from t8;
 delete from t8 where col11 is not NULL;
