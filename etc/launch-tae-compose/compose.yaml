@@ -1,0 +1,80 @@
+version: '3.9'
+
+services:
+  cn:
+    container_name: cn
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-adefec5d
+    entrypoint: ["/mo-service", "-cfg", "/config/cn.toml"]
+    ports:
+      - "6001:6001"
+    restart: on-failure
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    tty: true
+    networks:
+      monet:
+        ipv4_address: 172.19.0.2
+
+  dn:
+    container_name: dn
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-adefec5d
+    entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
+    ports:
+      - "41010"
+    restart: on-failure
+    tty: true
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    networks:
+      monet:
+        ipv4_address: 172.19.0.3
+
+  logService:
+    container_name: logService
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-adefec5d
+    entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
+    ports:
+      - "32000"
+      - "32001"
+      - "32002"
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    restart: on-failure
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    tty: true    
+    networks:
+      monet:
+        ipv4_address: 172.19.0.4
+
+networks:
+  monet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16

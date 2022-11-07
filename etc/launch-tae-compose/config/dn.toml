@@ -1,0 +1,30 @@
+service-type = "DN"
+
+[dn]
+uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
+service-address = "172.19.0.3:41010"
+listen-address = "0.0.0.0:41010"
+
+[dn.Txn]
+
+[dn.Txn.Storage]
+backend = "TAE"
+log-backend = "logservice"
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "/test"
+name = "S3"
+
+[[fileservice]]
+backend = "DISK-ETL"
+data-dir = "/test"
+name = "ETL"
+
+[hakeeper-client]
+service-addresses = ["172.19.0.4:32001"]
