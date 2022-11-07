@@ -1,22 +1,22 @@
 select -1.7976931348623157E+308,-2.2250738585072014E-308,0,2.2250738585072014E-308,1.7976931348623157E+308;
--1.7976931348623157E+308	-2.2250738585072014E-308	0	2.2250738585072014E-308	1.7976931348623157E+308
--1.7976931348623157e308	-2.2250738585072014e-308	0	2.2250738585072014e-308	1.7976931348623157e308
+-1.7976931348623157e+308    -2.2250738585072014e-308    0    2.2250738585072014e-308    1.7976931348623157e+308
+-1.7976931348623157E308    -2.2250738585072014E-308    0    2.2250738585072014E-308    1.7976931348623157E308
 select 1.7976931348623158E+308,-2.2250738585072015E-308,2.2250738585072015E-308,1.7976931348623158E+308;
-1.7976931348623158E+308	-2.2250738585072015E-308	2.2250738585072015E-308	1.7976931348623158E+308
-1.7976931348623157e308	-2.2250738585072014e-308	2.2250738585072014e-308	1.7976931348623157e308
+1.7976931348623158e+308    -2.2250738585072015e-308    2.2250738585072015e-308    1.7976931348623158e+308
+1.7976931348623157E308    -2.2250738585072014E-308    2.2250738585072014E-308    1.7976931348623157E308
 select 1.7976931348623158E+308*1,-2.2250738585072015E-308+1.2250738585072015E-308;
-1.7976931348623158E+308*1	-2.2250738585072015E-308+1.2250738585072015E-308
-1.7976931348623157e308	-1e-308
+1.7976931348623158e+308 * 1    -2.2250738585072015e-308 + 1.2250738585072015e-308
+1.7976931348623157E308    -1.0E-308
 drop table if exists t1;
 create table t1 (a double not null, primary key(a));
 insert into t1 values(-1.7976931348623157E+308),(-2.2250738585072014E-308),(0),(2.2250738585072014E-308),(1.7976931348623157E+308);
 select * from t1 order by a asc;
 a
--1.7976931348623157e308
--2.2250738585072014e-308
-0
-2.2250738585072014e-308
-1.7976931348623157e308
+-1.7976931348623157E308
+-2.2250738585072014E-308
+0.0
+2.2250738585072014E-308
+1.7976931348623157E308
 delete from t1 where a>0;
 drop table if exists t1;
 create table t1(a double(53,30));
@@ -35,50 +35,50 @@ select * from t1;
 a
 -1.79769
 2.22507
-0.00000
+0.0
 2.22507
 1.79769
 drop table t1;
 create table t1(a float(34));
 show create table t1;
-Table	Create Table
-t1	CREATE TABLE `t1` (\n`a` DOUBLE DEFAULT NULL\n)
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` DOUBLE DEFAULT NULL\n)
 drop table t1;
 create table t1 ( a double not null default 1, big double(30,5) );
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
 select * from t1 order by a desc, big asc;
-a	big
-1	-1.00000
-1	12345678.90123
-1	92233720368547.77000
+a    big
+1.0    -1.0
+1.0    1.234567890123E7
+1.0    9.223372036854777E13
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big) - 1
--1.0	9.223372036854777E13	9.223372036854677E13
+min(big)    max(big)    max(big) - 1
+-1.0    9.223372036854777E13    9.223372036854677E13
 select min(big),max(big),max(big)-1 from t1 group by a order by 1+2;
-min(big)	max(big)	max(big) - 1
--1.0	9.223372036854777E13	9.223372036854677E13
+min(big)    max(big)    max(big) - 1
+-1.0    9.223372036854777E13    9.223372036854677E13
 drop table t1;
 create table t1 ( a double not null default 1, big double);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
 select * from t1;
-a	big
-1.0	-1.0
-1.0	1.2345678901234567E7
-1.0	9.223372036854777E13
+a    big
+1.0    -1.0
+1.0    1.2345678901234567E7
+1.0    9.223372036854777E13
 select * from t1 order by big limit 1,2;
-a	big
-1.0	1.2345678901234567E7
-1.0	9.223372036854777E13
+a    big
+1.0    1.2345678901234567E7
+1.0    9.223372036854777E13
 select * from t1 order by big limit 2 offset 1;
-a	big
-1.0	1.2345678901234567E7
-1.0	9.223372036854777E13
+a    big
+1.0    1.2345678901234567E7
+1.0    9.223372036854777E13
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big) - 1
--1.0	9.223372036854777E13	9.223372036854677E13
+min(big)    max(big)    max(big) - 1
+-1.0    9.223372036854777E13    9.223372036854677E13
 select min(big),max(big),max(big)+1 from t1 group by a;
-min(big)	max(big)	max(big) + 1
--1.0	9.223372036854777E13	9.223372036854877E13
+min(big)    max(big)    max(big) + 1
+-1.0    9.223372036854777E13    9.223372036854877E13
 drop table t1;
 create table t1 (id double primary key, a int);
 insert into t1 values (1.1,1);
@@ -86,11 +86,11 @@ insert into t1 values (2.22,2);
 insert into t1 values (3.333,3);
 insert into t1 values (4.4444,4);
 select * from t1 order by id desc;
-id	a
-4.4444	4
-3.333	3
-2.22	2
-1.1	1
+id    a
+4.4444    4
+3.333    3
+2.22    2
+1.1    1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -109,23 +109,23 @@ insert into t2 values(1.23456e-1, 3);
 insert into t2 values(1.23456e1, 4);
 insert into t1 values(3,5);
 select * from t1;
-a	b
-0.123456	1
-1.23456	2
-3	5
+a    b
+0.123456    1.0
+1.23456    2.0
+3.0    5.0
 select * from t2;
-a	b
-0.123456	3
-12.3456	4
+a    b
+0.123456    3
+12.3456    4
 select * from t1 join t2 on t1.a=t2.a order by 1 asc, 2 desc;
-a	b	a	b
-0.123456	1	0.123456	3
+a    b    a    b
+0.123456    1.0    0.123456    3
 select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456 order by abs(1);
-a	b	a	b
-0.123456	1	0.123456	3
+a    b    a    b
+0.123456    1.0    0.123456    3
 select * from t1 join t2 on t2.b=t1.a order by t1.a, t2.b asc;
-a	b	a	b
-3	5	0.123456	3
+a    b    a    b
+3.0    5.0    0.123456    3
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (a double);
@@ -146,69 +146,61 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 select * from t1;
-id	a	b
-1	0	NULL
-2	9223372036854776000	NULL
-3	9223372036854776000	NULL
-4	18446744073709552000	NULL
+id    a    b
+1    0.0    null
+2    9.223372036854776E18    null
+3    9.223372036854776E18    null
+4    1.8446744073709552E19    null
 UPDATE t1 SET b = a;
 select * from t1;
-id	a	b
-1	0	0
-2	9223372036854776000	9.223372036854776e18
-3	9223372036854776000	9.223372036854776e18
-4	18446744073709552000	1.844674407370955e19
+id    a    b
+1    0.0    0
+2    9.223372036854776E18    9.223372036854776E+18
+3    9.223372036854776E18    9.223372036854776E+18
+4    1.8446744073709552E19    1.8446744073709552E+19
 select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776E+18')) group by a having count(a)>1 order by count(a);
-a	count(a)
-9223372036854776000	2
+a    count(a)
+9.223372036854776E18    2
 select distinct a,b from t1 where ((a = 1.844674407370955e19) and (b != '9.223372036854776e18')) order by 1;
-a	b
+a    b
 CREATE TABLE t_double(id double(30,1));
 INSERT INTO t_double VALUES (1.19),(1.11), (2);
 SELECT id, id >= 1.1 FROM t_double;
-id	id >= 1.1
-1.2	true	
-1.1	true	
-2.0	true	
+id    id >= 1.1
+1.2    true
+1.1    true
+2.0    true
 SELECT id, 1.1 <= id FROM t_double;
-id	1.1 <= id
-1.2	true	
-1.1	true	
-2.0	true	
+id    1.1 <= id
+1.2    true
+1.1    true
+2.0    true
 SELECT id, id = 1.1 FROM t_double;
-id	id = 1.1
-1.2	false	
-1.1	true	
-2.0	false	
+id    id = 1.1
+1.2    false
+1.1    false
+2.0    false
 SELECT id, 1.1 = id FROM t_double;
-id	1.1 = id
-1.2	false	
-1.1	true	
-2.0	false	
+id    1.1 = id
+1.2    false
+1.1    false
+2.0    false
 SELECT * from t_double WHERE id = 1.1;
 id
-1.1
 SELECT * from t_double WHERE id = 1.1e0;
 id
-1.1
 SELECT * from t_double WHERE id = '1.1';
 id
-1.1
 SELECT * from t_double WHERE id = '1.1e0';
 id
-1.1
 SELECT * from t_double WHERE id IN (1.1, 2.2);
 id
-1.1
 SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
 id
-1.1
 SELECT * from t_double WHERE id IN ('1.1', '2.2');
 id
-1.1
 SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
 id
-1.1
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 id
 1.2
@@ -231,16 +223,16 @@ INSERT INTO t1 VALUES (1),(0.8999),(0.800000);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
 a
 0.8999
-0.8000
+0.8
 SELECT * FROM t1 WHERE a=0.9;
 a
 SELECT * FROM t1 WHERE a in (0.8,0.9);
 a
-0.8000
+0.8
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 a
 0.8999
-0.8000
+0.8
 drop table t1;
 create table t1 (id double, b int);
 insert into t1 values(4.571231231231233534314,1);
@@ -264,16 +256,16 @@ CREATE TABLE t1 (a double(3,2), b double(5,2) primary key);
 INSERT INTO t1 VALUES (1.00,1.0000),(1.00,2.0000);
 update t1 set a=2.00 where a=1 limit 1;
 select * from t1;
-a	b
-2.0	1.0
-1.0	2.0
+a    b
+1.0    2.0
+2.0    1.0
 INSERT INTO t1 VALUES (1,3);
 update t1 set a=2 where a=1.00;
 select * from t1;
-a	b
-2.0	1.0
-2.0	2.0
-2.0	3.0
+a    b
+2.0    1.0
+2.0    2.0
+2.0    3.0
 drop table t1;
 create table t1 (
 a double(10,5) not null,
@@ -290,79 +282,79 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 update t1 set a=a+101;
 select a,b from t1;
-a	b
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-125.0	12346
-127.0	12346
+a    b
+103.0    12346
+105.0    12346
+107.0    12346
+109.0    12346
+111.0    12346
+113.0    12346
+115.0    12346
+117.0    12346
+119.0    12346
+121.0    12346
+123.0    12346
+125.0    12346
+127.0    12346
+124.0    12346
 update t1 set a=27 where a=125;
 select a,b from t1;
-a	b
-27.0	12346
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-127.0	12346
+a    b
+103.0    12346
+105.0    12346
+107.0    12346
+109.0    12346
+111.0    12346
+113.0    12346
+115.0    12346
+117.0    12346
+119.0    12346
+121.0    12346
+123.0    12346
+127.0    12346
+124.0    12346
+27.0    12346
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
-a	b
-27.0	12346
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-127.0	12346
+a    b
+103.0    12346
+105.0    12346
+107.0    12346
+109.0    12346
+111.0    12346
+113.0    12346
+115.0    12346
+117.0    12346
+119.0    12346
+121.0    12346
+123.0    12346
+127.0    12346
+124.0    12346
+27.0    12346
 update t1 set a=a-1 where 3 > 2;
 select a,b from t1;
-a	b
-26.0	12346
-102.0	12346
-104.0	12346
-106.0	12346
-108.0	12346
-110.0	12346
-112.0	12346
-114.0	12346
-116.0	12346
-118.0	12346
-120.0	12346
-122.0	12346
-123.0	12346
-126.0	12346
+a    b
+102.0    12346
+104.0    12346
+106.0    12346
+108.0    12346
+110.0    12346
+112.0    12346
+114.0    12346
+116.0    12346
+118.0    12346
+120.0    12346
+122.0    12346
+126.0    12346
+123.0    12346
+26.0    12346
 drop table t1;
 create table t1 (a double(10,5) primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1.0	apple
-2.0	apple
+a    b
+1.0    apple
+2.0    apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -372,12 +364,12 @@ CREATE TABLE t1 (a double(3,2), b double(5,4) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 delete from t1 where a=1 limit 1;
 select * from t1;
-a	b
-1.00	2.0000
+a    b
+1.0    2.0
 INSERT INTO t1 VALUES (1,3);
 delete from t1 where a=1;
 select * from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (
 a double(10,5) not null,
@@ -394,33 +386,33 @@ primary key (a));
 insert into t1 (a) values (2.1111),(4),(00006.12311),(8.41231),(24.0000);
 delete from t1 where a=2+2.0000;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
-24.00000	12346
+a    b
+2.1111    12346
+6.12311    12346
+8.41231    12346
+24.0    12346
 delete from t1 where  a=24.0000;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+a    b
+2.1111    12346
+6.12311    12346
+8.41231    12346
 delete from t1 where  3 < 2;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+a    b
+2.1111    12346
+6.12311    12346
+8.41231    12346
 delete from t1 where  1 < 2;
 select a,b from t1;
-a	b
+a    b
 drop table t1;
 create table t1 (a double(10,5) primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1.0	apple
-2.0	apple
+a    b
+1.0    apple
+2.0    apple
 drop table if exists double_test;
 create table double_test(c1 double(6,1));
 insert into double_test values(-1.7976931348623157E+308);
