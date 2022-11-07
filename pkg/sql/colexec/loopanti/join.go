@@ -49,7 +49,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			ctr.state = Probe
 
 		case Probe:
-			var err error = nil
+			var err error
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End

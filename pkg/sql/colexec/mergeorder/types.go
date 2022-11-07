@@ -23,8 +23,7 @@ import (
 )
 
 type container struct {
-	n     int // result vector number
-	state int
+	n     int               // result vector number
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
 
