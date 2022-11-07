@@ -15,37 +15,18 @@
 package ctl
 
 import (
-	"context"
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type serviceType string
-
-var (
-	dn serviceType = "DN"
-
-	supportedServiceTypes = map[serviceType]struct{}{
-		dn: {},
-	}
-)
-
-var (
-	// register all supported debug command here
-	supportedCmds = map[string]handleFunc{
-		strings.ToUpper(pb.CmdMethod_Ping.String()):  handlePing(),
-		strings.ToUpper(pb.CmdMethod_Flush.String()): handleFlush(),
-		strings.ToUpper(pb.CmdMethod_Task.String()):  handleTask,
-	}
-)
-
-type requestSender = func(context.Context, []txn.CNOpRequest) ([]txn.CNOpResponse, error)
-
-type handleFunc func(proc *process.Process,
+func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error)
+	sender requestSender) (pb.CtlResult, error) {
+	taskservice.DebugCtlTaskFramwork(parameter == "disable")
+	return pb.CtlResult{
+		Method: pb.CmdMethod_Task.String(),
+		Data:   "OK",
+	}, nil
+}
