@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 				continue
 			}
 			return false, nil
-			
+
 		case End:
 			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
