@@ -18,15 +18,13 @@ select * from time_01;
 --invalid format
 create table time_02(t1 time);
 insert into time_02 values("200:60:60");
-insert into time_02 values("1000:59:59");
-insert into time_02 values("-1000:59:59");
+insert into time_02 values("2562047788:00:00");
+insert into time_02 values("-2562047788:00:00");
 insert into time_02 values("abc");
 insert into time_02 values("中文");
 insert into time_02 values(200);
--- @bvt:issue#6168
 insert into time_02 values("");
 select * from time_02;
--- @bvt:issue
 -- filter and expression etc
 insert into time_02 values("200:50:10");
 select '-838:59:59.0000' from time_01 limit 1;
@@ -37,7 +35,6 @@ select t1+2,t1*2,t1/2,t1%2 from time_01;
 -- @bvt:issue
 select * from time_01 where t2 is not null;
 select * from time_01 where t2 is null;
--- @bvt:issue#6168
 select t1 from time_01 where t2>"23";
 select t1 from time_01 where t1!="24:59:09.932823";
 select * from time_01 where t1="24:59:09.932823" and t2>"24:01:00";
@@ -45,7 +42,6 @@ select * from time_01 where t2 between "23" and "24:59:09.932823";
 select * from time_01 where t2 not between "23" and "24:59:09.932823";
 select * from time_01 where t2 in("838:59:59.00","4");
 select * from time_01 where t2 not in("838:59:59.00","4");
--- @bvt:issue
 select count(t1) from time_01;
 select count(t1),t2 from time_01 group by t2 order by t2;
 select min(t1),max(t2) from time_01;
@@ -53,11 +49,9 @@ drop table time_02;
 -- primary key default and compk
 create table time_02 (t1 int,t2 time primary key,t3 varchar(25))partition by hash(t2)partitions 4;
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
--- @bvt:issue#6272
 insert into time_03 values (30,"101412","yellow");
 insert into time_03 values (40,"101412","apple");
 select * from time_03;
--- @bvt:issue
 drop table time_03;
 create table time_03 (t1 int,t2 time,t3 varchar(25),t4 time default '110034',primary key(t1,t2));
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","yellow");
@@ -86,12 +80,10 @@ select t1,t2 from time_01 union select t2,t4 from time_03;
 select * from (select t1,t2 from time_01 intersect select t2,t4 from time_03) as t;
 select t1,t2 from time_01 minus select t2,t4 from time_03;
 select * from time_01 where t2 in (select t2 from time_03);
--- @bvt:issue#6168
 select * from time_01 where t1 > (select t2 from time_03 where t1 = '10:14:12');
 select t1,t2,t3 from time_01 where t1 < any(select t2 from time_03 where t1 = '10:14:12');
 select t1,t2,t3 from time_01 where t1 >= all(select t2 from time_03 where t1 = '10:14:12');
 select t1,t2,t3 from time_01 where t1 >= some(select t2 from time_03 where t1 = '10:14:12');
--- @bvt:issue
 select * from time_01 where exists(select t2 from time_03);
 select * from time_01 where not exists(select t2 from time_03);
 create view time_view_01 as select * from time_01;

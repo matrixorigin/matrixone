@@ -78,7 +78,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 	return nil
 }
 
-// TODO: how to handle overflow?
+// TODO: handle overflow
 func timeDiff[T DiffT](v1, v2 T) (types.Time, error) {
 	time := types.Time(int64(v1) - int64(v2))
 	hour, _, _, _, isNeg := time.ClockFormat()
