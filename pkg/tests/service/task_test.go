@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
@@ -75,7 +76,7 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -109,7 +110,7 @@ func TestTaskServiceCanCreate(t *testing.T) {
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -159,7 +160,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -227,7 +228,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 }
 
 func TestTaskRunner(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -281,7 +282,7 @@ func TestTaskRunner(t *testing.T) {
 }
 
 func TestCronTask(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return

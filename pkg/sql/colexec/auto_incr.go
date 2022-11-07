@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -115,7 +116,6 @@ loop:
 		step = append(step, s)
 	}
 	if err = CommitTxn(param.eg, txn, param.ctx); err != nil {
-		RolllbackTxn(param.eg, txn, param.ctx)
 		goto loop
 	}
 
@@ -440,9 +440,6 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
 		return err
 	}
 	return nil
@@ -485,9 +482,6 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, rel engine.Relatio
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
 		return err
 	}
 	return nil
@@ -543,9 +537,6 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
 		return err
 	}
 	return nil
@@ -599,9 +590,6 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
-		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-			return err2
-		}
 		return err
 	}
 	return nil
@@ -652,6 +640,9 @@ func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) er
 	)
 	defer cancel()
 	if err := eg.Commit(ctx, txn); err != nil {
+		if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+		}
 		return err
 	}
 	err := txn.Commit(ctx)
