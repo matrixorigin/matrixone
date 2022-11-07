@@ -99,10 +99,10 @@ select * from ex_table_2_18;
 create external table ex_table_2_19(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_19.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_19;
 
--- @bvt:issue#5442
+
 --覆盖字符数字中文特殊字符
 create external table ex_table_3(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select * from ex_table_3;
+select char_1,char_2,date_1,date_2 from ex_table_3;
 --增加text类型
 
 --覆盖非法值，超出范围值
@@ -116,22 +116,21 @@ create external table ex_table_3_4(char_1 char(20),char_2 varchar(10),date_1 dat
 select * from ex_table_3_4;
 create external table ex_table_3_5(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_5.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_5;
--- @bvt:issue
 
 create external table ex_table_31(clo1 tinyint default 8,clo2 smallint null,clo3 int not null,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255),primary key(clo1))infile{"filepath"='$resources/external_table_file/ex_table_3_6.csv'};
-select * from ex_table_31;
+select clo1,clo2,clo3,clo4,clo5,clo6,clo7,clo8,col9,col10,col11,col12,col13,col15,col16,col17,col18,col19,col20 from ex_table_31;
 
 create external table ex_table_4(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '\"' lines terminated by '\n';
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18 from ex_table_4;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18 from ex_table_4;
 create external table ex_table_5(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_2.csv'} fields terminated by '|' lines terminated by '\n';
-select * from ex_table_5;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18 from ex_table_5;
 create external table ex_table_6(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_3.csv'} fields terminated by '*' enclosed by '\"' lines terminated by '\n';
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_6;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_6;
 create external table ex_table_6a(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_11.csv'} fields terminated by '\t' enclosed by '\"' lines terminated by '\n';
-select clo1,clo5,clo7,col12,col13,col14,col16 from ex_table_6a;
+select clo1,clo5,clo7,col12,col13,col16 from ex_table_6a;
 
 --异常值分隔符封闭符#，\r,\n
 create external table ex_table_7(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
@@ -160,31 +159,29 @@ select * from ex_table_11;
 --缺省换行符
 create external table ex_table_12(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_9.csv'} fields terminated by ','  enclosed by '\"' ;
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_12;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_12;
 --换行符为\r
 create external table ex_table_13(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\r\n';
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_13;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_13;
 --缺省fields terminated ，terminated，ENCLOSED(默认分隔符，封闭符"")
 create external table ex_table_14(clo1 tinyint primary key,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_10.csv'};
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_14;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_14;
 --text
--- @bvt:issue#5442
 create external table ex_table_text(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.text'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select * from ex_table_text;
+select char_1,char_2,date_1,date_2 from ex_table_text;
 --log
 create external table ex_table_log(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.log'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select * from ex_table_log;
--- @bvt:issue
+select char_1,char_2,date_1,date_2 from ex_table_log;
+
 --gzip
 create external table ex_table_gzip(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='gzip'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_gzip;
 
 --bzip2
--- @bvt:issue#5442
 create external table ex_table_bzip2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2',"compression"='bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select * from ex_table_bzip2;
--- @bvt:issue
+select char_1,char_2,date_1,date_2 from ex_table_bzip2;
+
 --lz4
 create external table ex_table_lz4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_lz4.lz4',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_lz4;
@@ -200,13 +197,11 @@ select * from ex_table_auto;
 --none
 create external table ex_table_none(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255)) infile{"filepath"='$resources/external_table_file/ex_table_sep_8.csv',"compression"='none'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_none;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_none;
 
 --缺省compression
--- @bvt:issue#5442
-create external table ex_table_nocomp(char_1 char(20),char_2 varchar(10),date_1 timestamp,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
-select * from ex_table_nocomp;
--- @bvt:issue
+create external table ex_table_nocomp(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_bzip.bz2'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select char_1,char_2,date_1,date_2 from ex_table_nocomp;
 --异常：压缩格式不对应，未压缩文件
 create external table ex_table_cp1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_gzip.gz',"compression"='lz4'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_cp1;
@@ -218,13 +213,13 @@ create external table ex_table_15(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigin
 --create table table_15 as select * from ex_table_15;
 create table table_15(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255));
 insert into table_15 select * from  ex_table_15;
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from table_15;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from table_15;
 
 --drop外部表后再创建
 create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '' lines terminated by '\n';
 drop table ex_table_drop;
 create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_1.csv'} fields terminated by '|' enclosed by '' lines terminated by '\n';
-select clo1,clo5,clo7,col12,col13,col14,col16,col17,col18  from ex_table_drop;
+select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_drop;
 
 --内部表和外部表关联
 -- @bvt:issue#6171
