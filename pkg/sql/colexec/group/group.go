@@ -94,6 +94,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat)
 			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
 			return true, nil
 		}
 		proc.SetInputBatch(nil)
@@ -164,6 +165,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.bat.ExpandNulls()
 			anal.Output(ctr.bat)
 			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
 			return true, nil
 		}
 		proc.SetInputBatch(nil)
