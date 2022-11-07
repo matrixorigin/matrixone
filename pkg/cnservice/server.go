@@ -169,14 +169,20 @@ func (s *service) stopFrontend() error {
 }
 
 func (s *service) stopRPCs() error {
-	if err := s._txnClient.Close(); err != nil {
-		return err
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
 	}
-	if err := s._hakeeperClient.Close(); err != nil {
-		return err
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
 	}
-	if err := s._txnSender.Close(); err != nil {
-		return err
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
