@@ -439,6 +439,19 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 
 		// TODO:
 		// 2. remove previous checkpoint
+		ckpEntries := r.GetAllCheckpoints()
+		for _, ckpEntry := range ckpEntries {
+			if ckpEntry.start.Equal(entry.start) {
+				continue
+			}
+			if ckpEntry.HasGC() {
+				continue
+			}
+			if !ckpEntry.IsFinished() {
+				continue
+			}
+			ckpEntry.GCMeta(r.fs)
+		}
 
 		logutil.Debugf("Post %s", entry.String())
 	}

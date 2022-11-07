@@ -16,11 +16,19 @@ package checkpoint
 
 import (
 	"fmt"
+	"path"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
+)
+
+const (
+	ModuleName = "TAECHECKPOINT"
 )
 
 func TestCkpCheck(t *testing.T) {
@@ -123,4 +131,79 @@ func TestGetCheckpoints(t *testing.T) {
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;ckp3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+}
+
+func mockCheckpointEntries(count int) []*CheckpointEntry {
+	timestamps := make([]types.TS, 0)
+	for i := 0; i < count+1; i++ {
+		ts := types.BuildTS(int64(i*10), 0)
+		timestamps = append(timestamps, ts)
+	}
+	entries := make([]*CheckpointEntry, 0)
+	for i := 0; i < 5; i++ {
+		entry := &CheckpointEntry{
+			start:    timestamps[i].Next(),
+			end:      timestamps[i+1],
+			state:    ST_Finished,
+			location: fmt.Sprintf("ckp%d", i),
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func getUnGCCount(r *runner) int {
+	unGCEntries := make([]*CheckpointEntry, 0)
+	entries := r.GetAllCheckpoints()
+	for _, e := range entries {
+		if !e.hasGCed {
+			unGCEntries = append(unGCEntries, e)
+		}
+	}
+	return len(unGCEntries)
+}
+
+func TestGCMeta(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	serviceDir := path.Join(dir, "data")
+	fileserviceFs := objectio.TmpNewFileservice(serviceDir)
+	fs := objectio.NewObjectFS(fileserviceFs, serviceDir)
+	r := NewRunner(fs, nil, nil, nil, nil)
+	r.postCheckpointQueue.Start()
+	entries := mockCheckpointEntries(6)
+
+	for i := 0; i < 5; i++ {
+		entry := entries[i]
+		if i == 4 {
+			entry.state = ST_Pending
+		}
+		r.storage.entries.Set(entry)
+		if entry.state == ST_Finished {
+			r.saveCheckpoint(entry.start, entry.end)
+			r.postCheckpointQueue.Enqueue(entry)
+		}
+	}
+
+	testutils.WaitExpect(10000, func() bool {
+		return getUnGCCount(r) == 2
+	})
+	assert.Equal(t, 2, getUnGCCount(r))
+
+	dirs, err := fs.ListDir(CheckpointDir)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(dirs))
+	assert.Equal(t, blockio.EncodeCheckpointMetadataFileName(
+		CheckpointDir, PrefixMetadata, entries[3].start, entries[3].end),
+		path.Join(CheckpointDir, dirs[0].Name))
+	t.Log(dirs[0])
+
+	r.Stop()
+	r = NewRunner(fs, nil, nil, nil, nil)
+	_, err = r.Replay(nil)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 1, getUnGCCount(r))
+
+	r.Start()
+	r.Stop()
 }

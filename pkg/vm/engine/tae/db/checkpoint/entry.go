@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,6 +33,7 @@ type CheckpointEntry struct {
 	start, end types.TS
 	state      State
 	location   string
+	hasGCed    bool
 }
 
 func NewCheckpointEntry(start, end types.TS) *CheckpointEntry {
@@ -123,6 +125,10 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (err error) {
+	if c == nil {
+		logutil.Warnf("Catalog is nil")
+		return
+	}
 	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
@@ -149,4 +155,16 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 	}
 	ins, del, cnIns, err = data.GetTableData(tid)
 	return
+}
+func (e *CheckpointEntry) HasGC() bool {
+	return e.hasGCed
+}
+func (e *CheckpointEntry) GCMeta(fs *objectio.ObjectFS) {
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
+	err := fs.Delete(name)
+	if err == nil {
+		e.hasGCed = true
+	} else {
+		logutil.Warnf("GC %s failed: %v", name, err)
+	}
 }

@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"path"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,6 +42,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	if len(dirs) == 0 {
 		return
 	}
+	starts := make([]types.TS, 0)
 	metaFiles := make([]*metaFile, 0)
 	for i, dir := range dirs {
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
@@ -49,13 +51,14 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			end:   end,
 			index: i,
 		})
+		starts = append(starts, start)
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].end.Less(metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := objectio.NewObjectReader(CheckpointDir+dir.Name, r.fs.Service)
+	reader, err := objectio.NewObjectReader(path.Join(CheckpointDir, dir.Name), r.fs.Service)
 	if err != nil {
 		return
 	}
@@ -96,11 +99,18 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		metaloc := string(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		var exist bool
+		for _, metaStart := range starts {
+			if metaStart.Equal(start) {
+				exist = true
+			}
+		}
 		checkpointEntry := &CheckpointEntry{
 			start:    start,
 			end:      end,
 			location: metaloc,
 			state:    ST_Finished,
+			hasGCed:  !exist,
 		}
 		r.tryAddNewCheckpointEntry(checkpointEntry)
 		if err = checkpointEntry.Replay(r.catalog, r.fs, dataFactory); err != nil {
@@ -110,6 +120,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			maxTs = checkpointEntry.end
 		}
 	}
-	r.source.Init(maxTs)
+	if r.source != nil {
+		r.source.Init(maxTs)
+	}
 	return
 }

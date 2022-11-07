@@ -73,7 +73,7 @@ const (
 	PrefixIncremental = "incremental"
 	PrefixGlobal      = "global"
 	PrefixMetadata    = "meta"
-	CheckpointDir     = "ckp/"
+	CheckpointDir     = "ckp"
 )
 
 const (
