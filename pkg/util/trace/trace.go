@@ -43,7 +43,9 @@ var gSpanContext atomic.Value
 func init() {
 	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
-	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
+	tp := newMOTracerProvider(EnableTracer(false))
+	gTracer = tp.Tracer("default")
+	SetTracerProvider(tp)
 }
 
 var inited uint32
