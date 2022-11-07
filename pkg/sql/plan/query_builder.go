@@ -97,6 +97,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Name2ColIndex: node.TableDef.Name2ColIndex,
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
+			TableType:     node.TableDef.TableType,
+			CompositePkey: node.TableDef.CompositePkey,
+			IndexInfos:    node.TableDef.IndexInfos,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -803,8 +806,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
+	// set ctx's headings  projects  results
+	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 
-	getProjectList := func(tag int32) []*plan.Expr {
+	getProjectList := func(tag int32, thisTag int32) []*plan.Expr {
 		projectList := make([]*plan.Expr, len(firstSelectProjectNode.ProjectList))
 		for i, expr := range firstSelectProjectNode.ProjectList {
 			projectList[i] = &plan.Expr{
@@ -816,6 +821,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					},
 				},
 			}
+			builder.nameByColRef[[2]int32{thisTag, int32(i)}] = ctx.headings[i]
 		}
 		return projectList
 	}
@@ -835,7 +841,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				NodeType:    unionTypes[utIdx],
 				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
 				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(leftNodeTag),
+				ProjectList: getProjectList(leftNodeTag, lastTag),
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -855,7 +861,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			NodeType:    newUnionType[utIdx],
 			Children:    []int32{lastNodeId, newNodes[i]},
 			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(leftNodeTag),
+			ProjectList: getProjectList(leftNodeTag, lastTag),
 		}, ctx)
 	}
 
@@ -863,11 +869,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	ctx.groupTag = builder.genNewTag()
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
-	// set ctx's headings  projects  results
-	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 	for i, v := range ctx.headings {
 		ctx.aliasMap[v] = int32(i)
-		builder.nameByColRef[[2]int32{lastTag, int32(i)}] = v
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
 	for i, expr := range firstSelectProjectNode.ProjectList {

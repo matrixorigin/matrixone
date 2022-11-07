@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -49,6 +51,11 @@ func (e *txnEngine) Commit(_ context.Context, _ client.TxnOperator) error {
 
 func (e *txnEngine) Rollback(_ context.Context, _ client.TxnOperator) error {
 	return nil
+}
+
+func (e *txnEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]engine.Reader, error) {
+	return nil, nil
 }
 
 func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {

@@ -10,9 +10,7 @@ SELECT BIT_AND(ABS(-1)), BIT_OR(ABS(-1)), BIT_XOR(ABS(-1));
 SELECT BIT_AND(1 + 1), BIT_OR(1 + 1), BIT_XOR(1 + 1);
 SELECT BIT_AND(COS(0)), BIT_OR(COS(0)), BIT_XOR(COS(0));
 
--- @bvt:issue#5638
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
--- @bvt:issue
 
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(
@@ -55,9 +53,7 @@ SELECT BIT_AND(tiny + SIN(0)), BIT_XOR(int_t + TAN(0)) FROM t;
 SELECT BIT_OR(tiny + small), BIT_XOR(int_t + big) FROM t;
 SELECT BIT_XOR(tiny + SIN(0)), BIT_OR(int_t + big) FROM t;
 
--- @bvt:issue#5638
 SELECT BIT_AND(tiny + 1), BIT_OR(small - 1), BIT_XOR(int_t / 0) FROM t;
--- @bvt:issue
 
 -- JOIN
 DROP TABLE IF EXISTS t;

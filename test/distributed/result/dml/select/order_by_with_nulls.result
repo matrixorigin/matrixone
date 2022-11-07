@@ -322,7 +322,10 @@ id    name    sex
 (SELECT * FROM t1 WHERE id BETWEEN 1 AND 2 ORDER BY name)
 UNION ALL
 (SELECT * FROM t2 WHERE nation BETWEEN 'A' AND 'F' ORDER BY id DESC);
-[unknown result because it is related to issue#5370]
+id    name    sex
+2    kante    M
+1    ronaldo    F
+1    ronaldo    American
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;

@@ -60,6 +60,10 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 	panic("unimplemented")
 }
 
+func (*StorageTxnClient) Close() error {
+	return nil
+}
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta

@@ -152,6 +152,9 @@ func (s *service) Close() error {
 	if err := s.stopTask(); err != nil {
 		return err
 	}
+	if err := s.stopRPCs(); err != nil {
+		return err
+	}
 	return s.server.Close()
 }
 
@@ -162,6 +165,25 @@ func (s *service) stopFrontend() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	return nil
+}
+
+func (s *service) stopRPCs() error {
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
