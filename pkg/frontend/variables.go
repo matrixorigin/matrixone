@@ -1049,6 +1049,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("collation_connection"),
 		Default:           "default",
 	},
+	"collation_server": {
+		Name:              "collation_server",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("collation_server"),
+		Default:           "utf8mb4_bin",
+	},
+	"license": {
+		Name:              "license",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("license"),
+		Default:           "APACHE",
+	},
 	"autocommit": {
 		Name:              "autocommit",
 		Scope:             ScopeBoth,

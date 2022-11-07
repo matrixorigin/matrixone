@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,7 +31,7 @@ const (
 )
 
 func TestClusterStart(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -47,7 +48,7 @@ func TestClusterStart(t *testing.T) {
 }
 
 func TestAllocateID(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -91,7 +92,7 @@ func TestAllocateID(t *testing.T) {
 }
 
 func TestClusterAwareness(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -159,7 +160,7 @@ func TestClusterAwareness(t *testing.T) {
 }
 
 func TestClusterOperation(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -321,7 +322,7 @@ func TestClusterOperation(t *testing.T) {
 }
 
 func TestClusterState(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -453,7 +454,7 @@ func TestClusterState(t *testing.T) {
 }
 
 func TestClusterWaitState(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -534,7 +535,7 @@ func TestClusterWaitState(t *testing.T) {
 }
 
 func TestNetworkPartition(t *testing.T) {
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
