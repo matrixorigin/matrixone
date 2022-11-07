@@ -28,9 +28,11 @@ type serviceType string
 
 var (
 	dn serviceType = "DN"
+	cn serviceType = "CN"
 
 	supportedServiceTypes = map[serviceType]struct{}{
 		dn: {},
+		cn: {},
 	}
 )
 
