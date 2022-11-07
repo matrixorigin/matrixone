@@ -186,13 +186,16 @@ func (m *ScheduleCommand) LogString() string {
 		return fmt.Sprintf("%s/unknown command %v", serviceType, m)
 	}
 
-	configChangeType := map[ConfigChangeType]string{
-		AddReplica:    "Add",
-		RemoveReplica: "Remove",
-		StartReplica:  "Start",
-		StopReplica:   "Stop",
-		KillZombie:    "Kill",
-	}[m.ConfigChange.ChangeType]
+	configChangeType := "Unknown"
+	if m.ConfigChange != nil {
+		configChangeType = map[ConfigChangeType]string{
+			AddReplica:    "Add",
+			RemoveReplica: "Remove",
+			StartReplica:  "Start",
+			StopReplica:   "Stop",
+			KillZombie:    "Kill",
+		}[m.ConfigChange.ChangeType]
+	}
 
 	replica := c(m.ConfigChange.Replica.UUID)
 	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d",
