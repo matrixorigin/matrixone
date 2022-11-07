@@ -89,8 +89,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat := <-proc.Reg.MergeReceivers[1].Ch
-	ctr.bat = bat
-	ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	if bat != nil {
+		ctr.bat = bat
+		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+	}
 	return nil
 }
 
