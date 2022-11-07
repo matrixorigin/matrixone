@@ -315,7 +315,8 @@ func (l *store) propose(ctx context.Context,
 		count++
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
-			if errors.Is(err, dragonboat.ErrShardNotReady) {
+			if errors.Is(err, dragonboat.ErrShardNotReady) ||
+				errors.Is(err, dragonboat.ErrSystemBusy) {
 				l.retryWait()
 				continue
 			}
