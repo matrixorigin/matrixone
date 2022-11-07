@@ -112,12 +112,11 @@ func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	ovec := ctr.vecs[0].vec
 	var strCol []string
 
-	sels := proc.Mp().GetSels()
+	sels := make([]int64, len(bat.Zs))
 	for i := 0; i < len(bat.Zs); i++ {
 		sels[i] = int64(i)
 	}
-	defer proc.Mp().PutSels(sels)
-	
+
 	nullCnt := nulls.Length(ovec.Nsp)
 	// skip sort for all nulls
 	if nullCnt < ovec.Length() {
