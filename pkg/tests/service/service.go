@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -346,6 +347,7 @@ func (c *testCluster) Options() Options {
 
 func (c *testCluster) Close() error {
 	defer logutil.LogClose(c.logger, "tests-framework")()
+	c.logger.Info("closing testCluster")
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1322,7 +1324,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1383,7 +1385,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1393,10 +1395,12 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 
 		opt = append(opt,
 			cnservice.WithLogger(c.logger))
-		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		ctx, cancel := context.WithCancel(context.Background())
+		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
 			panic(err)
 		}
+		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",

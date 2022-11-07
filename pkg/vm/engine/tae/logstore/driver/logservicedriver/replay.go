@@ -43,6 +43,7 @@ type replayer struct {
 	safeLsn       uint64
 	nextToReadLsn uint64
 	d             *LogServiceDriver
+	appended      []uint64
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
@@ -56,6 +57,7 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 		nextToReadLsn:             truncated + 1,
 		replayedLsn:               math.MaxUint64,
 		d:                         d,
+		appended:                  make([]uint64, 0),
 	}
 }
 
@@ -152,7 +154,8 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	recordEntry.meta.metaType = TReplay
 	recordEntry.cmd = cmd
 	size := recordEntry.prepareRecord()
-	c, _ := r.d.getClient()
+	c, lsn := r.d.getClient()
+	r.appended = append(r.appended, lsn)
 	c.TryResize(size)
 	record := c.record
 	copy(record.Payload(), recordEntry.payload)

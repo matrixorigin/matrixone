@@ -138,7 +138,7 @@ insert into t1 values(null,null,null),(2,3,4),(4,5,6);
 with qn as
   (with qn2 as (select "qn2" as a from t1) select "qn", a from qn2)
 select * from qn;
--- @bvt:issue#3304
+-- @bvt:issue#3307
 SELECT (WITH qn AS (SELECT t2.a*a as a FROM t1),
         qn2 AS (SELECT 3*a AS b FROM qn)
         SELECT * from qn2 LIMIT 1)
@@ -279,13 +279,11 @@ insert into t1 values (2);
 insert into t2 values (1,7),(2,7);
 insert into t4 values (4,8),(3,8),(5,9);
 insert into t3 values (6),(7),(3);
--- @bvt:issue#3304
 with qn as (select * from t2 where t2.b=t3.a)
 select * from t3 where exists (select * from qn);
 
 with qn as (select * from t2 where t2.b=t3.a)
 select * from t3 where not exists (select * from qn);
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;

@@ -121,6 +121,9 @@ var (
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
+	// defaultMaxFileSize default: 128 MB
+	defaultMaxFileSize = 128
+
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
 
@@ -252,6 +255,9 @@ type FrontendParameters struct {
 
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
+
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize uint64 `toml:"max-message-size"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -356,6 +362,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 }
 
+func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
+	fp.MaxMessageSize = size
+}
+
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
 	fp.LogLevel = log.Level
 	fp.LogFormat = log.Format
@@ -412,6 +422,9 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
+	// MergeMaxFileSize default: 128 (MB)
+	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
+
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
 }
@@ -449,6 +462,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.PathBuilder == "" {
 		op.PathBuilder = defaultPathBuilder
+	}
+
+	if op.MergeMaxFileSize <= 0 {
+		op.MergeMaxFileSize = defaultMaxFileSize
 	}
 }
 

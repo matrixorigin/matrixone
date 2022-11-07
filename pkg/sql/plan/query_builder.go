@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -775,12 +776,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetType *plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
-				targetType = makePlan2Type(&tmpArgsType[0])
 				targetArgType = tmpArgsType[0]
 			} else {
-				targetType = makePlan2Type(&argsCastType[0])
 				targetArgType = argsCastType[0]
 			}
+			// if string union string, different length may cause error. use text type as the output
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+				targetArgType = types.T_text.ToType()
+			}
+			targetType = makePlan2Type(&targetArgType)
 
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
@@ -1014,6 +1018,28 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			ctx.cteByName[name] = &CTERef{
 				ast:        cte,
 				maskedCTEs: maskedCTEs,
+			}
+		}
+
+		// Try to do binding for CTE at declaration
+		for _, cte := range stmt.With.CTEs {
+			subCtx := NewBindContext(builder, ctx)
+			subCtx.maskedCTEs = ctx.cteByName[string(cte.Name.Alias)].maskedCTEs
+
+			var err error
+			switch stmt := cte.Stmt.(type) {
+			case *tree.Select:
+				_, err = builder.buildSelect(stmt, subCtx, false)
+
+			case *tree.ParenSelect:
+				_, err = builder.buildSelect(stmt.Select, subCtx, false)
+
+			default:
+				err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+			}
+
+			if err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -1617,10 +1643,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				if err != nil {
 					return
-				}
-
-				if subCtx.isCorrelated {
-					return 0, moerr.NewNYI("correlated column in CTE")
 				}
 
 				if subCtx.hasSingleRow {
