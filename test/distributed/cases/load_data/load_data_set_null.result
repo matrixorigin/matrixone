@@ -1,0 +1,94 @@
+drop table if exists t1;
+create table t1(
+col1 int,
+col2 varchar,
+col3 float,
+col4 date,
+col5 text
+);
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set a=nullif(col1,'1');
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col3,'1');
+load data infile "$resources/load_data/not_exists.csv" into table t1;
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col1=nullif(col1,'1');
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col2,'1');
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col3,'"1111-11-11"');
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col4=nullif(col4,'1');
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+load data infile "$resources/load_data/set_null_1.csv" into table t1 set col1=nullif(col1,1), col2=nullif(col2,1),col3=nullif(col3,1) ,col4=nullif(col4,'1111-11-11'),col5=nullif(col5,1);
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+null    null    null    null    null
+load data infile "$resources/load_data/set_null_2.csv" into table t1 set col1=nullif(col1,1), col2=nullif(col2,2),col3=nullif(col3,2) ,col4=nullif(col4,'1111-04-11'),col5=nullif(col5,5);
+select * from t1;
+col1    col2    col3    col4    col5
+1    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+null    1    1.0    1111-11-11    1
+1    null    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+1    1    1.0    1111-11-11    1
+null    null    null    null    null
+null    1    1.0    1111-11-11    1
+2    null    null    1111-02-11    2
+3    3    3.0    1111-03-11    3
+4    4    4.0    null    4
+5    5    5.0    1111-05-11    null
+6    6    6.0    1111-06-11    6
+7    7    7.0    1111-07-11    7
+8    8    8.0    1111-08-11    8
+9    9    9.0    1111-09-11    9
+10    10    10.0    1111-10-11    10
+drop table t1;
+drop table if exists t2;
+create table t2(
+col1 int primary key auto_increment,
+col2 varchar
+);
+load data infile "$resources/load_data/set_null_3.csv" into table t2 set col1=nullif(col1,'null');
+select * from t2;
+col1    col2
+1    a
+2    b
+3    c
+4    d
+5    e
+6    f
+7    g
+8    null
+delete from t2;
+insert into t2 values();
+select * from t2;
+col1    col2
+9    null
+drop table t2;
