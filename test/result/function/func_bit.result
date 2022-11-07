@@ -17,7 +17,7 @@ SELECT BIT_AND(COS(0)), BIT_OR(COS(0)), BIT_XOR(COS(0));
 BIT_AND(COS(0))    BIT_OR(COS(0))    BIT_XOR(COS(0))
 1    1    1
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
-[unknown result because it is related to issue#5638]
+Data truncation: division by zero
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(
 tiny TINYINT NOT NULL,
@@ -81,7 +81,7 @@ SELECT BIT_XOR(tiny + SIN(0)), BIT_OR(int_t + big) FROM t;
 BIT_XOR(tiny + SIN(0))    BIT_OR(int_t + big)
 1    66667
 SELECT BIT_AND(tiny + 1), BIT_OR(small - 1), BIT_XOR(int_t / 0) FROM t;
-[unknown result because it is related to issue#5638]
+Data truncation: division by zero
 DROP TABLE IF EXISTS t;
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t(

@@ -144,6 +144,48 @@ func UnixTimestampVarcharToFloat64(lv []*vector.Vector, proc *process.Process) (
 	return vec, nil
 }
 
+var (
+	Decimal128Zero = types.Decimal128_FromInt32(0)
+)
+
+func UnixTimestampVarcharToDecimal128(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inVec := lv[0]
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: 6}
+	if inVec.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
+
+	if inVec.IsScalar() {
+		tms := make([]types.Timestamp, 1)
+		rs := make([]types.Decimal128, 1)
+		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))
+		unixtimestamp.UnixTimestampToDecimal128(tms, rs)
+		if rs[0].Ge(Decimal128Zero) {
+			return vector.NewConstFixed(resultType, inVec.Length(), rs[0], proc.Mp()), nil
+		} else {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+	}
+
+	vlen := inVec.Length()
+	times := make([]types.Timestamp, vlen)
+	for i := 0; i < vlen; i++ {
+		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(int64(i)))
+	}
+	vec, err := proc.AllocVectorOfRows(resultType, int64(vlen), inVec.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Decimal128](vec)
+	unixtimestamp.UnixTimestampToDecimal128(times, rs)
+	for i, r := range rs {
+		if r.Lt(Decimal128Zero) {
+			nulls.Add(vec.Nsp, uint64(i))
+		}
+	}
+	return vec, nil
+}
+
 func MustTimestamp(loc *time.Location, s string) types.Timestamp {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {

@@ -24,6 +24,7 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 import "plan.proto";
+import "timestamp.proto";
 
 message Message {
   uint64  sid = 1;
@@ -212,6 +213,8 @@ message Source {
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
   plan.Expr  expr = 7;
+  plan.TableDef tableDef = 8;
+  timestamp.Timestamp timestamp = 9;
 }
 
 message NodeInfo {
