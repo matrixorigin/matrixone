@@ -15,22 +15,17 @@
 package taskservice
 
 import (
-	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// TODO: refactor to use Export function
-var (
-	disableTaskFramework atomic.Value // bool
-)
+func TestDisableTaskFramework(t *testing.T) {
+	assert.False(t, taskFrameworkDisabled())
 
-// DebugCtlTaskFramwork disable task framework
-func DebugCtlTaskFramwork(disable bool) {
-	disableTaskFramework.Store(disable)
-}
+	DebugCtlTaskFramwork(true)
+	assert.True(t, taskFrameworkDisabled())
 
-func taskFrameworkDisabled() bool {
-	if v := disableTaskFramework.Load(); v != nil {
-		return v.(bool)
-	}
-	return false
+	DebugCtlTaskFramwork(false)
+	assert.False(t, taskFrameworkDisabled())
 }
