@@ -52,7 +52,11 @@ type compactBlockTask struct {
 	deletes   *roaring.Bitmap
 }
 
-func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
+func NewCompactBlockTask(
+	ctx *tasks.Context,
+	txn txnif.AsyncTxn,
+	meta *catalog.BlockEntry,
+	scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
 		txn:       txn,
 		meta:      meta,

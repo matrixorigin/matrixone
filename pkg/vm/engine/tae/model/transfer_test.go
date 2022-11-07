@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnimpl
+package model
 
 import (
 	"testing"
@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,10 +31,10 @@ func TestTransferPage(t *testing.T) {
 	dest := common.ID{
 		BlockID: 2,
 	}
-	prefix := model.EncodeBlockKeyPrefix(0, dest.BlockID)
+	prefix := EncodeBlockKeyPrefix(0, dest.BlockID)
 	offsets1 := NewRowIDVector()
 	for i := 0; i < 10; i++ {
-		rowID := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
 		offsets1.Append(rowID)
 	}
 	offsets2 := offsets1.CloneWindow(0, offsets1.Length())
@@ -58,7 +57,7 @@ func TestTransferPage(t *testing.T) {
 	assert.True(t, memo2.TTL(now.Add(ttl+time.Duration(1)), ttl))
 
 	rowId1 := memo2.TransferOne(1)
-	_, blockId, offset := model.DecodePhyAddrKey(rowId1)
+	_, blockId, offset := DecodePhyAddrKey(rowId1)
 	assert.Equal(t, dest.BlockID, blockId)
 	assert.Equal(t, uint32(1), offset)
 
@@ -67,7 +66,7 @@ func TestTransferPage(t *testing.T) {
 		rowidVec := memo2.TransferMany(srcOffs...)
 		assert.Equal(t, 5, rowidVec.Length())
 		rowidVec.Foreach(func(v any, row int) (err error) {
-			_, blockId, offset := model.DecodePhyAddrKey(v.(types.Rowid))
+			_, blockId, offset := DecodePhyAddrKey(v.(types.Rowid))
 			assert.Equal(t, dest.BlockID, blockId)
 			assert.Equal(t, srcOffs[row], offset)
 			return
@@ -83,10 +82,10 @@ func TestTransferTable(t *testing.T) {
 	id1 := common.ID{BlockID: 1}
 	id2 := common.ID{BlockID: 2}
 
-	prefix := model.EncodeBlockKeyPrefix(id2.SegmentID, id2.BlockID)
+	prefix := EncodeBlockKeyPrefix(id2.SegmentID, id2.BlockID)
 	rowIDS := NewRowIDVector()
 	for i := 0; i < 10; i++ {
-		rowID := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
 		rowIDS.Append(rowID)
 	}
 
