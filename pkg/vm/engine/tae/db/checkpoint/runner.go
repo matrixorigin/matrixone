@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,19 +192,6 @@ type runner struct {
 	onceStop  sync.Once
 }
 
-func MockRunner(fs *objectio.ObjectFS, c *catalog.Catalog) *runner {
-	r := &runner{
-		fs:      fs,
-		catalog: c,
-	}
-	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
-	return r
-}
-
 func NewRunner(
 	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
@@ -220,7 +208,7 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.start.Less(b.start)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -301,9 +289,7 @@ func (r *runner) onCheckpointEntries(items ...any) {
 }
 func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
-	r.storage.RLock()
-	entries := r.storage.entries.Items()
-	r.storage.RUnlock()
+	entries := r.GetAllCheckpoints()
 	for _, entry := range entries {
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start)
 		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end)
@@ -311,11 +297,11 @@ func (r *runner) collectCheckpointMetadata() *containers.Batch {
 	}
 	return bat
 }
-func (r *runner) GetEntries() []*CheckpointEntry {
-	r.storage.RLock()
-	entries := r.storage.entries.Items()
-	r.storage.RUnlock()
-	return entries
+func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
+	r.storage.Lock()
+	snapshot := r.storage.entries.Copy()
+	r.storage.Unlock()
+	return snapshot.Items()
 }
 func (r *runner) MaxLSN() uint64 {
 	endTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
@@ -738,4 +724,76 @@ func (r *runner) Stop() {
 		r.postCheckpointQueue.Stop()
 		r.waitQueue.Stop()
 	})
+}
+
+func (r *runner) CollectCheckpointsInRange(start, end types.TS) (locations string, checkpointed types.TS) {
+	r.storage.Lock()
+	tree := r.storage.entries.Copy()
+	r.storage.Unlock()
+	locs := make([]string, 0)
+	pivot := NewCheckpointEntry(start, end)
+
+	// For debug
+	// checkpoints := make([]*CheckpointEntry, 0)
+	// defer func() {
+	// 	items := tree.Items()
+	// 	logutil.Infof("CollectCheckpointsInRange: Pivot: %s", pivot.String())
+	// 	for i, item := range items {
+	// 		logutil.Infof("CollectCheckpointsInRange: Source[%d]: %s", i, item.String())
+	// 	}
+	// 	for i, ckp := range checkpoints {
+	// 		logutil.Infof("CollectCheckpointsInRange: Found[%d]:%s", i, ckp.String())
+	// 	}
+	// 	logutil.Infof("CollectCheckpointsInRange: Checkpointed=%s", checkpointed.ToString())
+	// }()
+
+	iter := tree.Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(pivot); ok {
+		if ok = iter.Prev(); ok {
+			e := iter.Item()
+			if !e.IsCommitted() {
+				return
+			}
+			if e.HasOverlap(start, end) {
+				locs = append(locs, e.GetLocation())
+				checkpointed = e.GetEnd()
+				// checkpoints = append(checkpoints, e)
+			}
+			iter.Next()
+		}
+		for {
+			e := iter.Item()
+			if !e.IsCommitted() || !e.HasOverlap(start, end) {
+				break
+			}
+			locs = append(locs, e.GetLocation())
+			checkpointed = e.GetEnd()
+			// checkpoints = append(checkpoints, e)
+			if ok = iter.Next(); !ok {
+				break
+			}
+		}
+	} else {
+		// if it is empty, quick quit
+		if ok = iter.Last(); !ok {
+			return
+		}
+		// get last entry
+		e := iter.Item()
+		// if it is committed and visible, quick quit
+		if !e.IsCommitted() || !e.HasOverlap(start, end) {
+			return
+		}
+		locs = append(locs, e.GetLocation())
+		checkpointed = e.GetEnd()
+		// checkpoints = append(checkpoints, e)
+	}
+
+	if len(locs) == 0 {
+		return
+	}
+	locations = strings.Join(locs, ";")
+	return
 }

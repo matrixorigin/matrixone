@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -55,17 +56,17 @@ func NewReader(cxt context.Context, fs *objectio.ObjectFS, key string) (*Reader,
 	}, nil
 }
 
-func NewCheckpointReader(fs *objectio.ObjectFS, key string) (*Reader, error) {
+func NewCheckpointReader(fs fileservice.FileService, key string) (*Reader, error) {
 	name, locs, err := DecodeMetaLocToMetas(key)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := objectio.NewObjectReader(name, fs.Service)
+	reader, err := objectio.NewObjectReader(name, fs)
 	if err != nil {
 		return nil, err
 	}
 	return &Reader{
-		fs:     fs,
+		fs:     objectio.NewObjectFS(fs, ""),
 		reader: reader,
 		key:    key,
 		name:   name,
