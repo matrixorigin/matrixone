@@ -18,13 +18,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTransferMemo(t *testing.T) {
+func TestTransferPage(t *testing.T) {
 	src := common.ID{
 		BlockID: 1,
 	}
@@ -72,4 +73,42 @@ func TestTransferMemo(t *testing.T) {
 			return
 		}, nil)
 	}
+}
+
+func TestTransferTable(t *testing.T) {
+	ttl := time.Minute
+	table := NewTransferTable(ttl)
+	defer table.Close()
+
+	id1 := common.ID{BlockID: 1}
+	id2 := common.ID{BlockID: 2}
+
+	prefix := model.EncodeBlockKeyPrefix(id2.SegmentID, id2.BlockID)
+	rowIDS := NewRowIDVector()
+	for i := 0; i < 10; i++ {
+		rowID := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		rowIDS.Append(rowID)
+	}
+
+	now := time.Now()
+	page1 := NewTransferPage(now, &id1, &id2, rowIDS)
+	assert.False(t, table.AddPage(page1))
+	assert.True(t, table.AddPage(page1))
+	assert.Equal(t, int64(1), page1.RefCount())
+
+	pinned, err := table.Pin(id2)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	pinned, err = table.Pin(id1)
+	assert.NoError(t, err)
+
+	assert.Equal(t, int64(2), pinned.Item().RefCount())
+
+	table.RunTTL(now.Add(ttl - time.Duration(1)))
+	assert.Equal(t, 1, table.Len())
+	table.RunTTL(now.Add(ttl + time.Duration(1)))
+	assert.Equal(t, 0, table.Len())
+
+	assert.Equal(t, int64(1), pinned.Item().RefCount())
+	pinned.Close()
+	assert.Equal(t, int64(0), pinned.Item().RefCount())
 }

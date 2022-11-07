@@ -57,6 +57,22 @@ func NewTransferTable(ttl time.Duration) *TransferTable {
 	}
 }
 
+func (table *TransferTable) Pin(id common.ID) (pinned *PinnedItem[*TransferPage], err error) {
+	table.RLock()
+	defer table.RUnlock()
+	var found bool
+	if pinned, found = table.pages[id]; !found {
+		err = moerr.GetOkExpectedEOB()
+	} else {
+		pinned = pinned.Item().Pin()
+	}
+	return
+}
+func (table *TransferTable) Len() int {
+	table.RLock()
+	defer table.RUnlock()
+	return len(table.pages)
+}
 func (table *TransferTable) prepareTTL(now time.Time) (items []*PinnedItem[*TransferPage]) {
 	table.RLock()
 	defer table.RUnlock()
@@ -87,7 +103,7 @@ func (table *TransferTable) RunTTL(now time.Time) {
 	table.executeTTL(items)
 }
 
-func (table *TransferTable) TryAddMemo(page *TransferPage) (dup bool) {
+func (table *TransferTable) AddPage(page *TransferPage) (dup bool) {
 	pinned := page.Pin()
 	defer func() {
 		if dup {
