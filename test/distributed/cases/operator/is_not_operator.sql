@@ -59,10 +59,8 @@ SELECT -1 IS TRUE;
 SELECT 0 IS TRUE;
 SELECT -1 IS TRUE;
 SELECT 1 IS TRUE;
--- @bvt:issue#5113
 SELECT 2 IS TRUE;
 SELECT -2 IS TRUE;
--- @bvt:issue
 SELECT * FROM is_test WHERE big IS TRUE;
 SELECT small_un FROM is_test WHERE small_un IS TRUE;
 SELECT float_32, float_64 FROM is_test WHERE float_32 > 0 IS FALSE;
