@@ -26,20 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type PinnedItem[T common.IRef] struct {
-	Val T
-}
-
-func (item *PinnedItem[T]) Close() {
-	item.Val.Unref()
-}
-
-func (item *PinnedItem[T]) Item() T { return item.Val }
-
 type TransferTable struct {
 	sync.RWMutex
 	ttl   time.Duration
-	pages map[common.ID]*PinnedItem[*TransferPage]
+	pages map[common.ID]*common.PinnedItem[*TransferPage]
 }
 
 type TransferPage struct {
@@ -53,11 +43,11 @@ type TransferPage struct {
 func NewTransferTable(ttl time.Duration) *TransferTable {
 	return &TransferTable{
 		ttl:   ttl,
-		pages: make(map[common.ID]*PinnedItem[*TransferPage]),
+		pages: make(map[common.ID]*common.PinnedItem[*TransferPage]),
 	}
 }
 
-func (table *TransferTable) Pin(id common.ID) (pinned *PinnedItem[*TransferPage], err error) {
+func (table *TransferTable) Pin(id common.ID) (pinned *common.PinnedItem[*TransferPage], err error) {
 	table.RLock()
 	defer table.RUnlock()
 	var found bool
@@ -73,7 +63,7 @@ func (table *TransferTable) Len() int {
 	defer table.RUnlock()
 	return len(table.pages)
 }
-func (table *TransferTable) prepareTTL(now time.Time) (items []*PinnedItem[*TransferPage]) {
+func (table *TransferTable) prepareTTL(now time.Time) (items []*common.PinnedItem[*TransferPage]) {
 	table.RLock()
 	defer table.RUnlock()
 	for _, page := range table.pages {
@@ -84,7 +74,7 @@ func (table *TransferTable) prepareTTL(now time.Time) (items []*PinnedItem[*Tran
 	return
 }
 
-func (table *TransferTable) executeTTL(items []*PinnedItem[*TransferPage]) {
+func (table *TransferTable) executeTTL(items []*common.PinnedItem[*TransferPage]) {
 	if len(items) == 0 {
 		return
 	}
@@ -127,7 +117,7 @@ func (table *TransferTable) Close() {
 	for _, item := range table.pages {
 		item.Close()
 	}
-	table.pages = make(map[common.ID]*PinnedItem[*TransferPage])
+	table.pages = make(map[common.ID]*common.PinnedItem[*TransferPage])
 }
 
 func NewRowIDVector() containers.Vector {
@@ -179,9 +169,9 @@ func (page *TransferPage) String() string {
 		page.offsets.Length())
 }
 
-func (page *TransferPage) Pin() *PinnedItem[*TransferPage] {
+func (page *TransferPage) Pin() *common.PinnedItem[*TransferPage] {
 	page.Ref()
-	return &PinnedItem[*TransferPage]{
+	return &common.PinnedItem[*TransferPage]{
 		Val: page,
 	}
 }

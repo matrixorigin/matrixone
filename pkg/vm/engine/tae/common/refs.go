@@ -18,6 +18,16 @@ import (
 	"sync/atomic"
 )
 
+type PinnedItem[T IRef] struct {
+	Val T
+}
+
+func (item *PinnedItem[T]) Close() {
+	item.Val.Unref()
+}
+
+func (item *PinnedItem[T]) Item() T { return item.Val }
+
 // IRef is the general representation of the resources
 // that should be managed with a reference count.
 // Once the reference count reached 0, the OnZeroCB
