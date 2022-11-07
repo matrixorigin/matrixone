@@ -43,6 +43,7 @@
 - 在显式事务中，DML 与 DDL 可以同时存在，但是如果的出现 DDL 会影响到 DML 的结果，例如 `drop table` 或者 `alter table`，该 DDL 会被判定失败并报错，事务中未受影响的语句正常提交或回滚。
 - 显式事务中，无法嵌套其他显式事务，例如 `START TANSACTIONS` 之后再遇到 `START TANSACTIONS`，两个 `START TANSACTIONS` 之间的所有语句都会强制提交，无论 `AUTOCOMMIT` 的值是 1 或 0。
 - 显式事务中，只能包含 DML 与 DDL，不能带有修改参数配置或管理命令，如 `set [parameter] = [value]`， `create user` 等等。
+- 显式事务中，如果某一条语句发生错误，为确保事务的原子性，单条语句的错误会强制让整个事务回滚。
 
 ### 隐式事务规则
 
