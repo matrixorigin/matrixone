@@ -1,0 +1,36 @@
+SET @val = CAST(0 AS UNSIGNED);
+select @val;
+@val
+0
+SET @val = CAST(0 AS bool);
+select @val;
+@val
+false
+SET @val = CAST(0 AS varchar);
+select @val;
+@val
+0
+SET @val = CAST(0 AS char);
+select @val;
+@val
+0
+SET @val = CAST("2022-10-10" AS date);
+[unknown result because it is related to issue#6328]
+select @val;
+[unknown result because it is related to issue#6328]
+SET @val = CAST("2022-10-10" AS datetime);
+[unknown result because it is related to issue#6328]
+select @val;
+[unknown result because it is related to issue#6328]
+SET @val = CAST("2022-10-10" AS timestamp);
+[unknown result because it is related to issue#6328]
+select @val;
+[unknown result because it is related to issue#6328]
+SET @val = CAST('0' AS text);
+select @val;
+@val
+0
+SET @val = CAST('0' AS blob);
+select @val;
+@val
+0
