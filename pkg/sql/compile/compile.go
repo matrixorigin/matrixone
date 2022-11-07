@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -602,16 +603,68 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
 	var s *Scope
+	var tblDef *plan.TableDef
+	var ts timestamp.Timestamp
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
+	if c.proc != nil && c.proc.TxnOperator != nil {
+		ts = c.proc.TxnOperator.Txn().SnapshotTS
+	}
+	{
+		var err error
+		var cols []*plan.ColDef
+
+		db, err := c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(c.ctx, n.TableDef.Name)
+		if err != nil {
+			panic(err)
+		}
+		defs, err := rel.TableDefs(c.ctx)
+		if err != nil {
+			panic(err)
+		}
+		i := int32(0)
+		name2index := make(map[string]int32)
+		for _, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				name2index[attr.Attr.Name] = i
+				cols = append(cols, &plan.ColDef{
+					Name: attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:        int32(attr.Attr.Type.Oid),
+						Width:     attr.Attr.Type.Width,
+						Size:      attr.Attr.Type.Size,
+						Precision: attr.Attr.Type.Precision,
+						Scale:     attr.Attr.Type.Scale,
+						AutoIncr:  attr.Attr.AutoIncrement,
+					},
+					Primary:  attr.Attr.Primary,
+					Default:  attr.Attr.Default,
+					OnUpdate: attr.Attr.OnUpdate,
+					Comment:  attr.Attr.Comment,
+				})
+				i++
+			}
+		}
+		tblDef = &plan.TableDef{
+			Cols:          cols,
+			Name2ColIndex: name2index,
+			Name:          n.TableDef.Name,
+		}
+	}
 	s = &Scope{
 		Magic:    Remote,
 		NodeInfo: node,
 		DataSource: &Source{
+			Timestamp:    ts,
 			Attributes:   attrs,
+			TableDef:     tblDef,
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
 			Expr:         colexec.RewriteFilterExprList(n.FilterList),
