@@ -1,11 +1,6 @@
 # Launch-tae-CN-tae-dn with docker-compose
 
-## minio as s3 service
-
-[localhost:9001](localhost:9001)
-
-username: minio
-password: minio123
+- docker compose version >= v2.12.1
 
 ## build and up 
 
@@ -34,6 +29,13 @@ docker compose -f etc/launch-tae-compose/compose.yaml logs dn
 # logService
 docker compose -f etc/launch-tae-compose/compose.yaml logs logService
 ```
+
+## minio as s3 service
+
+[localhost:9001](localhost:9001)
+
+username: minio
+password: minio123
 
 ## down
 

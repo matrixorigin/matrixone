@@ -33,7 +33,7 @@ key-prefix = "server/etl"
 statusPort = 7001
 
 [hakeeper-client]
-discovery-address = "179.19.0.4:32001"
+service-addresses = ["179.19.0.4:32001"]
 
 [logservice]
 deployment-id = 1
