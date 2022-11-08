@@ -12,6 +12,7 @@ import (
 	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -613,6 +614,21 @@ func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
 func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockEngine)(nil).New), ctx, op)
+}
+
+// NewBlockReader mocks base method.
+func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, ranges, tblDef)
+	ret0, _ := ret[0].([]engine.Reader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// NewBlockReader indicates an expected call of NewBlockReader.
+func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, ranges, tblDef interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockReader", reflect.TypeOf((*MockEngine)(nil).NewBlockReader), ctx, num, ts, expr, ranges, tblDef)
 }
 
 // Nodes mocks base method.
