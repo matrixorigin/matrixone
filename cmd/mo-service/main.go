@@ -102,7 +102,7 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 	stopper.Stop()
 	if cnProxy != nil {
 		if err := cnProxy.Stop(); err != nil {
-			logutil.GetGlobalLogger().Error("shutdown cn proxt failed", zap.Error(err))
+			logutil.GetGlobalLogger().Error("shutdown cn proxy failed", zap.Error(err))
 		}
 	}
 }
