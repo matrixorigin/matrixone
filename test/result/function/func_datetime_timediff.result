@@ -153,3 +153,22 @@ timediff(-838:59:59, -1122)
 select timediff('12:00:00','24:59:09');
 timediff(12:00:00, 24:59:09)
 -12:59:09
+drop table if exists  time_01;
+create table time_01(t1 time,t2 time,t3 time);
+insert into time_01 values("-838:59:59.0000","838:59:59.00","22:00:00");
+insert into time_01 values("0:00:00.0000","0","0:00");
+insert into time_01 values(null,NULL,null);
+insert into time_01 values("23","1122","-1122");
+insert into time_01 values("101412","4","-101219");
+insert into time_01 values("24:59:09.932823","24:02:00.93282332424","24:20:34.00000000");
+insert into time_01 values("2022-09-08 12:00:01","019","23403");
+select timediff(t1,t2) from time_01;
+timediff(t1, t2)
+-838:59:59
+00:00:00
+null
+00:10:59
+10:14:08
+00:57:09
+11:59:42
+drop table time_01;

@@ -15,23 +15,16 @@
 package timediff
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type DiffT interface {
 	types.Time | types.Datetime
 }
 
-func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, vectorLen int) error {
+func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time) error {
 	if len(v1) == 1 && len(v2) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(0)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[0], v2[0])
 			if err != nil {
 				return err
@@ -39,11 +32,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[0] = res
 		}
 	} else if len(v1) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(0)) || nulls.Contains(v2N, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[0], v2[i])
 			if err != nil {
 				return err
@@ -51,11 +40,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[i] = res
 		}
 	} else if len(v2) == 1 {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(0)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[i], v2[0])
 			if err != nil {
 				return err
@@ -63,11 +48,7 @@ func TimeDiffWithTimeFn[T DiffT](v1, v2 []T, rs []types.Time, v1N, v2N *nulls.Nu
 			rs[i] = res
 		}
 	} else {
-		for i := 0; i < vectorLen; i++ {
-			if nulls.Contains(v1N, uint64(i)) || nulls.Contains(v2N, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(0))
-				continue
-			}
+		for i := 0; i < len(rs); i++ {
 			res, err := timeDiff(v1[i], v2[i])
 			if err != nil {
 				return err
