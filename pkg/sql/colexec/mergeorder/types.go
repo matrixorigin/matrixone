@@ -15,20 +15,15 @@
 package mergeorder
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
-const (
-	Build = iota
-	Eval
-	End
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
-	n     int // result vector number
-	state int
+	n     int               // result vector number
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
 
@@ -38,4 +33,19 @@ type container struct {
 type Argument struct {
 	ctr *container          // ctr stores the attributes needn't do Serialization work
 	Fs  []*plan.OrderBySpec // Fields store the order information
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		mp := proc.Mp()
+		ctr.cleanBatch(mp)
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
 }
