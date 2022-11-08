@@ -1,6 +1,6 @@
 SELECT @@session.autocommit;
 @@autocommit
-on
+1
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;
 @@autocommit
