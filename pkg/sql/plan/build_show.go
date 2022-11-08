@@ -94,11 +94,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		// col.Default must be not nil
 		if len(col.Default.OriginString) > 0 {
-			str := col.Default.OriginString
-			if strings.ToUpper(str) != "NULL" && needQuoteType(types.T(col.Typ.Id)) && col.Default.Expr.GetC() != nil {
-				str = fmt.Sprintf("'%s'", str)
-			}
-			nullOrNot = "DEFAULT " + str
+			nullOrNot = "DEFAULT " + col.Default.OriginString
 		} else if col.Default.NullAbility {
 			nullOrNot = "DEFAULT NULL"
 		}

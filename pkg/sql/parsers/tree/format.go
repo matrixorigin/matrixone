@@ -26,7 +26,8 @@ type FmtCtx struct {
 	*strings.Builder
 	dialectType dialect.DialectType
 	// quoteString string
-	quoteString bool
+	quoteString       bool
+	singleQuoteString bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -49,6 +50,11 @@ func (f FmtCtxOption) Apply(ctx *FmtCtx) {
 func WithQuoteString(quote bool) FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteString = quote
+	})
+}
+func WithSingleQuoteString() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.singleQuoteString = true
 	})
 }
 
@@ -90,6 +96,9 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		default:
 			return ctx.WriteString(v)
 		}
+	}
+	if ctx.singleQuoteString && t == P_char {
+		return ctx.WriteString(fmt.Sprintf("'%s'", v))
 	}
 	return ctx.WriteString(v)
 }
