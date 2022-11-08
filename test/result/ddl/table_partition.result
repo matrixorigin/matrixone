@@ -63,7 +63,7 @@ PARTITION p3 VALUES LESS THAN (21)
 );
 show create table tp13;
 Table    Create Table
-tp13    CREATE TABLE `tp13` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30) DEFAULT NULL,\n`lname` VARCHAR(30) DEFAULT NULL,\n`hired` DATE DEFAULT 1970-01-01,\n`separated` DATE DEFAULT 9999-12-31,\n`job_code` INT NOT NULL,\n`store_id` INT NOT NULL,\nPRIMARY KEY (`id`)\n) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))
+tp13    CREATE TABLE `tp13` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30) DEFAULT NULL,\n`lname` VARCHAR(30) DEFAULT NULL,\n`hired` DATE DEFAULT '1970-01-01',\n`separated` DATE DEFAULT '9999-12-31',\n`job_code` INT NOT NULL,\n`store_id` INT NOT NULL,\nPRIMARY KEY (`id`)\n) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))
 CREATE TABLE tp14 (
 id INT NOT NULL,
 fname VARCHAR(30),
@@ -81,7 +81,7 @@ PARTITION p3 VALUES LESS THAN MAXVALUE
 );
 show create table tp14;
 Table    Create Table
-tp14    CREATE TABLE `tp14` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30) DEFAULT NULL,\n`lname` VARCHAR(30) DEFAULT NULL,\n`hired` DATE DEFAULT 1970-01-01,\n`separated` DATE DEFAULT 9999-12-31,\n`job_code` INT DEFAULT NULL,\n`store_id` INT DEFAULT NULL\n) partition by range(year(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))
+tp14    CREATE TABLE `tp14` (\n`id` INT NOT NULL,\n`fname` VARCHAR(30) DEFAULT NULL,\n`lname` VARCHAR(30) DEFAULT NULL,\n`hired` DATE DEFAULT '1970-01-01',\n`separated` DATE DEFAULT '9999-12-31',\n`job_code` INT DEFAULT NULL,\n`store_id` INT DEFAULT NULL\n) partition by range(year(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))
 CREATE TABLE tp15 (
 a INT NOT NULL,
 b INT NOT NULL
