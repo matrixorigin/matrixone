@@ -1199,9 +1199,15 @@ func TestReplay10(t *testing.T) {
 		NullAbility: false,
 		Expr:        exprbuf,
 	}
+	schema.ColDefs[1].OnUpdate = catalog.OnUpdate{
+		Expr: exprbuf,
+	}
 	schema.ColDefs[2].Default = catalog.Default{
 		NullAbility: true,
-		Expr:        []byte("world"),
+		Expr:        nil,
+	}
+	schema.ColDefs[2].OnUpdate = catalog.OnUpdate{
+		Expr: nil,
 	}
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
@@ -1219,6 +1225,9 @@ func TestReplay10(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
 	assert.Equal(t, exprbuf, schema1.ColDefs[1].Default.Expr)
+	assert.Equal(t, exprbuf, schema1.ColDefs[1].OnUpdate.Expr)
+	assert.Equal(t, []byte(nil), schema1.ColDefs[2].Default.Expr)
+	assert.Equal(t, []byte(nil), schema1.ColDefs[2].OnUpdate.Expr)
 	assert.Equal(t, true, schema1.ColDefs[2].Default.NullAbility)
 }
 
