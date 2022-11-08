@@ -255,6 +255,7 @@ func (catalog *Catalog) onReplayCreateDB(dbid uint64, name string, txnNode *txnb
 	db.Insert(un)
 }
 func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNode) {
+	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Infof("delete %d", dbid)
@@ -378,6 +379,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.Insert(un)
 }
 func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.TxnMVCCNode) {
+	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -674,6 +676,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	blk.Insert(un)
 }
 func (catalog *Catalog) onReplayDeleteBlock(dbid, tid, segid, blkid uint64, metaloc, deltaloc string, txnNode *txnbase.TxnMVCCNode) {
+	catalog.OnReplayBlockID(blkid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
