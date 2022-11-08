@@ -59,7 +59,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 
 	defer func() {
 		if !c.teardown {
-			c.logger.Info("MO is working.")
+			c.logger.Debug("MO is working.")
 		}
 	}()
 
