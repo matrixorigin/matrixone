@@ -89,6 +89,18 @@ func TestTimeDiffInTime(t *testing.T) {
 			secondValue: "838:59:59",
 			want:        "00:00:00",
 		},
+		{
+			name:        "TestCase11",
+			firstValue:  "2562047787:00:00",
+			secondValue: "-2562047787:00:00",
+			want:        "2562047787:59:59",
+		},
+		{
+			name:        "TestCase11",
+			firstValue:  "-2562047787:00:00",
+			secondValue: "2562047787:00:00",
+			want:        "-2562047787:59:59",
+		},
 	}
 
 	for _, v := range testCases {

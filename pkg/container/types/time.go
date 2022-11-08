@@ -26,12 +26,9 @@ import (
 const (
 	// Time range is [-2562047787:59:59.999999,2562047787:59:59.999999]
 	// This is the max hour that int64 with solution msec can present
+	// (9223372036854775807(max int64)/1000000(msec) - 1)/3600(sec per hour) - 1 = 2562047787
 	MinHourInTime, MaxHourInTime     = 0, 2562047787
 	MinInputIntTime, MaxInputIntTime = -25620477875959, 25620477875959
-)
-
-var (
-	FillString = []string{"", "0", "00", "000", "0000", "00000", "000000", "0000000"}
 )
 
 // no msec part
