@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
@@ -50,7 +51,8 @@ func TimeDiff[T timediff.DiffT](vectors []*vector.Vector, proc *process.Process)
 	}
 
 	rs := vector.MustTCols[types.Time](resultVector)
-	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs, firstVector.Nsp, secondVector.Nsp, resultVector, proc, vectorLen); err != nil {
+	nulls.Or(firstVector.Nsp, secondVector.Nsp, resultVector.Nsp)
+	if err = timediff.TimeDiffWithTimeFn(firstValues, secondValues, rs); err != nil {
 		return nil, err
 	}
 	return resultVector, nil

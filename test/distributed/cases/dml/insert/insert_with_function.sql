@@ -101,9 +101,6 @@ INSERT INTO test1(num1, num2, num3) VALUES(12.21, 43.43, 999.899);
 INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
 
--- @bvt:issue#4947
---INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
--- @bvt:issue
 
 DROP TABLE char_test;
 DROP TABLE date_test;

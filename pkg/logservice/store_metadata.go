@@ -308,3 +308,11 @@ func (l *store) getReplicaID(shardID uint64) int64 {
 	}
 	return -1
 }
+
+func (l *store) getShards() []metadata.LogShard {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	shards := make([]metadata.LogShard, 0, len(l.mu.metadata.Shards))
+	shards = append(shards, l.mu.metadata.Shards...)
+	return shards
+}

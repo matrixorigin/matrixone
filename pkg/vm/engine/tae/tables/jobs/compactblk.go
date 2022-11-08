@@ -249,9 +249,9 @@ func (task *compactBlockTask) Execute() (err error) {
 				return err
 			}
 		}
-		if err = oldBlkData.ReplayIndex(); err != nil {
-			return err
-		}
+		// if err = oldBlkData.ReplayIndex(); err != nil {
+		// 	return err
+		// }
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,

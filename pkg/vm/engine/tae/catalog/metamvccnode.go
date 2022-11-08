@@ -96,6 +96,9 @@ func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	err = e.EntryMVCCNode.ApplyCommit(commitTS)
 	return err
 }
+func (e *MetadataMVCCNode) PrepareRollback() (err error) {
+	return e.TxnMVCCNode.PrepareRollback()
+}
 func (e *MetadataMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	var commitTS types.TS
 	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)

@@ -45,7 +45,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ut_linux_x86_reports
+          name: ut-linux-x86_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/upload-artifact@v2
         continue-on-error: true
         with:
-          name: linux_x86_ci_reports
+          name: bvt-linux-x86_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
@@ -246,7 +246,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ci_linux_arm_reports
+          name: bvt-linux-arm_reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
@@ -318,7 +318,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ci_darwin_x86_reports
+          name: bvt-darwin-x86_reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
