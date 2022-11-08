@@ -377,7 +377,11 @@ func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.R
 	}
 	dnode := n.(*updates.DeleteNode)
 	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
+		if view.DeleteMask == nil {
+			view.DeleteMask = dnode.GetDeleteMaskLocked()
+		} else {
+			view.DeleteMask.Or(dnode.GetDeleteMaskLocked())
+		}
 	}
 	return
 }
