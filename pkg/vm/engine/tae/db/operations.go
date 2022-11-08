@@ -161,9 +161,9 @@ type WriteReq struct {
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	FileName     string
-	BlockID      uint64
-	Batch        *batch.Batch
+	//S3 object file name
+	FileName string
+	Batch    *batch.Batch
 }
 
 type WriteResp struct {

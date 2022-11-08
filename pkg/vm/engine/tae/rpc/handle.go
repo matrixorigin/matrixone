@@ -257,6 +257,7 @@ func (h *Handle) HandlePreCommit(
 				TableID:      pe.GetTableId(),
 				DatabaseName: pe.GetDatabaseName(),
 				TableName:    pe.GetTableName(),
+				FileName:     pe.GetFileName(),
 				Batch:        moBat,
 			}
 			if err = h.HandleWrite(ctx, meta, req,
@@ -394,14 +395,14 @@ func (h *Handle) HandleWrite(
 	}
 
 	if req.Type == db.EntryInsert {
-		//Append a block had been bulk-loaded into S3
+		//Add blocks had been bulk-loaded into S3
 		if req.FileName != "" {
-			//TODO::Precommit a block from S3
-			//tb.AppendBlock()
+			//TODO::Add blocks from S3.
+			//tb.AddBlock()
 			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
 		}
-		//Add a batch into table
-		//TODO::add a parameter to Append for PreCommit-Append?
+		//Appends a batch of data into table.
+		//TODO::add a parameter for Write method to represent pre-commit append?
 		err = tb.Write(ctx, req.Batch)
 		return
 	}
