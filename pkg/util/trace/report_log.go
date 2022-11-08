@@ -38,6 +38,7 @@ type MOZapLog struct {
 	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
 	Message     string `json:"message"`
 	Extra       string `json:"extra"` // like json text
+	Stack       string `json:"stack"`
 }
 
 func newMOZap() *MOZapLog {
@@ -76,6 +77,7 @@ func (m *MOZapLog) CsvFields(row *export.Row) []string {
 	row.SetColumnVal(callerCol, m.Caller)
 	row.SetColumnVal(messageCol, m.Message)
 	row.SetColumnVal(extraCol, m.Extra)
+	row.SetColumnVal(stackCol, m.Stack)
 	return row.ToStrings()
 }
 
@@ -91,17 +93,20 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	log.Caller = entry.Caller.TrimmedPath()
 	log.Timestamp = entry.Time
 	log.SpanContext = DefaultSpanContext()
+	log.Stack = entry.Stack
+	cutFields := fields[:0]
 	for _, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
-			break
+			continue
 		}
+		cutFields = append(cutFields, v)
 	}
 	if !needReport {
 		log.Free()
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
-	buffer, err := jsonEncoder.EncodeEntry(entry, fields)
+	buffer, err := jsonEncoder.EncodeEntry(entry, cutFields)
 	log.Extra = buffer.String()
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	return buffer, err
