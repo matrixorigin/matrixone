@@ -1,0 +1,39 @@
+service-type = "CN"
+data-dir = "./mo-data"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32001",
+]
+
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK"
+
+[[fileservice]]
+name = "S3"
+backend = "DISK"
+data-dir = "mo-data/s3"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+
+[observability]
+disableTrace = true
+disableMetric = true
+
+[cn]
+uuid = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf"
+listen-address = "0.0.0.0:7002"
+
+[cn.Engine]
+type = "distributed-tae"
+
+[cn.frontend]
+port = 6002

@@ -73,6 +73,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	if err := GetProjectNode(stmt, ctx, node2, tableDef.Name2ColIndex); err != nil {
 		return nil, err
 	}
+	if err := checkNullMap(stmt, tableDef.Cols); err != nil {
+		return nil, err
+	}
 
 	node3.TableDef = tableDef
 	node3.ObjRef = objRef
@@ -183,15 +186,38 @@ func InitNullMap(stmt *tree.Load) error {
 			return moerr.NewInvalidInput("the nullif func need two paramaters")
 		}
 
+		expr2, ok := expr.Exprs[0].(*tree.UnresolvedName)
+		if !ok {
+			return moerr.NewInvalidInput("the nullif func first param is not UnresolvedName form")
+		}
+
 		expr3, ok := expr.Exprs[1].(*tree.NumVal)
 		if !ok {
-			return moerr.NewInvalidInput("the nullif func second param is not UnresolvedName form")
+			return moerr.NewInvalidInput("the nullif func second param is not NumVal form")
 		}
 		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
 			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
+			if col != expr2.Parts[0] {
+				return moerr.NewInvalidInput("the nullif func first param must equal to colName")
+			}
 			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr3.String()))
 		}
 		stmt.Param.Tail.Assignments[i].Expr = nil
+	}
+	return nil
+}
+
+func checkNullMap(stmt *tree.Load, Cols []*ColDef) error {
+	for k := range stmt.Param.NullMap {
+		find := false
+		for i := 0; i < len(Cols); i++ {
+			if Cols[i].Name == k {
+				find = true
+			}
+		}
+		if !find {
+			return moerr.NewInvalidInput("wrong col name '%s' in nullif function", k)
+		}
 	}
 	return nil
 }
