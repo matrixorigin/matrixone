@@ -164,7 +164,7 @@ insert into time_01 values("24:59:09.932823","24:02:00.93282332424","24:20:34.00
 insert into time_01 values("2022-09-08 12:00:01","019","23403");
 select timediff(t1,t2) from time_01;
 timediff(t1, t2)
--838:59:59
+-1677:59:58
 00:00:00
 null
 00:10:59
