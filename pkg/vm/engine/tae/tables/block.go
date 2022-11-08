@@ -132,14 +132,14 @@ func (blk *dataBlock) PrepareCompact() bool {
 }
 
 func (blk *dataBlock) IsAppendFrozen() bool {
-	blk.RLock()
-	defer blk.RUnlock()
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
 	return blk.appendFrozen
 }
 
 func (blk *dataBlock) FreeData() {
-	blk.Lock()
-	defer blk.Unlock()
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
 	if blk.node != nil {
 		_ = blk.node.Close()
 	}
@@ -765,6 +765,22 @@ func (blk *dataBlock) onCheckConflictAndDedup(
 	}
 }
 
+func (blk *dataBlock) dedupWithPK(
+	keys containers.Vector,
+	ts types.TS,
+	rowmask *roaring.Bitmap) (selects *roaring.Bitmap, dupRow uint32, err error) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	selects, err = blk.pkIndex.BatchDedup(
+		keys,
+		blk.onCheckConflictAndDedup(
+			&dupRow,
+			rowmask,
+			ts),
+	)
+	return
+}
+
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
 	var dupRow uint32
 	if blk.meta.IsAppendable() {
@@ -809,11 +825,8 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		}
 		return err
 	}
-	if blk.indexes == nil {
-		panic("index not found")
-	}
-	keyselects, err := blk.pkIndex.BatchDedup(pks,
-		blk.onCheckConflictAndDedup(&dupRow, rowmask, txn.GetStartTS()))
+
+	keyselects, _, err := blk.dedupWithPK(pks, txn.GetStartTS(), rowmask)
 	if err == nil {
 		return
 	}
