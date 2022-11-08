@@ -119,7 +119,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	if !ok {
 		if safe {
 			logutil.Infof("drlsn %d has been truncated", lsn)
-			r.minDriverLsn = r.replayedLsn
+			r.minDriverLsn = lsn + 1
 			r.replayedLsn++
 			return nil
 		}
