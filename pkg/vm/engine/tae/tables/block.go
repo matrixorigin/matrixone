@@ -132,14 +132,14 @@ func (blk *dataBlock) PrepareCompact() bool {
 }
 
 func (blk *dataBlock) IsAppendFrozen() bool {
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
+	blk.RLock()
+	defer blk.RUnlock()
 	return blk.appendFrozen
 }
 
 func (blk *dataBlock) FreeData() {
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
+	blk.Lock()
+	defer blk.Unlock()
 	if blk.node != nil {
 		_ = blk.node.Close()
 	}
