@@ -141,6 +141,7 @@ type ExternParam struct {
 	S3option     []string
 	S3Param      *S3Parameter
 	Ctx          context.Context
+	LoadFile     bool
 }
 
 type S3Parameter struct {
