@@ -222,9 +222,7 @@ create external table ex_table_drop(clo1 tinyint,clo2 smallint,clo3 int,clo4 big
 select clo1,clo5,clo7,col12,col13,col16,col17,col18  from ex_table_drop;
 
 --内部表和外部表关联
--- @bvt:issue#6171
 select count(*) from ex_table_15,table_15 where ex_table_15.clo1=table_15.clo1;
--- @bvt:issue
 --异常测试:insert/update/delete
 create external table ex_table_yccs(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 insert into ex_table_yccs select 'yellow','apple','2020-09-30','2020-09-30 10:20:08','2020-09-30 10:20:08.09834';
