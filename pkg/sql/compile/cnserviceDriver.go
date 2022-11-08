@@ -146,7 +146,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	}
 	refactorScope(c, c.ctx, s)
 
-	err = s.ParallelRun(c, true)
+	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
 		return nil, err
 	}
