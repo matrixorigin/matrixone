@@ -7,13 +7,9 @@ col4 date,
 col5 text
 );
 
--- bvt:issue#6323
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set a=nullif(col1,'1');
--- bvt:issue
 
--- bvt:issue#6323
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col3,'1');
--- bvt:issue
 
 -- bvt:issue#6325
 load data infile "$resources/load_data/not_exists.csv" into table t1;

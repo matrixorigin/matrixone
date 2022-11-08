@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -117,6 +118,9 @@ func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 	)
 	defer cancel()
 	if err := n.Engine.Commit(ctx, txn); err != nil {
+		if err2 := RolllbackTxn(n, txn, ctx); err2 != nil {
+			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+		}
 		return err
 	}
 	err := txn.Commit(ctx)
