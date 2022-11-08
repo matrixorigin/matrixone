@@ -1,28 +1,38 @@
 service-type = "CN"
-data-dir = "./mo-data"
 
 [log]
 level = "info"
 format = "console"
 max-size = 512
 
-[hakeeper-client]
-service-addresses = [
-  "172.19.0.4:32001",
-]
+[cn.rpc]
+max-message-size = "100mb"
 
 [[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
-backend = "DISK"
 
 [[fileservice]]
+backend = "MINIO"
 name = "S3"
-backend = "DISK"
-data-dir = "mo-data/s3"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/data"
 
 [[fileservice]]
+backend = "MINIO"
 name = "ETL"
-backend = "DISK-ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/etl"
+
+[hakeeper-client]
+service-addresses = ["179.19.0.4:32001"]
 
 [observability]
 disableTrace = true
@@ -31,8 +41,11 @@ disableMetric = true
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
-service-address = "172.19.0.2:6002"
-sql-address = "172.19.0.2:6001"
+service-address = "179.19.0.2:6002"
+sql-address = "179.19.0.2:6001"
 
 [cn.Engine]
 type = "distributed-tae"
+
+[cn.frontend]
+port = 6001

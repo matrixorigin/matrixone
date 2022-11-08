@@ -10,19 +10,21 @@ services:
         GOPROXY: "https://proxy.golang.com.cn,direct"
     image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/cn.toml"]
+    depends_on:
+      - dn
     ports:
       - "6001:6001"
     restart: on-failure
     volumes:
       - ../../etc/launch-tae-compose/config:/config
     environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
     tty: true
     networks:
       monet:
-        ipv4_address: 172.19.0.2
+        ipv4_address: 179.19.0.2
 
   dn:
     container_name: dn
@@ -33,6 +35,8 @@ services:
         GOPROXY: "https://proxy.golang.com.cn,direct"
     image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
+    depends_on:
+      - logService
     ports:
       - "41010"
     restart: on-failure
@@ -40,12 +44,12 @@ services:
     volumes:
       - ../../etc/launch-tae-compose/config:/config
     environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
     networks:
       monet:
-        ipv4_address: 172.19.0.3
+        ipv4_address: 179.19.0.3
 
   logService:
     container_name: logService
@@ -56,21 +60,23 @@ services:
         GOPROXY: "https://proxy.golang.com.cn,direct"
     image: matrixorigin/matrixone:nightly-e23e00f1
     entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
+    depends_on:
+      - createbuckets
     ports:
       - "32000"
       - "32001"
       - "32002"
     environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
     restart: on-failure
     volumes:
       - ../../etc/launch-tae-compose/config:/config
     tty: true    
     networks:
       monet:
-        ipv4_address: 172.19.0.4
+        ipv4_address: 179.19.0.4
 
   minio:
     image: minio/minio
@@ -83,6 +89,30 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
     command: server --console-address ":9001" /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 1s
+      timeout: 5s
+      retries: 3
+    networks:
+      monet:
+        ipv4_address: 179.19.0.5
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+       minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
+      /usr/bin/mc mb myminio/mo-test;
+      /usr/bin/mc policy set public myminio/mo-test;
+      exit 0;
+      "
+    networks:
+      monet:
+        ipv4_address: 179.19.0.6
 
 volumes:
   minio_storage: {}
@@ -92,4 +122,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.19.0.0/16
+        - subnet: 179.19.0.0/16

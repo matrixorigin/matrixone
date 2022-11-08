@@ -1,31 +1,42 @@
 service-type = "DN"
-data-dir = "./mo-data"
+
 
 [[fileservice]]
 backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
 
 [[fileservice]]
-backend = "DISK"
-data-dir = "mo-data/s3"
+backend = "MINIO"
 name = "S3"
 
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/data"
+
 [[fileservice]]
-backend = "DISK-ETL"
+backend = "MINIO"
 name = "ETL"
 
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/etl"
+
 [hakeeper-client]
-service-addresses = ["172.19.0.4:32001"]
+service-addresses = ["179.19.0.4:32001"]
 
 [dn]
 uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
-service-address = "172.19.0.3:41010"
+service-address = "179.19.0.3:41010"
 listen-address = "0.0.0.0:41010"
 
 [dn.Txn]
 
 [dn.Txn.Storage]
 backend = "TAE"
+fileservice = "S3"
 log-backend = "logservice"
 
 [dn.Ckp]

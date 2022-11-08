@@ -1,6 +1,5 @@
 # service node type, [DN|CN|LOG]
 service-type = "LOG"
-data-dir = "./mo-data"
 
 [log]
 level = "info"
@@ -8,35 +7,43 @@ format = "console"
 max-size = 512
 
 [[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
-backend = "DISK"
 
 [[fileservice]]
+backend = "MINIO"
 name = "S3"
-backend = "DISK"
-data-dir = "mo-data/s3"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/data"
 
 [[fileservice]]
+backend = "MINIO"
 name = "ETL"
-backend = "DISK-ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://179.19.0.5:9000"
+key-prefix = "server/etl"
 
 [observability]
 statusPort = 7001
 
 [hakeeper-client]
-service-addresses = [
-  "172.19.0.4:32001",
-]
+discovery-address = "179.19.0.4:32001"
 
 [logservice]
 deployment-id = 1
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-raft-address = "172.19.0.4:32000"
-logservice-address = "172.19.0.4:32001"
-gossip-address = "172.19.0.4:32002"
-ogservice-listen-address = "0.0.0.0:32001"
+raft-address = "179.19.0.4:32000"
+logservice-address = "179.19.0.4:32001"
+gossip-address = "179.19.0.4:32002"
+logservice-listen-address = "0.0.0.0:32001"
 gossip-seed-addresses = [
-  "172.19.0.4:32002",
+  "179.19.0.4:32002",
 ]
 gossip-allow-self-as-seed = true
 

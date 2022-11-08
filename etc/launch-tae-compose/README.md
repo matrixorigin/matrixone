@@ -1,12 +1,11 @@
 # Launch-tae-CN-tae-dn with docker-compose
 
-## Export aws configuration
+## minio as s3 service
 
-```shell
-export AWS_ACCESS_KEY_ID=<AWS_ACCESS_KEY_ID>
-export AWS_SECRET_ACCESS_KEY=<AWS_SECRET_ACCESS_KEY>
-export AWS_REGION=<AWS_REGION>
-```
+[localhost:9001](localhost:9001)
+
+username: minio
+password: minio123
 
 ## build and up 
 
