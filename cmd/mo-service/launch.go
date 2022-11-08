@@ -16,14 +16,20 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
+)
+
+var (
+	cnProxy goetty.Proxy
 )
 
 func startCluster(stopper *stopper.Stopper) error {
@@ -94,13 +100,27 @@ func startCNServiceCluster(
 		return moerr.NewBadConfig("CN service config not set")
 	}
 
+	upstreams := []string{}
+
 	var cfg *Config
 	for _, file := range files {
 		cfg = &Config{}
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
+		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
 		if err := startService(cfg, stopper); err != nil {
+			return err
+		}
+	}
+
+	if len(upstreams) > 1 {
+		// TODO: make configurable for 6001
+		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+		for _, address := range upstreams {
+			cnProxy.AddUpStream(address, time.Second*10)
+		}
+		if err := cnProxy.Start(); err != nil {
 			return err
 		}
 	}

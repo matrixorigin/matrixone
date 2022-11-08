@@ -36,4 +36,4 @@ listen-address = "0.0.0.0:7002"
 type = "distributed-tae"
 
 [cn.frontend]
-port = 6002
+port = 16002
