@@ -402,7 +402,7 @@ func dupScope(s *Scope) *Scope {
 	if err != nil {
 		return nil
 	}
-	rs, err := decodeScope(data, s.Proc)
+	rs, err := decodeScope(data, s.Proc, false)
 	if err != nil {
 		return nil
 	}
