@@ -1419,18 +1419,7 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		}
 	}
 
-	getUnionCount := func(flags []uint8) int {
-		var numAdd = 0
-		for _, flg := range flags {
-			if flg > 0 {
-				numAdd++
-			}
-		}
-		return numAdd
-	}
-
-	if nulls.Any(w.Nsp) {
-		v.TryExpandNulls(int(oldLen) + getUnionCount(flags))
+	if w.Nsp != nil {
 		for idx, flg := range flags {
 			if flg > 0 {
 				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
@@ -1439,10 +1428,6 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 				// Advance oldLen regardless if it is null
 				oldLen += 1
 			}
-		}
-	} else {
-		if nulls.Any(v.Nsp) {
-			nulls.TryExpand(v.Nsp, getUnionCount(flags))
 		}
 	}
 
