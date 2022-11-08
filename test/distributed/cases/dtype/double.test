@@ -106,14 +106,14 @@ SELECT id, 1.1 = id FROM t_double;
 SELECT * from t_double WHERE id = 1.1;
 SELECT * from t_double WHERE id = 1.1e0;
 -- @bvt:issue
--- @bvt:issue#3677
+
 SELECT * from t_double WHERE id = '1.1';
 SELECT * from t_double WHERE id = '1.1e0';
 SELECT * from t_double WHERE id IN (1.1, 2.2);
 SELECT * from t_double WHERE id IN (1.1e0, 2.2e0);
 SELECT * from t_double WHERE id IN ('1.1', '2.2');
 SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
--- @bvt:issue
+
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_double WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_double WHERE id BETWEEN '1.1' AND '1.9';

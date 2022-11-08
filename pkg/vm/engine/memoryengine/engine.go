@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -58,6 +60,11 @@ func (e *Engine) Commit(_ context.Context, _ client.TxnOperator) error {
 
 func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 	return nil
+}
+
+func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]engine.Reader, error) {
+	return nil, nil
 }
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -64,6 +65,8 @@ type Source struct {
 	R            engine.Reader
 	Bat          *batch.Batch
 	Expr         *plan.Expr
+	TableDef     *plan.TableDef
+	Timestamp    timestamp.Timestamp
 }
 
 // Col is the information of attribute

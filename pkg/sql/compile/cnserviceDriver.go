@@ -146,7 +146,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	}
 	refactorScope(c, c.ctx, s)
 
-	err = s.ParallelRun(c)
+	err = s.ParallelRun(c, true)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +426,8 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownId:   s.DataSource.PushdownId,
 			PushdownAddr: s.DataSource.PushdownAddr,
 			Expr:         s.DataSource.Expr,
+			TableDef:     s.DataSource.TableDef,
+			Timestamp:    &s.DataSource.Timestamp,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -491,6 +493,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			PushdownId:   dsc.PushdownId,
 			PushdownAddr: dsc.PushdownAddr,
 			Expr:         dsc.Expr,
+			TableDef:     dsc.TableDef,
+			Timestamp:    *dsc.Timestamp,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
