@@ -252,6 +252,24 @@ func TestDMLDelete(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
+func TestSystemVariableAndUserVariable(t *testing.T) {
+	sqls := []string{
+		"explain verbose select @@autocommit from NATION",
+		"explain verbose select @@global.autocommit from NATION",
+		"explain verbose select @@session.autocommit from NATION",
+		"explain verbose select @@autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@global.autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@session.autocommit,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @val from NATION",
+		"explain verbose select @val,@a,@b from NATION",
+		"explain verbose select @val,N_NAME, N_REGIONKEY from NATION",
+		"explain verbose select @@session.autocommit,@val from NATION",
+		"explain verbose select @@session.autocommit,@val,N_NAME from NATION",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {
 		err := runOneStmt(opt, t, sql)
