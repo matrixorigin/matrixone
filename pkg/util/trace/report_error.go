@@ -76,7 +76,7 @@ func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.E
 // ReportError send to BatchProcessor
 func ReportError(ctx context.Context, err error, depth int) {
 	msg := fmt.Sprintf("error: %v", err)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
+	logutil.GetErrorLogger().WithOptions(zap.AddCallerSkip(depth)).Error(msg, ContextField(ctx))
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
