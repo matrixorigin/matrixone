@@ -90,6 +90,9 @@ type Scope struct {
 	// IsEnd means the pipeline is end
 	IsEnd bool
 
+	// IsRemote means the pipeline is remote
+	IsRemote bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
