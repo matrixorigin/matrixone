@@ -479,10 +479,11 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	var err error
 
 	s := &Scope{
-		Magic:  int(p.GetPipelineType()),
-		IsEnd:  p.IsEnd,
-		IsJoin: p.IsJoin,
-		Plan:   p.Qry,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     p.Qry,
+		IsRemote: true,
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
