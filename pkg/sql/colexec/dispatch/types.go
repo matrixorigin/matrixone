@@ -29,3 +29,24 @@ type Argument struct {
 	vecs []*vector.Vector
 	Regs []*process.WaitRegister
 }
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if pipelineFailed {
+		for i := range arg.Regs {
+			for len(arg.Regs[i].Ch) > 0 {
+				bat := <-arg.Regs[i].Ch
+				if bat == nil {
+					break
+				}
+				bat.Clean(proc.Mp())
+			}
+		}
+	}
+
+	for i := range arg.Regs {
+		select {
+		case <-arg.Regs[i].Ctx.Done():
+		case arg.Regs[i].Ch <- nil:
+		}
+	}
+}

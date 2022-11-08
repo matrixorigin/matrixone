@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mergeoffset
+package taskservice
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"sync/atomic"
+)
 
-type container struct {
-	seen uint64
+// TODO: refactor to use Export function
+var (
+	disableTaskFramework atomic.Value // bool
+)
+
+// DebugCtlTaskFramwork disable task framework
+func DebugCtlTaskFramwork(disable bool) {
+	disableTaskFramework.Store(disable)
 }
 
-type Argument struct {
-	// Offset records the offset number of mergeOffset operator
-	Offset uint64
-	// ctr contains the attributes needn't do serialization work
-	ctr *container
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func taskFrameworkDisabled() bool {
+	if v := disableTaskFramework.Load(); v != nil {
+		return v.(bool)
+	}
+	return false
 }
