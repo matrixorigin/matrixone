@@ -1186,6 +1186,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("profiling", 0, 1, false),
 		Default:           int64(0),
 	},
+	"performance_schema": {
+		Name:              "performance_schema",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("performance_schema", 0, 1, false),
+		Default:           int64(0),
+	},
+	"transaction_read_only": {
+		Name:              "transaction_read_only",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("transaction_read_only", 0, 1, false),
+		Default:           int64(0),
+	},
+	"tx_read_only": {
+		Name:              "tx_read_only",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("tx_read_only", 0, 1, false),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

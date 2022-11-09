@@ -30,6 +30,8 @@ enum CmdMethod {
     // Flush is to force flush the table data.
     // parameter should be "DbName.TableName"
     Flush  = 1;
+    // Task disable or enable task framework
+    Task   = 2;
 }
 
 // DNPingRequest ping request

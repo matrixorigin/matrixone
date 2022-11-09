@@ -17,6 +17,7 @@ package disttae
 import (
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,14 +53,24 @@ func (r *blockReader) Read(cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
 			for i, column := range cols {
-				r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-				if r.colIdxs[i] == uint16(r.primaryIdx) {
-					r.pkidxInColIdxs = i
-				}
-				colDef := r.tableDef.Cols[r.colIdxs[i]]
-				r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-				if colDef.Default != nil {
-					r.colNulls[i] = colDef.Default.NullAbility
+				// sometimes Name2ColIndex have no row_id， sometimes have one
+				if column == catalog.Row_ID {
+					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
+						r.colIdxs[i] = uint16(colIdx)
+					} else {
+						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
+					}
+					r.colTypes[i] = types.T_Rowid.ToType()
+				} else {
+					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+					if r.colIdxs[i] == uint16(r.primaryIdx) {
+						r.pkidxInColIdxs = i
+					}
+					colDef := r.tableDef.Cols[r.colIdxs[i]]
+					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+					if colDef.Default != nil {
+						r.colNulls[i] = colDef.Default.NullAbility
+					}
 				}
 			}
 		} else {
@@ -110,11 +121,21 @@ func (r *blockMergeReader) Read(cols []string, expr *plan.Expr, m *mpool.MPool) 
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			for i, column := range cols {
-				r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-				colDef := r.tableDef.Cols[r.colIdxs[i]]
-				r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-				if colDef.Default != nil {
-					r.colNulls[i] = colDef.Default.NullAbility
+				// sometimes Name2ColIndex have no row_id， sometimes have one
+				if column == catalog.Row_ID {
+					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
+						r.colIdxs[i] = uint16(colIdx)
+					} else {
+						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
+					}
+					r.colTypes[i] = types.T_Rowid.ToType()
+				} else {
+					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
+					colDef := r.tableDef.Cols[r.colIdxs[i]]
+					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+					if colDef.Default != nil {
+						r.colNulls[i] = colDef.Default.NullAbility
+					}
 				}
 			}
 		} else {

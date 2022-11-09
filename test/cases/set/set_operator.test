@@ -25,3 +25,5 @@ select a, b from t1 minus select b, c from t2;
 select a, b from t1 intersect select b, c from t2;
 set max_allowed_packet = cast('2048' as unsigned);
 show variables where variable_name = 'max_allowed_packet';
+set @val = cast('2022-10-10' as date);
+select @val;

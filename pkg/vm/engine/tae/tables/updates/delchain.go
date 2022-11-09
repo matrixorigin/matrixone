@@ -151,6 +151,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
+	chain.mvcc.IncChangeNodeCnt()
 }
 
 func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
