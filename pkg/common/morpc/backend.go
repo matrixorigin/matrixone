@@ -442,10 +442,9 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						if _, ok := f.message.Message.(PayloadMessage); ok && conn != nil {
 							conn.SetWriteDeadline(time.Now().Add(v))
 						}
-						if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
-							ce.Write(zap.Uint64("request-id", f.message.Message.GetID()),
-								zap.String("request", f.message.Message.DebugString()))
-						}
+						rb.logger.Debug("write request",
+							zap.Uint64("request-id", f.message.Message.GetID()),
+							zap.String("request", f.message.Message.DebugString()))
 						if err := rb.conn.Write(f.message, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
 								zap.Uint64("request-id", f.message.Message.GetID()),
@@ -570,11 +569,9 @@ func (rb *remoteBackend) stopWriteLoop() {
 func (rb *remoteBackend) requestDone(response Message, cb func()) {
 	id := response.GetID()
 
-	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
-		ce.Write(zap.Uint64("request-id", id),
-			zap.String("response", response.DebugString()))
-	}
-
+	rb.logger.Debug("read response",
+		zap.Uint64("request-id", id),
+		zap.String("response", response.DebugString()))
 	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
 		delete(rb.mu.futures, id)
