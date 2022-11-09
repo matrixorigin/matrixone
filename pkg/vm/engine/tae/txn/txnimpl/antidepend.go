@@ -26,6 +26,10 @@ func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
+	// TODO:
+	// I don't think we need to wait here any more. `block` and `segment` are
+	// local metadata and never be involved in a 2PC txn. So a prepared `block`
+	// will never be rollbacked
 	if needWait {
 		entry.RUnlock()
 		txnToWait.GetTxnState(true)
