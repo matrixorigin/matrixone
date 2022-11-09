@@ -194,6 +194,9 @@ func (n *Bitmap) Remove(row uint64) {
 
 // Contains returns true if the row is contained in the Bitmap
 func (n *Bitmap) Contains(row uint64) bool {
+	if row >= uint64(n.len) {
+		return false
+	}
 	idx := row >> 6
 	return (n.data[idx] & (1 << (row & 0x3F))) != 0
 }
@@ -215,6 +218,9 @@ func (n *Bitmap) AddRange(start, end uint64) {
 }
 
 func (n *Bitmap) RemoveRange(start, end uint64) {
+	if end > uint64(n.len) {
+		end = uint64(n.len)
+	}
 	if start >= end {
 		return
 	}
@@ -244,35 +250,38 @@ func (n *Bitmap) IsSame(m *Bitmap) bool {
 
 func (n *Bitmap) Or(m *Bitmap) {
 	n.TryExpand(m)
-	for i := 0; i < len(m.data); i++ {
+	size := (int(m.len) + 63) / 64
+	for i := 0; i < size; i++ {
 		n.data[i] |= m.data[i]
 	}
 }
 
 func (n *Bitmap) And(m *Bitmap) {
 	n.TryExpand(m)
-	for i := 0; i < len(n.data); i++ {
+	size := (int(m.len) + 63) / 64
+	for i := 0; i < size; i++ {
 		n.data[i] &= m.data[i]
+	}
+	for i := size; i < len(n.data); i++ {
+		n.data[i] = 0
 	}
 }
 
 func (n *Bitmap) TryExpand(m *Bitmap) {
-	if n.len < m.len {
-		n.Expand(int(m.len))
-	}
+	n.TryExpandWithSize(int(m.len))
 }
 
 func (n *Bitmap) TryExpandWithSize(size int) {
-	if int(n.len) < size {
-		n.Expand(size)
+	if int(n.len) >= size {
+		return
 	}
-}
-
-func (n *Bitmap) Expand(size int) {
-	data := make([]uint64, (size-1)/64+1)
-	copy(data, n.data)
+	newCap := (size + 63) / 64
+	if newCap > cap(n.data) {
+		data := make([]uint64, newCap)
+		copy(data, n.data)
+		n.data = data
+	}
 	n.len = int64(size)
-	n.data = data
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
