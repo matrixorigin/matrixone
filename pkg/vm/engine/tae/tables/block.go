@@ -272,7 +272,7 @@ func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 		blk.score = &statBlock{
 			rows:               rows,
 			startTime:          t,
-			startCheckRowsTime: time.Now(),
+			startCheckRowsTime: t,
 		}
 		return 1
 	}
