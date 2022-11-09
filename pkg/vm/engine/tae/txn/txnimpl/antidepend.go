@@ -16,10 +16,26 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
+	entry.RLock()
+	defer entry.RUnlock()
+	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
+	if needWait {
+		entry.RUnlock()
+		txnToWait.GetTxnState(true)
+		entry.RLock()
+	}
+	if entry.DeleteBefore(ts) {
+		err = moerr.NewTxnRWConflict()
+	}
+	return
+}
 
 type warChecker struct {
 	*common.Tree
@@ -62,20 +78,7 @@ func (checker *warChecker) visitBlock(
 	if err != nil {
 		panic(err)
 	}
-	if block != nil {
-		commitTs := checker.txn.GetCommitTS()
-		block.RLock()
-		needWait, txnToWait := block.GetLatestNodeLocked().NeedWaitCommitting(commitTs)
-		if needWait {
-			block.RUnlock()
-			txnToWait.GetTxnState(true)
-			block.RLock()
-		}
-		if block.DeleteBefore(commitTs) {
-			block.RUnlock()
-			return moerr.NewTxnRWConflict()
-		}
-		block.RUnlock()
-	}
-	return
+
+	entry := block.MetaBaseEntry
+	return readWriteConfilictCheck(entry, checker.txn.GetCommitTS())
 }
