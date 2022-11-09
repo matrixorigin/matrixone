@@ -7,7 +7,7 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
+        GOPROXY: "https://proxy.golang.org,direct"
     image: matrixorigin/matrixone:nightly-2af3bb11
     entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
     profiles:
@@ -35,7 +35,7 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
+        GOPROXY: "https://proxy.golang.org,direct"
     image: matrixorigin/matrixone:nightly-2af3bb11
     entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
     depends_on:
@@ -62,7 +62,7 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
+        GOPROXY: "https://proxy.golang.org,direct"
     image: matrixorigin/matrixone:nightly-2af3bb11
     entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
     profiles:
@@ -89,7 +89,7 @@ services:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
+        GOPROXY: "https://proxy.golang.org,direct"
     image: matrixorigin/matrixone:nightly-2af3bb11
     profiles:
       - launch-tae-CN-tae-DN
