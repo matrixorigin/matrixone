@@ -356,10 +356,7 @@ func (builder *QueryBuilder) findAggFunc(nodeID int32) bool {
 			return true
 		}
 	}
-	if node.NodeType == plan.Node_AGG {
-		return true
-	}
-	return false
+	return node.NodeType == plan.Node_AGG
 }
 func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 	for _, pred := range preds {
