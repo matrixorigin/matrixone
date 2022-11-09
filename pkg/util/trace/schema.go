@@ -169,6 +169,7 @@ var (
 			callerCol,
 			messageCol,
 			extraCol,
+			stackCol,
 		},
 		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: logInfoTbl},
 	}
