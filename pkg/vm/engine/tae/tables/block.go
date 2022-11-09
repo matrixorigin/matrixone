@@ -66,6 +66,7 @@ type dataBlock struct {
 	score        *statBlock
 	fs           *objectio.ObjectFS
 	appendFrozen bool
+	dataFlushed  bool
 }
 
 func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -99,6 +100,7 @@ func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INode
 		}
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
+		block.dataFlushed = true
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
@@ -697,8 +699,8 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
-	if blk.meta != nil && blk.meta.GetMetaLoc() != "" {
-		if blk.IsAppendable() {
+	if blk.meta != nil && blk.dataFlushed {
+		if blk.meta.IsAppendable() {
 			err = blk.pkIndex.Dedup(key)
 			if err == nil {
 				err = moerr.NewNotFound()
