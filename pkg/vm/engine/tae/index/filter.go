@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+const FuseFilterError = "too many iterations, you probably have duplicate keys"
+
 type StaticFilter interface {
 	MayContainsKey(key any) (bool, error)
 	MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
@@ -55,9 +57,11 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		hashes = lo.Uniq[uint64](hashes)
-		if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-			return nil, err
+		if err.Error() == FuseFilterError {
+			hashes = lo.Uniq[uint64](hashes)
+			if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return sf, nil
