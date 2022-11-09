@@ -39,7 +39,7 @@ func TestTransferPage(t *testing.T) {
 	}
 	offsets2 := offsets1.CloneWindow(0, offsets1.Length())
 
-	memo1 := NewTransferPage(time.Now(), &src, &dest, offsets1)
+	memo1 := NewTransferPage(time.Now(), &src, offsets1)
 	assert.Zero(t, memo1.RefCount())
 
 	pinned := memo1.Pin()
@@ -49,7 +49,7 @@ func TestTransferPage(t *testing.T) {
 
 	ttl := time.Millisecond * 10
 	now := time.Now()
-	memo2 := NewTransferPage(now, &src, &dest, offsets2)
+	memo2 := NewTransferPage(now, &src, offsets2)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
@@ -90,7 +90,7 @@ func TestTransferTable(t *testing.T) {
 	}
 
 	now := time.Now()
-	page1 := NewTransferPage(now, &id1, &id2, rowIDS)
+	page1 := NewTransferPage(now, &id1, rowIDS)
 	assert.False(t, table.AddPage(page1))
 	assert.True(t, table.AddPage(page1))
 	assert.Equal(t, int64(1), page1.RefCount())

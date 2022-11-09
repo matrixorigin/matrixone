@@ -42,9 +42,8 @@ type TransferTable[T PageT[T]] struct {
 type TransferPage struct {
 	common.RefHelper
 	bornTS  time.Time
-	src     *common.ID
-	dest    *common.ID
-	offsets containers.Vector
+	id      *common.ID
+	mapping containers.Vector
 }
 
 func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
@@ -138,13 +137,15 @@ func NewRowIDVector() containers.Vector {
 
 func NewTransferPage(
 	bornTS time.Time,
-	src, dest *common.ID,
-	offsets containers.Vector) *TransferPage {
+	id *common.ID,
+	mapping containers.Vector) *TransferPage {
+	if mapping == nil {
+		mapping = NewRowIDVector()
+	}
 	page := &TransferPage{
 		bornTS:  bornTS,
-		src:     src,
-		dest:    dest,
-		offsets: offsets,
+		id:      id,
+		mapping: mapping,
 	}
 	page.OnZeroCB = page.Close
 	return page
@@ -152,28 +153,26 @@ func NewTransferPage(
 
 func (page *TransferPage) Close() {
 	logutil.Infof("Closing %s", page.String())
-	if page.offsets != nil {
-		page.offsets.Close()
-		page.offsets = nil
+	if page.mapping != nil {
+		page.mapping.Close()
+		page.mapping = nil
 	} else {
 		panic(moerr.NewInternalError("page was closed more than once"))
 	}
 }
 
 func (page *TransferPage) GetBornTS() time.Time { return page.bornTS }
-func (page *TransferPage) ID() *common.ID       { return page.src }
-func (page *TransferPage) GetDest() *common.ID  { return page.dest }
+func (page *TransferPage) ID() *common.ID       { return page.id }
 
 func (page *TransferPage) TTL(now time.Time, ttl time.Duration) bool {
 	return now.After(page.bornTS.Add(ttl))
 }
 
 func (page *TransferPage) String() string {
-	return fmt.Sprintf("page[%s->%s][%s][Len=%d]",
-		page.src.BlockString(),
-		page.dest.BlockString(),
+	return fmt.Sprintf("page[%s][%s][Len=%d]",
+		page.id.BlockString(),
 		page.bornTS.String(),
-		page.offsets.Length())
+		page.mapping.Length())
 }
 
 func (page *TransferPage) Pin() *common.PinnedItem[*TransferPage] {
@@ -184,12 +183,12 @@ func (page *TransferPage) Pin() *common.PinnedItem[*TransferPage] {
 }
 
 func (page *TransferPage) TransferOne(srcOff uint32) types.Rowid {
-	return page.offsets.Get(int(srcOff)).(types.Rowid)
+	return page.mapping.Get(int(srcOff)).(types.Rowid)
 }
 
 func (page *TransferPage) TransferMany(srcOffs ...uint32) (dest containers.Vector) {
 	dest = NewRowIDVector()
-	slice := page.offsets.Slice().([]types.Rowid)
+	slice := page.mapping.Slice().([]types.Rowid)
 	for _, off := range srcOffs {
 		dest.Append(slice[off])
 	}
