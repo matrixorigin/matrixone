@@ -394,7 +394,7 @@ func (node *ShowVariables) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" variables")
 	if node.Like != nil {
-		ctx.WriteString(" like ")
+		ctx.WriteByte(' ')
 		node.Like.Format(ctx)
 	}
 	if node.Where != nil {
