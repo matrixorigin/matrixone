@@ -4111,7 +4111,7 @@ func TestDelete4(t *testing.T) {
 
 		getValueFn()
 		scanFn()
-		for j := 0; j < 1000; j++ {
+		for j := 0; j < 100; j++ {
 			wg.Add(1)
 			p.Submit(run)
 		}
