@@ -43,6 +43,11 @@ const (
 
 func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
+
+	logutil.Info("open-tae", common.OperationField("Start"),
+		common.OperandField("open"))
+	totalTime := time.Now()
+
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +55,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
+		logutil.Info("open-tae", common.OperationField("End"),
+			common.OperandField("open"),
+			common.AnyField("cost", time.Since(totalTime)),
+			common.AnyField("err", err))
 	}()
 
 	opts = opts.FillDefaults(dirname)

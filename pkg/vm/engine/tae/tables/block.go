@@ -881,6 +881,16 @@ func (blk *dataBlock) dedupWithPK(
 	return
 }
 
+func (blk *dataBlock) DumpData(attr string) (view *model.ColumnView, err error) {
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
+		return blk.ResolveColumnFromANode(types.MaxTs(), colIdx, nil, false)
+	}
+	view, err = blk.ResolveColumnFromMeta(metaLoc, types.MaxTs(), colIdx, nil)
+	return
+}
+
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
 	var dupRow uint32
 	if blk.meta.IsAppendable() {
