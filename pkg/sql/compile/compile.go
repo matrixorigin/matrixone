@@ -41,6 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func InitAddress(addr string) {
+	Address = addr
+}
+
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
@@ -542,6 +546,9 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	fileList, err := external.ReadDir(param)
 	if err != nil {
 		return nil, err
+	}
+	if param.LoadFile && len(fileList) == 0 {
+		return nil, moerr.NewInvalidInput("the file does not exist in load flow")
 	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu

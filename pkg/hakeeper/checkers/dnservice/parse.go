@@ -156,7 +156,7 @@ func checkInitiatingShards(
 		}
 	}
 
-	logger.Info(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	logger.Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
 	if bootstrapping && len(ops) != 0 {
 		bootstrapping = false
 	}

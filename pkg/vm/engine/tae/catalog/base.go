@@ -45,7 +45,7 @@ type BaseEntry interface {
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool
-	IsCreating() bool
+	IsCreatingOrAborted() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
 	HasDropCommitted() bool
