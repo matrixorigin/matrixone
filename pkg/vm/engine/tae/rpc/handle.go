@@ -163,9 +163,13 @@ func (h *Handle) HandleRollback(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
 	h.mu.Lock()
+	_, ok := h.mu.txnCtxs[string(meta.GetID())]
 	delete(h.mu.txnCtxs, string(meta.GetID()))
 	h.mu.Unlock()
-
+	//Rollback after pre-commit write.
+	if ok {
+		return
+	}
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
