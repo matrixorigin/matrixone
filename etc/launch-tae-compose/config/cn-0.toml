@@ -19,7 +19,7 @@ name = "S3"
 
 [fileservice.s3]
 bucket = "mo-test"
-endpoint = "http://179.19.0.5:9000"
+endpoint = "http://minio:9000"
 key-prefix = "server/data"
 
 [[fileservice]]
@@ -28,21 +28,21 @@ name = "ETL"
 
 [fileservice.s3]
 bucket = "mo-test"
-endpoint = "http://179.19.0.5:9000"
+endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [hakeeper-client]
-service-addresses = ["179.19.0.4:32001"]
+service-addresses = ["logservice:32001"]
 
 [observability]
 disableTrace = true
 disableMetric = true
 
 [cn]
-uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+uuid = "dd1dccb8-4d3c-41f9-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
-service-address = "179.19.0.2:6002"
-sql-address = "179.19.0.2:6001"
+service-address = "cn-0:6002"
+sql-address = "cn-0:6001"
 
 [cn.Engine]
 type = "distributed-tae"

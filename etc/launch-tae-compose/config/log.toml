@@ -17,7 +17,7 @@ name = "S3"
 
 [fileservice.s3]
 bucket = "mo-test"
-endpoint = "http://179.19.0.5:9000"
+endpoint = "http://minio:9000"
 key-prefix = "server/data"
 
 [[fileservice]]
@@ -26,24 +26,24 @@ name = "ETL"
 
 [fileservice.s3]
 bucket = "mo-test"
-endpoint = "http://179.19.0.5:9000"
+endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [observability]
 statusPort = 7001
 
 [hakeeper-client]
-service-addresses = ["179.19.0.4:32001"]
+discovery-address = "logservice:32001"
 
 [logservice]
 deployment-id = 1
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-raft-address = "179.19.0.4:32000"
-logservice-address = "179.19.0.4:32001"
+raft-address = "logservice:32000"
+logservice-address = "logservice:32001"
 gossip-address = "179.19.0.4:32002"
 logservice-listen-address = "0.0.0.0:32001"
 gossip-seed-addresses = [
-  "179.19.0.4:32002",
+  "logservice:32002",
 ]
 gossip-allow-self-as-seed = true
 

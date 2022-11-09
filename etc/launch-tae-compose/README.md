@@ -1,33 +1,34 @@
 # Launch-tae-CN-tae-dn with docker-compose
 
 - docker compose version >= v2.12.1
+- support profiles: launch-tae-multi-CN-tae-DN, launch-tae-CN-tae-DN
 
 ## build and up 
 
 build new image
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml up -d --build
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
 ```
 
 use default image
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml pull
-docker-compose -f etc/launch-tae-compose/compose.yaml up -d
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN pull
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d
 ```
 
 ## Check log
 
 ```shell
 # cn
-docker compose -f etc/launch-tae-compose/compose.yaml logs cn
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn
 
 # dn
-docker compose -f etc/launch-tae-compose/compose.yaml logs dn
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn
 
 # logService
-docker compose -f etc/launch-tae-compose/compose.yaml logs logService
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logService
 ```
 
 ## minio as s3 service
@@ -37,10 +38,22 @@ docker compose -f etc/launch-tae-compose/compose.yaml logs logService
 username: minio
 password: minio123
 
+## connect service
+
+cn-0
+```shell
+mysql -h 127.0.0.1 -P 7001 -udump -p111
+```
+
+cn-1:
+```shell
+mysql -h 127.0.0.1 -P 8001 -udump -p111
+```
+
 ## down
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml down --remove-orphans
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
 ```
 
 ## clean dangling image
