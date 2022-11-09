@@ -218,6 +218,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	reqCtx := ses.GetRequestContext()
+	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
