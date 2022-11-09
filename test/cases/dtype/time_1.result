@@ -254,7 +254,7 @@ select timediff(t2,t3) from time_04;
 invalid input: timediff function have invalid input args type
 select timediff(t1,t2) from time_01;
 timediff(t1, t2)
--838:59:59
+-1677:59:58
 00:00:00
 null
 00:10:59
@@ -278,7 +278,7 @@ timediff(12:00, 24:59:09.8453)    timediff(-838:59:59.0000, -1122)
 -12:59:09.845300000    -838:48:37
 select * from (select timediff(t1,t2) from time_01) as t;
 timediff(t1, t2)
--838:59:59
+-1677:59:58
 00:00:00
 null
 00:10:59
