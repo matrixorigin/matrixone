@@ -32,7 +32,7 @@ docker compose -f etc/launch-tae-compose/compose.yaml logs logService
 
 ## minio as s3 service
 
-[localhost:9001](localhost:9001)
+[localhost:9001](http://localhost:9001)
 
 username: minio
 password: minio123
@@ -47,4 +47,9 @@ docker-compose -f etc/launch-tae-compose/compose.yaml down --remove-orphans
 
 ```shell
 docker image prune -f
+```
+
+## remove minio storage
+```shell
+docker volume rm launch-tae-compose_minio_storage
 ```

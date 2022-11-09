@@ -1,5 +1,9 @@
 service-type = "DN"
 
+[log]
+level = "debug"
+format = "console"
+max-size = 512
 
 [[fileservice]]
 backend = "DISK"
