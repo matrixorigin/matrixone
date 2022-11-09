@@ -176,17 +176,24 @@ j1
 {}
 {"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "1234567890000000000000000000000000000000000000000000000", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu": ["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}
 create table json_table_81(d1 int,j1 json);
-load data infile'/Users/heni/test_data/json_table_3.txt' into table json_table_81 fields terminated by '|' ignore 1 lines;
+load data infile'$resources/json/json_table_3.txt' into table json_table_81 fields terminated by '|' ignore 1 lines;
+select * from json_table_81;
+d1    j1
+1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 create table json_table_82(d2 int,j2 json);
 insert into json_table_82 select * from json_table_81;
+select * from json_table_82;
+d2    j2
+1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 create temporary table json_table_4a(j1 json);
 insert into json_table_4a values('{"key1": "value1", "key2": "value2"}');
 select * from json_table_4a;
 j1
 {"key1": "value1", "key2": "value2"}
-create external table json_table_5a(d1 int,j1 json)infile{"filepath"='/Users/heni/test_data/json_table_3.txt'} fields terminated by '|' lines terminated by '\n' ignore 1 lines;
+create external table json_table_5a(d1 int,j1 json)infile{"filepath"='$resources/json/json_table_3.txt'} fields terminated by '|' lines terminated by '\n' ignore 1 lines;
 select * from json_table_5a;
 d1    j1
+1    {"debug": true, "networkTimeout": {"connectSocket": 60000, "downloadFile": 60000, "request": 6000, "uploadFile": 60000}, "pages": ["pages/news/news", "pages/index/index", "pages/movie/movie", "pages/logs/logs"], "permission": {"scope.userLocation": {"desc": "你的位置信息将用于小程序位置接口的效果展示"}}, "requiredBackgroundModes": ["audio", "location"], "style": "v2", "tabBar": {"borderStyle": "black", "color": "#000", "custom": "false", "list": [{"iconPath": "pages/images/yuedu.png", "pagePath": "pages/news/news", "selectedIconPath": "pages/images/193.jpg", "text": "新闻"}, {"iconPath": "pages/images/diany.png", "pagePath": "pages/movie/movie", "selectedIconPath": "pages/images/506.jpg", "text": "电影"}], "position": "bottom", "selectedColor": "#ff6600"}, "window": {"backgroundColor": "#ffffff", "backgroundTextStyle": "light", "navigationBarBackgroundColor": "white", "navigationBarTextStyle": "black", "navigationBarTitleText": "哈哈", "navigationStyle": "custom"}}
 select j1 from  json_table_1 union select j1 from  json_table_3;
 j1
 {}
@@ -358,9 +365,7 @@ col0    col1    col2    col3    col4    col5    col6    col7
 {"key1": "value1", "key2": "value2"}    json_table_6.j1    0    null    $.a[0]    0    1    [1, "2", {"aa": "bb"}]
 {"key1": "value1", "key2": "value2"}    json_table_6.j1    1    null    $.a[1]    1    "2"    [1, "2", {"aa": "bb"}]
 {"key1": "value1", "key2": "value2"}    json_table_6.j1    2    null    $.a[2]    2    {"aa": "bb"}    [1, "2", {"aa": "bb"}]
--参数不是json类型,语法错误
 select * from unnest('abc',"$.*") as u;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 1 near "-参数不是json类型,语法错误
-select * from unnest('abc',"$.*") as u;";
+invalid input: json text abc
 select unnest('abc',"$.*") ;
 not supported: function or operator 'unnest'

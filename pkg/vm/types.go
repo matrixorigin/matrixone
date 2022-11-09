@@ -14,8 +14,6 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
-
 const (
 	Top = iota
 	Join
@@ -76,13 +74,7 @@ type Instruction struct {
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
-	Arg InstructionArgument
-}
-
-type InstructionArgument interface {
-	// Free release all the memory allocated from mPool in an operator.
-	// pipelineFailed marks the process status of the pipeline when the method is called.
-	Free(proc *process.Process, pipelineFailed bool)
+	Arg any
 }
 
 type Instructions []Instruction

@@ -34,29 +34,30 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
-		ap.Free(proc, false)
-		return true, nil
+		select {
+		case <-reg.Ctx.Done():
+			return true, nil
+		case reg.Ch <- bat:
+			return true, nil
+		}
 	}
 	if bat.Length() == 0 {
 		return false, nil
 	}
-
-	// do not send the source batch to remote node.
 	for i := range bat.Vecs {
 		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return false, err
 			}
-			bat.Vecs[i].Free(proc.Mp())
+			vector.Clean(bat.Vecs[i], proc.Mp())
 			bat.Vecs[i] = vec
 		}
 	}
-
 	select {
 	case <-reg.Ctx.Done():
 		bat.Clean(proc.Mp())
-		ap.Free(proc, false)
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil
