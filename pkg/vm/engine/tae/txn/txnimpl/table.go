@@ -67,6 +67,10 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	return tbl
 }
 
+func (tbl *txnTable) PrePreareTransfer() (err error) {
+	return tbl.TransferDeletes(tbl.store.txn.GetStartTS())
+}
+
 func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 	if tbl.store.transferTable == nil {
 		return
@@ -85,14 +89,14 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 		if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
 			return
 		}
-		if err = tbl.TransferDelete(&id, node); err != nil {
+		if _, err = tbl.TransferDelete(&id, node); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func (tbl *txnTable) TransferDelete(id *common.ID, node txnif.DeleteNode) (err error) {
+func (tbl *txnTable) TransferDelete(id *common.ID, node txnif.DeleteNode) (transferred bool, err error) {
 	pinned, err := tbl.store.transferTable.Pin(*id)
 	if err != nil {
 		return
@@ -121,6 +125,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node txnif.DeleteNode) (err e
 		return
 	}
 	err = node.ApplyRollback(nil)
+	transferred = err == nil
 	return
 }
 
@@ -610,17 +615,19 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 					continue
 				}
 			}
-			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				fp := blk.AsCommonID()
-				dn := tbl.deleteNodes[*fp]
-				if dn != nil {
-					rowmask = dn.GetRowMaskRefLocked()
+				deleteNode := tbl.deleteNodes[*fp]
+				if deleteNode != nil {
+					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
 			}
 			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask); err != nil {
+				// if rowmask == nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				// 	transferred, err := tbl.TransferDelete(tbl.store.txn.GetStartTS())
+				// }
 				return
 			}
 			blkIt.Next()

@@ -444,6 +444,11 @@ func (db *txnDB) PrePrepare() (err error) {
 		}
 	}
 	for _, table := range db.tables {
+		if err = table.PrePreareTransfer(); err != nil {
+			return
+		}
+	}
+	for _, table := range db.tables {
 		if err = table.PrePrepareDedup(); err != nil {
 			return
 		}

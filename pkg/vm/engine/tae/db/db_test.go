@@ -4119,3 +4119,30 @@ func TestDelete4(t *testing.T) {
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 }
+
+func TestTransfer(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	txn1, rel1 := tae.getRelation()
+	err := rel1.DeleteByFilter(handle.NewEQFilter(bat.Vecs[3].Get(3)))
+	assert.NoError(t, err)
+
+	meta := rel1.GetMeta().(*catalog.TableEntry)
+	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+		types.BuildTS(time.Now().UTC().UnixNano(), 0))
+	assert.NoError(t, err)
+
+	err = txn1.Commit()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+}
