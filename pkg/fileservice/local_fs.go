@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -396,9 +397,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		nBlock := ceilingDiv(fileSize, _BlockSize)
 		contentSize := fileSize - _ChecksumSize*nBlock
 
+		isDir, err := entryIsDir(nativePath, name, info)
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
-			IsDir: entry.IsDir(),
+			IsDir: isDir,
 			Size:  contentSize,
 		})
 	}
@@ -630,4 +635,18 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
+	if entry.IsDir() {
+		return true, nil
+	}
+	if entry.Mode().Type()&fs.ModeSymlink > 0 {
+		stat, err := os.Stat(filepath.Join(path, name))
+		if err != nil {
+			return false, err
+		}
+		return entryIsDir(path, name, stat)
+	}
+	return false, nil
 }
