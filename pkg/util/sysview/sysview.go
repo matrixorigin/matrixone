@@ -162,7 +162,7 @@ var (
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
 			");",
-		"CREATE VIEW COLUMNS AS select" +
+		"CREATE VIEW COLUMNS AS select " +
 			"'def' as TABLE_CATALOG," +
 			"att_database as TABLE_SCHEMA," +
 			"att_relname AS TABLE_NAME," +
@@ -181,7 +181,7 @@ var (
 			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE," +
 			"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY," +
 			"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA," +
-			"'select,insert,update,references' as `PRIVILEGES`" +
+			"'select,insert,update,references' as `PRIVILEGES`," +
 			"att_comment as COLUMN_COMMENT," +
 			"'' as GENERATION_EXPRESSION," +
 			"0 as SRS_ID " +
