@@ -35,6 +35,8 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
+var Address string
+
 // type of scope
 const (
 	Merge = iota
