@@ -724,7 +724,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 				}
 				return nil
 			}, nil)
-			if !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 				return
 			}
 			if len(rows) == 0 {
