@@ -35,27 +35,9 @@ func Prepare(_ *process.Process, arg interface{}) error {
 
 func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
-	for {
-		switch ap.ctr.state {
-		case Eval:
-			anal := proc.GetAnalyze(idx)
-			defer anal.Stop()
-			ok, err := ap.ctr.eval(ap, proc, anal)
-			if err != nil {
-				return ok, err
-			}
-			if ok {
-				ap.ctr.state = End
-			}
-			return ok, err
-		default:
-			proc.SetInputBatch(nil)
-			return true, nil
-		}
-	}
-}
+	anal := proc.GetAnalyze(idx)
+	defer anal.Stop()
 
-func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Analyze) (bool, error) {
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
 		bat := <-reg.Ch
@@ -89,9 +71,10 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 		}
 		ap.ctr.seen += uint64(length)
 		bat.Clean(proc.Mp())
-		proc.SetInputBatch(nil)
 		i--
 	}
+	proc.SetInputBatch(nil)
+	ap.Free(proc, false)
 	return true, nil
 }
 

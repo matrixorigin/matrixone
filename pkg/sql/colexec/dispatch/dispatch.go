@@ -37,12 +37,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
-		for _, reg := range ap.Regs {
-			select {
-			case <-reg.Ctx.Done():
-			case reg.Ch <- nil:
-			}
-		}
 		return true, nil
 	}
 	vecs := ap.vecs[:0]

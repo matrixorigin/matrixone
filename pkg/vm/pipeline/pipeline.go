@@ -17,10 +17,7 @@ package pipeline
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,135 +45,98 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
-	var end bool // exist flag
-	var err error
+func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err error) {
 	var bat *batch.Batch
-
-	defer cleanup(p, proc)
-	if p.reg != nil { // used to handle some push-down request
+	// used to handle some push-down request
+	if p.reg != nil {
 		select {
 		case <-p.reg.Ctx.Done():
 		case <-p.reg.Ch:
 		}
 	}
 	if err = vm.Prepare(p.instructions, proc); err != nil {
+		p.cleanup(proc, true)
 		return false, err
 	}
 	for {
 		// read data from storage engine
 		if bat, err = r.Read(p.attrs, nil, proc.Mp()); err != nil {
+			p.cleanup(proc, true)
 			return false, err
 		}
 		if bat != nil {
 			bat.Cnt = 1
 		}
-		// processing the batch according to the instructions
-		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
+		proc.SetInputBatch(bat)
+		end, err = vm.Run(p.instructions, proc)
+		if err != nil {
+			p.cleanup(proc, true)
 			return end, err
+		}
+		if end {
+			// end is true means pipeline successfully completed
+			p.cleanup(proc, false)
+			return end, nil
 		}
 	}
 }
 
-func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, error) {
-	var end bool // exist flag
-	var err error
-
-	defer cleanup(p, proc)
-	if p.reg != nil { // used to handle some push-down request
+func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
+	// used to handle some push-down request
+	if p.reg != nil {
 		select {
 		case <-p.reg.Ctx.Done():
 		case <-p.reg.Ch:
 		}
 	}
+
 	if err = vm.Prepare(p.instructions, proc); err != nil {
+		p.cleanup(proc, true)
 		return false, err
 	}
 	bat.Cnt = 1
-	// processing the batch according to the instructions
+	pipelineInputBatches := []*batch.Batch{bat, nil}
 	for {
-		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
-			return end, err
-		}
-		proc.Reg.InputBatch = nil
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
-			return end, err
+		for i := range pipelineInputBatches {
+			proc.SetInputBatch(pipelineInputBatches[i])
+			end, err = vm.Run(p.instructions, proc)
+			if err != nil {
+				p.cleanup(proc, true)
+				return end, err
+			}
+			if end {
+				p.cleanup(proc, false)
+				return end, nil
+			}
 		}
 	}
 }
 
-func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
-	var end bool
-	var err error
-
-	// XXX Here is the big problem.   In side defer, we call cleanup
-	// which in turn can calls Run.   Using defer to trigger normal
-	// execution flow is simply WRONG.   Calling Run in cleanup, at
-	// best is extremely bad naming.
-	//
-	// I have observed a panic within, calls defer, calls cleanup,
-	// calls Run, may create a deadlock.
-	//
-	// Will try to repro it with fault inj.
-	//
-	defer func() {
-		cleanup(p, proc)
-		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(proc.Mp())
-				}
-			}
-		}
-		proc.Cancel()
-	}()
-	if p.reg != nil { // used to handle some push-down request
+func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
+	// used to handle some push-down request
+	if p.reg != nil {
 		select {
 		case <-p.reg.Ctx.Done():
 		case <-p.reg.Ch:
 		}
 	}
-	if err := vm.Prepare(p.instructions, proc); err != nil {
+
+	if err = vm.Prepare(p.instructions, proc); err != nil {
+		proc.Cancel()
+		p.cleanup(proc, true)
 		return false, err
 	}
 	for {
-		proc.Reg.InputBatch = nil
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+		end, err = vm.Run(p.instructions, proc)
+		if err != nil {
+			proc.Cancel()
+			p.cleanup(proc, true)
 			return end, err
 		}
-	}
-}
-
-func cleanup(p *Pipeline, proc *process.Process) {
-	proc.Reg.InputBatch = nil
-	_, _ = vm.Run(p.instructions, proc)
-	for i, in := range p.instructions {
-		if in.Op == vm.Connector {
-			arg := p.instructions[i].Arg.(*connector.Argument)
-			if len(arg.Reg.Ch) > 0 {
-				break
-			}
-			select {
-			case <-arg.Reg.Ctx.Done():
-			case arg.Reg.Ch <- nil:
-			}
-			break
-		}
-		if in.Op == vm.Dispatch {
-			arg := p.instructions[i].Arg.(*dispatch.Argument)
-			for _, reg := range arg.Regs {
-				if len(reg.Ch) > 0 {
-					break
-				}
-				select {
-				case <-reg.Ctx.Done():
-				case reg.Ch <- nil:
-				}
-			}
-			break
+		if end {
+			proc.Cancel()
+			p.cleanup(proc, false)
+			return end, nil
 		}
 	}
 }

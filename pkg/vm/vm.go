@@ -16,7 +16,6 @@ package vm
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
