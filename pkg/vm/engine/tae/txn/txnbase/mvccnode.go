@@ -269,6 +269,16 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 	return 1
 }
 
+func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
+	if un.Prepare.Less(o.Prepare) {
+		return -1
+	}
+	if un.Prepare.Equal(o.Prepare) {
+		return un.Compare(o)
+	}
+	return 1
+}
+
 func (un *TxnMVCCNode) SetLogIndex(idx *wal.Index) {
 	un.LogIndex = idx
 
