@@ -30,15 +30,35 @@ type TreeVisitor interface {
 	String() string
 }
 
-type NoopTreeVisitor struct{}
+type BaseTreeVisitor struct {
+	TableFn   func(uint64, uint64) error
+	SegmentFn func(uint64, uint64, uint64) error
+	BlockFn   func(uint64, uint64, uint64, uint64) error
+}
 
-func (visitor *NoopTreeVisitor) String() string { return "" }
+func (visitor *BaseTreeVisitor) String() string { return "" }
 
-func (visitor *NoopTreeVisitor) VisitTable(_, _ uint64) (err error) { return }
+func (visitor *BaseTreeVisitor) VisitTable(dbID, tableID uint64) (err error) {
+	if visitor.TableFn != nil {
+		return visitor.TableFn(dbID, tableID)
+	}
+	return
+}
 
-func (visitor *NoopTreeVisitor) VisitSegment(_, _, _ uint64) (err error) { return }
+func (visitor *BaseTreeVisitor) VisitSegment(dbID, tableID, segmentID uint64) (err error) {
+	if visitor.SegmentFn != nil {
+		return visitor.SegmentFn(dbID, tableID, segmentID)
+	}
+	return
+}
 
-func (visitor *NoopTreeVisitor) VisitBlock(_, _, _, _ uint64) (err error) { return }
+func (visitor *BaseTreeVisitor) VisitBlock(
+	dbID, tableID, segmentID, blockID uint64) (err error) {
+	if visitor.BlockFn != nil {
+		return visitor.BlockFn(dbID, tableID, segmentID, blockID)
+	}
+	return
+}
 
 type stringVisitor struct {
 	buf bytes.Buffer

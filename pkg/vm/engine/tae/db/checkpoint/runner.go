@@ -37,18 +37,6 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type blockVisitor struct {
-	common.NoopTreeVisitor
-	blockFn func(uint64, uint64, uint64, uint64) error
-}
-
-func (visitor *blockVisitor) VisitBlock(dbID, tableID, segmentID, id uint64) (err error) {
-	if visitor.blockFn != nil {
-		err = visitor.blockFn(dbID, tableID, segmentID, id)
-	}
-	return
-}
-
 type timeBasedPolicy struct {
 	interval time.Duration
 }
@@ -649,8 +637,8 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	visitor := new(blockVisitor)
-	visitor.blockFn = func(force bool) func(uint64, uint64, uint64, uint64) error {
+	visitor := new(common.BaseTreeVisitor)
+	visitor.BlockFn = func(force bool) func(uint64, uint64, uint64, uint64) error {
 		return func(dbID, tableID, segmentID, id uint64) (err error) {
 			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
 		}

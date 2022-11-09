@@ -138,7 +138,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	}
 	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
-	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
+	// tbl.store.warChecker.AddTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
 
@@ -166,7 +166,7 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg ha
 		meta.Set1PC()
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
+	// tbl.store.warChecker.AddTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
 }
 
@@ -184,7 +184,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	if meta != nil {
 		tbl.txnEntries = append(tbl.txnEntries, meta)
 	}
-	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
+	// tbl.store.warChecker.AddSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
 
@@ -192,7 +192,17 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, entry)
 	for _, id := range readed {
-		tbl.store.warChecker.Read(tbl.entry.GetDB().ID, id)
+		// warChecker skip non-block read
+		if id.BlockID == 0 {
+			continue
+		}
+
+		// record block into read set
+		tbl.store.warChecker.AddBlock(
+			tbl.entry.GetDB().ID,
+			id.TableID,
+			id.SegmentID,
+			id.BlockID)
 	}
 	return
 }
@@ -242,7 +252,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 	id := meta.AsCommonID()
 	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
+	// tbl.store.warChecker.AddSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
 }
 
@@ -254,7 +264,6 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	tbl.createEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
-	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
 
 func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
@@ -265,7 +274,6 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	tbl.dropEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
-	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 	return nil
 }
 
@@ -351,6 +359,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	}
 	node := tbl.deleteNodes[*id]
 	if node != nil {
+		// TODO: refactor
 		chain := node.GetChain().(*updates.DeleteChain)
 		mvcc := chain.GetController()
 		mvcc.Lock()
@@ -359,9 +368,11 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		}
 		mvcc.Unlock()
 		if err != nil {
-			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
-			blk, _ := seg.GetBlockEntryByID(id.BlockID)
-			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
+			tbl.store.warChecker.AddBlock(
+				tbl.entry.GetDB().ID,
+				id.TableID,
+				id.SegmentID,
+				id.BlockID)
 		}
 		return
 	}
@@ -376,11 +387,14 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	blkData := blk.GetBlockData()
 	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
 	if err == nil {
-		id := blk.AsCommonID()
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
 		}
-		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, id)
+		tbl.store.warChecker.AddBlock(
+			tbl.entry.GetDB().ID,
+			id.TableID,
+			id.SegmentID,
+			id.BlockID)
 	}
 	return
 }

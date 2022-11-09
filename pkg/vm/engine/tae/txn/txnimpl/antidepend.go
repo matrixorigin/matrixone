@@ -19,140 +19,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type warChecker struct {
-	txn      txnif.AsyncTxn
-	catalog  *catalog.Catalog
-	symTable map[string]bool
+	*common.Tree
+	txn     txnif.AsyncTxn
+	catalog *catalog.Catalog
+	visitor common.TreeVisitor
 }
 
 func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
-	return &warChecker{
-		symTable: make(map[string]bool),
-		txn:      txn,
-		catalog:  c,
+	checker := &warChecker{
+		Tree:    common.NewTree(),
+		txn:     txn,
+		catalog: c,
 	}
-}
-
-func (checker *warChecker) readSymbol(symbol string) {
-	if _, ok := checker.symTable[symbol]; !ok {
-		checker.symTable[symbol] = false
-	}
-}
-
-func (checker *warChecker) Read(dbId uint64, id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(dbId)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeBlock(dbId, id.TableID, id.SegmentID, id.BlockID)
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) ReadDB(id uint64) {
-	buf := txnbase.KeyEncoder.EncodeDB(id)
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) ReadTable(dbId uint64, id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(dbId)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) ReadSegment(dbId uint64, id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(dbId)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) ReadBlock(dbId uint64, id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(dbId)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeBlock(dbId, id.TableID, id.SegmentID, id.BlockID)
-	checker.readSymbol(string(buf))
+	visitor := new(common.BaseTreeVisitor)
+	visitor.BlockFn = checker.visitBlock
+	checker.visitor = visitor
+	return checker
 }
 
 func (checker *warChecker) check() (err error) {
-	var entry catalog.BaseEntry
-	for key := range checker.symTable {
-		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
-		db, err := checker.catalog.GetDatabaseByID(did)
-		if err != nil {
-			panic(err)
-		}
-		switch keyt {
-		// XXX  Here we skip checking database, table and segment.
-		// XXX  We still check block
-		// 1. Start txn1
-		// 2. Start txn2
-		// 3. txn2 delete table A and commit
-		// 4. txn1 dml on table A and commit
-		//    - Previously, txn1 will get a rw conflict
-		//    - Now, txn1 can commit successfully
+	return checker.Visit(checker.visitor)
+}
 
-		// case txnbase.KeyT_DBEntry:
-		// 	entry = db.DBBaseEntry
-		// case txnbase.KeyT_TableEntry:
-		// 	tb, err := db.GetTableEntryByID(tid)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-		// 	entry = tb.TableBaseEntry
-		// case txnbase.KeyT_SegmentEntry:
-		// 	tb, err := db.GetTableEntryByID(tid)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-		// 	seg, err := tb.GetSegmentByID(sid)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-		// 	entry = seg.MetaBaseEntry
-		case txnbase.KeyT_BlockEntry:
-			tb, err := db.GetTableEntryByID(tid)
-			if err != nil {
-				panic(err)
-			}
-			seg, err := tb.GetSegmentByID(sid)
-			if err != nil {
-				panic(err)
-			}
-			blk, err := seg.GetBlockEntryByID(bid)
-			if err != nil {
-				panic(err)
-			}
-			entry = blk.MetaBaseEntry
-		default:
-			entry = nil
+func (checker *warChecker) visitBlock(
+	dbID, tableID, segmentID, blockID uint64) (err error) {
+	db, err := checker.catalog.GetDatabaseByID(dbID)
+	if err != nil {
+		panic(err)
+	}
+	table, err := db.GetTableEntryByID(tableID)
+	if err != nil {
+		panic(err)
+	}
+	segment, err := table.GetSegmentByID(segmentID)
+	if err != nil {
+		panic(err)
+	}
+	block, err := segment.GetBlockEntryByID(blockID)
+	if err != nil {
+		panic(err)
+	}
+	if block != nil {
+		commitTs := checker.txn.GetCommitTS()
+		block.RLock()
+		needWait, txnToWait := block.GetLatestNodeLocked().NeedWaitCommitting(commitTs)
+		if needWait {
+			block.RUnlock()
+			txnToWait.GetTxnState(true)
+			block.RLock()
 		}
-		if entry != nil {
-			commitTs := checker.txn.GetCommitTS()
-			entry.RLock()
-			needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(commitTs)
-			if needWait {
-				entry.RUnlock()
-				txnToWait.GetTxnState(true)
-				entry.RLock()
-			}
-			if entry.DeleteBefore(commitTs) {
-				entry.RUnlock()
-				return moerr.NewTxnRWConflict()
-			}
-			entry.RUnlock()
+		if block.DeleteBefore(commitTs) {
+			block.RUnlock()
+			return moerr.NewTxnRWConflict()
 		}
+		block.RUnlock()
 	}
 	return
 }
