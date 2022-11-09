@@ -94,19 +94,29 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	log.Timestamp = entry.Time
 	log.SpanContext = DefaultSpanContext()
 	log.Stack = entry.Stack
-	cutFields := fields[:0]
-	for _, v := range fields {
+	// find SpanContext
+	endIdx := len(fields) - 1
+	for idx, v := range fields {
 		if IsSpanField(v) {
 			log.SpanContext = v.Interface.(*SpanContext)
+			// find endIdx
+			for ; idx < endIdx && IsSpanField(fields[endIdx]); endIdx-- {
+			}
+			if idx <= endIdx {
+				fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
+				endIdx--
+			}
 			continue
 		}
-		cutFields = append(cutFields, v)
+		if idx == endIdx {
+			break
+		}
 	}
 	if !needReport {
 		log.Free()
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
-	buffer, err := jsonEncoder.EncodeEntry(entry, cutFields)
+	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	return buffer, err
