@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"github.com/samber/lo"
 	"strconv"
 
 	"github.com/FastFilter/xorfilter"
@@ -54,7 +55,10 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		return nil, err
+		hashes = lo.Uniq[uint64](hashes)
+		if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+			return nil, err
+		}
 	}
 	return sf, nil
 }
