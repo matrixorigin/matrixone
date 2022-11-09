@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -94,7 +93,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
-	db.TxnMgr.TransferTable = model.NewTransferTable(time.Minute * 1)
+	// db.TxnMgr.TransferTable = model.NewTransferTable(time.Minute * 1)
 	db.TxnMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		db.Fs,

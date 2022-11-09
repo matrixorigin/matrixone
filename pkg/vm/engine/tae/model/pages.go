@@ -69,7 +69,16 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
-func (page *TransferHashPage) TransferOne(from types.Rowid) (dest types.Rowid, ok bool) {
+func (page *TransferHashPage) TrainWithOffset(offset uint32, to types.Rowid) {
+	from := EncodePhyAddrKey(page.id.SegmentID, page.id.BlockID, offset)
+	page.hashmap[from] = to
+}
+
+func (page *TransferHashPage) Train(from, to types.Rowid) {
+	page.hashmap[from] = to
+}
+
+func (page *TransferHashPage) Transfer(from types.Rowid) (dest types.Rowid, ok bool) {
 	dest, ok = page.hashmap[from]
 	return
 }
