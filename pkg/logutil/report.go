@@ -122,7 +122,7 @@ func newTraceLogEncoder() *TraceLogEncoder {
 	e := &TraceLogEncoder{
 		Encoder: zapcore.NewJSONEncoder(
 			zapcore.EncoderConfig{
-				StacktraceKey:  "stacktrace",
+				StacktraceKey:  "",
 				SkipLineEnding: true,
 				LineEnding:     zapcore.DefaultLineEnding,
 				EncodeLevel:    zapcore.LowercaseLevelEncoder,
