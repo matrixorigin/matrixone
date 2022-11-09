@@ -1,0 +1,51 @@
+service-type = "DN"
+
+[log]
+level = "debug"
+format = "console"
+max-size = 512
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "S3"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/etl"
+
+[hakeeper-client]
+service-addresses = ["logservice:32001"]
+
+[dn]
+uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
+service-address = "dn:41010"
+listen-address = "0.0.0.0:41010"
+
+[dn.Txn]
+
+[dn.Txn.Storage]
+backend = "TAE"
+fileservice = "S3"
+log-backend = "logservice"
+
+[dn.Ckp]
+flush-interval = "60s"
+min-count = 100
+scan-interval = "5s"
+incremental-interval = "180s"
+global-interval = "100000s"
