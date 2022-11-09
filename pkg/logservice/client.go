@@ -517,6 +517,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool, maxMessag
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1),
 		morpc.WithClientTag(fmt.Sprintf("hakeeper-client(%s)", tag)),
+		morpc.WithClientLogger(logutil.GetGlobalLogger()),
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
 
