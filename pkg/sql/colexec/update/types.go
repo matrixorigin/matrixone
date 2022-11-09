@@ -17,7 +17,6 @@ package update
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
@@ -30,9 +29,6 @@ type Argument struct {
 	TableID      []string
 	DBName       []string
 	TblName      []string
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 type UpdateCtx struct {

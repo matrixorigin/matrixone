@@ -16,9 +16,7 @@ package mergegroup
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -48,31 +46,4 @@ type container struct {
 type Argument struct {
 	NeedEval bool // need to projection the aggregate column
 	ctr      *container
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanHashMap()
-	}
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
 }
