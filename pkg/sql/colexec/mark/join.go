@@ -75,60 +75,30 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				return true, err
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
+			var err error
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.freeBuildEqVec(proc)
-				if ctr.nullWithBatch != nil {
-					ctr.nullWithBatch.Clean(proc.Mp())
-				}
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.emptyProbe(bat, ap, proc, anal)
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal); err != nil {
-					ctr.freeBuildEqVec(proc)
-					if ctr.nullWithBatch != nil {
-						ctr.nullWithBatch.Clean(proc.Mp())
-					}
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					if ctr.bat != nil {
-						ctr.bat.Clean(proc.Mp())
-					}
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.probe(bat, ap, proc, anal)
 			}
-			return false, nil
+			bat.Clean(proc.Mp())
+			return false, err
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -136,12 +106,16 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	var err error
 	bat := <-proc.Reg.MergeReceivers[1].Ch
 	if bat != nil {
 		joinMap := bat.Ht.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
-		ctr.nullWithBatch = DumpBatch(bat, proc, ctr.nullSels)
-		if err := ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
+		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
+		if err != nil {
+			return err
+		}
+		if err = ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
 			return err
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
@@ -153,7 +127,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result) + 1)
 	rbat.Zs = proc.Mp().GetSels()
@@ -195,7 +168,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result) + 1)
 	// vector.UnionBatch()
@@ -207,10 +179,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.Vecs[lastIndex] = vector.New(types.T_bool.ToType())
 	ctr.joinFlags = make([]bool, bat.Length())
 	ctr.Nsp = nulls.NewWithSize(bat.Length())
+	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.freeProbeEqVec(proc)
 	count := bat.Length()
 	itr := ctr.mp.Map().NewIterator()
 	mSels := ctr.mp.Sels()
@@ -230,7 +202,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if zvals[k] == 0 { // 2.1 : probe tuple has null
-				condState, err := ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
+				condState, err = ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
 				if err != nil {
 					return err
 				}
@@ -305,11 +277,7 @@ func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Exp
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -330,11 +298,7 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.buildEqVec[i] = vec
@@ -348,22 +312,6 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Exp
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeProbeEqVec(proc *process.Process) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.Mp())
-		}
-	}
-}
-
-func (ctr *container) freeBuildEqVec(proc *process.Process) {
-	for i := range ctr.buildEqEvecs {
-		if ctr.buildEqEvecs[i].needFree {
-			ctr.buildEqEvecs[i].vec.Free(proc.Mp())
-		}
-	}
 }
 
 // calculate the state of non-equal conditions for those tuples in JoinMap
@@ -447,7 +395,7 @@ func (ctr *container) handleResultType(idx int, r resultType) {
 	}
 }
 
-func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) *batch.Batch {
+func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*batch.Batch, error) {
 	length := originBatch.Length()
 	flags := make([]uint8, length)
 	for _, sel := range sels {
@@ -458,12 +406,15 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) *b
 		bat.Vecs[i] = vector.New(vec.GetType())
 	}
 	if len(sels) == 0 {
-		return bat
+		return bat, nil
 	}
 	for i, vec := range originBatch.Vecs {
-		vector.UnionBatch(bat.Vecs[i], vec, 0, length, flags, proc.Mp())
+		err := vector.UnionBatch(bat.Vecs[i], vec, 0, length, flags, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	bat.Zs = append(bat.Zs, originBatch.Zs...)
-	return bat
+	return bat, nil
 }
