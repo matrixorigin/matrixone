@@ -1,7 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
 SECONDS=0
 
+# mv log to mount path
 function packLog() {
     mv /matrixone-test/mo-service.log /matrixone-test/tester-log
     mv /matrixone-test/mo-tester/report /matrixone-test/tester-log
@@ -43,16 +46,16 @@ function run_bvt() {
   if [[ "$LAUNCH" == "launch-tae-logservice" ]]; then
     echo "> test case: test/cases"
     cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
-  elif [[ "$LAUNCH" == "launch-tae-CN-tae-DN" ]]; then
+  else
+    # use test/distributed/cases as default test cases
     echo "> test case: test/distributed/cases"
     cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases 2>&1
-  else
-    echo ">>>>>>>>>>>>>>>>>>>>>>>> please choose a launch way"
-    exit 1
   fi
 }
 
 function bvt_ut() {
+  trap "packLog" EXIT
+
   prepare
 
   if [[ "$ENABLE_UT" == "true" ]]; then
@@ -66,4 +69,3 @@ function bvt_ut() {
 }
 
 bvt_ut
-trap "packLog" EXIT
