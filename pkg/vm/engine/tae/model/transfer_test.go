@@ -76,7 +76,7 @@ func TestTransferPage(t *testing.T) {
 
 func TestTransferTable(t *testing.T) {
 	ttl := time.Minute
-	table := NewTransferTable(ttl)
+	table := NewTransferTable[*TransferPage](ttl)
 	defer table.Close()
 
 	id1 := common.ID{BlockID: 1}
@@ -95,9 +95,9 @@ func TestTransferTable(t *testing.T) {
 	assert.True(t, table.AddPage(page1))
 	assert.Equal(t, int64(1), page1.RefCount())
 
-	pinned, err := table.Pin(id2)
+	_, err := table.Pin(id2)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
-	pinned, err = table.Pin(id1)
+	pinned, err := table.Pin(id1)
 	assert.NoError(t, err)
 
 	assert.Equal(t, int64(2), pinned.Item().RefCount())

@@ -26,10 +26,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type TransferTable struct {
+type PageT[T common.IRef] interface {
+	common.IRef
+	Pin() *common.PinnedItem[T]
+	TTL(time.Time, time.Duration) bool
+	ID() *common.ID
+}
+
+type TransferTable[T PageT[T]] struct {
 	sync.RWMutex
 	ttl   time.Duration
-	pages map[common.ID]*common.PinnedItem[*TransferPage]
+	pages map[common.ID]*common.PinnedItem[T]
 }
 
 type TransferPage struct {
@@ -40,14 +47,14 @@ type TransferPage struct {
 	offsets containers.Vector
 }
 
-func NewTransferTable(ttl time.Duration) *TransferTable {
-	return &TransferTable{
+func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
+	return &TransferTable[T]{
 		ttl:   ttl,
-		pages: make(map[common.ID]*common.PinnedItem[*TransferPage]),
+		pages: make(map[common.ID]*common.PinnedItem[T]),
 	}
 }
 
-func (table *TransferTable) Pin(id common.ID) (pinned *common.PinnedItem[*TransferPage], err error) {
+func (table *TransferTable[T]) Pin(id common.ID) (pinned *common.PinnedItem[T], err error) {
 	table.RLock()
 	defer table.RUnlock()
 	var found bool
@@ -58,12 +65,12 @@ func (table *TransferTable) Pin(id common.ID) (pinned *common.PinnedItem[*Transf
 	}
 	return
 }
-func (table *TransferTable) Len() int {
+func (table *TransferTable[T]) Len() int {
 	table.RLock()
 	defer table.RUnlock()
 	return len(table.pages)
 }
-func (table *TransferTable) prepareTTL(now time.Time) (items []*common.PinnedItem[*TransferPage]) {
+func (table *TransferTable[T]) prepareTTL(now time.Time) (items []*common.PinnedItem[T]) {
 	table.RLock()
 	defer table.RUnlock()
 	for _, page := range table.pages {
@@ -74,13 +81,13 @@ func (table *TransferTable) prepareTTL(now time.Time) (items []*common.PinnedIte
 	return
 }
 
-func (table *TransferTable) executeTTL(items []*common.PinnedItem[*TransferPage]) {
+func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 	if len(items) == 0 {
 		return
 	}
 	table.Lock()
 	for _, pinned := range items {
-		delete(table.pages, *pinned.Item().GetSrc())
+		delete(table.pages, *pinned.Item().ID())
 	}
 	table.Unlock()
 	for _, pinned := range items {
@@ -88,12 +95,12 @@ func (table *TransferTable) executeTTL(items []*common.PinnedItem[*TransferPage]
 	}
 }
 
-func (table *TransferTable) RunTTL(now time.Time) {
+func (table *TransferTable[T]) RunTTL(now time.Time) {
 	items := table.prepareTTL(now)
 	table.executeTTL(items)
 }
 
-func (table *TransferTable) AddPage(page *TransferPage) (dup bool) {
+func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	pinned := page.Pin()
 	defer func() {
 		if dup {
@@ -102,7 +109,7 @@ func (table *TransferTable) AddPage(page *TransferPage) (dup bool) {
 	}()
 	table.Lock()
 	defer table.Unlock()
-	id := *page.GetSrc()
+	id := *page.ID()
 	if _, found := table.pages[id]; found {
 		dup = true
 		return
@@ -111,13 +118,13 @@ func (table *TransferTable) AddPage(page *TransferPage) (dup bool) {
 	return
 }
 
-func (table *TransferTable) Close() {
+func (table *TransferTable[T]) Close() {
 	table.Lock()
 	defer table.Unlock()
 	for _, item := range table.pages {
 		item.Close()
 	}
-	table.pages = make(map[common.ID]*common.PinnedItem[*TransferPage])
+	table.pages = make(map[common.ID]*common.PinnedItem[T])
 }
 
 func NewRowIDVector() containers.Vector {
@@ -154,7 +161,7 @@ func (page *TransferPage) Close() {
 }
 
 func (page *TransferPage) GetBornTS() time.Time { return page.bornTS }
-func (page *TransferPage) GetSrc() *common.ID   { return page.src }
+func (page *TransferPage) ID() *common.ID       { return page.src }
 func (page *TransferPage) GetDest() *common.ID  { return page.dest }
 
 func (page *TransferPage) TTL(now time.Time, ttl time.Duration) bool {
