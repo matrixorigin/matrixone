@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -100,6 +101,8 @@ func NewService(
 	}
 	srv.pu = pu
 
+	compile.InitAddress(cfg.ServiceAddress)
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
 		morpc.WithServerLogger(srv.logger),
@@ -152,6 +155,9 @@ func (s *service) Close() error {
 	if err := s.stopTask(); err != nil {
 		return err
 	}
+	if err := s.stopRPCs(); err != nil {
+		return err
+	}
 	return s.server.Close()
 }
 
@@ -162,6 +168,25 @@ func (s *service) stopFrontend() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	return nil
+}
+
+func (s *service) stopRPCs() error {
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

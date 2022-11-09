@@ -260,11 +260,13 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			r.logger.Info("fetch task stopped")
 			return
 		case <-timer.C:
-			tasks, err := r.doFetch()
-			if err != nil {
-				break
+			if !taskFrameworkDisabled() {
+				tasks, err := r.doFetch()
+				if err != nil {
+					break
+				}
+				r.addTasks(ctx, tasks)
 			}
-			r.addTasks(ctx, tasks)
 		}
 		timer.Reset(r.options.fetchInterval)
 	}
@@ -317,7 +319,9 @@ func (r *taskRunner) dispatch(ctx context.Context) {
 			r.logger.Info("dispatch task stopped")
 			return
 		case task := <-r.waitTasksC:
-			r.runTask(ctx, task)
+			if !taskFrameworkDisabled() {
+				r.runTask(ctx, task)
+			}
 		}
 	}
 }
@@ -334,20 +338,22 @@ func (r *taskRunner) retry(ctx context.Context) {
 			r.logger.Info("retry task stopped")
 			return
 		case <-timer.C:
-			now := time.Now()
-			needRetryTasks = needRetryTasks[:0]
-			r.mu.Lock()
-			for idx, rt := range r.mu.retryTasks {
-				if rt.retryAt.After(now) {
-					r.mu.retryTasks = r.mu.retryTasks[:copy(r.mu.retryTasks, r.mu.retryTasks[idx:])]
-					break
+			if !taskFrameworkDisabled() {
+				now := time.Now()
+				needRetryTasks = needRetryTasks[:0]
+				r.mu.Lock()
+				for idx, rt := range r.mu.retryTasks {
+					if rt.retryAt.After(now) {
+						r.mu.retryTasks = r.mu.retryTasks[:copy(r.mu.retryTasks, r.mu.retryTasks[idx:])]
+						break
+					}
+					needRetryTasks = append(needRetryTasks, rt)
 				}
-				needRetryTasks = append(needRetryTasks, rt)
-			}
-			r.mu.Unlock()
-			if len(needRetryTasks) > 0 {
-				for _, rt := range needRetryTasks {
-					r.runTask(ctx, rt)
+				r.mu.Unlock()
+				if len(needRetryTasks) > 0 {
+					for _, rt := range needRetryTasks {
+						r.runTask(ctx, rt)
+					}
 				}
 			}
 		}
@@ -456,7 +462,9 @@ func (r *taskRunner) done(ctx context.Context) {
 			r.logger.Info("done task stopped")
 			return
 		case task := <-r.doneC:
-			r.doTaskDone(ctx, task)
+			if !taskFrameworkDisabled() {
+				r.doTaskDone(ctx, task)
+			}
 		}
 	}
 }
@@ -492,7 +500,9 @@ func (r *taskRunner) heartbeat(ctx context.Context) {
 			r.logger.Info("heartbeat task stopped")
 			return
 		case <-timer.C:
-			r.doHeartbeat(ctx)
+			if !taskFrameworkDisabled() {
+				r.doHeartbeat(ctx)
+			}
 		}
 		timer.Reset(r.options.heartbeatInterval)
 	}

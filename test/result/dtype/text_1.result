@@ -266,9 +266,6 @@ internal error: Can't cast column from TEXT type to VARCHAR type because of one 
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
-insert into t8(col11) values (2020-01-01);
-insert into t8(col11) values (2020-01-01 13:10:10);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as date) from t8;
 cast(col11 as date)
 2020-01-01
@@ -284,8 +281,6 @@ delete from t8 where col11 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 insert into t8(col11) values ('2020-01-01 13:10:59.999999');
-insert into t8(col11) values (2020-01-01 13:10:59.999999);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as timestamp) from t8;
 cast(col11 as timestamp(26))
 2020-01-01 00:00:00

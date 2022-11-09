@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
@@ -99,8 +98,14 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	typ := vec.GetType()
 
 	if vec.GetType().IsVarlen() {
-		header := make([]types.Varlena, len(bs.Header))
-		copy(header, bs.Header)
+		var header []types.Varlena
+		if bs.AsWindow {
+			header = make([]types.Varlena, bs.WinLength)
+			copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
+		} else {
+			header = make([]types.Varlena, len(bs.Header))
+			copy(header, bs.Header)
+		}
 		storage := make([]byte, len(bs.Storage))
 		if len(storage) > 0 {
 			copy(storage, bs.Storage)
@@ -161,8 +166,6 @@ func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
 	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
 		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
-			common.OperandField("Col length is 0"))
 	} else {
 		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
 	}
@@ -226,7 +229,6 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	if v.Nsp.Np != nil {
 		np = roaring64.New()
 		np.AddMany(v.Nsp.Np.ToArray())
-		logutil.Debugf("sie : %d", np.GetCardinality())
 	}
 	vec.ResetWithData(bs, np)
 	return vec

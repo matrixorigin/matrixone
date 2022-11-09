@@ -90,5 +90,6 @@ func (c Config) getClientOptions(logger *zap.Logger) []morpc.ClientOption {
 		morpc.WithClientLogger(logger),
 		morpc.WithClientMaxBackendPerHost(c.MaxConnections),
 		morpc.WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration),
+		morpc.WithClientTag("txn-rpc-sender"),
 	}
 }

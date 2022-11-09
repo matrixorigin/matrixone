@@ -370,7 +370,7 @@ func connectToHAKeeper(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize)
+		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize, "connectToHAKeeper")
 		if err != nil {
 			e = err
 			continue
@@ -497,6 +497,10 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 }
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
+	if c == nil {
+		return pb.Response{},
+			moerr.NewInternalError("hakeeper client is nil")
+	}
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
 	future, err := c.client.Send(ctx, c.addr, r)

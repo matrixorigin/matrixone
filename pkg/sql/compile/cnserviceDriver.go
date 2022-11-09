@@ -140,13 +140,13 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
 	// decode and run the scope.
-	s, err = decodeScope(m.GetData(), c.proc)
+	s, err = decodeScope(m.GetData(), c.proc, true)
 	if err != nil {
 		return nil, err
 	}
 	refactorScope(c, c.ctx, s)
 
-	err = s.ParallelRun(c)
+	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
-func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -284,7 +284,7 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil)
+	s, err := generateScope(proc, p, ctx, nil, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +426,8 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownId:   s.DataSource.PushdownId,
 			PushdownAddr: s.DataSource.PushdownAddr,
 			Expr:         s.DataSource.Expr,
+			TableDef:     s.DataSource.TableDef,
+			Timestamp:    &s.DataSource.Timestamp,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -473,14 +475,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 }
 
 // generateScope generate a scope from scope context and pipeline.
-func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
+func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
+	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
 
 	s := &Scope{
-		Magic:  int(p.GetPipelineType()),
-		IsEnd:  p.IsEnd,
-		IsJoin: p.IsJoin,
-		Plan:   p.Qry,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     p.Qry,
+		IsRemote: isRemote,
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -491,6 +495,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			PushdownId:   dsc.PushdownId,
 			PushdownAddr: dsc.PushdownAddr,
 			Expr:         dsc.Expr,
+			TableDef:     dsc.TableDef,
+			Timestamp:    *dsc.Timestamp,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -524,7 +530,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			id:     p.Children[i].PipelineId,
 			regs:   make(map[*process.WaitRegister]int32),
 		}
-		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], analNodes); err != nil {
+		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], analNodes, isRemote); err != nil {
 			return nil, err
 		}
 	}

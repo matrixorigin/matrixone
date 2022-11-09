@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -261,6 +262,12 @@ type blockReader struct {
 	tableDef   *plan.TableDef
 	primaryIdx int
 	expr       *plan.Expr
+
+	// cached meta data.
+	colIdxs        []uint16
+	colTypes       []types.Type
+	colNulls       []bool
+	pkidxInColIdxs int
 }
 
 type blockMergeReader struct {
@@ -270,6 +277,11 @@ type blockMergeReader struct {
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
+
+	// cached meta data.
+	colIdxs  []uint16
+	colTypes []types.Type
+	colNulls []bool
 }
 
 type mergeReader struct {

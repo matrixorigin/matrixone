@@ -432,5 +432,7 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
-	return nil
+	return []morpc.ClientOption{
+		morpc.WithClientTag("log-heartbeat"),
+	}
 }

@@ -41,6 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+var (
+	FillString = []string{"", "0", "00", "000", "0000", "00000", "000000", "0000000"}
+)
+
 //const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
@@ -82,7 +86,14 @@ func (ts Timestamp) Unix() int64 {
 
 func (ts Timestamp) UnixToFloat() float64 {
 	return float64(int64(ts)-unixEpoch) / microSecsPerSec
-	//strconv.ParseFloat()
+}
+
+func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
+	a, err := Decimal128_FromStringWithScale(fmt.Sprintf("%d", int64(ts)-unixEpoch), 64, 6)
+	if err != nil {
+		return a, err
+	}
+	return a.DivInt64(microSecsPerSec), nil
 }
 
 // this scaleTable stores the corresponding microseconds value for a precision

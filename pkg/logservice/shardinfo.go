@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -43,7 +44,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, address, respPool, defaultMaxMessageSize)
+	cc, err := getRPCClient(ctx, address, respPool, defaultMaxMessageSize, "GetShardInfo")
 	if err != nil {
 		return ShardInfo{}, false, err
 	}

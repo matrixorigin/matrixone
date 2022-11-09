@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -73,8 +72,6 @@ func (rel *txnRelation) Delete(_ context.Context, bat *batch.Batch, col string) 
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
 	if data.Typ.Oid == types.T_any {
 		data.Typ = schema.ColDefs[idx].Type
-		logutil.Warn("[Moengine]", common.OperationField("Delete"),
-			common.OperandField("Col type is any"))
 	}
 	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()

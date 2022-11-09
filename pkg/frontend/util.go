@@ -433,6 +433,18 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 	case types.T_uuid:
 		val := vector.GetValueAt[types.Uuid](vec, 0)
 		return val.ToString(), nil
+	case types.T_date:
+		val := vector.GetValueAt[types.Date](vec, 0)
+		return val.String(), nil
+	case types.T_time:
+		val := vector.GetValueAt[types.Time](vec, 0)
+		return val.String(), nil
+	case types.T_datetime:
+		val := vector.GetValueAt[types.Datetime](vec, 0)
+		return val.String(), nil
+	case types.T_timestamp:
+		val := vector.GetValueAt[types.Timestamp](vec, 0)
+		return val.String(), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}

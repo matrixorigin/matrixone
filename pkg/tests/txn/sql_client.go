@@ -121,6 +121,7 @@ func (kop *sqlTxn) Rollback() error {
 		return nil
 	}
 
+	kop.mu.closed = true
 	err := kop.txn.Rollback()
 	if err != nil {
 		return multierr.Append(err, kop.db.Close())

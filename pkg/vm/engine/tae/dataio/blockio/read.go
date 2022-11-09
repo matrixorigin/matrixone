@@ -50,29 +50,18 @@ func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
 	columns []string,
+	colIdxs []uint16,
+	colTypes []types.Type,
+	colNulls []bool,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*batch.Batch, error) {
 
-	// prepare
-	columnLength := len(columns)
-	colIdxs := make([]uint16, columnLength)
-	colTyps := make([]types.Type, columnLength)
-	colNulls := make([]bool, columnLength)
-	for i, column := range columns {
-		colIdxs[i] = uint16(tableDef.Name2ColIndex[column])
-		colDef := tableDef.Cols[colIdxs[i]]
-		colTyps[i] = types.T(colDef.Typ.Id).ToType()
-		if colDef.Default != nil {
-			colNulls[i] = colDef.Default.NullAbility
-		}
-	}
-
 	// read
 	columnBatch, err := BlockReadInner(
 		ctx, info,
-		columns, colIdxs, colTyps, colNulls,
+		columns, colIdxs, colTypes, colNulls,
 		types.TimestampToTS(ts), fs, pool,
 	)
 	if err != nil {

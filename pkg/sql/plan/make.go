@@ -49,6 +49,23 @@ func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
 	}
 }
 
+func makePlan2Decimal128ConstNullExpr() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:        int32(types.T_decimal128),
+			Width:     34,
+			Scale:     0,
+			Precision: 34,
+			Nullable:  false,
+		},
+	}
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{

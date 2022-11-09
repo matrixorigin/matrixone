@@ -347,6 +347,7 @@ func (c *testCluster) Options() Options {
 
 func (c *testCluster) Close() error {
 	defer logutil.LogClose(c.logger, "tests-framework")()
+	c.logger.Info("closing testCluster")
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1394,10 +1395,12 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 
 		opt = append(opt,
 			cnservice.WithLogger(c.logger))
-		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		ctx, cancel := context.WithCancel(context.Background())
+		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
 			panic(err)
 		}
+		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",

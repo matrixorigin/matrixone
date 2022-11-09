@@ -47,6 +47,8 @@ type CNService interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	// WaitSystemInitCompleted wait system init task completed
 	WaitSystemInitCompleted(ctx context.Context) error
+	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
+	SetCancel(context.CancelFunc)
 }
 
 // cnService wraps cnservice.Service.
@@ -57,6 +59,8 @@ type cnService struct {
 	status ServiceStatus
 	svc    cnservice.Service
 	cfg    *cnservice.Config
+
+	cancel context.CancelFunc
 }
 
 func (c *cnService) Start() error {
@@ -80,6 +84,7 @@ func (c *cnService) Close() error {
 
 	if c.status == ServiceStarted {
 		err := c.svc.Close()
+		c.cancel()
 		if err != nil {
 			return err
 		}
@@ -117,6 +122,10 @@ func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 
 func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
 	return c.svc.WaitSystemInitCompleted(ctx)
+}
+
+func (c *cnService) SetCancel(cancel context.CancelFunc) {
+	c.cancel = cancel
 }
 
 // cnOptions is options for a cn service.

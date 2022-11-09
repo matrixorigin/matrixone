@@ -1,0 +1,291 @@
+drop table if exists text_01;
+drop table if exists text_02;
+drop table if exists text_03;
+drop table if exists text_04;
+drop table if exists blob_01;
+drop table if exists blob_02;
+drop table if exists blob_03;
+drop table if exists blob_04;
+drop table if exists blob_05;
+create table text_01(t1 text,t2 text,t3 text);
+insert into text_01 values ('中文123abcd','',NULL);
+insert into text_01 values ('yef&&190',' wwww ',983);
+insert into text_01 select '',null,'中文';
+insert into text_01 select '123','7834','commmmmmment';
+insert into text_01 values ('789',' 23:50:00','20');
+select * from text_01;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+create table text_02(t1 text,t2 tinytext,t3 mediumtext,t4 longtext,t5 text);
+load data infile '$resources/blob_file/blob1.csv' into table text_02;
+select * from text_02;
+t1    t2    t3    t4    t5
+cat    345.678    2020-10-09    0001-01-01 00:00:00.000000    1970-01-01 00:00:01.0000
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:08.9083    2030-01-01 03:14:07.999999
+insert into text_02 values ("123木头人","zt@126.com","1000-01-01","9999-12-31 23:59:59.999999","2038-01-19 03:14:07.999999");
+select * from text_02;
+t1    t2    t3    t4    t5
+cat    345.678    2020-10-09    0001-01-01 00:00:00.000000    1970-01-01 00:00:01.0000
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:08.9083    2030-01-01 03:14:07.999999
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+create external table text_03(t1 text,t2 tinytext,t3 mediumtext,t4 longtext,t5 text)infile{"filepath"='$resources/blob_file/blob1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select * from text_03;
+t1    t2    t3    t4    t5
+cat    345.678    2020-10-09    0001-01-01 00:00:00.000000    1970-01-01 00:00:01.0000
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:08.9083    2030-01-01 03:14:07.999999
+update text_02 set t3='yelllllow' where t1='cat';
+update text_02 set t2='786374' where t1='cat';
+select t2,t3 from text_02 where t1='cat';
+t2    t3
+786374    yelllllow
+delete from text_02  where t4='0001-01-01 00:00:00.000000';
+select * from text_02;
+t1    t2    t3    t4    t5
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+abc$%*()#$    ttttt    9999-12-31    2019-10-23 23:00:08.9083    2030-01-01 03:14:07.999999
+123木头人    zt@126.com    1000-01-01    9999-12-31 23:59:59.999999    2038-01-19 03:14:07.999999
+truncate table text_02;
+select * from text_02;
+t1    t2    t3    t4    t5
+select cast(t2 as time), cast(t3 as time)from text_01 where t1='789';
+cast(t2 as time(26))    cast(t3 as time(26))
+23:50:00    00:00:20
+select cast(t2 as blob) from text_01;
+cast(t2 as blob)
+
+ wwww 
+null
+7834
+ 23:50:00
+select cast(null as text),cast("" as text);
+cast(null as text)    cast( as text)
+null    
+create table text_04(t1 text,t2 time,t3 json,t4 blob);
+insert into text_04 values ('ttttt','12:00','{"a":"1","b":"2"}','yes');
+select * from text_04;
+t1    t2    t3    t4
+ttttt    12:00:00    {"a": "1", "b": "2"}    yes
+select cast(t2 as text)from text_04;
+cast(t2 as text)
+12:00:00
+select cast(t3 as text)from text_04;
+invalid argument operator cast, bad value [JSON TEXT]
+select cast(t4 as text)from text_04;
+cast(t4 as text)
+yes
+select count(t1),max(t2),min(t3) from text_01;
+count(t1)    max(t2)    min(t3)
+5    7834    20
+select bin(t3) from text_01;
+invalid argument cast to uint, bad value 
+select space(t3) from text_01;
+invalid argument cast to uint, bad value 
+select * from text_01 where t3 is null or length (t1)  >3;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+select * from text_01 where t3 between  '100' and '1000';
+t1    t2    t3
+select * from text_01 where t3 not between  '100' and '1000';
+t1    t2    t3
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+select * from text_01 where t1 in('yef&&190','','789') and t2 not in(' 23:50:00');
+t1    t2    t3
+yef&&190     wwww     983
+create table text_05(t1 text,t2 text,t3 text, t4 varchar(250),t5 char(250));
+insert into text_05 select * from text_03;
+insert into text_05 values ('789',' 23:50:00','20','12345','noooooo');
+select t1,t2 from text_01 intersect select t1,t2 from text_05;
+t1    t2
+789     23:50:00
+select t1,t2 from text_01 minus select t1,t2 from text_05;
+t1    t2
+    null
+中文123abcd    
+yef&&190     wwww 
+123    7834
+select * from (select * from text_01 where t1 like '%123%');
+t1    t2    t3
+中文123abcd        null
+123    7834    commmmmmment
+select * from text_01 where t1 in (select t1 from text_05);
+t1    t2    t3
+789     23:50:00    20
+select * from text_01 where t2 > (select t2 from text_05 where t1='789');
+t1    t2    t3
+yef&&190     wwww     983
+123    7834    commmmmmment
+select t1,t2,t3 from text_01 where t1 < any(select t2 from text_05);
+t1    t2    t3
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+select t1,t2,t3 from text_01 where t1 >= all(select t2 from text_05);
+t1    t2    t3
+中文123abcd        null
+select t1,t2,t3 from text_01 where t1 >= some(select t2 from text_05);
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+123    7834    commmmmmment
+789     23:50:00    20
+select * from text_01 where exists(select t2 from text_05);
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+select * from text_01 where not exists(select t2 from text_05);
+t1    t2    t3
+create table text_02(t1 int,t2 text,t3 text,primary key(t1,t2));
+not supported: text type in index
+create table text_02(t1 int,t2 text primary key,t3 text);
+not supported: text type in primary key
+prepare stmt1 from 'select * from text_01';
+execute stmt1;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+create table blob_01(b1 blob,b2 blob,b3 blob);
+insert into blob_01 values ('no','中文','89233432234234 ');
+insert into blob_01 values ('',' hhhh@126.com','0001-01-01');
+insert into blob_01 values ('#$%^&*()',NULL,null);
+select * from blob_01;
+b1    b2    b3
+no    ä¸­æ    89233432234234 
+     hhhh@126.com    0001-01-01
+#$%^&*()    null    null
+select length(b1),length(b2),length(b3) from blob_01;
+length(b1)    length(b2)    length(b3)
+2    6    15
+0    13    10
+8    null    null
+select substring(b3,5),substr(b2,-3,2) from blob_01;
+substring(b3, 5)    substr(b2, -3, 2)
+3432234234     
+-01-01    co
+null    
+select count(b1) from blob_01;
+count(b1)
+3
+select max(b2),min(b3) from blob_01;
+max(b2)    min(b3)
+ä¸­æ    0001-01-01
+select b1||b2 from blob_01;
+concat(b1, b2)
+no中文
+ hhhh@126.com
+null
+create table blob_02(b1 blob primary key,b2 int);
+not supported: blob type in primary key
+create table blob_02(b1 blob,b2 int,primary key(b1,b2));
+not supported: blob type in index
+create table blob_02(b1 blob not null,b2 int);
+insert into blob_02 values (null,40);
+constraint violation: Column 'b1' cannot be null
+insert into blob_02 values ('12345',43);
+insert into blob_02 values ('tennis','0934');
+select * from blob_02;
+b1    b2
+12345    43
+tennis    934
+update blob_02 set b1='abc';
+select * from blob_02;
+b1    b2
+abc    43
+abc    934
+delete from blob_02 where b2=43;
+select * from blob_02;
+b1    b2
+abc    934
+truncate table blob_02;
+select * from blob_02;
+b1    b2
+drop table blob_02;
+create table blob_02(b1 blob default 'tom',b2 int);
+insert into blob_02(b2) values (50);
+select * from blob_02;
+b1    b2
+tom    50
+drop table blob_02;
+select cast('苏轼' as blob),cast('alex' as blob),cast('123' as blob);
+cast(苏轼 as blob)    cast(alex as blob)    cast(123 as blob)
+èè½¼    alex    123
+select cast('@#$%^' as blob),cast('hhh@123'as blob);
+cast(@#$%^ as blob)    cast(hhh@123 as blob)
+@#$%^    hhh@123
+create table blob_03(t1 text,t2 time,t3 json,t4 blob,t5 int,t6 varchar,t7 double,t8 decimal(6,3));
+insert into blob_03 values ('枫叶','0150','{"a":"1","b":"2"}','checkin',30,'zzzow',89.02,23.90);
+select cast(t1 as blob),cast(t2 as blob),cast(t5 as blob),cast(t6 as blob),cast(t7 as blob),cast(t8 as blob) from blob_03;
+cast(t1 as blob)    cast(t2 as blob)    cast(t5 as blob)    cast(t6 as blob)    cast(t7 as blob)    cast(t8 as blob)
+æ«å¶    00:01:50    30    zzzow    89.02    23.900
+select cast(t3 as blob) from blob_03;
+invalid argument operator cast, bad value [JSON BLOB]
+select cast(t4 as varchar(255))from blob_03;
+cast(t4 as varchar(255))
+checkin
+select load_file(null);
+load_file(null)
+null
+select load_file('');
+file  is not found
+select load_file('/opt/aaa.csv');
+file aaa.csv is not found
+select load_file(12);
+file 12 is not found
+select load_file('$resources/blob_file/blob1.csv');
+load_file(/Users/heni/matrixone/test/resources/blob_file/blob1.csv)
+"cat","345.678","2020-10-09","0001-01-01 00:00:00.000000","1970-01-01 00:00:01.0000"\n"123木头人","zt@126.com","1000-01-01","9999-12-31 23:59:59.999999","2038-01-19 03:14:07.999999"\n"abc$%*()#$","ttttt","9999-12-31","2019-10-23 23:00:08.9083","2030-01-01 03:14:07.999999"
+select length(load_file('$resources/blob_file/blob3.jpeg'));
+length(load_file(/Users/heni/matrixone/test/resources/blob_file/blob3.jpeg))
+55886
+select length(load_file('$resources/blob_file/blob1.csv'));
+length(load_file(/Users/heni/matrixone/test/resources/blob_file/blob1.csv))
+273
+create table blob_04(a int,b varchar(290));
+insert into blob_04 values(1,load_file('$resources/blob_file/blob1.csv'));
+create table blob_02(a int,b blob);
+insert into blob_02 values(3,load_file('$resources/blob_file/blob1.csv'));
+insert into blob_02 values(4,load_file('$resources/blob_file/blob3.jpeg'));
+insert into blob_02 values(5,load_file('$resources/blob_file/blob4.gif'));
+insert into blob_02 values(6,load_file('$resources/blob_file/blob5.docx'));
+insert into blob_02 values(7,load_file('$resources/blob_file/blob6.pptx'));
+insert into blob_02 values(8,load_file('$resources/blob_file/blob7.pdf'));
+insert into blob_02 values(9,load_file('$resources/blob_file/blob8.xlsx'));
+insert into blob_02 values(10,load_file('$resources/blob_file/blob9.xml'));
+select a,length(b) from blob_02;
+a    length(b)
+3    273
+4    55886
+5    48008
+6    10098
+7    44945
+8    15324
+9    8655
+10    3448
+insert into blob_02 values(1,load_file('$resources/blob_file/blob2.mp3'));
+insert into blob_02 select 2,load_file('$resources/blob_file/blob2.mp3');
+select a,length(b) from blob_02 where a in (1,2);
+prepare stmt2 from 'create table blob_05(a int,b blob)';
+execute stmt2 ;
+prepare stmt2 from 'insert into blob_05 values(4, load_file("$resources/blob_file/blob3.jpeg"))';
+execute stmt2 ;
+prepare stmt2 from 'select length(b) from blob_05';
+execute stmt2 ;
+length(b)
+55886

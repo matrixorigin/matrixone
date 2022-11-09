@@ -2286,6 +2286,9 @@ func incTransactionCounter(tenant string) {
 }
 
 func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	if t == metric.SQLTypeRollback {
+		return
+	}
 	metric.TransactionErrorsCounter(tenant, t).Inc()
 }
 

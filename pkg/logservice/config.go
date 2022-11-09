@@ -402,6 +402,8 @@ func (c *HAKeeperClientConfig) Validate() error {
 
 // ClientConfig is the configuration for log service clients.
 type ClientConfig struct {
+	// Tag client tag
+	Tag string
 	// ReadOnly indicates whether this is a read-only client.
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.

@@ -22,11 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
@@ -42,6 +44,7 @@ func updatePartition(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 	}
 	for i := range logTails {
 		if consumeLogTail(idx, primaryIdx, tbl, ts, ctx, db, mvcc, logTails[i]); err != nil {
+			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
 	}
@@ -66,21 +69,31 @@ func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTai
 }
 
 func consumeLogTail(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
-	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) error {
-	if err := consumeCheckPoint(logTail.CkpLocation); err != nil {
-		return err
+	ctx context.Context, db *DB, mvcc MVCC, logTail *api.SyncLogTailResp) (err error) {
+	var entries []*api.Entry
+
+	if entries, err = logtail.LoadCheckpointEntries(
+		logTail.CkpLocation,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+		tbl.db.fs); err != nil {
+		return
 	}
-	for i := 0; i < len(logTail.Commands); i++ {
-		if err := consumeEntry(idx, primaryIdx, tbl, ts, ctx,
-			db, mvcc, logTail.Commands[i]); err != nil {
-			return err
+	for _, e := range entries {
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+			db, mvcc, e); err != nil {
+			return
 		}
 	}
-	return nil
-}
 
-func consumeCheckPoint(ckpt string) error {
-	// TODO
+	for i := 0; i < len(logTail.Commands); i++ {
+		if err = consumeEntry(idx, primaryIdx, tbl, ts, ctx,
+			db, mvcc, logTail.Commands[i]); err != nil {
+			return
+		}
+	}
 	return nil
 }
 
@@ -100,7 +113,9 @@ func consumeEntry(idx, primaryIdx int, tbl *table, ts timestamp.Timestamp,
 			timestamps := vector.MustTCols[types.TS](timeVec)
 			for i, v := range vs {
 				if err := tbl.parts[idx].DeleteByBlockID(ctx, timestamps[i].ToTimestamp(), v); err != nil {
-					return err
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict) {
+						return err
+					}
 				}
 			}
 			return db.getMetaPartitions(e.TableName)[idx].Insert(ctx, -1, e.Bat, false)

@@ -94,7 +94,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 				defer func() {
 					errChan <- err
 				}()
-				err = cs.ParallelRun(c)
+				err = cs.ParallelRun(c, cs.IsRemote)
 			}(s.PreScopes[i])
 		case Pushdown:
 			go func(cs *Scope) {
@@ -123,8 +123,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() {
-		return s.ParallelRun(c)
+	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() || s.NodeInfo.Addr == Address {
+		return s.ParallelRun(c, s.IsRemote)
 	}
 
 	err := s.remoteRun(c)
@@ -135,7 +135,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 }
 
 // ParallelRun try to execute the scope in parallel way.
-func (s *Scope) ParallelRun(c *Compile) error {
+func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
 
 	if s.IsJoin {
@@ -145,7 +145,15 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		return s.MergeRun(c)
 	}
 	mcpu := s.NodeInfo.Mcpu
-	{
+	if remote {
+		var err error
+
+		rds, err = c.e.NewBlockReader(c.ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
+			s.NodeInfo.Data, s.DataSource.TableDef)
+		if err != nil {
+			return err
+		}
+	} else {
 		var err error
 
 		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
@@ -394,7 +402,7 @@ func dupScope(s *Scope) *Scope {
 	if err != nil {
 		return nil
 	}
-	rs, err := decodeScope(data, s.Proc)
+	rs, err := decodeScope(data, s.Proc, s.IsRemote)
 	if err != nil {
 		return nil
 	}
