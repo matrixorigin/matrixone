@@ -41,6 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+var (
+	FillString = []string{"", "0", "00", "000", "0000", "00000", "000000", "0000000"}
+)
+
 //const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
