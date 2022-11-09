@@ -102,12 +102,8 @@ create table time_04 (t1 int,t2 time,t3 datetime,t4 timestamp);
 insert into time_04 values (1,"344:59:09","2020-09-12","2021-09-22 10:01:23.903");
 select * from time_04;
 select timediff(t2,t3) from time_04;
--- @bvt:issue#6321
 select timediff(t1,t2) from time_01;
--- @bvt:issue
 select timediff(t1,NULL),timediff(NULL,t2)from time_01;
 select timediff('20',NULL) , timediff('20','24:59:09.8453');
 select timediff('12:00','24:59:09.8453'),timediff('-838:59:59.0000','-1122');
--- @bvt:issue#6321
 select * from (select timediff(t1,t2) from time_01) as t;
--- @bvt:issue

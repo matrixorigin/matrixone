@@ -116,11 +116,11 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	return
 }
 
-func (be *MVCCChain) MustOneNodeLocked() txnif.MVCCNode {
+func (be *MVCCChain) MustOneNodeLocked() (txnif.MVCCNode, bool) {
 	if be.MVCC.Depth() != 1 {
-		return nil
+		return nil, be.MVCC.Depth() == 0
 	}
-	return be.MVCC.GetHead().GetPayload()
+	return be.MVCC.GetHead().GetPayload(), false
 }
 
 // GetLatestNodeLocked gets the latest mvcc node.
@@ -226,12 +226,15 @@ func (be *MVCCChain) HasCommittedNode() bool {
 	return found
 }
 
-func (be *MVCCChain) IsCreating() bool {
-	un := be.MustOneNodeLocked()
+func (be *MVCCChain) IsCreatingOrAborted() bool {
+	un, empty := be.MustOneNodeLocked()
+	if empty {
+		return true
+	}
 	if un == nil {
 		return false
 	}
-	return un.IsActive()
+	return un.IsActive() || un.IsAborted()
 }
 
 func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
@@ -364,6 +367,7 @@ func (be *MVCCChain) PrepareRollback() (bool, error) {
 	be.Lock()
 	defer be.Unlock()
 	node := be.MVCC.GetHead()
+	_ = node.GetPayload().PrepareRollback()
 	be.MVCC.Delete(node)
 	isEmpty := be.IsEmpty()
 	return isEmpty, nil
