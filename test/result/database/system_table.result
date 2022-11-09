@@ -10,8 +10,13 @@ SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
 id    user    host    db    command    time    state    info
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
-SELECT * FROM `information_schema`.`schemata` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`schemata` LIMIT 5;
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    mo_catalog    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+def    mo_task    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+def    information_schema    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+def    mysql    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+def    system_metrics    utf8mb4    utf8mb4_0900_ai_ci    null    NO
 SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
 table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
@@ -37,7 +42,7 @@ procs_priv
 columns_priv
 tables_priv
 show columns from `user`;
-Field    Type    Null    Key    Default    Comment
+Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
 user    CHAR    NO        NULL        
 select_priv    VARCHAR    NO        N        
@@ -89,32 +94,32 @@ password_reuse_history    SMALLINT UNSIGNED    YES        null
 password_reuse_time    SMALLINT UNSIGNED    YES        null        
 password_require_current    VARCHAR    YES        null        
 user_attributes    JSON    YES        null        
-__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL    
+__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL        
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-select_priv    VARCHAR    NO        N
-insert_priv    VARCHAR    NO        N
-update_priv    VARCHAR    NO        N
-delete_priv    VARCHAR    NO        N
-create_priv    VARCHAR    NO        N
-drop_priv    VARCHAR    NO        N
-grant_priv    VARCHAR    NO        N
-references_priv    VARCHAR    NO        N
-index_priv    VARCHAR    NO        N
-alter_priv    VARCHAR    NO        N
-create_tmp_table_priv    VARCHAR    NO        N
-lock_tables_priv    VARCHAR    NO        N
-create_view_priv    VARCHAR    NO        N
-show_view_priv    VARCHAR    NO        N
-create_routine_priv    VARCHAR    NO        N
-alter_routine_priv    VARCHAR    NO        N
-execute_priv    VARCHAR    NO        N
-event_priv    VARCHAR    NO        N
-trigger_priv    VARCHAR    NO        N
-__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        NULL        
+db    CHAR    NO        NULL        
+user    CHAR    NO        NULL        
+select_priv    VARCHAR    NO        N        
+insert_priv    VARCHAR    NO        N        
+update_priv    VARCHAR    NO        N        
+delete_priv    VARCHAR    NO        N        
+create_priv    VARCHAR    NO        N        
+drop_priv    VARCHAR    NO        N        
+grant_priv    VARCHAR    NO        N        
+references_priv    VARCHAR    NO        N        
+index_priv    VARCHAR    NO        N        
+alter_priv    VARCHAR    NO        N        
+create_tmp_table_priv    VARCHAR    NO        N        
+lock_tables_priv    VARCHAR    NO        N        
+create_view_priv    VARCHAR    NO        N        
+show_view_priv    VARCHAR    NO        N        
+create_routine_priv    VARCHAR    NO        N        
+alter_routine_priv    VARCHAR    NO        N        
+execute_priv    VARCHAR    NO        N        
+event_priv    VARCHAR    NO        N        
+trigger_priv    VARCHAR    NO        N        
+__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL        
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -125,17 +130,17 @@ routine_type    VARCHAR    NO        NULL
 grantor    VARCHAR    NO        NULL        
 proc_priv    VARCHAR    NO        NULL        
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL    
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-table_name    CHAR    NO        NULL
-column_name    CHAR    NO        NULL
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-column_priv    VARCHAR    NO        NULL
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        NULL        
+db    CHAR    NO        NULL        
+user    CHAR    NO        NULL        
+table_name    CHAR    NO        NULL        
+column_name    CHAR    NO        NULL        
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
+column_priv    VARCHAR    NO        NULL        
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL        
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
 host    CHAR    NO        NULL        
@@ -146,7 +151,7 @@ grantor    VARCHAR    NO        NULL
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
 table_priv    VARCHAR    NO        NULL        
 column_priv    VARCHAR    NO        NULL        
-__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL    
+__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -175,7 +180,7 @@ db    VARCHAR    YES        null
 command    VARCHAR    NO        NULL        
 time    INT    NO        0        
 state    VARCHAR    YES        null        
-info    BLOB    YES        NULL    
+info    BLOB    YES        NULL        
 show columns from `USER_PRIVILEGES`;
 no such table information_schema.USER_PRIVILEGES
 show columns from `SCHEMATA`;

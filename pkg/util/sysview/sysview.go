@@ -179,9 +179,9 @@ var (
 			"'utf8' as CHARACTER_SET_NAME," +
 			"'utf8_bin' as COLLATION_NAME," +
 			"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE," +
-			"att_uniq_name as COLUMN_KEY," +
-			"'' as EXTRA," +
-			"'' as `PRIVILEGES`," +
+			"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY," +
+			"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA," +
+			"'select,insert,update,references' as `PRIVILEGES`" +
 			"att_comment as COLUMN_COMMENT," +
 			"'' as GENERATION_EXPRESSION," +
 			"0 as SRS_ID " +
@@ -247,14 +247,22 @@ var (
 			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 			");",
-		"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
-			"CATALOG_NAME varchar(64)," +
-			"SCHEMA_NAME varchar(64)," +
-			"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
-			"DEFAULT_COLLATION_NAME varchar(64)," +
-			"SQL_PATH binary(0)," +
-			"DEFAULT_ENCRYPTION varchar(10)" +
-			");",
+		//"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
+		//	"CATALOG_NAME varchar(64)," +
+		//	"SCHEMA_NAME varchar(64)," +
+		//	"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
+		//	"DEFAULT_COLLATION_NAME varchar(64)," +
+		//	"SQL_PATH binary(0)," +
+		//	"DEFAULT_ENCRYPTION varchar(10)" +
+		//	");",
+		"CREATE VIEW SCHEMATA AS SELECT " +
+			"dat_catalog_name AS CATALOG_NAME," +
+			"datname AS SCHEMA_NAME," +
+			"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
+			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+			"NULL AS SQL_PATH," +
+			"'NO' AS DEFAULT_ENCRYPTION " +
+			"FROM mo_catalog.mo_database;",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
