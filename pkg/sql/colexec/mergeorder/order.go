@@ -50,29 +50,33 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-
-	// get batch from merge receivers and do merge sort.
-	// save the sort result in ctr.bat.
-	if err := ctr.build(ap, proc, anal); err != nil {
-		ap.Free(proc, true)
-		return false, err
-	}
-
-	// output the sort result.
-	if ctr.bat != nil {
-		for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-			vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+	for {
+		switch ctr.state {
+		case Build:
+			if err := ctr.build(ap, proc, anal); err != nil {
+				ctr.state = End
+				return true, err
+			}
+			ctr.state = Eval
+		case Eval:
+			if ctr.bat != nil {
+				for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
+					vector.Clean(ctr.bat.Vecs[i], proc.Mp())
+				}
+				ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+				ctr.bat.ExpandNulls()
+			}
+			anal.Output(ctr.bat)
+			proc.SetInputBatch(ctr.bat)
+			ctr.bat = nil
+			ctr.state = End
+			return true, nil
+		default:
+			proc.SetInputBatch(nil)
+			return true, nil
 		}
-		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-		ctr.bat.ExpandNulls()
 	}
-	anal.Output(ctr.bat)
-	proc.SetInputBatch(ctr.bat)
-	ctr.bat = nil
 
-	// free and return
-	ap.Free(proc, false)
-	return true, nil
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
@@ -139,6 +143,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			} else {
 				if err := ctr.processBatch(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
+					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 				bat.Clean(proc.Mp())
@@ -203,7 +208,6 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		sels = append(sels, s2)
 		s2++
 	}
-
 	err := bat1.Shuffle(sels, proc.Mp())
 	if err != nil {
 		return err

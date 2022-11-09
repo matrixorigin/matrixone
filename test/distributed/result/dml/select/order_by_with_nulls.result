@@ -285,16 +285,16 @@ id    name    sex
 id    name    sex
 1    ronaldo    F
 1    ronaldo    American
-3    noyer    F
-3    noyer    Germany
-4    modrici    M
-4    modrici    UK
 2    kante    M
+3    noyer    F
+4    modrici    M
 2    kante    Franch
+3    noyer    Germany
+4    modrici    UK
 (SELECT * FROM t1) UNION (SELECT * FROM t2 ORDER BY nation) ORDER BY id DESC;
 id    name    sex
-4    modrici    UK
 4    modrici    M
+4    modrici    UK
 3    noyer    F
 3    noyer    Germany
 2    kante    M
@@ -303,22 +303,22 @@ id    name    sex
 1    ronaldo    American
 (SELECT * FROM t1 ORDER BY sex) UNION (SELECT * FROM t2);
 id    name    sex
-2    kante    M
-4    modrici    UK
 1    ronaldo    F
 3    noyer    F
+2    kante    M
 4    modrici    M
-3    noyer    Germany
 1    ronaldo    American
 2    kante    Franch
+3    noyer    Germany
+4    modrici    UK
 (SELECT * FROM t1 WHERE sex = 'M' ORDER BY sex DESC)
 UNION
 (SELECT * FROM t2 WHERE id >= 3 ORDER BY nation ASC) ORDER BY id ASC;
 id    name    sex
 2    kante    M
 3    noyer    Germany
-4    modrici    UK
 4    modrici    M
+4    modrici    UK
 (SELECT * FROM t1 WHERE id BETWEEN 1 AND 2 ORDER BY name)
 UNION ALL
 (SELECT * FROM t2 WHERE nation BETWEEN 'A' AND 'F' ORDER BY id DESC);
@@ -349,14 +349,14 @@ INSERT INTO t2() VALUES(1,'UK'), (2,'USA'), (3,'RA'),(4,'CN');
 INSERT INTO t3() VALUES(1,'EU'), (2,'NA'), (3,'AU'),(4,'AS');
 (SELECT * FROM t1) UNION (SELECT * FROM t2 ORDER BY id DESC) UNION ALL (SELECT * FROM t3 ORDER BY area);
 id    name
-2    kante
-2    USA
 1    ronaldo
-4    modrici
+2    kante
 3    noyer
-1    UK
+4    modrici
 4    CN
 3    RA
+2    USA
+1    UK
 4    AS
 3    AU
 1    EU
@@ -378,13 +378,13 @@ id    name
 (SELECT * FROM t1 ORDER BY name) UNION (SELECT * FROM t2 ORDER BY id) UNION ALL (SELECT * FROM t3 ORDER BY area);
 id    name
 2    kante
-2    USA
 4    modrici
-1    ronaldo
 3    noyer
+1    ronaldo
 1    UK
-4    CN
+2    USA
 3    RA
+4    CN
 4    AS
 3    AU
 1    EU
@@ -393,26 +393,26 @@ id    name
 UNION
 (SELECT * FROM t2 RIGHT JOIN t3 ON t2.id = t3.id ORDER BY t3.id DESC);
 id    name    id    nation
-1    UK    1    EU
 1    ronaldo    1    UK
-2    USA    2    NA
 2    kante    2    USA
-3    RA    3    AU
+3    noyer    3    RA
 4    modrici    4    CN
 4    CN    4    AS
-3    noyer    3    RA
+3    RA    3    AU
+2    USA    2    NA
+1    UK    1    EU
 (SELECT * FROM t1 LEFT JOIN t3 ON t1.id = t3.id ORDER BY t1.id DESC, t3.area ASC)
 UNION
 (SELECT * FROM t2 RIGHT JOIN t3 ON t2.id = t3.id ORDER BY t2.nation ASC, t3.id DESC);
 id    name    id    area
-1    UK    1    EU
-2    USA    2    NA
-3    RA    3    AU
-2    kante    2    NA
-4    CN    4    AS
 4    modrici    4    AS
 3    noyer    3    AU
+2    kante    2    NA
 1    ronaldo    1    EU
+4    CN    4    AS
+3    RA    3    AU
+1    UK    1    EU
+2    USA    2    NA
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1(

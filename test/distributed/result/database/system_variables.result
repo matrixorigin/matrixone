@@ -72,6 +72,7 @@ system_time_zone
 show variables like 'trans%';
 Variable_name    Value
 transaction_isolation    SNAPSHOT-ISOLATION
+transaction_read_only    0
 show variables like 'transaction_isolation';
 Variable_name    Value
 transaction_isolation    SNAPSHOT-ISOLATION
