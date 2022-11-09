@@ -4015,7 +4015,7 @@ func TestReadCheckpoint(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -4103,7 +4103,7 @@ func TestDelete4(t *testing.T) {
 		txn.Commit()
 	}
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 200; i++ {
 		getValueFn()
 		scanFn()
 
@@ -4111,7 +4111,7 @@ func TestDelete4(t *testing.T) {
 
 		getValueFn()
 		scanFn()
-		for j := 0; j < 100; j++ {
+		for j := 0; j < 1000; j++ {
 			wg.Add(1)
 			p.Submit(run)
 		}
