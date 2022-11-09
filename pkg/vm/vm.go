@@ -48,45 +48,6 @@ func Prepare(ins Instructions, proc *process.Process) error {
 	return nil
 }
 
-var debugInstructionNames = map[int]string{
-	Top:          "top",
-	Join:         "join",
-	Semi:         "semi",
-	Left:         "left",
-	Limit:        "limit",
-	Merge:        "merge",
-	Order:        "order",
-	Group:        "group",
-	Output:       "output",
-	Offset:       "offset",
-	Product:      "product",
-	Restrict:     "restrict",
-	Dispatch:     "dispatch",
-	Connector:    "connect",
-	Projection:   "projection",
-	Anti:         "anti",
-	Single:       "single",
-	Mark:         "mark",
-	LoopJoin:     "loop join",
-	LoopLeft:     "loop left",
-	LoopSemi:     "loop semi",
-	LoopAnti:     "loop anti",
-	LoopSingle:   "loop single",
-	MergeTop:     "merge top",
-	MergeLimit:   "merge limit",
-	MergeOrder:   "merge order",
-	MergeGroup:   "merge group",
-	MergeOffset:  "merge offset",
-	Deletion:     "delete",
-	Insert:       "insert",
-	Update:       "update",
-	External:     "external",
-	Minus:        "minus",
-	Intersect:    "intersect",
-	IntersectAll: "intersect all",
-	HashBuild:    "hash build",
-}
-
 func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 	var ok bool
 
@@ -96,11 +57,9 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 	for _, in := range ins {
-		//println("step in ", debugInstructionNames[in.Op])
 		if ok, err = execFunc[in.Op](in.Idx, proc, in.Arg); err != nil {
 			return ok || end, err
 		}
-		//println("step out ", debugInstructionNames[in.Op])
 		if ok { // ok is true shows that at least one operator has done its work
 			end = true
 		}
