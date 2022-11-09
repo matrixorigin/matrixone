@@ -30,7 +30,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.flag = make([]bool, len(proc.Reg.MergeReceivers))
+	ap.ctr.flag = make([]bool, len(ap.Regs))
 	return nil
 }
 
@@ -75,10 +75,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return flag, nil
 	}
 
-	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		if i == len(proc.Reg.MergeReceivers) {
+	for i := 0; i < len(ap.Regs); i++ {
+		if i == len(ap.Regs) {
 			i = 0
-			ap.ctr.flag = make([]bool, len(proc.Reg.MergeReceivers))
+			for j := range ap.ctr.flag {
+				ap.ctr.flag[j] = false
+			}
 		}
 		if ap.ctr.flag[i] {
 			continue
