@@ -65,6 +65,9 @@ type Block interface {
 	CheckpointUnit
 	BlockReplayer
 
+	LoadCommitTS() containers.Vector
+	LoadDeleteCommitTS() containers.Vector
+
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool

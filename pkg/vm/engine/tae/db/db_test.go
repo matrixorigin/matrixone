@@ -4150,9 +4150,9 @@ func TestGetActiveRow(t *testing.T) {
 
 	_, rel = tae.getRelation()
 	{
-		txn2,rel2:=tae.getRelation()
+		txn2, rel2 := tae.getRelation()
 		it := rel2.MakeBlockIt()
-		blk:=it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
