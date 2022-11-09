@@ -35,6 +35,7 @@ type Future struct {
 	c           chan Message
 	releaseFunc func(*Future)
 	ctx         context.Context
+	cancel      context.CancelFunc
 	mu          struct {
 		sync.Mutex
 		closed bool
@@ -49,14 +50,14 @@ func (f *Future) init(id uint64, ctx context.Context) {
 	}
 
 	f.id = id
-	f.ctx = ctx
+	f.ctx, f.cancel = context.WithCancel(ctx)
 
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.Unlock()
 }
 
-// Get get the response data synchronously, blocking until `context.Done` or the response is received.
+// Get gets the response data synchronously, blocking until `context.Done` or the response is received.
 // This method cannot be called more than once. After calling `Get`, `Close` must be called to close
 // `Future`.
 func (f *Future) Get() (Message, error) {
@@ -68,7 +69,7 @@ func (f *Future) Get() (Message, error) {
 	}
 }
 
-// Close close the future.
+// Close closes the future.
 func (f *Future) Close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -121,7 +122,7 @@ func (f *Future) unRef() {
 
 func (f *Future) reset() {
 	f.id = 0
-	f.ctx = nil
+	f.cancel()
 	select {
 	case <-f.c:
 	default:
