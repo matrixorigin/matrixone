@@ -49,9 +49,6 @@ type Argument struct {
 	IndexInfos    []*plan.IndexInfo
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-}
-
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
