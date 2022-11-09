@@ -11,7 +11,7 @@ drop table if exists json_table_5a;
 drop table if exists json_view_1;
 drop table if exists json_table_6;
 
---覆盖json串 key value为字符，数字，中文，特殊字符， ' '，常量，日期格式字符串,true/false
+--Overwrite json string key value as character, number, Chinese, special character, '', constant, date format string, true/false
 create table json_table_1(j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "key123456": 223}'),('{"芝士面包": "12abc", "key_56": 78.90}'),('{"": "", "12_key": "中文mo"}'),('{"a 1": "b 1", "13key4": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
 insert into json_table_1 values('{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"1234567890000000000000000000000000000000000000000000000","uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu":["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}');
@@ -82,11 +82,12 @@ Insert into json_table_3 values (1,'{
 ');
 select * from json_table_3;
 
---json重复值
+--Json duplicate value
 create table json_table_3a(j1 json);
 insert into json_table_3a values('{"x": 17, "x": "red"}'),('{"x": 17, "x": "red", "x": [3, 5, 7]}');
 select * from json_table_3a;
---异常测试：非法json串,列约束pk，default,partiton by
+
+--Exception test: illegal json string, column constraint pk, default, partition by
 create table json_table_4(j1 json);
 insert into json_table_4 values('[1, 2,');
 insert into json_table_4 values('{"key1": NULL, "": "value2"}');
@@ -95,7 +96,7 @@ create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "r
 create table json_table_5(j1 json) partition by hash(j1);
 select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
 
---update 全部数据
+--update all data
 create table json_table_61(j1 json,a varchar(25),b int);
 insert into json_table_61 values('{"010": "beijing", "021": "shanghai"}','apple',345),('{"phonenum":"17290839029","age":"45"}','pear',0);
 select * from json_table_61;
@@ -103,11 +104,12 @@ update json_table_61 set j1='{"010": [56,"beijing","2002-09-09"]}' where a='appl
 select * from json_table_61;
 update json_table_61 set j1='{"010": "beijing"}';
 
---delete全部数据
+--delete all data
 delete from json_table_61 where b=0;
 select * from json_table_61;
 delete from json_table_61;
 select * from json_table_61;
+
 -- agg function
 select count(j1) from json_table_1 ;
 select max(j1) from json_table_1 ;
@@ -129,15 +131,17 @@ select * from json_view_1;
 
 -- load data
 create table json_table_81(d1 int,j1 json);
-load data infile'/Users/heni/test_data/json_table_3.txt' into table json_table_81 fields terminated by '|' ignore 1 lines;
+load data infile'$resources/json/json_table_3.txt' into table json_table_81 fields terminated by '|' ignore 1 lines;
+select * from json_table_81;
 create table json_table_82(d2 int,j2 json);
 insert into json_table_82 select * from json_table_81;
+select * from json_table_82;
 
 --temporary/external table
 create temporary table json_table_4a(j1 json);
 insert into json_table_4a values('{"key1": "value1", "key2": "value2"}');
 select * from json_table_4a;
-create external table json_table_5a(d1 int,j1 json)infile{"filepath"='/Users/heni/test_data/json_table_3.txt'} fields terminated by '|' lines terminated by '\n' ignore 1 lines;
+create external table json_table_5a(d1 int,j1 json)infile{"filepath"='$resources/json/json_table_3.txt'} fields terminated by '|' lines terminated by '\n' ignore 1 lines;
 select * from json_table_5a;
 
 -- union etc
@@ -174,12 +178,13 @@ select json_extract(' {"a": [1, "2", {"aa": "bb"}]} ','$.a[2].aa');
 select json_extract(' {"a": [1, "2", {"aa": ["yyy",56,89,{"aa2": ["aa3",{"aa4": [1,2,{"aa5": ["aa6", {"aa7": "bb"}]}]}]}]}]} ','$.a[2].aa[3].aa2[1].aa4[2].aa5[1].aa7');
 select json_extract('{"a":1,"b":2,"c":3,"d":{"a":"x"}}', '$**.a');
 select json_extract(' {"a.f": [1, "2", {"aa.f": "bb"}],"e.a.b":"888"} ','$**.f');
---异常测试：
+
+--Exception
 select  json_extract('{"a":"a1","b":"b1"}','$.**');
 select json_extract('bar','$.*');
 select  json_extract(j1,'') from json_table_71;
 
---数组，jsontype,包含空
+--Array, jsontype, including null
 create table json_table_6(j1 json);
 insert into json_table_6 values('{"a": [1, "2", {"aa": "bb"}]}'),('{"key1": "value1", "key2": "value2"}');
 select * from json_table_6,unnest(json_table_6.j1) as u;
@@ -192,7 +197,7 @@ select * from unnest(' [23,"gooooogle",874] ',"$") as u;
 select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$") as u;
 select * from unnest(' [23,"gooooogle",{"k1":89000}] ',"$[2]") as u;
 
---非数组，jsontype类型
+--Non array, jsontype type
 select * from json_table_6,unnest(json_table_6.j1,"$.key1",true) as u;
 select * from json_table_6,unnest(json_table_6.j1,"$.a",true) as u;
 select * from json_table_6,unnest(json_table_6.j1,"$.a[2].aa") as u;
@@ -205,6 +210,7 @@ select seq,value from json_table_6,unnest(json_table_6.j1,"$.a") as u where u.`p
 create table unnest_table_1(col0 json,col1 varchar(255),col2 int,col3 varchar(255),col4 varchar(255),col5 int,col6 varchar(255),col7 varchar(255));
 insert into unnest_table_1 select * from json_table_6,unnest(json_table_6.j1,"$.*") as u;
 select * from unnest_table_1;
--参数不是json类型,语法错误
+
+--Exception:parameter is not of json type
 select * from unnest('abc',"$.*") as u;
 select unnest('abc',"$.*") ;

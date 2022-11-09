@@ -43,14 +43,17 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return false, err
+				ctr.state = End
+				return true, err
 			}
 			ctr.state = Probe
-
 		case Probe:
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp())
+				}
 				continue
 			}
 			if bat.Length() == 0 {
@@ -60,12 +63,13 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			err := ctr.probe(bat, ap, proc, anal)
-			bat.Clean(proc.Mp())
-			return false, err
-
+			if err := ctr.probe(bat, ap, proc, anal); err != nil {
+				ctr.state = End
+				proc.SetInputBatch(nil)
+				return true, err
+			}
+			return false, nil
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -81,6 +85,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.Mp().GetSels()
@@ -97,20 +102,18 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if err != nil {
 			return err
 		}
-		bs := vector.MustTCols[bool](vec)
+		bs := vec.Col.([]bool)
 		if len(bs) == 1 {
 			if bs[0] {
 				for j := 0; j < len(ctr.bat.Zs); j++ {
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
 							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
@@ -126,13 +129,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if rp.Rel == 0 {
 							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						} else {
 							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						}
@@ -141,7 +142,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vec.Free(proc.Mp())
+		vector.Clean(vec, proc.Mp())
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)
