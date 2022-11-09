@@ -68,6 +68,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		return 0, nil, moerr.NewNYI("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+	}
+
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
@@ -343,6 +347,18 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			},
 		})
 	}
+}
+
+func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
+	for _, pred := range preds {
+		switch exprImpl := pred.Expr.(type) {
+		case *plan.Expr_F:
+			if exprImpl.F.Func.ObjName != "=" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
