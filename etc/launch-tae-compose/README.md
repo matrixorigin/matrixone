@@ -1,6 +1,6 @@
 # Launch-tae-CN-tae-dn with docker-compose
 
-- docker compose version >= v2.12.1
+- [docker compose version](https://docs.docker.com/compose/install/) >= v2.12.1
 - support profiles: launch-tae-multi-CN-tae-DN, launch-tae-CN-tae-DN
 
 ## build and up 

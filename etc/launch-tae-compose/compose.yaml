@@ -16,7 +16,7 @@ services:
     depends_on:
       - dn
     ports:
-      - "7001:6001"
+      - "6001:6001"
       - "6002"
     restart: on-failure
     volumes:
@@ -41,7 +41,7 @@ services:
     depends_on:
       - dn
     ports:
-      - "8001:6001"
+      - "7001:6001"
       - "6002"
     restart: on-failure
     profiles:
