@@ -14,12 +14,7 @@
 
 package limit
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
-
 type Argument struct {
 	Seen  uint64 // seen is the number of tuples seen so far
 	Limit uint64
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
