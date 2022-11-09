@@ -220,7 +220,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		return moerr.NewFileNotFound(path.File)
 	}
 	if err != nil {
-		return nil
+		return err
 	}
 	defer file.Close()
 
@@ -278,7 +278,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
