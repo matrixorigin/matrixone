@@ -290,6 +290,11 @@ func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	return
 }
 
+func (un *TxnMVCCNode) PrepareRollback() (err error) {
+	un.Aborted = true
+	return
+}
+
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (ts types.TS, err error) {
 	ts = un.Txn.GetCommitTS()
 	un.End = ts

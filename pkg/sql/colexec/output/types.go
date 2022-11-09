@@ -14,15 +14,9 @@
 
 package output
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/batch"
 
 type Argument struct {
 	Data interface{}
 	Func func(interface{}, *batch.Batch) error
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }

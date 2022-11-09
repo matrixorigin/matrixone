@@ -77,7 +77,7 @@ func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskF
 	if segment.meta.IsAppendable() {
 		segment.meta.RLock()
 		dropped := segment.meta.HasDropCommittedLocked()
-		inTxn := segment.meta.IsCreating()
+		inTxn := segment.meta.IsCreatingOrAborted()
 		segment.meta.RUnlock()
 		if dropped || inTxn {
 			return

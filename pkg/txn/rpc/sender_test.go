@@ -23,10 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -252,11 +254,17 @@ func BenchmarkLocalSend(b *testing.B) {
 }
 
 func TestNewSenderWithOptions(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
 	s, err := NewSender(newTestClock(),
 		nil,
 		WithSenderPayloadBufferSize(100),
 		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
 	assert.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
 	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
 	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 3)
 	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
