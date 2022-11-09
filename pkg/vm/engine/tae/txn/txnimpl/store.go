@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -34,14 +35,15 @@ import (
 
 type txnStore struct {
 	txnbase.NoopTxnStore
-	dbs      map[uint64]*txnDB
-	mu       sync.RWMutex
-	driver   wal.Driver
-	nodesMgr base.INodeManager
-	txn      txnif.AsyncTxn
-	catalog  *catalog.Catalog
-	cmdMgr   *commandManager
-	logs     []entry.Entry
+	mu            sync.RWMutex
+	transferTable *model.HashPageTable
+	dbs           map[uint64]*txnDB
+	driver        wal.Driver
+	nodesMgr      base.INodeManager
+	txn           txnif.AsyncTxn
+	catalog       *catalog.Catalog
+	cmdMgr        *commandManager
+	logs          []entry.Entry
 	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
 	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
 	warChecker  *warChecker
@@ -52,26 +54,29 @@ type txnStore struct {
 var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
+	transferTable *model.HashPageTable,
 	txnBufMgr base.INodeManager,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, txnBufMgr, dataFactory)
+		return newStore(catalog, driver, transferTable, txnBufMgr, dataFactory)
 	}
 }
 
 func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
+	transferTable *model.HashPageTable,
 	txnBufMgr base.INodeManager,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
-		dbs:         make(map[uint64]*txnDB),
-		catalog:     catalog,
-		cmdMgr:      newCommandManager(driver),
-		driver:      driver,
-		logs:        make([]entry.Entry, 0),
-		dataFactory: dataFactory,
-		nodesMgr:    txnBufMgr,
+		transferTable: transferTable,
+		dbs:           make(map[uint64]*txnDB),
+		catalog:       catalog,
+		cmdMgr:        newCommandManager(driver),
+		driver:        driver,
+		logs:          make([]entry.Entry, 0),
+		dataFactory:   dataFactory,
+		nodesMgr:      txnBufMgr,
 	}
 }
 

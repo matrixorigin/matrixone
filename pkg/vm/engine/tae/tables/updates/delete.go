@@ -157,6 +157,13 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 		node.chain.InsertInDeleteView(i, node)
 	}
 }
+func (node *DeleteNode) DeletedRows() (rows []uint32) {
+	if node.mask == nil {
+		return
+	}
+	node.mask.ToArray()
+	return
+}
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {

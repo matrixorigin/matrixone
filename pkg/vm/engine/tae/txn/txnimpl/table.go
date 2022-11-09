@@ -65,6 +65,25 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	return tbl
 }
 
+func (tbl *txnTable) TryTransfer() (err error) {
+	if len(tbl.deleteNodes) == 0 {
+		return
+	}
+	return
+	// for id, node := range tbl.deleteNodes {
+	// 	if err = tbl.store.warChecker.checkOne(
+	// 		tbl.entry.GetDB().ID,
+	// 		id,
+	// 	); err == nil {
+	// 		continue
+	// 	}
+
+	// 	if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
+	// 		return
+	// 	}
+	// }
+}
+
 func (tbl *txnTable) LogSegmentID(sid uint64) {
 	if tbl.maxSegId < sid {
 		tbl.maxSegId = sid

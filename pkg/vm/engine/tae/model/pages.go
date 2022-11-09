@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+type HashPageTable = TransferTable[*TransferHashPage]
+
 type TransferHashPage struct {
 	common.RefHelper
 	bornTS  time.Time

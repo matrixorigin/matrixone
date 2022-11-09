@@ -60,6 +60,16 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	return checker
 }
 
+func (checker *warChecker) checkOne(dbID uint64, id *common.ID) (err error) {
+	err = checker.visitBlock(
+		dbID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID,
+	)
+	return
+}
+
 func (checker *warChecker) check() (err error) {
 	return checker.Visit(checker.visitor)
 }
