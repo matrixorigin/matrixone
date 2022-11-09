@@ -356,12 +356,14 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND account_id = %v"
+	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, null `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 	if stmt.Full {
-		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND account_id = %v"
+		sql = "SELECT attname `Field`,atttyp `Type`, null `Collation`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`,  null `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 	}
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -447,9 +449,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 	accountId := ctx.GetAccountId()
 	ddlType := plan.DataDefinition_SHOW_INDEX
-	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND account_id = %v"
+	mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountId)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
