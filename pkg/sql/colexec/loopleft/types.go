@@ -15,10 +15,12 @@
 package loopleft
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -37,4 +39,18 @@ type Argument struct {
 	Typs   []types.Type
 	Cond   *plan.Expr
 	Result []colexec.ResultPos
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.cleanBatch(proc.Mp())
+	}
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
 }

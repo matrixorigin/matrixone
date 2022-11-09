@@ -23,10 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
+	var span trace.Span
+	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
+	defer span.End()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
