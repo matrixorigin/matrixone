@@ -177,11 +177,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			seg.table.txnEntries = append(seg.table.txnEntries, anode)
 		}
 		id := appender.GetID()
-		seg.table.store.warChecker.AddBlock(
-			seg.table.entry.GetDB().ID,
-			id.TableID,
-			id.SegmentID,
-			id.BlockID)
+		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
 		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID, id.TableID, id.SegmentID, id.BlockID)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))

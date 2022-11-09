@@ -22,11 +22,13 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -65,23 +67,61 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	return tbl
 }
 
-func (tbl *txnTable) TryTransfer() (err error) {
+func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
+	if tbl.store.transferTable == nil {
+		return
+	}
 	if len(tbl.deleteNodes) == 0 {
 		return
 	}
-	return
-	// for id, node := range tbl.deleteNodes {
-	// 	if err = tbl.store.warChecker.checkOne(
-	// 		tbl.entry.GetDB().ID,
-	// 		id,
-	// 	); err == nil {
-	// 		continue
-	// 	}
+	for id, node := range tbl.deleteNodes {
+		if err = tbl.store.warChecker.checkOne(
+			&id,
+			ts,
+		); err == nil {
+			continue
+		}
 
-	// 	if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
-	// 		return
-	// 	}
-	// }
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
+			return
+		}
+		if err = tbl.TransferDelete(&id, node); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (tbl *txnTable) TransferDelete(id *common.ID, node txnif.DeleteNode) (err error) {
+	pinned, err := tbl.store.transferTable.Pin(*id)
+	if err != nil {
+		return
+	}
+	defer pinned.Close()
+
+	rows := node.DeletedRows()
+	page := pinned.Item()
+	for _, row := range rows {
+		rowID, ok := page.TransferWithOffset(row)
+		if !ok {
+			err = moerr.NewTxnRWConflict()
+			return
+		}
+		segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
+		if err = tbl.RangeDelete(&common.ID{
+			TableID:   id.TableID,
+			SegmentID: segmentID,
+			BlockID:   blockID,
+		}, offset, offset, handle.DT_Normal); err != nil {
+			return
+		}
+	}
+	tbl.store.warChecker.Delete(id)
+	if err = node.PrepareRollback(); err != nil {
+		return
+	}
+	err = node.ApplyRollback(nil)
+	return
 }
 
 func (tbl *txnTable) LogSegmentID(sid uint64) {
@@ -157,7 +197,6 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	}
 	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
-	// tbl.store.warChecker.AddTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
 
@@ -185,7 +224,6 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg ha
 		meta.Set1PC()
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	// tbl.store.warChecker.AddTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
 }
 
@@ -203,7 +241,6 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	if meta != nil {
 		tbl.txnEntries = append(tbl.txnEntries, meta)
 	}
-	// tbl.store.warChecker.AddSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
 
@@ -217,11 +254,9 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 		}
 
 		// record block into read set
-		tbl.store.warChecker.AddBlock(
+		tbl.store.warChecker.InsertByID(
 			tbl.entry.GetDB().ID,
-			id.TableID,
-			id.SegmentID,
-			id.BlockID)
+			id)
 	}
 	return
 }
@@ -387,11 +422,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		}
 		mvcc.Unlock()
 		if err != nil {
-			tbl.store.warChecker.AddBlock(
-				tbl.entry.GetDB().ID,
-				id.TableID,
-				id.SegmentID,
-				id.BlockID)
+			tbl.store.warChecker.Insert(mvcc.GetEntry())
 		}
 		return
 	}
@@ -409,11 +440,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
 		}
-		tbl.store.warChecker.AddBlock(
-			tbl.entry.GetDB().ID,
-			id.TableID,
-			id.SegmentID,
-			id.BlockID)
+		tbl.store.warChecker.Insert(blk)
 	}
 	return
 }

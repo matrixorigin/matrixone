@@ -89,7 +89,8 @@ func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
 }
 
-func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetID() *common.ID             { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetEntry() *catalog.BlockEntry { return n.meta }
 
 func (n *MVCCHandle) StringLocked() string {
 	s := ""

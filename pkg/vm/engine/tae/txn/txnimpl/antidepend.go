@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -42,57 +44,76 @@ func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
 }
 
 type warChecker struct {
-	*common.Tree
-	txn     txnif.AsyncTxn
-	catalog *catalog.Catalog
-	visitor common.TreeVisitor
+	txn         txnif.AsyncTxn
+	catalog     *catalog.Catalog
+	conflictSet map[common.ID]bool
+	readSet     map[common.ID]*catalog.BlockEntry
 }
 
 func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	checker := &warChecker{
-		Tree:    common.NewTree(),
-		txn:     txn,
-		catalog: c,
+		txn:         txn,
+		catalog:     c,
+		conflictSet: make(map[common.ID]bool),
+		readSet:     make(map[common.ID]*catalog.BlockEntry),
 	}
-	visitor := new(common.BaseTreeVisitor)
-	visitor.BlockFn = checker.visitBlock
-	checker.visitor = visitor
 	return checker
 }
 
-func (checker *warChecker) checkOne(dbID uint64, id *common.ID) (err error) {
-	err = checker.visitBlock(
-		dbID,
-		id.TableID,
-		id.SegmentID,
-		id.BlockID,
-	)
-	return
-}
-
-func (checker *warChecker) check() (err error) {
-	return checker.Visit(checker.visitor)
-}
-
-func (checker *warChecker) visitBlock(
-	dbID, tableID, segmentID, blockID uint64) (err error) {
+func (checker *warChecker) InsertByID(dbID uint64, id *common.ID) {
 	db, err := checker.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
 	}
-	table, err := db.GetTableEntryByID(tableID)
+	table, err := db.GetTableEntryByID(id.TableID)
 	if err != nil {
 		panic(err)
 	}
-	segment, err := table.GetSegmentByID(segmentID)
+	segment, err := table.GetSegmentByID(id.SegmentID)
 	if err != nil {
 		panic(err)
 	}
-	block, err := segment.GetBlockEntryByID(blockID)
+	block, err := segment.GetBlockEntryByID(id.BlockID)
 	if err != nil {
 		panic(err)
 	}
+	checker.Insert(block)
+}
 
-	entry := block.MetaBaseEntry
-	return readWriteConfilictCheck(entry, checker.txn.GetCommitTS())
+func (checker *warChecker) Insert(block *catalog.BlockEntry) {
+	id := block.AsCommonID()
+	if checker.HasConflict(id) {
+		panic(fmt.Sprintf("cannot add conflicted %s into readset", block.String()))
+	}
+	checker.readSet[*id] = block
+}
+
+func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
+	if checker.HasConflict(id) {
+		err = moerr.NewTxnRWConflict()
+		return
+	}
+	entry := checker.readSet[*id]
+	if entry == nil {
+		return
+	}
+	return readWriteConfilictCheck(entry.MetaBaseEntry, ts)
+}
+
+func (checker *warChecker) checkAll(ts types.TS) (err error) {
+	for _, block := range checker.readSet {
+		if err = readWriteConfilictCheck(block.MetaBaseEntry, ts); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (checker *warChecker) Delete(id *common.ID) {
+	checker.conflictSet[*id] = true
+}
+
+func (checker *warChecker) HasConflict(id *common.ID) (y bool) {
+	_, y = checker.conflictSet[*id]
+	return
 }

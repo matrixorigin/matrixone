@@ -553,7 +553,8 @@ func (store *txnStore) PrePrepare() (err error) {
 
 func (store *txnStore) PrepareCommit() (err error) {
 	if store.warChecker != nil {
-		if err = store.warChecker.check(); err != nil {
+		if err = store.warChecker.checkAll(
+			store.txn.GetPrepareTS()); err != nil {
 			return err
 		}
 	}
