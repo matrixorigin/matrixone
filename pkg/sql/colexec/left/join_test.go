@@ -120,6 +120,7 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		nb1 := tc.proc.Mp().CurrNB()
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, nb0, nb1)
 	}
 }
