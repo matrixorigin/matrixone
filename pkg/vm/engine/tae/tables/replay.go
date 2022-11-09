@@ -55,7 +55,7 @@ func (blk *dataBlock) ReplayImmutIndex() (err error) {
 			return
 		}
 	}
-	blk.dataFlushed =true
+	blk.dataFlushed = true
 	return blk.replayImmutIndex()
 }
 
