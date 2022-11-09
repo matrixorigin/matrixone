@@ -85,28 +85,3 @@ type Pipeline struct {
 	instructions vm.Instructions
 	reg          *process.WaitRegister
 }
-
-// cleanup do memory release work for whole pipeline.
-func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
-	// clean all the coming batches.
-	if pipelineFailed {
-		bat := proc.InputBatch()
-		if bat != nil {
-			bat.Clean(proc.Mp())
-		}
-		proc.SetInputBatch(nil)
-	}
-	for _, receiver := range proc.Reg.MergeReceivers {
-		for len(receiver.Ch) > 0 {
-			bat := <-receiver.Ch
-			if bat == nil {
-				break
-			}
-			bat.Clean(proc.Mp())
-		}
-	}
-	// clean operator hold memory.
-	for i := range p.instructions {
-		p.instructions[i].Arg.Free(proc, pipelineFailed)
-	}
-}

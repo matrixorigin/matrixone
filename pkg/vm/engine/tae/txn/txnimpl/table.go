@@ -513,9 +513,9 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 				txnToWait.GetTxnState(true)
 				seg.RLock()
 			}
-			invalid := seg.HasDropCommittedLocked() || seg.IsCreating()
+			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
 			seg.RUnlock()
-			if invalid {
+			if shouldSkip {
 				segIt.Next()
 				continue
 			}
@@ -529,6 +529,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			segIt.Next()
 			continue
 		}
+		var shouldSkip bool
 		err = nil
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
@@ -538,9 +539,13 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			}
 			{
 				blk.RLock()
-				invalid := blk.HasDropCommittedLocked() || blk.IsCreating()
+				if preCommit {
+					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
+				} else {
+					shouldSkip = blk.HasDropCommittedLocked() || !blk.HasCommittedNode()
+				}
 				blk.RUnlock()
-				if invalid {
+				if shouldSkip {
 					blkIt.Next()
 					continue
 				}

@@ -176,6 +176,7 @@ type MVCCNode interface {
 	ApplyCommit(index *wal.Index) (err error)
 	ApplyRollback(index *wal.Index) (err error)
 	PrepareCommit() (err error)
+	PrepareRollback() (err error)
 
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)

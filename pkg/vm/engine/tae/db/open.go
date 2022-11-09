@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -106,16 +107,21 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		checkpoint.WithMinGlobalInterval(opts.CheckpointCfg.GlobalInterval))
 
 	now := time.Now()
-	ts, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
-	logutil.Infof("replay checkpoint takes %s", time.Since(now))
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("checkpoints"),
+		common.AnyField("cost", time.Since(now)),
+		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	db.Replay(dataFactory, ts)
+	db.Replay(dataFactory, checkpointed)
 	db.Catalog.ReplayTableRows()
-	logutil.Infof("replay wal takes %s", time.Since(now))
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("cost", time.Since(now)))
 
 	db.DBLocker, dbLocker = dbLocker, nil
 

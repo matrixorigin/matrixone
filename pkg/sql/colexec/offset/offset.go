@@ -44,7 +44,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat)
-
 	if ap.Seen > ap.Offset {
 		return false, nil
 	}
