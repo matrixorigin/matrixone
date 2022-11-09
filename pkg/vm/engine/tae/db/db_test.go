@@ -4119,3 +4119,47 @@ func TestDelete4(t *testing.T) {
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 }
+
+// append, delete, apppend, get start ts, compact, get active row
+func TestGetActiveRow(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	v := getSingleSortKeyValue(bat, schema, 0)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	assert.NoError(t, rel.Append(bat))
+	assert.NoError(t, txn.Commit())
+
+	_, rel = tae.getRelation()
+	{
+		txn2,rel2:=tae.getRelation()
+		it := rel2.MakeBlockIt()
+		blk:=it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+		assert.NoError(t, txn2.Commit())
+	}
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+}
