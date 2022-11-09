@@ -4,8 +4,8 @@
 -- @desc:test for insert data with function
 -- @label:bvt
 CREATE TABLE char_test(
-	str1 CHAR(5),
-	str2 VARCHAR(5)
+	str1 CHAR(50),
+	str2 VARCHAR(50)
 );
 INSERT INTO char_test(str1, str2) VALUES('ABCED', 'MESSI');
 
@@ -38,14 +38,7 @@ INSERT INTO char_test(str2) VALUES(EMPTY(null));
 INSERT INTO char_test(str2) VALUES(EMPTY(CONCAT_WS(' ', 'ABCDE','JKFL;JDK','FDAFD')));
 INSERT INTO char_test(str2) VALUES(EMPTY(SPACE(100)));
 INSERT INTO char_test(str2) VALUES(EMPTY(OCT(4564123156)));
-
--- @bvt:issue#4963
---SELECT str1, STARTSWITH(str1,'') FROM char_test;
--- @bvt:issue
-
--- @bvt:issue#4966
---SELECT str1, ENDSWITH(str1,'') FROM char_test;
--- @bvt:issue
+select * from char_test;
 
 -- 日期时间类型
 DROP TABLE IF EXISTS date_test;
@@ -63,9 +56,6 @@ INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
 INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
 SELECT * FROM date_test;
 DELETE FROM date_test;
-
-
-
 
 
 -- 数字类型
@@ -100,7 +90,6 @@ CREATE TABLE test1(
 INSERT INTO test1(num1, num2, num3) VALUES(12.21, 43.43, 999.899);
 INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
-
 
 DROP TABLE char_test;
 DROP TABLE date_test;
