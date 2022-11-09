@@ -68,7 +68,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
-	if subquery.Typ == plan.SubqueryRef_SCALAR && builder.findAggFunc(subID) && builder.findNonEqPred(preds) {
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
 		return 0, nil, moerr.NewNYI("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
 	}
 
@@ -349,15 +349,6 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 	}
 }
 
-func (builder *QueryBuilder) findAggFunc(nodeID int32) bool {
-	node := builder.qry.Nodes[nodeID]
-	for _, childID := range node.Children {
-		if builder.findAggFunc(childID) {
-			return true
-		}
-	}
-	return node.NodeType == plan.Node_AGG
-}
 func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 	for _, pred := range preds {
 		switch exprImpl := pred.Expr.(type) {

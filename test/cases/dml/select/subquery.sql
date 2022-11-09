@@ -103,6 +103,7 @@ select * from (select city,libname1,count(libname1) as a from t3 join t1 on libn
 
 drop table if exists t1;
 drop table if exists t2;
+drop table if exists t3;
 create table t1(c1 int, c2 int);
 insert into t1 values(1,1);
 insert into t1 values(1,2);
@@ -117,6 +118,13 @@ insert into t2 values(1,3);
 insert into t2 values(1,4);
 insert into t2 values(1,5);
 insert into t2 values(1,6);
+create table t3(c5 int, c6 int);
+insert into t3 values(1,1);
+insert into t3 values(1,2);
+insert into t3 values(1,3);
+insert into t3 values(1,4);
+insert into t3 values(1,5);
+insert into t3 values(1,6);
 select * from t1  where(select count(*) from t2  where t1.c1=t2.c3 and t1.c2<t2.c4)=1;
 select * from t1  where(select count(*) from t2  where t1.c1=t2.c3 and t1.c2<t2.c4)<10;
 select * from t1  where(select avg(t1.c1) from t2  where t1.c1=t2.c3 and t1.c2<t2.c4)=1;
@@ -125,5 +133,8 @@ select * from t1  where(select avg(t2.c4) from t2  where t1.c1=t2.c3 and t1.c2<t
 select * from t1  where(select max(t2.c3) from t2  where t1.c1=t2.c3 and t1.c2<t2.c4)=1;
 select * from t1  where(select count(t2.c3) from t2  where t1.c1=t2.c3 and t1.c2=t2.c4)=1;
 select * from t1  where(select count(t2.c3) from t2  where t1.c1=t2.c3 and t2.c4<10)=1;
+select * from t1  where t1.c1 in (select c6 from t3 where t1.c1=t3.c5 and t1.c2<t3.c6 and (select count(*) from t2  where t3.c5=t2.c3 and t3.c6=t2.c4)=1);
+select * from t1  where t1.c1 not in (select c6 from t3 where t1.c1=t3.c5 and t1.c2<t3.c6 and (select count(*) from t2  where t3.c5=t2.c3 and t3.c6=t2.c4)=1);
 drop table if exists t1;
 drop table if exists t2;
+drop table if exists t3;
