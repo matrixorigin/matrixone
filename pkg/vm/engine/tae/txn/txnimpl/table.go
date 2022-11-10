@@ -120,6 +120,34 @@ func (tbl *txnTable) PrePreareTransfer() (err error) {
 	return tbl.TransferDeletes(ts)
 }
 
+func (tbl *txnTable) TransferDeleteIntent(
+	id *common.ID,
+	row uint32) (changed bool, nid *common.ID, nrow uint32, err error) {
+	pinned, err := tbl.store.transferTable.Pin(*id)
+	if err != nil {
+		err = nil
+		return
+	}
+	defer pinned.Close()
+	entry := tbl.store.warChecker.GetEntryByID(tbl.entry.GetDB().ID, id)
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	if err = readWriteConfilictCheck(entry.MetaBaseEntry, ts); err == nil {
+		return
+	}
+	err = nil
+	nid = &common.ID{
+		TableID: id.TableID,
+	}
+	rowID, ok := pinned.Item().Transfer(row)
+	if !ok {
+		err = moerr.NewTxnWWConflict()
+		return
+	}
+	changed = true
+	nid.SegmentID, nid.BlockID, nrow = model.DecodePhyAddrKey(rowID)
+	return
+}
+
 func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 	if tbl.store.transferTable == nil {
 		return

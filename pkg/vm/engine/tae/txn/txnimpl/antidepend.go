@@ -48,6 +48,7 @@ type warChecker struct {
 	catalog     *catalog.Catalog
 	conflictSet map[common.ID]bool
 	readSet     map[common.ID]*catalog.BlockEntry
+	cache       map[uint64]*catalog.BlockEntry
 }
 
 func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
@@ -56,11 +57,16 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 		catalog:     c,
 		conflictSet: make(map[common.ID]bool),
 		readSet:     make(map[common.ID]*catalog.BlockEntry),
+		cache:       make(map[uint64]*catalog.BlockEntry),
 	}
 	return checker
 }
 
-func (checker *warChecker) InsertByID(dbID uint64, id *common.ID) {
+func (checker *warChecker) GetEntryByID(dbID uint64, id *common.ID) *catalog.BlockEntry {
+	block := checker.SearchCache(id.BlockID)
+	if block != nil {
+		return block
+	}
 	db, err := checker.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -73,14 +79,28 @@ func (checker *warChecker) InsertByID(dbID uint64, id *common.ID) {
 	if err != nil {
 		panic(err)
 	}
-	block, err := segment.GetBlockEntryByID(id.BlockID)
+	block, err = segment.GetBlockEntryByID(id.BlockID)
 	if err != nil {
 		panic(err)
 	}
+	checker.Cache(block)
+	return block
+}
+
+func (checker *warChecker) InsertByID(dbID uint64, id *common.ID) {
+	block := checker.GetEntryByID(dbID, id)
 	checker.Insert(block)
 }
 
+func (checker *warChecker) SearchCache(id uint64) *catalog.BlockEntry {
+	return checker.cache[id]
+}
+func (checker *warChecker) Cache(block *catalog.BlockEntry) {
+	checker.cache[block.ID] = block
+}
+
 func (checker *warChecker) Insert(block *catalog.BlockEntry) {
+	checker.Cache(block)
 	id := block.AsCommonID()
 	if checker.HasConflict(id) {
 		panic(fmt.Sprintf("cannot add conflicted %s into readset", block.String()))

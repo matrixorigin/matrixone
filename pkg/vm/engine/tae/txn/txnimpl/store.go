@@ -185,9 +185,6 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	if err != nil {
 		return err
 	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
 	return db.RangeDelete(id, start, end, dt)
 }
 
