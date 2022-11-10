@@ -279,7 +279,7 @@ func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 	sinceStart := time.Since(blk.score.startTime)
 	// TODO: Now it is 2 times the interval time must be compact
 	// Requires extensive testing to give a reasonable score
-	if sinceStart > interval*2 {
+	if sinceStart > interval*3 {
 		return 100
 	}
 	if blk.score.rows != rows {
