@@ -179,10 +179,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
-		OriginString: tree.String(expr, dialect.MYSQL),
+		OriginString: fmtCtx.String(),
 	}, nil
 }
 

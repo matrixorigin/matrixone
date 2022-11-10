@@ -64,6 +64,7 @@ type History interface {
 	DropEntry(int) (VFile, error)
 	OldestEntry() VFile
 	Empty() bool
+	Close()
 }
 
 type File interface {

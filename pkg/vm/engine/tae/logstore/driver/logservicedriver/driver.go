@@ -19,8 +19,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+)
+
+const (
+	ReplayReadSize = common.M * 2
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
@@ -105,7 +110,7 @@ func (d *LogServiceDriver) Close() error {
 }
 
 func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
-	r := newReplayer(h, 1024, d)
+	r := newReplayer(h, ReplayReadSize, d)
 	r.replay()
 	d.onReplay(r)
 	return nil
