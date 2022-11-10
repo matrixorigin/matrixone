@@ -65,7 +65,17 @@ func TestMergeBlocksCmd(t *testing.T) {
 	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
 	fromAddr := []uint32{40000, 40000, 40000, 42}
 	toAddr := []uint32{40000, 40000, 242}
-	cmd := newMergeBlocksCmd(0, droppedSegs, createdSegs, droppedBlks, createdBlks, mapping, fromAddr, toAddr, nil, 0)
+	cmd := newMergeBlocksCmd(
+		0,
+		droppedSegs,
+		createdSegs,
+		droppedBlks,
+		createdBlks,
+		mapping,
+		fromAddr,
+		toAddr,
+		nil,
+		0)
 
 	var w bytes.Buffer
 	_, err := cmd.WriteTo(&w)

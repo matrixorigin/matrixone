@@ -64,9 +64,7 @@ func (chain *DeleteChain) StringLocked() string {
 	line := 1
 	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
-		n.chain.mvcc.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
-		n.chain.mvcc.RUnlock()
 		line++
 		return true
 	})

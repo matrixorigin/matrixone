@@ -39,7 +39,12 @@ type mergeBlocksCmd struct {
 	id          uint32
 }
 
-func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32, txn txnif.AsyncTxn, id uint32) *mergeBlocksCmd {
+func newMergeBlocksCmd(
+	tid uint64,
+	droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID,
+	mapping, fromAddr, toAddr []uint32,
+	txn txnif.AsyncTxn,
+	id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
 		droppedSegs: droppedSegs,
