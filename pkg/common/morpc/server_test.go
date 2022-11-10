@@ -87,6 +87,7 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 
 func TestHandleServerWriteWithClosedSession(t *testing.T) {
 	wc := make(chan struct{}, 1)
+	defer close(wc)
 
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -96,7 +97,6 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		rs.RegisterRequestHandler(func(_ context.Context, request Message, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
 			wc <- struct{}{}
-			close(wc)
 			return cs.Write(ctx, request)
 		})
 
@@ -106,7 +106,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 		defer f.Close()
 		resp, err := f.Get()
-		assert.Error(t, f.ctx.Err(), err)
+		assert.Error(t, ctx.Err(), err)
 		assert.Nil(t, resp)
 	}, WithServerWriteFilter(func(_ Message) bool {
 		<-wc

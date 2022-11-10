@@ -308,21 +308,8 @@ func (rb *remoteBackend) Close() {
 	rb.stopWriteLoop()
 	rb.stateMu.Unlock()
 
-	for _, future := range rb.getFutures() {
-		future.Close()
-	}
 	rb.stopper.Stop()
 	rb.doClose()
-}
-
-func (rb *remoteBackend) getFutures() []*Future {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	futures := make([]*Future, 0, len(rb.mu.futures))
-	for _, future := range rb.mu.futures {
-		futures = append(futures, future)
-	}
-	return futures
 }
 
 func (rb *remoteBackend) Busy() bool {
