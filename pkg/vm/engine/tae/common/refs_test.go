@@ -17,10 +17,12 @@ package common
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRefs(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	helper := RefHelper{
 		OnZeroCB: func() {
 

@@ -18,6 +18,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -35,6 +36,7 @@ import (
 // 5. Append data and the total rows is more than a segment. Commit and then merge sort the full segment.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -191,6 +193,7 @@ func TestHiddenWithPK1(t *testing.T) {
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
 func TestHidden2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
