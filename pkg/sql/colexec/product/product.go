@@ -42,17 +42,15 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if len(bat.Zs) == 0 {
@@ -63,13 +61,14 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
-				ctr.state = End
 				bat.Clean(proc.Mp())
-				proc.SetInputBatch(nil)
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			return false, nil
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}

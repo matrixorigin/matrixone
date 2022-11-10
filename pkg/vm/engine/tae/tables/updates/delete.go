@@ -39,7 +39,7 @@ const (
 func compareDeleteNode(va, vb txnif.MVCCNode) int {
 	a := va.(*DeleteNode)
 	b := vb.(*DeleteNode)
-	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
+	return a.TxnMVCCNode.Compare2(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
@@ -173,6 +173,13 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
+	if node.dt == handle.DT_MergeCompact {
+		_, err = node.TxnMVCCNode.PrepareCommit()
+		if err != nil {
+			return
+		}
+		node.chain.UpdateLocked(node)
+	}
 	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return

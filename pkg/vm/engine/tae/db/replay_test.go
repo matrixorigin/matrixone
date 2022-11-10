@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +34,7 @@ import (
 )
 
 func TestReplayCatalog1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schemas := make([]*catalog.Schema, 4)
@@ -78,6 +80,7 @@ func TestReplayCatalog1(t *testing.T) {
 	var wg sync.WaitGroup
 	pool, err := ants.NewPool(1)
 	assert.Nil(t, err)
+	defer pool.Release()
 	for i, schema := range schemas {
 		wg.Add(1)
 		ckp := false
@@ -107,6 +110,7 @@ func TestReplayCatalog1(t *testing.T) {
 }
 
 func TestReplayCatalog2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
@@ -183,6 +187,7 @@ func TestReplayCatalog2(t *testing.T) {
 }
 
 func TestReplayCatalog3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
@@ -268,6 +273,7 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog and data not checkpoint
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -371,6 +377,7 @@ func TestReplay1(t *testing.T) {
 // replay
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -502,6 +509,7 @@ func TestReplay2(t *testing.T) {
 // 1. Ckp
 // TODO check rows
 func TestReplay3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := newTestEngine(t, nil)
 	defer tae.Close()
@@ -575,6 +583,7 @@ func TestReplay3(t *testing.T) {
    1. compact
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
@@ -693,6 +702,7 @@ func TestReplayTableRows(t *testing.T) {
 
 // Testing Steps
 func TestReplay4(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -755,6 +765,7 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -861,6 +872,7 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -916,6 +928,7 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -942,6 +955,7 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -1091,6 +1105,7 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -1186,6 +1201,7 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -1237,6 +1253,7 @@ func TestReplay10(t *testing.T) {
 // checkpoint
 // restart
 func TestReplaySnapshots(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	schema := catalog.MockSchemaAll(1, -1)

@@ -31,6 +31,10 @@ disableMetric = true
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:7001"
+service-address = "127.0.0.1:7001"
 
 [cn.Engine]
 type = "distributed-tae"
+
+[cn.frontend]
+port = 16001

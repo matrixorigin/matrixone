@@ -547,6 +547,9 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if param.LoadFile && len(fileList) == 0 {
+		return nil, moerr.NewInvalidInput("the file does not exist in load flow")
+	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
 	index := 0
@@ -1263,34 +1266,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if len(ranges) == 0 {
 		return nodes, nil
 	}
-	step := len(ranges) / len(c.cnList)
-	if step <= 0 {
-		for i := range ranges {
+	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < len(ranges); i += step {
+		j := i / step
+		if i+step >= len(ranges) {
 			nodes = append(nodes, engine.Node{
-				Id:   c.cnList[i].Id,
-				Addr: c.cnList[i].Addr,
-				Mcpu: c.cnList[i].Mcpu,
-				Data: [][]byte{ranges[i]},
+				Id:   c.cnList[j].Id,
+				Addr: c.cnList[j].Addr,
+				Mcpu: c.cnList[j].Mcpu,
+				Data: ranges[i:],
 			})
-		}
-	} else {
-		for i := 0; i < len(ranges); i += step {
-			j := i / step
-			if i+step >= len(ranges) {
-				nodes = append(nodes, engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.cnList[j].Mcpu,
-					Data: ranges[i:],
-				})
-			} else {
-				nodes = append(nodes, engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.cnList[j].Mcpu,
-					Data: ranges[i : i+step],
-				})
-			}
+		} else {
+			nodes = append(nodes, engine.Node{
+				Id:   c.cnList[j].Id,
+				Addr: c.cnList[j].Addr,
+				Mcpu: c.cnList[j].Mcpu,
+				Data: ranges[i : i+step],
+			})
 		}
 	}
 	return nodes, nil

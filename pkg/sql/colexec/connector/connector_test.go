@@ -81,7 +81,7 @@ func TestConnector(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		for {
+		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch
 			if bat == nil {
 				break
@@ -91,6 +91,7 @@ func TestConnector(t *testing.T) {
 			}
 			bat.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

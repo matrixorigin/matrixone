@@ -143,6 +143,12 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, mp *mpool.MPo
 			continue
 		}
 
+		if p.skipBlocks != nil {
+			if _, ok := p.skipBlocks[rowIDToBlockID(dataKey)]; ok {
+				continue
+			}
+		}
+
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
 				b.Vecs[i].Append(types.Rowid(dataKey), false, mp)

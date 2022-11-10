@@ -1,16 +1,12 @@
 CREATE TABLE char_test(
-str1 CHAR(5),
-str2 VARCHAR(5)
+str1 CHAR(50),
+str2 VARCHAR(50)
 );
 INSERT INTO char_test(str1, str2) VALUES('ABCED', 'MESSI');
 INSERT INTO char_test(str1) VALUES(CONCAT_WS(' ', ' I have ', '  a dream'));
-truncated type CHAR value concat_ws( ,  I have ,   a dream) for column str1, 1
 INSERT INTO char_test(str1) VALUES(CONCAT_WS(',', ',I have ', ',a dream'));
-truncated type CHAR value concat_ws(,, ,I have , ,a dream) for column str1, 1
 INSERT INTO char_test(str1) VALUES(CONCAT_WS('x', ' I have x', 'x a dream'));
-truncated type CHAR value concat_ws(x,  I have x, x a dream) for column str1, 1
 INSERT INTO char_test(str1) SELECT CONCAT_WS('.', 'MESSI is a ', '. aloha bumda.');
-internal error: Can't cast column from VARCHAR type to CHAR type because of one or more values in that column. Src length 26 is larger than Dest length 5
 DELETE FROM char_test;
 INSERT INTO char_test(str2) VALUES(FIND_IN_SET('a', 'b,d,c,a'));
 INSERT INTO char_test(str2) VALUES(FIND_IN_SET('a', 'if i were a boy'));
@@ -33,12 +29,19 @@ DELETE FROM char_test;
 INSERT INTO char_test(str1) VALUES(SPACE(100));
 truncated type CHAR value space(100) for column str1, 1
 INSERT INTO char_test(str1) VALUES('RONALDOSHOOTGOAL');
-truncated type CHAR value RONALDOSHOOTGOAL for column str1, 1
 INSERT INTO char_test(str2) VALUES(EMPTY(""));
 INSERT INTO char_test(str2) VALUES(EMPTY(null));
 INSERT INTO char_test(str2) VALUES(EMPTY(CONCAT_WS(' ', 'ABCDE','JKFL;JDK','FDAFD')));
 INSERT INTO char_test(str2) VALUES(EMPTY(SPACE(100)));
 INSERT INTO char_test(str2) VALUES(EMPTY(OCT(4564123156)));
+select * from char_test;
+str1    str2
+RONALDOSHOOTGOAL    null
+null    1
+null    null
+null    0
+null    0
+null    0
 DROP TABLE IF EXISTS date_test;
 CREATE TABLE date_test(
 d2 DATE,
@@ -90,7 +93,7 @@ INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
 num1    num2    num3
 12.21    43.43    999.90
-3.1415    3.1415    3.14
+3.14    3.14    3.14
 DROP TABLE char_test;
 DROP TABLE date_test;
 DROP TABLE math_test;
