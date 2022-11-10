@@ -1201,8 +1201,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	//int<1> protocol version
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
-	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, "8.0.30-MatrixOne-v"+serverVersion.Load().(string))
+	pos = mp.writeStringNUL(data, pos, mp.SV.ServerVersionPrefix+serverVersion.Load().(string))
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
