@@ -15,12 +15,13 @@
 package dump
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
 type Kase struct {
@@ -46,6 +47,7 @@ var (
 		types.T_decimal64.ToType(),
 		types.T_decimal128.ToType(),
 		types.T_date.ToType(),
+		types.T_time.ToType(),
 		types.T_datetime.ToType(),
 		types.T_timestamp.ToType(),
 		types.T_varchar.ToType(),
@@ -310,6 +312,23 @@ func TestParser(t *testing.T) {
 			kase.ns = nulls.NewWithSize(len(xs))
 			kase.ns.Set(uint64(len(xs) - 1))
 			rs, err = ParseQuoted[types.Date](xs, kase.ns, rs, DefaultParser[types.Date])
+			require.Nil(t, err)
+			require.Equal(t, rs[len(rs)-1], "NULL")
+			for i := 0; i < len(xs)-1; i++ {
+				unquote := rs[i][1 : len(rs[i])-1]
+				require.Equal(t, xs[i].String(), unquote)
+			}
+		case types.T_time:
+			xs := make([]types.Time, len(kase.xs))
+			for i, x := range kase.xs {
+				tmp, err := types.ParseTime(x, kase.tp.Precision)
+				require.Nil(t, err)
+				xs[i] = tmp
+			}
+			xs = append(xs, xs[0])
+			kase.ns = nulls.NewWithSize(len(xs))
+			kase.ns.Set(uint64(len(xs) - 1))
+			rs, err = ParseQuoted[types.Time](xs, kase.ns, rs, DefaultParser[types.Time])
 			require.Nil(t, err)
 			require.Equal(t, rs[len(rs)-1], "NULL")
 			for i := 0; i < len(xs)-1; i++ {

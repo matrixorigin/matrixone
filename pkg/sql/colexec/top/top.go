@@ -41,7 +41,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(Container)
+	ap.ctr = new(container)
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			bat := proc.Reg.InputBatch
+			bat := proc.InputBatch()
 			if bat == nil {
 				ctr.state = Eval
 				continue
@@ -69,26 +69,29 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 				return false, nil
 			}
 			if ap.Limit == 0 {
-				ctr.state = End
 				bat.Clean(proc.Mp())
-				proc.Reg.InputBatch = nil
+				proc.SetInputBatch(nil)
 				return true, nil
 			}
-			return false, ctr.build(ap, bat, proc)
+			err := ctr.build(ap, bat, proc)
+			if err != nil {
+				ap.Free(proc, true)
+			}
+			return false, err
+
 		case Eval:
-			ctr.state = End
 			if ctr.bat == nil {
+				proc.SetInputBatch(nil)
 				return true, nil
 			}
-			return true, ctr.eval(ap.Limit, proc)
-		default:
-			proc.Reg.InputBatch = nil
-			return true, nil
+			err := ctr.eval(ap.Limit, proc)
+			ap.Free(proc, err != nil)
+			return err == nil, err
 		}
 	}
 }
 
-func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process) error {
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
 	for _, f := range ap.Fs {
@@ -139,7 +142,7 @@ func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	return ctr.processBatch(ap.Limit, bat, proc)
 }
 
-func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
 	length := int64(len(bat.Zs))
@@ -151,7 +154,6 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
 				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp()); err != nil {
-					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 			}
@@ -175,7 +177,6 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
-					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 				ctr.bat.Zs[0] = bat.Zs[i]
@@ -186,7 +187,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *Container) eval(limit int64, proc *process.Process) error {
+func (ctr *container) eval(limit int64, proc *process.Process) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -198,8 +199,7 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
 	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		ctr.bat.Clean(proc.Mp())
-		ctr.bat = nil
+		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
@@ -212,7 +212,7 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 }
 
 // do sort work for heap, and result order will be set in container.sels
-func (ctr *Container) sort() {
+func (ctr *container) sort() {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(0, ctr.bat.Vecs[i])
 	}

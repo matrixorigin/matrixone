@@ -1,0 +1,163 @@
+version: '3.9'
+
+services:
+  cn-0:
+    container_name: cn-0
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-2af3bb11
+    entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
+    profiles:
+      - launch-tae-CN-tae-DN
+      - launch-tae-multi-CN-tae-DN
+    depends_on:
+      - dn
+    ports:
+      - "6001:6001"
+      - "6002"
+    restart: on-failure
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
+    tty: true
+    networks:
+      monet:
+
+  cn-1:
+    container_name: cn-1
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-2af3bb11
+    entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
+    depends_on:
+      - dn
+    ports:
+      - "7001:6001"
+      - "6002"
+    restart: on-failure
+    profiles:
+      - launch-tae-multi-CN-tae-DN
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+        # - AWS_REGION=${AWS_REGION}
+    tty: true
+    networks:
+      monet:
+
+  dn:
+    container_name: dn
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-2af3bb11
+    entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
+    profiles:
+      - launch-tae-CN-tae-DN
+      - launch-tae-multi-CN-tae-DN
+    depends_on:
+      - logservice
+    ports:
+      - "41010"
+    restart: on-failure
+    tty: true
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
+    networks:
+      monet:
+
+  logservice:
+    container_name: logservice
+    build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+    image: matrixorigin/matrixone:nightly-2af3bb11
+    profiles:
+      - launch-tae-CN-tae-DN
+      - launch-tae-multi-CN-tae-DN
+    entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
+    depends_on:
+      - createbuckets
+    ports:
+      - "32000"
+      - "32001"
+      - "32002"
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      # - AWS_REGION=${AWS_REGION}
+    restart: on-failure
+    volumes:
+      - ../../etc/launch-tae-compose/config:/config
+    tty: true    
+    networks:
+      monet:
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_storage:/data
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    command: server --console-address ":9001" /data
+    profiles:
+      - launch-tae-CN-tae-DN
+      - launch-tae-multi-CN-tae-DN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 1s
+      timeout: 5s
+      retries: 3
+    networks:
+      monet:
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+       minio:
+        condition: service_healthy
+    profiles:
+      - launch-tae-CN-tae-DN
+      - launch-tae-multi-CN-tae-DN
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
+      /usr/bin/mc mb myminio/mo-test;
+      /usr/bin/mc policy set public myminio/mo-test;
+      exit 0;
+      "
+    networks:
+      monet:
+
+volumes:
+  minio_storage: {}
+
+networks:
+  monet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 179.19.0.0/16

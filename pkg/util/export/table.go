@@ -41,6 +41,7 @@ type Column struct {
 	Type    string
 	Default string
 	Comment string
+	Alias   string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql
@@ -212,6 +213,9 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		if len(col.Alias) > 0 {
+			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
+		}
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
