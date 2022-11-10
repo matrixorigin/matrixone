@@ -60,6 +60,7 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 // if service part of path is argumented, a FileService instance will be created dynamically with those arguments
 // supported dynamic file service:
 // s3,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
+// s3-no-key,<endpoint>,<region>,<bucket>,<prefix>
 // minio,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
 func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
 	fsPath, err := ParsePath(path)
@@ -82,6 +83,12 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 
 		case "s3":
 			res, err = newS3FSFromArguments(fsPath.ServiceArguments)
+			if err != nil {
+				return
+			}
+
+		case "s3-no-key":
+			res, err = newS3FSFromArgumentsWithoutKey(fsPath.ServiceArguments)
 			if err != nil {
 				return
 			}
@@ -151,6 +158,49 @@ func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 			),
 			func(opt *s3.Options) {
 				opt.Credentials = credentialProvider
+				opt.Region = region
+			},
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs, nil
+}
+
+func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
+	endpoint := arguments[0]
+	region := arguments[1]
+	bucket := arguments[2]
+	keyPrefix := arguments[3]
+	var name string
+	if len(arguments) > 4 {
+		name = arguments[4]
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint = u.String()
+
+	fs, err := newS3FS(
+		"",
+		name,
+		endpoint,
+		bucket,
+		keyPrefix,
+		0,
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(endpoint),
+			),
+			func(opt *s3.Options) {
 				opt.Region = region
 			},
 		},
