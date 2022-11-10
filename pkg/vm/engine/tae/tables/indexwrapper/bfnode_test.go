@@ -20,6 +20,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -32,6 +33,7 @@ import (
 )
 
 func TestStaticFilterIndex(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	//bufManager := buffer.NewNodeManager(1024*1024, nil)
 	var err error
 	//var res bool

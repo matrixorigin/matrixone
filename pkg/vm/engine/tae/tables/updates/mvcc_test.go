@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -25,6 +26,7 @@ import (
 )
 
 func TestMutationControllerAppend(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	mc := NewMVCCHandle(nil)
 
@@ -70,6 +72,7 @@ func TestMutationControllerAppend(t *testing.T) {
 // a3 1,4,4 false
 // a4 1,5,5 true
 func TestGetVisibleRow(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	n := NewMVCCHandle(nil)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)

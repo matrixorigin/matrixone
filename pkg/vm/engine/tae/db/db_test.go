@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -54,6 +55,7 @@ import (
 )
 
 func TestAppend(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := newTestEngine(t, nil)
 	defer tae.Close()
@@ -81,6 +83,7 @@ func TestAppend(t *testing.T) {
 }
 
 func TestAppend2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
@@ -107,6 +110,7 @@ func TestAppend2(t *testing.T) {
 
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(80)
+	defer pool.Release()
 
 	start := time.Now()
 	for _, data := range bats {
@@ -138,6 +142,7 @@ func TestAppend2(t *testing.T) {
 }
 
 func TestAppend3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -162,6 +167,7 @@ func TestAppend3(t *testing.T) {
 }
 
 func TestAppend4(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -286,6 +292,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 }
 
 func TestCRUD(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -295,6 +302,7 @@ func TestCRUD(t *testing.T) {
 }
 
 func TestTableHandle(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -318,6 +326,7 @@ func TestTableHandle(t *testing.T) {
 }
 
 func TestCreateBlock(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -345,6 +354,7 @@ func TestCreateBlock(t *testing.T) {
 }
 
 func TestNonAppendableBlock(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -419,6 +429,7 @@ func TestNonAppendableBlock(t *testing.T) {
 }
 
 func TestCreateSegment(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -450,6 +461,7 @@ func TestCreateSegment(t *testing.T) {
 }
 
 func TestCompactBlock1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	db := initDB(t, opts)
@@ -563,6 +575,7 @@ func TestCompactBlock1(t *testing.T) {
 }
 
 func TestCompactBlock2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -696,6 +709,7 @@ func TestCompactBlock2(t *testing.T) {
 }
 
 func TestAutoCompactABlk1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -729,6 +743,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 }
 
 func TestAutoCompactABlk2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
@@ -761,6 +776,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
+	defer pool.Release()
 	var wg sync.WaitGroup
 	doSearch := func(name string) func() {
 		return func() {
@@ -802,6 +818,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 }
 
 func TestCompactABlk(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -834,6 +851,7 @@ func TestCompactABlk(t *testing.T) {
 }
 
 func TestRollback1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -900,6 +918,7 @@ func TestRollback1(t *testing.T) {
 }
 
 func TestMVCC1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -973,6 +992,7 @@ func TestMVCC1(t *testing.T) {
 // 3. Txn2 delete the 5th row value in uncommitted state -- PASS
 // 4. Txn2 get the 5th row value -- NotFound
 func TestMVCC2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -1025,6 +1045,7 @@ func TestMVCC2(t *testing.T) {
 }
 
 func TestUnload1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
@@ -1044,6 +1065,7 @@ func TestUnload1(t *testing.T) {
 	var wg sync.WaitGroup
 	pool, err := ants.NewPool(1)
 	assert.Nil(t, err)
+	defer pool.Release()
 	for _, data := range bats {
 		wg.Add(1)
 		err := pool.Submit(appendClosure(t, data, schema.Name, db, &wg))
@@ -1068,6 +1090,7 @@ func TestUnload1(t *testing.T) {
 }
 
 func TestUnload2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
@@ -1100,6 +1123,7 @@ func TestUnload2(t *testing.T) {
 
 	p, err := ants.NewPool(10)
 	assert.Nil(t, err)
+	defer p.Release()
 	var wg sync.WaitGroup
 	for i, data := range bats {
 		wg.Add(1)
@@ -1139,6 +1163,7 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1225,6 +1250,7 @@ func TestDelete1(t *testing.T) {
 }
 
 func TestLogIndex1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1302,6 +1328,7 @@ func TestLogIndex1(t *testing.T) {
 }
 
 func TestCrossDBTxn(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1362,6 +1389,7 @@ func TestCrossDBTxn(t *testing.T) {
 }
 
 func TestSystemDB1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1504,6 +1532,7 @@ func TestSystemDB1(t *testing.T) {
 }
 
 func TestSystemDB2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1541,6 +1570,7 @@ func TestSystemDB2(t *testing.T) {
 }
 
 func TestSystemDB3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1560,6 +1590,7 @@ func TestSystemDB3(t *testing.T) {
 }
 
 func TestScan1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1578,6 +1609,7 @@ func TestScan1(t *testing.T) {
 }
 
 func TestDedup(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1600,6 +1632,7 @@ func TestDedup(t *testing.T) {
 }
 
 func TestScan2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1642,6 +1675,7 @@ func TestScan2(t *testing.T) {
 }
 
 func TestADA(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1744,6 +1778,7 @@ func TestADA(t *testing.T) {
 }
 
 func TestUpdateByFilter(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1781,6 +1816,7 @@ func TestUpdateByFilter(t *testing.T) {
 // 4. Start Txn2. Delete row 2. Commit.
 // 5. Txn1 call GetByFilter and should return PASS
 func TestGetByFilter(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1828,6 +1864,7 @@ func TestGetByFilter(t *testing.T) {
 //     3.5.2 If error, should always be w-w conflict
 //  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1879,6 +1916,7 @@ func TestChaos1(t *testing.T) {
 		_ = txn.Rollback()
 	}
 	pool, _ := ants.NewPool(10)
+	defer pool.Release()
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		err := pool.Submit(worker)
@@ -1909,6 +1947,7 @@ func TestChaos1(t *testing.T) {
 // 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
 // 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
 func TestSnapshotIsolation1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -1966,6 +2005,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 // 4. Txn1 try to append the row. (W-W). Rollback
 // 5. Start txn4 and append the row.
 func TestSnapshotIsolation2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -2004,6 +2044,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 // 2. Merge blocks
 // 3. Check rows and col[0]
 func TestMergeBlocks(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -2065,6 +2106,7 @@ func TestMergeBlocks(t *testing.T) {
 // delete
 // commit merge
 func TestMergeblocks2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2159,6 +2201,7 @@ func TestMergeblocks2(t *testing.T) {
 	// assert.Equal(t, int64(2), rel.Rows())
 }
 func TestMergeEmptyBlocks(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2214,6 +2257,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 	}
 }
 func TestDelete2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2237,6 +2281,7 @@ func TestDelete2(t *testing.T) {
 }
 
 func TestNull1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2354,6 +2399,7 @@ func TestNull1(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2369,6 +2415,7 @@ func TestTruncate(t *testing.T) {
 
 	var wg sync.WaitGroup
 	p, _ := ants.NewPool(10)
+	defer p.Release()
 	tryAppend := func(i int) func() {
 		return func() {
 			defer wg.Done()
@@ -2400,6 +2447,7 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestGetColumnData(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2461,6 +2509,7 @@ func TestGetColumnData(t *testing.T) {
 }
 
 func TestCompactBlk1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2542,6 +2591,7 @@ func TestCompactBlk1(t *testing.T) {
 }
 
 func TestCompactBlk2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2636,6 +2686,7 @@ func TestCompactBlk2(t *testing.T) {
 }
 
 func TestCompactblk3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2688,6 +2739,7 @@ func TestCompactblk3(t *testing.T) {
 }
 
 func TestImmutableIndexInAblk(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2744,6 +2796,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 }
 
 func TestDelete3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2790,6 +2843,7 @@ func TestDelete3(t *testing.T) {
 }
 
 func TestDropCreated1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2809,6 +2863,7 @@ func TestDropCreated1(t *testing.T) {
 }
 
 func TestDropCreated2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
@@ -2833,6 +2888,7 @@ func TestDropCreated2(t *testing.T) {
 // records create at 1 and commit
 // read by ts 1, err should be nil
 func TestReadEqualTS(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2845,6 +2901,7 @@ func TestReadEqualTS(t *testing.T) {
 }
 
 func TestTruncateZonemap(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	type Mod struct {
 		offset int
 		v      byte
@@ -2936,6 +2993,7 @@ func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn
 }
 
 func TestMultiTenantDBOps(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -2995,6 +3053,7 @@ func TestMultiTenantDBOps(t *testing.T) {
 }
 
 func TestMultiTenantMoCatalogOps(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -3113,6 +3172,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 // txn1 create update
 // txn2 update delete
 func TestUpdateAttr(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
@@ -3155,6 +3215,7 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string,
 }
 
 func TestLogtailBasic(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
 	tae := newTestEngine(t, opts)
@@ -3378,6 +3439,7 @@ func TestLogtailBasic(t *testing.T) {
 // txn2: compact
 // txn3: append, shouldn't get rw
 func TestGetLastAppender(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3408,6 +3470,7 @@ func TestGetLastAppender(t *testing.T) {
 // check data, row count, commit ts
 // TODO 1. in2pc committs!=preparets; 2. abort
 func TestCollectInsert(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3480,6 +3543,7 @@ func TestCollectInsert(t *testing.T) {
 // txn1[s3,p3,e3] delete
 // collect [0,p1] [0,p2] [p1+1,p2] [p1+1,p3]
 func TestCollectDelete(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3547,6 +3611,7 @@ func TestCollectDelete(t *testing.T) {
 }
 
 func TestAppendnode(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3563,6 +3628,7 @@ func TestAppendnode(t *testing.T) {
 
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(5)
+	defer pool.Release()
 	worker := func(i int) func() {
 		return func() {
 			txn, rel := tae.getRelation()
@@ -3587,6 +3653,7 @@ func TestAppendnode(t *testing.T) {
 }
 
 func TestTxnIdempotent(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3618,8 +3685,10 @@ func TestTxnIdempotent(t *testing.T) {
 // insert 200 rows and do quick compaction
 // expect that there are some dirty tables at first and then zero dirty table found
 func TestWatchDirty(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
+	defer tae.Close()
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
@@ -3643,6 +3712,7 @@ func TestWatchDirty(t *testing.T) {
 
 	wg := &sync.WaitGroup{}
 	pool, _ := ants.NewPool(3)
+	defer pool.Release()
 	worker := func(i int) func() {
 		return func() {
 			txn, _ := tae.getRelation()
@@ -3677,6 +3747,7 @@ func TestWatchDirty(t *testing.T) {
 }
 
 func TestDirtyWatchRace(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3704,6 +3775,7 @@ func TestDirtyWatchRace(t *testing.T) {
 	}
 
 	pool, _ := ants.NewPool(5)
+	defer pool.Release()
 
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
@@ -3729,6 +3801,7 @@ func TestDirtyWatchRace(t *testing.T) {
 }
 
 func TestBlockRead(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	tsAlloc := types.NewTsAlloctor(opts.Clock)
@@ -3839,6 +3912,7 @@ func TestBlockRead(t *testing.T) {
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -3924,6 +3998,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 }
 
 func TestFlushTable(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -3964,6 +4039,7 @@ func TestFlushTable(t *testing.T) {
 }
 
 func TestReadCheckpoint(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -4015,6 +4091,7 @@ func TestReadCheckpoint(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)

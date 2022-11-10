@@ -17,6 +17,7 @@ package db
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -29,6 +30,7 @@ import (
 )
 
 func TestCheckpoint1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
@@ -76,6 +78,7 @@ func TestCheckpoint1(t *testing.T) {
 }
 
 func TestCheckpoint2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
@@ -167,6 +170,7 @@ func TestCheckpoint2(t *testing.T) {
 }
 
 func TestSchedule1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	schema := catalog.MockSchema(13, 12)
