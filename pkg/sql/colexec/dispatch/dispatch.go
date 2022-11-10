@@ -27,9 +27,10 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("dispatch")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.flag = make([]bool, len(ap.Regs))
 	return nil
 }
 
@@ -37,7 +38,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
-		ap.Free(proc, false)
 		return true, nil
 	}
 	vecs := ap.vecs[:0]
@@ -45,7 +45,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			vecs = append(vecs, vec)
@@ -65,29 +64,35 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				jm.IncRef(int64(len(ap.Regs)) - 1)
 			}
 		}
+		flag := false
 		for _, reg := range ap.Regs {
 			select {
 			case <-reg.Ctx.Done():
+				flag = true
 			case reg.Ch <- bat:
 			}
 		}
-		return false, nil
+		return flag, nil
 	}
-	for len(ap.Regs) > 0 {
-		reg := ap.Regs[ap.ctr.i]
+
+	for i := 0; i < len(ap.Regs); i++ {
+		if i == len(ap.Regs) {
+			i = 0
+			for j := range ap.ctr.flag {
+				ap.ctr.flag[j] = false
+			}
+		}
+		if ap.ctr.flag[i] {
+			continue
+		}
+		reg := ap.Regs[i]
 		select {
 		case <-reg.Ctx.Done():
-			ap.Regs = append(ap.Regs[:ap.ctr.i], ap.Regs[ap.ctr.i+1:]...)
-			if ap.ctr.i >= len(ap.Regs) {
-				ap.ctr.i = 0
-			}
+			return true, nil
 		case reg.Ch <- bat:
-			if ap.ctr.i = ap.ctr.i + 1; ap.ctr.i >= len(ap.Regs) {
-				ap.ctr.i = 0
-			}
+			ap.ctr.flag[i] = true
 			return false, nil
 		}
 	}
-	ap.Free(proc, false)
 	return true, nil
 }

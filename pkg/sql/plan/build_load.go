@@ -81,6 +81,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	node3.ObjRef = objRef
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.LoadFile = true
 	json_byte, err := json.Marshal(stmt.Param)
 	if err != nil {
 		return nil, err
