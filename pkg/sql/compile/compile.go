@@ -1191,7 +1191,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if len(ranges) == 0 {
 		return nodes, nil
 	}
-	step := len(ranges) / len(c.cnList)
+	step := (len(ranges) / len(c.cnList)) + 1
 	if step <= 0 {
 		for i := range ranges {
 			nodes = append(nodes, engine.Node{
