@@ -39,7 +39,7 @@ const (
 func compareDeleteNode(va, vb txnif.MVCCNode) int {
 	a := va.(*DeleteNode)
 	b := vb.(*DeleteNode)
-	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
+	return a.TxnMVCCNode.Compare2(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {

@@ -566,12 +566,72 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
+	if IsInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_time {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastIntAsTime[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastIntAsTime[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastIntAsTime[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastIntAsTime[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastUIntAsTime[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastUIntAsTime[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastUIntAsTime[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastUIntAsTime[uint64](lv, rv, proc)
+		}
+	}
+
+	if lv.Typ.Oid == types.T_time && IsInteger(rv.Typ.Oid) {
+		switch rv.Typ.Oid {
+		case types.T_int8:
+			return CastTimeAsNumeric[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastTimeAsNumeric[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastTimeAsNumeric[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastTimeAsNumeric[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastTimeAsNumeric[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastTimeAsNumeric[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastTimeAsNumeric[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastTimeAsNumeric[uint64](lv, rv, proc)
+		}
+	}
+
 	if IsDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		switch lv.Typ.Oid {
 		case types.T_decimal64:
 			return CastDecimal64AsTimestamp(lv, rv, proc)
 		case types.T_decimal128:
 			return CastDecimal128AsTimestamp(lv, rv, proc)
+		}
+	}
+
+	if IsDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_time {
+		switch lv.Typ.Oid {
+		case types.T_decimal64:
+			return CastDecimal64AsTime(lv, rv, proc)
+		case types.T_decimal128:
+			return CastDecimal128AsTime(lv, rv, proc)
+		}
+	}
+
+	if lv.Typ.Oid == types.T_time && IsDecimal(rv.Typ.Oid) {
+		switch rv.Typ.Oid {
+		case types.T_decimal64:
+			return CastTimeAsDecimal64(lv, rv, proc)
+		case types.T_decimal128:
+			return CastTimeAsDecimal128(lv, rv, proc)
 		}
 	}
 
@@ -1953,6 +2013,183 @@ func CastDatetimeAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	}
 	rs := vector.MustTCols[types.Time](vec)
 	if _, err := binary.DatetimeToTime(lvs, rs, precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastIntAsTime[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[T](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Time, 1)
+		if int64(lvs[0]) < types.MinInputIntTime || int64(lvs[0]) > types.MaxInputIntTime {
+			nulls.Add(lv.Nsp, 0)
+		}
+		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Time](vec)
+	for i := 0; i < len(lvs); i++ {
+		if int64(lvs[0]) < types.MinInputIntTime || int64(lvs[0]) > types.MaxInputIntTime {
+			nulls.Add(vec.Nsp, uint64(i))
+		}
+	}
+	if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastUIntAsTime[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[T](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Time, 1)
+		if uint64(lvs[0]) > types.MaxInputIntTime {
+			nulls.Add(lv.Nsp, 0)
+		}
+		if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Time](vec)
+	for i := 0; i < len(lvs); i++ {
+		if uint64(lvs[0]) > types.MaxInputIntTime {
+			nulls.Add(vec.Nsp, uint64(i))
+		}
+	}
+	if _, err := binary.NumericToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastDecimal64AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Decimal64](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Time, 1)
+		if _, err := binary.Decimal64ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Time](vec)
+	if _, err := binary.Decimal64ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastDecimal128AsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Decimal128](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Time, 1)
+		if _, err := binary.Decimal128ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Time](vec)
+	if _, err := binary.Decimal128ToTime(lvs, rs, rv.Typ.Precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastTimeAsNumeric[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Time](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]T, 1)
+		if _, err := binary.TimeToNumeric(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[T](vec)
+	if _, err := binary.TimeToNumeric(lvs, rs); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastTimeAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Time](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Decimal64, 1)
+		if _, err := binary.TimeToDecimal64(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Decimal64](vec)
+	if _, err := binary.TimeToDecimal64(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+func CastTimeAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := vector.MustTCols[types.Time](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Decimal128, 1)
+		if _, err := binary.TimeToDecimal128(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(lvs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Decimal128](vec)
+	if _, err := binary.TimeToDecimal128(lvs, rs, rv.Typ.Width, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
 	return vec, nil

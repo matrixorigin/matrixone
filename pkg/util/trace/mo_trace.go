@@ -143,6 +143,8 @@ func (s *MOSpan) Size() int64 {
 var zeroTime = time.Time{}
 
 func (s *MOSpan) Free() {
+	s.SpanConfig.Reset()
+	s.parent = nil
 	s.Name.Reset()
 	s.tracer = nil
 	s.StartTime = zeroTime

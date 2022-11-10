@@ -319,7 +319,7 @@ func rewriteTypesIfNecessary(targets []types.Type, sources []types.Type) {
 		for i := range targets {
 			oid1, oid2 := sources[i].Oid, targets[i].Oid
 			// ensure that we will not lose the original precision.
-			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp {
+			if oid2 == types.T_decimal64 || oid2 == types.T_decimal128 || oid2 == types.T_timestamp || oid2 == types.T_time {
 				if oid1 == oid2 {
 					copyType(&targets[i], &sources[i])
 					hasSet[i] = true
