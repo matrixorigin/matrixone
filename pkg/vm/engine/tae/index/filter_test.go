@@ -91,14 +91,16 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.Equal(t, uint64(40000), positive.GetCardinality())
 	require.True(t, exist)
 }
-func TestStaticFilterString2(t *testing.T) {
+
+func TestNewBinaryFuseFilter(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_uint32}
-	data := containers.MockVector3(typ, 5000)
+	data := containers.MockVector3(typ, 2000)
 	defer data.Close()
 	_, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
 }
+
 func TestStaticFilterString(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_varchar}
