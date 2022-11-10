@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -33,6 +34,7 @@ const (
 )
 
 func TestCompoundPKSchema(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	schema := NewEmptySchema(t.Name())
 	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
 	assert.NoError(t, err)
@@ -60,6 +62,7 @@ func TestCompoundPKSchema(t *testing.T) {
 }
 
 func TestCreateDB1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -147,6 +150,7 @@ func TestCreateDB1(t *testing.T) {
 //	  | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
 //	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -221,6 +225,7 @@ func TestTableEntry1(t *testing.T) {
 }
 
 func TestTableEntry2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -284,6 +289,7 @@ func TestTableEntry2(t *testing.T) {
 }
 
 func TestDB1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -319,6 +325,7 @@ func TestDB1(t *testing.T) {
 }
 
 func TestTable1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -371,6 +378,7 @@ func TestTable1(t *testing.T) {
 // 4. Txn3 scan "tb" and also only "seg1" found
 // 5. Start Txn4, scan "tb" and both "seg1" and "seg2" found
 func TestSegment1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))

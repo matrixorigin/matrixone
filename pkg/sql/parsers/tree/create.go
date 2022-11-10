@@ -178,27 +178,27 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			ctx.WriteString(" url s3option ")
 			ctx.WriteString("{")
 			for i := 0; i < len(node.Param.S3option); i += 2 {
-			switch strings.ToLower(node.Param.S3option[i]) {
-			case "endpoint":
-				ctx.WriteString("'endpoint'='" + node.Param.S3option[i+1] + "'")
-			case "region":
-				ctx.WriteString("'region'='" + node.Param.S3option[i+1] + "'")
-			case "access_key_id":
-				ctx.WriteString("'access_key_id'='" + node.Param.S3option[i+1] + "'")
-			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='" + node.Param.S3option[i+1] + "'")
-			case "bucket":
-				ctx.WriteString("'bucket'='" + node.Param.S3option[i+1] + "'")
-			case "filepath":
-				ctx.WriteString("'filepath'='" + node.Param.S3option[i+1] + "'")
-			case "compression":
-				ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
+				switch strings.ToLower(node.Param.S3option[i]) {
+				case "endpoint":
+					ctx.WriteString("'endpoint'='" + node.Param.S3option[i+1] + "'")
+				case "region":
+					ctx.WriteString("'region'='" + node.Param.S3option[i+1] + "'")
+				case "access_key_id":
+					ctx.WriteString("'access_key_id'='" + node.Param.S3option[i+1] + "'")
+				case "secret_access_key":
+					ctx.WriteString("'secret_access_key'='" + node.Param.S3option[i+1] + "'")
+				case "bucket":
+					ctx.WriteString("'bucket'='" + node.Param.S3option[i+1] + "'")
+				case "filepath":
+					ctx.WriteString("'filepath'='" + node.Param.S3option[i+1] + "'")
+				case "compression":
+					ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
+				}
+				if i != len(node.Param.S3option)-2 {
+					ctx.WriteString(", ")
+				}
 			}
-			if i != len(node.Param.S3option) - 2 {
-				ctx.WriteString(", ")
-			}
-		}
-		ctx.WriteString("}")
+			ctx.WriteString("}")
 
 		} else {
 			ctx.WriteString(" infile ")

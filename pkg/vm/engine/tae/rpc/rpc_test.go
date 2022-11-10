@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -33,6 +34,7 @@ import (
 )
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -262,6 +264,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 }
 
 func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -546,6 +549,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 }
 
 func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -851,6 +855,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 }
 
 func TestHandle_MVCCVisibility(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())

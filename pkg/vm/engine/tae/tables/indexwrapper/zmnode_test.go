@@ -20,6 +20,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,7 @@ const (
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var err error
 	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)

@@ -215,7 +215,7 @@ func (node *Load) Format(ctx *FmtCtx) {
 			case "compression":
 				ctx.WriteString("'compression'='" + node.Param.S3option[i+1] + "'")
 			}
-			if i != len(node.Param.S3option) - 2 {
+			if i != len(node.Param.S3option)-2 {
 				ctx.WriteString(", ")
 			}
 		}
