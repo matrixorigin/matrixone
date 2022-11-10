@@ -166,6 +166,7 @@ func TestWal(t *testing.T) {
 	entries := make([]entry.Entry, 0)
 	wg := sync.WaitGroup{}
 	worker, _ := ants.NewPool(10000)
+	defer worker.Release()
 	appendfn := func(i int, group uint32) func() {
 		return func() {
 			e := entries[i]
