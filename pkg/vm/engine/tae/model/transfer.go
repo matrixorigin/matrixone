@@ -15,13 +15,11 @@
 package model
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -37,13 +35,6 @@ type TransferTable[T PageT[T]] struct {
 	sync.RWMutex
 	ttl   time.Duration
 	pages map[common.ID]*common.PinnedItem[T]
-}
-
-type TransferPage struct {
-	common.RefHelper
-	bornTS  time.Time
-	id      *common.ID
-	mapping containers.Vector
 }
 
 func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
@@ -143,64 +134,4 @@ func NewRowIDVector() containers.Vector {
 		&containers.Options{
 			Allocator: common.CacheAllocator,
 		})
-}
-
-func NewTransferPage(
-	bornTS time.Time,
-	id *common.ID,
-	mapping containers.Vector) *TransferPage {
-	if mapping == nil {
-		mapping = NewRowIDVector()
-	}
-	page := &TransferPage{
-		bornTS:  bornTS,
-		id:      id,
-		mapping: mapping,
-	}
-	page.OnZeroCB = page.Close
-	return page
-}
-
-func (page *TransferPage) Close() {
-	logutil.Infof("Closing %s", page.String())
-	if page.mapping != nil {
-		page.mapping.Close()
-		page.mapping = nil
-	} else {
-		panic(moerr.NewInternalError("page was closed more than once"))
-	}
-}
-
-func (page *TransferPage) GetBornTS() time.Time { return page.bornTS }
-func (page *TransferPage) ID() *common.ID       { return page.id }
-
-func (page *TransferPage) TTL(now time.Time, ttl time.Duration) bool {
-	return now.After(page.bornTS.Add(ttl))
-}
-
-func (page *TransferPage) String() string {
-	return fmt.Sprintf("page[%s][%s][Len=%d]",
-		page.id.BlockString(),
-		page.bornTS.String(),
-		page.mapping.Length())
-}
-
-func (page *TransferPage) Pin() *common.PinnedItem[*TransferPage] {
-	page.Ref()
-	return &common.PinnedItem[*TransferPage]{
-		Val: page,
-	}
-}
-
-func (page *TransferPage) TransferOne(srcOff uint32) types.Rowid {
-	return page.mapping.Get(int(srcOff)).(types.Rowid)
-}
-
-func (page *TransferPage) TransferMany(srcOffs ...uint32) (dest containers.Vector) {
-	dest = NewRowIDVector()
-	slice := page.mapping.Slice().([]types.Rowid)
-	for _, off := range srcOffs {
-		dest.Append(slice[off])
-	}
-	return
 }

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
@@ -32,15 +31,14 @@ func TestTransferPage(t *testing.T) {
 		BlockID: 2,
 	}
 	prefix := EncodeBlockKeyPrefix(0, dest.BlockID)
-	offsets1 := NewRowIDVector()
+
+	memo1 := NewTransferHashPage(&src, time.Now())
+	assert.Zero(t, memo1.RefCount())
+
 	for i := 0; i < 10; i++ {
 		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		offsets1.Append(rowID)
+		memo1.Train(uint32(i), rowID)
 	}
-	offsets2 := offsets1.CloneWindow(0, offsets1.Length())
-
-	memo1 := NewTransferPage(time.Now(), &src, offsets1)
-	assert.Zero(t, memo1.RefCount())
 
 	pinned := memo1.Pin()
 	assert.Equal(t, int64(1), memo1.RefCount())
@@ -49,48 +47,44 @@ func TestTransferPage(t *testing.T) {
 
 	ttl := time.Millisecond * 10
 	now := time.Now()
-	memo2 := NewTransferPage(now, &src, offsets2)
+	memo2 := NewTransferHashPage(&src, now)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
+
+	for i := 0; i < 10; i++ {
+		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		memo2.Train(uint32(i), rowID)
+	}
 
 	assert.False(t, memo2.TTL(now.Add(ttl-time.Duration(1)), ttl))
 	assert.True(t, memo2.TTL(now.Add(ttl+time.Duration(1)), ttl))
 
-	rowId1 := memo2.TransferOne(1)
-	_, blockId, offset := DecodePhyAddrKey(rowId1)
-	assert.Equal(t, dest.BlockID, blockId)
-	assert.Equal(t, uint32(1), offset)
-
-	{
-		srcOffs := []uint32{1, 3, 5, 7, 9}
-		rowidVec := memo2.TransferMany(srcOffs...)
-		assert.Equal(t, 5, rowidVec.Length())
-		rowidVec.Foreach(func(v any, row int) (err error) {
-			_, blockId, offset := DecodePhyAddrKey(v.(types.Rowid))
-			assert.Equal(t, dest.BlockID, blockId)
-			assert.Equal(t, srcOffs[row], offset)
-			return
-		}, nil)
+	for i := 0; i < 10; i++ {
+		rowID, ok := memo2.Transfer(uint32(i))
+		assert.True(t, ok)
+		_, blockId, offset := DecodePhyAddrKey(rowID)
+		assert.Equal(t, dest.BlockID, blockId)
+		assert.Equal(t, uint32(i), offset)
 	}
 }
 
 func TestTransferTable(t *testing.T) {
 	ttl := time.Minute
-	table := NewTransferTable[*TransferPage](ttl)
+	table := NewTransferTable[*TransferHashPage](ttl)
 	defer table.Close()
 
 	id1 := common.ID{BlockID: 1}
 	id2 := common.ID{BlockID: 2}
 
 	prefix := EncodeBlockKeyPrefix(id2.SegmentID, id2.BlockID)
-	rowIDS := NewRowIDVector()
-	for i := 0; i < 10; i++ {
-		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		rowIDS.Append(rowID)
-	}
 
 	now := time.Now()
-	page1 := NewTransferPage(now, &id1, rowIDS)
+	page1 := NewTransferHashPage(&id1, now)
+	for i := 0; i < 10; i++ {
+		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		page1.Train(uint32(i), rowID)
+	}
+
 	assert.False(t, table.AddPage(page1))
 	assert.True(t, table.AddPage(page1))
 	assert.Equal(t, int64(1), page1.RefCount())
