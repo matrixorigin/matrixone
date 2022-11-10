@@ -21,7 +21,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -176,9 +175,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Num:
 			colData.Append(int32(i + 1))
 		case pkgcatalog.SystemColAttr_Type:
-			//colData.Append(int32(colDef.Type.Oid))
-			data, _ := types.Encode(colDef.Type)
-			colData.Append(data)
+			colData.Append([]byte(colDef.Type.Oid.String()))
 		case pkgcatalog.SystemColAttr_DBID:
 			colData.Append(table.GetDB().GetID())
 		case pkgcatalog.SystemColAttr_DBName:
@@ -198,13 +195,13 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_NullAbility:
 			colData.Append(bool2i8(colDef.NullAbility))
 		case pkgcatalog.SystemColAttr_HasExpr:
-			colData.Append(bool2i8(true)) // @imlinjunhong says always has Default
+			colData.Append(bool2i8(colDef.Default.Expr != nil))
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			if val, err := colDef.Default.Marshal(); err == nil {
-				colData.Append(val)
+			// if t1(a int), then len(OriginString) = 0 and default is null
+			if len(colDef.Default.OriginString) > 0 {
+				colData.Append([]byte(colDef.Default.OriginString))
 			} else {
-				logutil.Warnf("encode plan default expr err: %v", err)
-				colData.Append([]byte(""))
+				colData.Append([]byte("NULL"))
 			}
 		case pkgcatalog.SystemColAttr_IsDropped:
 			colData.Append(int8(0))
@@ -224,11 +221,10 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_HasUpdate:
 			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
 		case pkgcatalog.SystemColAttr_Update:
-			if val, err := colDef.OnUpdate.Marshal(); err == nil {
-				colData.Append(val)
+			if len(colDef.OnUpdate.OriginString) > 0 {
+				colData.Append([]byte(colDef.OnUpdate.OriginString))
 			} else {
-				logutil.Warnf("encode plan onUpdate expr err: %v", err)
-				colData.Append([]byte(""))
+				colData.Append([]byte("NULL"))
 			}
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
