@@ -174,7 +174,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		if created {
 			seg.table.store.IncreateWriteCnt()
-			seg.table.txnEntries = append(seg.table.txnEntries, anode)
+			seg.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))

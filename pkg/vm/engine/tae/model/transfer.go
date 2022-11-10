@@ -117,6 +117,16 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	return
 }
 
+func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
+	table.Lock()
+	defer table.Unlock()
+	if _, deleted = table.pages[*id]; !deleted {
+		return
+	}
+	delete(table.pages, *id)
+	return
+}
+
 func (table *TransferTable[T]) Close() {
 	table.Lock()
 	defer table.Unlock()

@@ -161,7 +161,7 @@ func (node *DeleteNode) DeletedRows() (rows []uint32) {
 	if node.mask == nil {
 		return
 	}
-	node.mask.ToArray()
+	rows = node.mask.ToArray()
 	return
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
@@ -295,6 +295,7 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
 	node.chain.DeleteInDeleteView(node)
+	node.TxnMVCCNode.PrepareRollback()
 	return
 }
 

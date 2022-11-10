@@ -111,6 +111,7 @@ func (checker *warChecker) checkAll(ts types.TS) (err error) {
 
 func (checker *warChecker) Delete(id *common.ID) {
 	checker.conflictSet[*id] = true
+	delete(checker.readSet, *id)
 }
 
 func (checker *warChecker) HasConflict(id *common.ID) (y bool) {

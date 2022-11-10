@@ -30,14 +30,14 @@ type TransferHashPage struct {
 	common.RefHelper
 	bornTS  time.Time
 	id      *common.ID
-	hashmap map[types.Rowid]types.Rowid
+	hashmap map[uint32]types.Rowid
 }
 
 func NewTransferHashPage(id *common.ID, ts time.Time) *TransferHashPage {
 	page := &TransferHashPage{
 		bornTS:  ts,
 		id:      id,
-		hashmap: make(map[types.Rowid]types.Rowid),
+		hashmap: make(map[uint32]types.Rowid),
 	}
 	page.OnZeroCB = page.Close
 	return page
@@ -52,7 +52,7 @@ func (page *TransferHashPage) TTL(now time.Time, ttl time.Duration) bool {
 
 func (page *TransferHashPage) Close() {
 	logutil.Infof("Closing %s", page.String())
-	page.hashmap = make(map[types.Rowid]types.Rowid)
+	page.hashmap = make(map[uint32]types.Rowid)
 }
 
 func (page *TransferHashPage) String() string {
@@ -71,22 +71,11 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
-func (page *TransferHashPage) TrainWithOffset(offset uint32, to types.Rowid) {
-	from := EncodePhyAddrKey(page.id.SegmentID, page.id.BlockID, offset)
+func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 	page.hashmap[from] = to
 }
 
-func (page *TransferHashPage) Train(from, to types.Rowid) {
-	page.hashmap[from] = to
-}
-
-func (page *TransferHashPage) Transfer(from types.Rowid) (dest types.Rowid, ok bool) {
-	dest, ok = page.hashmap[from]
-	return
-}
-
-func (page *TransferHashPage) TransferWithOffset(offset uint32) (dest types.Rowid, ok bool) {
-	from := EncodePhyAddrKey(page.id.SegmentID, page.id.BlockID, offset)
+func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	dest, ok = page.hashmap[from]
 	return
 }
