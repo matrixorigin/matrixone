@@ -41,6 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func InitAddress(addr string) {
+	Address = addr
+}
+
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
@@ -542,6 +546,9 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	fileList, err := external.ReadDir(param)
 	if err != nil {
 		return nil, err
+	}
+	if param.LoadFile && len(fileList) == 0 {
+		return nil, moerr.NewInvalidInput("the file does not exist in load flow")
 	}
 	cnt := len(fileList) / mcpu
 	tag := len(fileList) % mcpu
@@ -1259,34 +1266,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if len(ranges) == 0 {
 		return nodes, nil
 	}
-	step := len(ranges) / len(c.cnList)
-	if step <= 0 {
-		for i := range ranges {
+	step := (len(ranges) / len(c.cnList)) + 1
+	for i := 0; i < len(ranges); i += step {
+		j := i / step
+		if i+step >= len(ranges) {
 			nodes = append(nodes, engine.Node{
-				Id:   c.cnList[i].Id,
-				Addr: c.cnList[i].Addr,
-				Mcpu: c.cnList[i].Mcpu,
-				Data: [][]byte{ranges[i]},
+				Id:   c.cnList[j].Id,
+				Addr: c.cnList[j].Addr,
+				Mcpu: c.cnList[j].Mcpu,
+				Data: ranges[i:],
 			})
-		}
-	} else {
-		for i := 0; i < len(ranges); i += step {
-			j := i / step
-			if i+step >= len(ranges) {
-				nodes = append(nodes, engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.cnList[j].Mcpu,
-					Data: ranges[i:],
-				})
-			} else {
-				nodes = append(nodes, engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.cnList[j].Mcpu,
-					Data: ranges[i : i+step],
-				})
-			}
+		} else {
+			nodes = append(nodes, engine.Node{
+				Id:   c.cnList[j].Id,
+				Addr: c.cnList[j].Addr,
+				Mcpu: c.cnList[j].Mcpu,
+				Data: ranges[i : i+step],
+			})
 		}
 	}
 	return nodes, nil

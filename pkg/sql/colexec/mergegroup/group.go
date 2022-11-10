@@ -83,8 +83,8 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	var err error
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		bat := <-proc.Reg.MergeReceivers[i].Ch
-		if bat == nil {
+		bat, ok := <-proc.Reg.MergeReceivers[i].Ch
+		if !ok || bat == nil {
 			continue
 		}
 		if len(bat.Zs) == 0 {

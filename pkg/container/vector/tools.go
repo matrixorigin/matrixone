@@ -340,22 +340,7 @@ func (v *Vector) extend(rows int, m *mpool.MPool) error {
 	newRows := int(tgtSz / v.GetType().TypeSize())
 	// Setup v.Col
 	v.setupColFromData(0, newRows)
-	// extend the null map
-	v.extendNullBitmap(newRows)
 	return nil
-}
-
-func (v *Vector) extendNullBitmap(target int) {
-	if v.IsScalar() {
-		if v.IsScalarNull() {
-			v.Nsp = nulls.NewWithSize(1)
-			nulls.Add(v.Nsp, 0)
-		} else {
-			v.Nsp = &nulls.Nulls{}
-		}
-	} else {
-		nulls.TryExpand(v.Nsp, target)
-	}
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap

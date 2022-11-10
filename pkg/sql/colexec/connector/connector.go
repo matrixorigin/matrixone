@@ -34,7 +34,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
-		ap.Free(proc, false)
 		return true, nil
 	}
 	if bat.Length() == 0 {
@@ -56,7 +55,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	select {
 	case <-reg.Ctx.Done():
 		bat.Clean(proc.Mp())
-		ap.Free(proc, false)
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil

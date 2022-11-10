@@ -17,12 +17,14 @@ package taskservice
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	store := NewMemTaskStorage()
 	h := NewTaskServiceHolderWithTaskStorageFactorySelector(nil,
 		func() (string, error) { return "", nil },
@@ -33,6 +35,9 @@ func TestTaskHolderCanCreateTaskService(t *testing.T) {
 		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
 		TaskDatabase: "d",
 	}))
+	defer func() {
+		require.NoError(t, h.Close())
+	}()
 	s, ok := h.Get()
 	assert.True(t, ok)
 	assert.NotNil(t, s)
@@ -74,12 +79,17 @@ func TestTaskHolderCanClose(t *testing.T) {
 }
 
 func TestRefreshTaskStorageCanRefresh(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
 	stores := map[string]TaskStorage{
 		"s1": NewMemTaskStorage(),
 		"s2": NewMemTaskStorage(),
 	}
 	address := "s1"
 	s := newRefreshableTaskStorage(nil, func() (string, error) { return address, nil }, &testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
 
 	s.mu.RLock()
 	assert.Equal(t, stores["s1"], s.mu.store)

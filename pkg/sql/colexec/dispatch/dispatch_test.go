@@ -82,15 +82,15 @@ func TestDispatch(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		for {
-			bat := <-tc.arg.Regs[0].Ch
-			if bat == nil {
-				break
+		tc.arg.Free(tc.proc, false)
+		for _, re := range tc.arg.Regs {
+			for len(re.Ch) > 0 {
+				bat = <-re.Ch
+				if bat == nil {
+					break
+				}
+				bat.Clean(tc.proc.Mp())
 			}
-			if len(bat.Zs) == 0 {
-				continue
-			}
-			bat.Clean(tc.proc.Mp())
 		}
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

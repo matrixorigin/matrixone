@@ -269,6 +269,16 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 	return 1
 }
 
+func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
+	if un.Prepare.Less(o.Prepare) {
+		return -1
+	}
+	if un.Prepare.Equal(o.Prepare) {
+		return un.Compare(o)
+	}
+	return 1
+}
+
 func (un *TxnMVCCNode) SetLogIndex(idx *wal.Index) {
 	un.LogIndex = idx
 
@@ -287,6 +297,11 @@ func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	}
 	un.Txn = nil
 	ts = un.End
+	return
+}
+
+func (un *TxnMVCCNode) PrepareRollback() (err error) {
+	un.Aborted = true
 	return
 }
 

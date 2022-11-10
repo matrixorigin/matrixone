@@ -20,7 +20,7 @@ import (
 )
 
 type container struct {
-	i int
+	flag []bool
 }
 
 type Argument struct {
@@ -48,5 +48,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		case <-arg.Regs[i].Ctx.Done():
 		case arg.Regs[i].Ch <- nil:
 		}
+		close(arg.Regs[i].Ch)
 	}
 }

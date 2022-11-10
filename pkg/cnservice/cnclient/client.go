@@ -20,6 +20,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"time"
 )
@@ -102,6 +103,7 @@ func NewCNClient(cfg *ClientConfig) error {
 			}),
 		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("cn-backend")),
 	)
 
 	client.client, err = morpc.NewClient(factory,

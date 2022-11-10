@@ -298,8 +298,8 @@ func (c SpanContext) GetIDs() (TraceID, SpanID) {
 }
 
 func (c *SpanContext) Reset() {
-	c.TraceID = TraceID{}
-	c.SpanID = SpanID{}
+	c.TraceID = nilTraceID
+	c.SpanID = nilSpanID
 }
 
 func (c *SpanContext) IsEmpty() bool {
@@ -309,7 +309,7 @@ func (c *SpanContext) IsEmpty() bool {
 // MarshalLogObject implement zapcore.ObjectMarshaler
 func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	if !c.TraceID.IsZero() {
-		enc.AddString("statement_id", c.TraceID.String())
+		enc.AddString("trace_id", c.TraceID.String())
 	}
 	if !c.SpanID.IsZero() {
 		enc.AddString("span_id", c.SpanID.String())
