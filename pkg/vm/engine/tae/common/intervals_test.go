@@ -17,10 +17,12 @@ package common
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMerge1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 1, End: 3},
@@ -56,6 +58,7 @@ func TestMerge1(t *testing.T) {
 }
 
 func TestMerge2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{},
 	}
@@ -89,6 +92,7 @@ func TestMerge2(t *testing.T) {
 }
 
 func TestMerge3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 2, End: 2},
@@ -116,6 +120,7 @@ func TestMerge3(t *testing.T) {
 	assert.True(t, i2.Equal(i2bk)) //i2 should remain the same
 }
 func TestContains1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 2, End: 2},
@@ -134,6 +139,7 @@ func TestContains1(t *testing.T) {
 	assert.True(t, i2.Equal(i2bk)) //i2 should remain the same
 }
 func TestContains2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 2, End: 2},
@@ -158,6 +164,7 @@ func TestContains2(t *testing.T) {
 	assert.True(t, i2.Equal(i2bk)) //i2 should remain the same
 }
 func TestContains3(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i1 := &ClosedIntervals{
 		Intervals: []*ClosedInterval{},
 	}
@@ -178,6 +185,7 @@ func TestContains3(t *testing.T) {
 }
 
 func TestNewBySlice(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	i := NewClosedIntervalsBySlice([]uint64{})
 	t.Log(i)
 	assert.Equal(t, 0, len(i.Intervals))
