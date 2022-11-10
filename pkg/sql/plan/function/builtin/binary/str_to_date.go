@@ -15,13 +15,14 @@
 package binary
 
 import (
+	"strings"
+	"unicode"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
-	"unicode"
 )
 
 const (
@@ -145,7 +146,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return proc.AllocScalarNullVector(resultType), nil
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				resCol := types.FromTimeClock(false, int32(time.hour), time.minute, time.second, time.microsecond)
+				resCol := types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 				return vector.NewConstFixed[types.Time](resultType, 1, resCol, proc.Mp()), nil
 			} else {
 				// should be null
@@ -226,7 +227,7 @@ func CalcStrToTime(timestrs []string, format string, ns *nulls.Nulls, rNsp *null
 			nulls.Add(rNsp, uint64(idx))
 		} else {
 			if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-				res[idx] = types.FromTimeClock(false, int32(time.hour), time.minute, time.second, time.microsecond)
+				res[idx] = types.FromTimeClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
 			} else {
 				// should be null
 				nulls.Add(rNsp, uint64(idx))

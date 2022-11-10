@@ -11,6 +11,7 @@ invalid input: the nullif func first param must equal to colName
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set col2=nullif(col3,'1');
 invalid input: the nullif func first param must equal to colName
 load data infile "$resources/load_data/not_exists.csv" into table t1;
+invalid input: the file does not exist in load flow
 load data infile "$resources/load_data/set_null_1.csv" into table t1 set col1=nullif(col1,'1');
 select * from t1;
 col1    col2    col3    col4    col5

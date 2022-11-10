@@ -79,7 +79,7 @@ SELECT 2 IS TRUE;
 2 is true
 true
 SELECT -2 IS TRUE;
-2 is true
+-2 is true
 true
 SELECT * FROM is_test WHERE big IS TRUE;
 tiny    small    int_test    big    tiny_un    small_un    int_test_un    big_un    float_32    float_64
@@ -156,7 +156,7 @@ SELECT name, class FROM t1 WHERE name IS NOT TRUE;
 invalid input: 'jack' is not a valid bool expression
 SELECT id, name, class FROM t1 WHERE CAST(SUBSTRING(id, 4) AS TINYINT) IS TRUE;
 id    name    class
-1001    JACK
+1001    JACK    
 1002    TOM    0
 1003    1    5
 1004         9

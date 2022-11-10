@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -82,6 +83,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	worker, _ := ants.NewPool(10)
+	defer worker.Release()
 	appendfn := func(i int) func() {
 		return func() {
 			e := entries[i]
@@ -133,6 +135,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 }
 
 func TestDriver(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	s := initEnv(t)
 	concurrentAppendReadCheckpoint(s, t)
 	s = restartStore(s, t)

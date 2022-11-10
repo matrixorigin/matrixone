@@ -74,7 +74,7 @@ func TestTime_StringAndString2(t *testing.T) {
 	}
 }
 
-func TestTime_ParseTime(t *testing.T) {
+func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name      string
 		inputStr  string
@@ -109,7 +109,7 @@ func TestTime_ParseTime(t *testing.T) {
 		},
 		{
 			name: "TestParse-DateError",
-			// 11:22:33
+			// invalid datetime
 			inputStr: "2022-12-33 11:22:33",
 			isErr:    true,
 		},
@@ -118,7 +118,7 @@ func TestTime_ParseTime(t *testing.T) {
 			name: "TestParse2-NoPrecision",
 			// 11:22:33
 			inputStr:  "20221212112233",
-			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			expected:  FromTimeClock(false, 2022121211, 22, 33, 0),
 			precision: 0,
 			isErr:     false,
 		},
@@ -126,7 +126,7 @@ func TestTime_ParseTime(t *testing.T) {
 			name: "TestParse2-Precision01",
 			// 11:22:33
 			inputStr:  "20221212112233.1234",
-			expected:  FromTimeClock(false, 11, 22, 33, 123000),
+			expected:  FromTimeClock(false, 2022121211, 22, 33, 123000),
 			precision: 3,
 			isErr:     false,
 		},
@@ -134,15 +134,9 @@ func TestTime_ParseTime(t *testing.T) {
 			name: "TestParse2-Precision02",
 			// 11:22:33
 			inputStr:  "20221212112233.1235",
-			expected:  FromTimeClock(false, 11, 22, 33, 124000),
+			expected:  FromTimeClock(false, 2022121211, 22, 33, 124000),
 			precision: 3,
 			isErr:     false,
-		},
-		{
-			name: "TestParse2-DateError",
-			// 11:22:33
-			inputStr: "20221233112233",
-			isErr:    true,
 		},
 		// ==================== Time format: hh:mm:ss(.msec) ====================
 		{
@@ -204,7 +198,7 @@ func TestTime_ParseTime(t *testing.T) {
 		},
 		{
 			name: "TestParse4-NoPrecision03",
-			// 11:22:33
+			// -00:01:12
 			inputStr:  "-112",
 			expected:  FromTimeClock(true, 0, 1, 12, 0),
 			precision: 0,
@@ -212,23 +206,23 @@ func TestTime_ParseTime(t *testing.T) {
 		},
 		{
 			name: "TestParse4-NoPrecision04",
-			// 11:22:33
+			// -01:12:32
 			inputStr:  "-11232",
 			expected:  FromTimeClock(true, 1, 12, 32, 0),
 			precision: 0,
 			isErr:     false,
 		},
 		{
-			name: "TestParse4-Precision",
-			// 11:22:33
+			name: "TestParse4-Precision01",
+			// -01:12:32.123
 			inputStr:  "-11232.123",
 			expected:  FromTimeClock(true, 1, 12, 32, 123000),
 			precision: 3,
 			isErr:     false,
 		},
 		{
-			name: "TestParse4-Precision",
-			// 11:22:33
+			name: "TestParse4-Precision02",
+			// -01:12:32.124
 			inputStr:  "11232.1235",
 			expected:  FromTimeClock(false, 1, 12, 32, 124000),
 			precision: 3,
@@ -248,5 +242,188 @@ func TestTime_ParseTime(t *testing.T) {
 			}
 		})
 
+	}
+}
+
+func TestTime_CastBetweenTimeInt64(t *testing.T) {
+	testCases := []struct {
+		name      string
+		input     int64
+		expected  Time
+		precision int32
+		isErr     bool
+	}{
+		{
+			name: "TestParse-validInt64-01",
+			// 11:22:33
+			input:     112233,
+			expected:  FromTimeClock(false, 11, 22, 33, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-02",
+			// -11:22:33
+			input:     -112233,
+			expected:  FromTimeClock(true, 11, 22, 33, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// -00:01:12
+			input:     -112,
+			expected:  FromTimeClock(true, 0, 1, 12, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// 00:00:00
+			input:     0,
+			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// -11:22:33
+			input:     0,
+			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// 2562047787:59:59
+			input:     20221212112233,
+			expected:  FromTimeClock(false, 2022121211, 22, 33, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// 2562047787:59:59
+			input:     25620477875959,
+			expected:  FromTimeClock(false, 2562047787, 59, 59, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name: "TestParse-validInt64-03",
+			// 2562047787:59:59
+			input:     -25620477875959,
+			expected:  FromTimeClock(true, 2562047787, 59, 59, 0),
+			precision: 0,
+			isErr:     false,
+		},
+		{
+			name:      "TestParse-invalidInt64",
+			input:     25620477880000,
+			expected:  FromTimeClock(false, 0, 0, 0, 0),
+			precision: 0,
+			isErr:     true,
+		},
+		{
+			name:      "TestParse-invalidInt64",
+			input:     -25620477880000,
+			expected:  FromTimeClock(true, 0, 0, 0, 0),
+			precision: 0,
+			isErr:     true,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			// Int64 to Time
+			parsed, err := ParseInt64ToTime(c.input, c.precision)
+			if !c.isErr {
+				require.NoError(t, err)
+				require.Equal(t, parsed, c.expected)
+
+				// Time to Int64
+				toInt := c.expected.ToInt64()
+				require.Equal(t, toInt, c.input)
+			} else {
+				require.Equal(t, err, moerr.NewInvalidInput("invalid time value %d", c.input))
+			}
+		})
+	}
+}
+
+func TestTime_ParseTimeFromDecimal128(t *testing.T) {
+	testCases := []struct {
+		name      string
+		dcmStr    string
+		expected  Time
+		expected2 string
+		precision int32
+		isCarry   bool
+		isErr     bool
+	}{
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "112233.444",
+			expected:  FromTimeClock(false, 11, 22, 33, 444000),
+			precision: 3,
+			isCarry:   false,
+			isErr:     false,
+		},
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "112233.44455",
+			expected:  FromTimeClock(false, 11, 22, 33, 445000),
+			expected2: "112233.445",
+			precision: 3,
+			isCarry:   true,
+			isErr:     false,
+		},
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "20201212112233.44455",
+			expected:  FromTimeClock(false, 2020121211, 22, 33, 445000),
+			expected2: "20201212112233.445",
+			precision: 3,
+			isCarry:   true,
+			isErr:     false,
+		},
+		{
+			name:      "TestParse-ValidDecimal128",
+			dcmStr:    "-20201212112233.44455",
+			expected:  FromTimeClock(true, 2020121211, 22, 33, 445000),
+			expected2: "-20201212112233.445",
+			precision: 3,
+			isCarry:   true,
+			isErr:     false,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			// decimal128 to Time
+			dcm, err := Decimal128_FromString(c.dcmStr)
+			println("the decimal is ", dcm.String())
+			require.NoError(t, err)
+			if !c.isErr {
+				parsed, err := ParseDecima128lToTime(dcm, c.precision)
+				require.NoError(t, err)
+				require.Equal(t, parsed, c.expected)
+
+				// Time to Decimal
+				toDcm, err := c.expected.ToDecimal128(34, c.precision)
+				println("the toDecimal is ", toDcm.String())
+				require.NoError(t, err)
+				if c.isCarry {
+					// if the precision cause carry
+					// must compare it with decimal from c.expected2
+					newdcm, err := Decimal128_FromString(c.expected2)
+					require.NoError(t, err)
+					require.Equal(t, toDcm, newdcm)
+				} else {
+					require.Equal(t, toDcm, dcm)
+				}
+
+			}
+		})
 	}
 }

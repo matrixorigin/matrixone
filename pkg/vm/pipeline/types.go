@@ -97,8 +97,11 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 		proc.SetInputBatch(nil)
 	}
 	for _, receiver := range proc.Reg.MergeReceivers {
-		for len(receiver.Ch) > 0 {
-			bat := <-receiver.Ch
+		for {
+			bat, ok := <-receiver.Ch
+			if !ok {
+				break
+			}
 			if bat == nil {
 				break
 			}

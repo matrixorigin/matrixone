@@ -68,6 +68,10 @@ func parameterModificationInTxnErrorInfo() string {
 	return "Uncommitted transaction exists. Please commit or rollback first."
 }
 
+func abortTransactionErrorInfo() string {
+	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
+}
+
 var (
 	errorOnlyCreateStatement        = moerr.NewInternalError(onlyCreateStatementErrorInfo())
 	errorAdministrativeStatement    = moerr.NewInternalError("administrative command is unsupported in transactions")
@@ -214,6 +218,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	reqCtx := ses.GetRequestContext()
+	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
@@ -2282,6 +2288,9 @@ func incTransactionCounter(tenant string) {
 }
 
 func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	if t == metric.SQLTypeRollback {
+		return
+	}
 	metric.TransactionErrorsCounter(tenant, t).Inc()
 }
 
@@ -2408,7 +2417,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Host:          pu.SV.Host,
 		ConnectionID:  uint64(proto.ConnectionID()),
 		Database:      ses.GetDatabaseName(),
-		Version:       "8.0.30-MatrixOne-v" + serverVersion.Load().(string),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}
@@ -3022,6 +3031,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	handleFailed:
 		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
 		trace.EndStatement(requestCtx, err)
 		logError(ses.GetConciseProfile(), err.Error())
 		if !fromLoadData {
@@ -3349,14 +3371,14 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 }
 
 /*
-IsStatementToBeCommittedInActiveTransaction checks the statement that need to be committed
+NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
 in an active transaction.
 
 Currently, it includes the drop statement, the administration statement ,
 
 	the parameter modification statement.
 */
-func IsStatementToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
+func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}

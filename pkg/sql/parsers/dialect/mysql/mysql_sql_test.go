@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show index from t1 from db",
-		output: "show index from db.t1",
+		input:  "show variables like 'sql_mode'",
+		output: "show variables like sql_mode",
 	}
 )
 
@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "show variables like 'sql_mode'",
+		output: "show variables like sql_mode",
+	}, {
 		input:  "show index from t1 from db",
 		output: "show index from db.t1",
 	}, {
