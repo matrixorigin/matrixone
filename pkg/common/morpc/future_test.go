@@ -54,8 +54,6 @@ func TestCloseChanAfterGC(t *testing.T) {
 func TestNewFuture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ctx2, cancel2 := context.WithCancel(ctx)
-	defer cancel2()
 
 	f := newFuture(nil)
 	f.init(1, ctx)
@@ -66,7 +64,7 @@ func TestNewFuture(t *testing.T) {
 	assert.NotNil(t, f.c)
 	assert.Equal(t, 0, len(f.c))
 	assert.Equal(t, uint64(1), f.id)
-	assert.Equal(t, ctx2, f.ctx)
+	assert.Equal(t, ctx, f.ctx)
 }
 
 func TestReleaseFuture(t *testing.T) {
@@ -81,7 +79,7 @@ func TestReleaseFuture(t *testing.T) {
 	assert.True(t, f.mu.closed)
 	assert.Equal(t, 0, len(f.c))
 	assert.Equal(t, uint64(0), f.id)
-	assert.Error(t, f.ctx.Err())
+	assert.Nil(t, f.ctx)
 }
 
 func TestGet(t *testing.T) {
