@@ -58,7 +58,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			return false, moerr.NewInternalError("pipeline closed unexpectedly")
 		}
 		if value.IsNil() {
-			ctr.receiverListener[chosen].Chan = reflect.ValueOf(nil)
+			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
 			ctr.aliveMergeReceiver--
 			continue
 		}
