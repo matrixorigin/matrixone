@@ -16,13 +16,10 @@ package merge
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"reflect"
 )
 
 type container struct {
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
+	i int
 }
 
 type Argument struct {
@@ -30,7 +27,4 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.receiverListener = nil
-	}
 }
