@@ -129,7 +129,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		return
 	}
 	defer pinned.Close()
-	entry, err := tbl.store.warChecker.GetEntryByID(
+	entry, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
@@ -395,7 +395,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 }
 
 func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	meta, err := tbl.store.warChecker.GetEntryByID(
+	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
@@ -560,7 +560,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		}
 		return
 	}
-	blk, err := tbl.store.warChecker.GetEntryByID(
+	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID, id.SegmentID,
 		id.BlockID)
@@ -620,7 +620,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
-	meta, err := tbl.store.warChecker.GetEntryByID(
+	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
@@ -633,7 +633,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
-	meta, err := tbl.store.warChecker.GetEntryByID(
+	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
@@ -652,7 +652,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 }
 
 func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
-	meta, err := tbl.store.warChecker.GetEntryByID(
+	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
 		id.SegmentID,
