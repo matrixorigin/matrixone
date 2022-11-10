@@ -324,6 +324,57 @@ var (
 			"XA varchar(3)," +
 			"SAVEPOINTS varchar(3)" +
 			");",
+		"CREATE TABLE IF NOT EXISTS ROUTINES (" +
+			"SPECIFIC_NAME varchar(64)," +
+			"ROUTINE_CATALOG varchar(64)," +
+			"ROUTINE_SCHEMA varchar(64)," +
+			"ROUTINE_NAME varchar(64)," +
+			"ROUTINE_TYPE varchar(10)," +
+			"DATA_TYPE  longtext," +
+			"CHARACTER_MAXIMUM_LENGTH bigint," +
+			"CHARACTER_OCTET_LENGTH bigint," +
+			"NUMERIC_PRECISION int unsigned," +
+			"NUMERIC_SCALE int unsigned," +
+			"DATETIME_PRECISION int unsigned," +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"COLLATION_NAME varchar(64)," +
+			"DTD_IDENTIFIER longtext," +
+			"ROUTINE_BODY varchar(3)," +
+			"ROUTINE_DEFINITION longtext," +
+			"EXTERNAL_NAME binary(0)," +
+			"EXTERNAL_LANGUAGE varchar(64)," +
+			"PARAMETER_STYLE varchar(3)," +
+			"IS_DETERMINISTIC varchar(3)," +
+			"SQL_DATA_ACCESS varchar(10)," +
+			"SQL_PATH varchar(100)," +
+			"SECURITY_TYPE varchar(10)," +
+			"CREATED timestamp," +
+			"LAST_ALTERED timestamp," +
+			"SQL_MODE varchar(100)," +
+			"ROUTINE_COMMENT text," +
+			"DEFINER varchar(288)," +
+			"CHARACTER_SET_CLIENT varchar(64)," +
+			"COLLATION_CONNECTION varchar(64)," +
+			"DATABASE_COLLATION  varchar(64)" +
+			");",
+		"CREATE TABLE IF NOT EXISTS PARAMETERS(" +
+			"SPECIFIC_CATALOG varchar(64)," +
+			"SPECIFIC_SCHEMA varchar(64)," +
+			"SPECIFIC_NAME varchar(64)," +
+			"ORDINAL_POSITION bigint unsigned," +
+			"PARAMETER_MODE varchar(5)," +
+			"PARAMETER_NAME varchar(64)," +
+			"DATA_TYPE longtext," +
+			"CHARACTER_MAXIMUM_LENGTH bigint," +
+			"CHARACTER_OCTET_LENGTH bigint," +
+			"NUMERIC_PRECISION int unsigned," +
+			"NUMERIC_SCALE bigint," +
+			"DATETIME_PRECISION int unsigned," +
+			"CHARACTER_SET_NAME varchar(64)," +
+			"COLLATION_NAME varchar(64)," +
+			"DTD_IDENTIFIER mediumtext," +
+			"ROUTINE_TYPE  varchar(64)" +
+			");",
 	}
 )
 
