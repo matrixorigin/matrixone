@@ -1,0 +1,51 @@
+service-type = "CN"
+
+[log]
+level = "debug"
+format = "console"
+max-size = 512
+
+[cn.rpc]
+max-message-size = "100mb"
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "S3"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/etl"
+
+[hakeeper-client]
+service-addresses = ["logservice:32001"]
+
+[observability]
+disableTrace = true
+disableMetric = true
+
+[cn]
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+listen-address = "0.0.0.0:6002"
+service-address = "cn-1:6002"
+sql-address = "cn-1:6001"
+
+[cn.Engine]
+type = "distributed-tae"
+
+[cn.frontend]
+port = 6001

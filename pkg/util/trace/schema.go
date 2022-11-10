@@ -189,12 +189,14 @@ var (
 		Condition: &export.ViewSingleCondition{Column: rawItemCol, Table: errorInfoTbl},
 	}
 
+	traceIDCol = export.Column{Name: stmtIDCol.Name, Type: stmtIDCol.Type, Default: stmtIDCol.Default, Comment: "trace uniq id", Alias: "trace_id"}
+
 	spanView = &export.View{
 		Database:    StatsDatabase,
 		Table:       spanInfoTbl,
 		OriginTable: SingleRowLogTable,
 		Columns: []export.Column{
-			stmtIDCol,
+			traceIDCol,
 			spanIDCol,
 			parentSpanIDCol,
 			nodeUUIDCol,
