@@ -162,10 +162,10 @@ mo_database    dat_id
 mo_database    datname
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
-query_id    INT    NO        0
-seq    INT    NO        0
-state    VARCHAR    NO        NULL
-duration    DECIMAL64    NO        0.000000
+query_id    INT    NO        '0'
+seq    INT    NO        '0'
+state    VARCHAR    NO        ''
+duration    DECIMAL64    NO        '0.000000'
 cpu_user    DECIMAL64    YES        null
 cpu_system    DECIMAL64    YES        null
 context_voluntary    INT    YES        null
@@ -188,10 +188,10 @@ select * from PROCESSLIST limit 2;
 [unknown result because it is related to issue#6036]
 desc user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment
-grantee    VARCHAR    NO        NULL
-table_catalog    VARCHAR    NO        NULL
-privilege_type    VARCHAR    NO        NULL
-is_grantable    VARCHAR    NO        NULL
+grantee    VARCHAR    NO        ''
+table_catalog    VARCHAR    NO        ''
+privilege_type    VARCHAR    NO        ''
+is_grantable    VARCHAR    NO        ''
 select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
@@ -266,53 +266,53 @@ table_name    table_type
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-user    CHAR    NO        NULL
-select_priv    VARCHAR    NO        N
-insert_priv    VARCHAR    NO        N
-update_priv    VARCHAR    NO        N
-delete_priv    VARCHAR    NO        N
-create_priv    VARCHAR    NO        N
-drop_priv    VARCHAR    NO        N
-reload_priv    VARCHAR    NO        N
-shutdown_priv    VARCHAR    NO        N
-process_priv    VARCHAR    NO        N
-file_priv    VARCHAR    NO        N
-grant_priv    VARCHAR    NO        N
-references_priv    VARCHAR    NO        N
-index_priv    VARCHAR    NO        N
-alter_priv    VARCHAR    NO        N
-show_db_priv    VARCHAR    NO        N
-super_priv    VARCHAR    NO        N
-create_tmp_table_priv    VARCHAR    NO        N
-lock_tables_priv    VARCHAR    NO        N
-execute_priv    VARCHAR    NO        N
-repl_slave_priv    VARCHAR    NO        N
-repl_client_priv    VARCHAR    NO        N
-create_view_priv    VARCHAR    NO        N
-show_view_priv    VARCHAR    NO        N
-create_routine_priv    VARCHAR    NO        N
-alter_routine_priv    VARCHAR    NO        N
-create_user_priv    VARCHAR    NO        N
-event_priv    VARCHAR    NO        N
-trigger_priv    VARCHAR    NO        N
-create_tablespace_priv    VARCHAR    NO        N
-ssl_type    VARCHAR    NO        NULL
+host    CHAR    NO        ''
+user    CHAR    NO        ''
+select_priv    VARCHAR    NO        'N'
+insert_priv    VARCHAR    NO        'N'
+update_priv    VARCHAR    NO        'N'
+delete_priv    VARCHAR    NO        'N'
+create_priv    VARCHAR    NO        'N'
+drop_priv    VARCHAR    NO        'N'
+reload_priv    VARCHAR    NO        'N'
+shutdown_priv    VARCHAR    NO        'N'
+process_priv    VARCHAR    NO        'N'
+file_priv    VARCHAR    NO        'N'
+grant_priv    VARCHAR    NO        'N'
+references_priv    VARCHAR    NO        'N'
+index_priv    VARCHAR    NO        'N'
+alter_priv    VARCHAR    NO        'N'
+show_db_priv    VARCHAR    NO        'N'
+super_priv    VARCHAR    NO        'N'
+create_tmp_table_priv    VARCHAR    NO        'N'
+lock_tables_priv    VARCHAR    NO        'N'
+execute_priv    VARCHAR    NO        'N'
+repl_slave_priv    VARCHAR    NO        'N'
+repl_client_priv    VARCHAR    NO        'N'
+create_view_priv    VARCHAR    NO        'N'
+show_view_priv    VARCHAR    NO        'N'
+create_routine_priv    VARCHAR    NO        'N'
+alter_routine_priv    VARCHAR    NO        'N'
+create_user_priv    VARCHAR    NO        'N'
+event_priv    VARCHAR    NO        'N'
+trigger_priv    VARCHAR    NO        'N'
+create_tablespace_priv    VARCHAR    NO        'N'
+ssl_type    VARCHAR    NO        ''
 ssl_cipher    BLOB    NO        NULL
 x509_issuer    BLOB    NO        NULL
 x509_subject    BLOB    NO        NULL
-max_questions    INT UNSIGNED    NO        0
-max_updates    INT UNSIGNED    NO        0
-max_connections    INT UNSIGNED    NO        0
-max_user_connections    INT UNSIGNED    NO        0
-plugin    CHAR    NO        caching_sha2_password
+max_questions    INT UNSIGNED    NO        '0'
+max_updates    INT UNSIGNED    NO        '0'
+max_connections    INT UNSIGNED    NO        '0'
+max_user_connections    INT UNSIGNED    NO        '0'
+plugin    CHAR    NO        'caching_sha2_password'
 authentication_string    TEXT    YES        NULL
-password_expired    VARCHAR    NO        N
+password_expired    VARCHAR    NO        'N'
 password_last_changed    TIMESTAMP    YES        null
 password_lifetime    SMALLINT UNSIGNED    YES        null
-account_locked    VARCHAR    NO        N
-create_role_priv    VARCHAR    NO        N
-drop_role_priv    VARCHAR    NO        N
+account_locked    VARCHAR    NO        'N'
+create_role_priv    VARCHAR    NO        'N'
+drop_role_priv    VARCHAR    NO        'N'
 password_reuse_history    SMALLINT UNSIGNED    YES        null
 password_reuse_time    SMALLINT UNSIGNED    YES        null
 password_require_current    VARCHAR    YES        null
@@ -322,66 +322,66 @@ select host, user from user limit 2;
 host    user
 desc db;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-select_priv    VARCHAR    NO        N
-insert_priv    VARCHAR    NO        N
-update_priv    VARCHAR    NO        N
-delete_priv    VARCHAR    NO        N
-create_priv    VARCHAR    NO        N
-drop_priv    VARCHAR    NO        N
-grant_priv    VARCHAR    NO        N
-references_priv    VARCHAR    NO        N
-index_priv    VARCHAR    NO        N
-alter_priv    VARCHAR    NO        N
-create_tmp_table_priv    VARCHAR    NO        N
-lock_tables_priv    VARCHAR    NO        N
-create_view_priv    VARCHAR    NO        N
-show_view_priv    VARCHAR    NO        N
-create_routine_priv    VARCHAR    NO        N
-alter_routine_priv    VARCHAR    NO        N
-execute_priv    VARCHAR    NO        N
-event_priv    VARCHAR    NO        N
-trigger_priv    VARCHAR    NO        N
+host    CHAR    NO        ''
+db    CHAR    NO        ''
+user    CHAR    NO        ''
+select_priv    VARCHAR    NO        'N'
+insert_priv    VARCHAR    NO        'N'
+update_priv    VARCHAR    NO        'N'
+delete_priv    VARCHAR    NO        'N'
+create_priv    VARCHAR    NO        'N'
+drop_priv    VARCHAR    NO        'N'
+grant_priv    VARCHAR    NO        'N'
+references_priv    VARCHAR    NO        'N'
+index_priv    VARCHAR    NO        'N'
+alter_priv    VARCHAR    NO        'N'
+create_tmp_table_priv    VARCHAR    NO        'N'
+lock_tables_priv    VARCHAR    NO        'N'
+create_view_priv    VARCHAR    NO        'N'
+show_view_priv    VARCHAR    NO        'N'
+create_routine_priv    VARCHAR    NO        'N'
+alter_routine_priv    VARCHAR    NO        'N'
+execute_priv    VARCHAR    NO        'N'
+event_priv    VARCHAR    NO        'N'
+trigger_priv    VARCHAR    NO        'N'
 __mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL
 select db, user from db limit 5;
 db    user
 desc procs_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-routine_name    CHAR    NO        NULL
+host    CHAR    NO        ''
+db    CHAR    NO        ''
+user    CHAR    NO        ''
+routine_name    CHAR    NO        ''
 routine_type    VARCHAR    NO        NULL
-grantor    VARCHAR    NO        NULL
-proc_priv    VARCHAR    NO        NULL
+grantor    VARCHAR    NO        ''
+proc_priv    VARCHAR    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
 __mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL
 select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-table_name    CHAR    NO        NULL
-column_name    CHAR    NO        NULL
+host    CHAR    NO        ''
+db    CHAR    NO        ''
+user    CHAR    NO        ''
+table_name    CHAR    NO        ''
+column_name    CHAR    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-column_priv    VARCHAR    NO        NULL
+column_priv    VARCHAR    NO        ''
 __mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL
 select table_name, column_name from columns_priv limit 5;
 table_name    column_name
 desc tables_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        NULL
-db    CHAR    NO        NULL
-user    CHAR    NO        NULL
-table_name    CHAR    NO        NULL
-grantor    VARCHAR    NO        NULL
+host    CHAR    NO        ''
+db    CHAR    NO        ''
+user    CHAR    NO        ''
+table_name    CHAR    NO        ''
+grantor    VARCHAR    NO        ''
 timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-table_priv    VARCHAR    NO        NULL
-column_priv    VARCHAR    NO        NULL
+table_priv    VARCHAR    NO        ''
+column_priv    VARCHAR    NO        ''
 __mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL
 select host, table_name from tables_priv limit 5;
 host    table_name
