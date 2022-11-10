@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -26,6 +27,7 @@ import (
 )
 
 func TestPointerCmd(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	groups := uint32(10)
 	maxLsn := uint64(10)
@@ -46,6 +48,7 @@ func TestPointerCmd(t *testing.T) {
 }
 
 func TestComposedCmd(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	composed := txnbase.NewComposedCmd()
 	defer composed.Close()

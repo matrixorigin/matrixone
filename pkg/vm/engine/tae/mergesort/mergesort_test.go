@@ -19,11 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func TestSort1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, false, nil)
@@ -40,6 +42,7 @@ func TestSort1(t *testing.T) {
 	}
 }
 func TestSort2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10000, false, false, nil)
@@ -51,6 +54,7 @@ func TestSort2(t *testing.T) {
 	}
 }
 func TestMerge1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 5, false, false, nil)
@@ -82,6 +86,7 @@ func TestMerge1(t *testing.T) {
 	}
 }
 func TestMerge2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 50000, false, false, nil)
@@ -97,6 +102,7 @@ func TestMerge2(t *testing.T) {
 	}
 }
 func TestReshape1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(18)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 4, false, true, nil)
@@ -113,6 +119,7 @@ func TestReshape1(t *testing.T) {
 	}
 }
 func TestReshape2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	vecTypes := types.MockColTypes(18)
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 50000, false, true, nil)

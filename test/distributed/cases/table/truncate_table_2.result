@@ -135,11 +135,11 @@ internal error: do not have privilege to execute the statement
 truncate table rawlog;
 internal error: do not have privilege to execute the statement
 truncate table log_info;
-internal error: do not have privilege to execute the statement
+no such table system.log_info
 truncate table error_info;
-internal error: do not have privilege to execute the statement
+no such table system.error_info
 truncate table span_info;
-internal error: do not have privilege to execute the statement
+no such table system.span_info
 use information_schema;
 truncate table key_column_usage ;
 internal error: do not have privilege to execute the statement
@@ -152,7 +152,7 @@ internal error: do not have privilege to execute the statement
 truncate table user_privileges;
 internal error: do not have privilege to execute the statement
 truncate table schemata;
-internal error: do not have privilege to execute the statement
+no such table information_schema.schemata
 truncate table character_sets;
 internal error: do not have privilege to execute the statement
 truncate table triggers;
