@@ -14,9 +14,14 @@
 
 package sm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/lni/goutils/leaktest"
+)
 
 func TestLoop1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	q1 := make(chan any, 100)
 	fn := func(batch []any, q chan any) {
 		for _, item := range batch {
