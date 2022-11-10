@@ -39,6 +39,7 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	var err error
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -48,49 +49,32 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				return true, err
+				ap.Free(proc, true)
+				return false, err
 			}
 			ctr.state = Probe
+
 		case Probe:
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				if ctr.mp != nil {
-					ctr.mp.Free()
-				}
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp())
-				}
 				continue
 			}
 			if bat.Length() == 0 {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.emptyProbe(bat, ap, proc, anal)
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal); err != nil {
-					ctr.state = End
-					if ctr.mp != nil {
-						ctr.mp.Free()
-					}
-					proc.SetInputBatch(nil)
-					return true, err
-				}
+				err = ctr.probe(bat, ap, proc, anal)
 			}
-			return false, nil
+			if err != nil {
+				ap.Free(proc, true)
+			}
+			return false, err
+
 		default:
+			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -150,10 +134,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		proc.SetInputBatch(rbat)
 		return nil
 	}
+
+	ap.ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc); err != nil {
 		return err
 	}
-	defer ctr.freeJoinCondition(proc)
+
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
@@ -217,11 +203,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
 		if err != nil || vec.ConstExpand(proc.Mp()) == nil {
-			for j := 0; j < i; j++ {
-				if ctr.evecs[j].needFree {
-					vector.Clean(ctr.evecs[j].vec, proc.Mp())
-				}
-			}
+			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
@@ -235,12 +217,4 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 		}
 	}
 	return nil
-}
-
-func (ctr *container) freeJoinCondition(proc *process.Process) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree {
-			ctr.evecs[i].vec.Free(proc.Mp())
-		}
-	}
 }

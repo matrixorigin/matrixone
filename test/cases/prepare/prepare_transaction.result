@@ -166,6 +166,7 @@ begin;
 prepare s6 from 'create table test_user(a int)';
 execute s6;
 table test_user already exists
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 deallocate prepare s6;
 commit;
 show tables like 'test_user';

@@ -111,3 +111,9 @@ insert into test values(0x616162636465666768202122232425303132);
 select * from test;
 a
 aabcdefgh !"#$%012
+drop table if exists test;
+create table test(a blob);
+insert into test values(_binary'1');
+select * from test;
+a
+1
