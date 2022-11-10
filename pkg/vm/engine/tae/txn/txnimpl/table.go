@@ -452,6 +452,7 @@ func (tbl *txnTable) Close() error {
 	}
 	tbl.deleteNodes = nil
 	tbl.logs = nil
+	tbl.txnEntries = nil
 	return nil
 }
 
