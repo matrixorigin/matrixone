@@ -330,9 +330,13 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 		if err != nil {
 			return nil, err
 		}
+		isDir, err := entryIsDir(nativePath, name, info)
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
-			IsDir: entry.IsDir(),
+			IsDir: isDir,
 			Size:  info.Size(),
 		})
 	}
