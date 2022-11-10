@@ -129,7 +129,14 @@ func (tbl *txnTable) TransferDeleteIntent(
 		return
 	}
 	defer pinned.Close()
-	entry := tbl.store.warChecker.GetEntryByID(tbl.entry.GetDB().ID, id)
+	entry, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID)
+	if err != nil {
+		panic(err)
+	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	if err = readWriteConfilictCheck(entry.MetaBaseEntry, ts); err == nil {
 		return
@@ -380,17 +387,19 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 		// record block into read set
 		tbl.store.warChecker.InsertByID(
 			tbl.entry.GetDB().ID,
-			id)
+			id.TableID,
+			id.SegmentID,
+			id.BlockID)
 	}
 	return
 }
 
 func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var seg *catalog.SegmentEntry
-	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
-		return
-	}
-	meta, err := seg.GetBlockEntryByID(id.BlockID)
+	meta, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID)
 	if err != nil {
 		return
 	}
@@ -551,11 +560,10 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		}
 		return
 	}
-	seg, err := tbl.entry.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		return
-	}
-	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	blk, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID, id.SegmentID,
+		id.BlockID)
 	if err != nil {
 		return
 	}
@@ -612,11 +620,11 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
-	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	meta, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -625,11 +633,11 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
-	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	meta, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -644,11 +652,11 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 }
 
 func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
-	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	meta, err := tbl.store.warChecker.GetEntryByID(
+		tbl.entry.GetDB().ID,
+		id.TableID,
+		id.SegmentID,
+		id.BlockID)
 	if err != nil {
 		panic(err)
 	}

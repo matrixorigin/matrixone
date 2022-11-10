@@ -62,33 +62,44 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	return checker
 }
 
-func (checker *warChecker) GetEntryByID(dbID uint64, id *common.ID) *catalog.BlockEntry {
-	block := checker.SearchCache(id.BlockID)
+func (checker *warChecker) GetEntryByID(
+	dbID uint64,
+	tableID uint64,
+	segmentID uint64,
+	blockID uint64) (block *catalog.BlockEntry, err error) {
+	block = checker.SearchCache(blockID)
 	if block != nil {
-		return block
+		return
 	}
 	db, err := checker.catalog.GetDatabaseByID(dbID)
 	if err != nil {
-		panic(err)
+		return
 	}
-	table, err := db.GetTableEntryByID(id.TableID)
+	table, err := db.GetTableEntryByID(tableID)
 	if err != nil {
-		panic(err)
+		return
 	}
-	segment, err := table.GetSegmentByID(id.SegmentID)
+	segment, err := table.GetSegmentByID(segmentID)
 	if err != nil {
-		panic(err)
+		return
 	}
-	block, err = segment.GetBlockEntryByID(id.BlockID)
+	block, err = segment.GetBlockEntryByID(blockID)
 	if err != nil {
-		panic(err)
+		return
 	}
 	checker.Cache(block)
-	return block
+	return
 }
 
-func (checker *warChecker) InsertByID(dbID uint64, id *common.ID) {
-	block := checker.GetEntryByID(dbID, id)
+func (checker *warChecker) InsertByID(
+	dbID uint64,
+	tableID uint64,
+	segmentID uint64,
+	blockID uint64) {
+	block, err := checker.GetEntryByID(dbID, tableID, segmentID, blockID)
+	if err != nil {
+		panic(err)
+	}
 	checker.Insert(block)
 }
 
