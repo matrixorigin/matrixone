@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestTree(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	tree := NewTree()
 	tree.AddSegment(1, 2, 3)
 	tree.AddBlock(4, 5, 6, 7)

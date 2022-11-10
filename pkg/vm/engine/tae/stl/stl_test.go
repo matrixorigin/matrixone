@@ -17,11 +17,13 @@ package stl
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestAllocator(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	allocator := mpool.MustNewZero()
 	node, err := allocator.Alloc(10)
 	assert.True(t, err == nil)

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -30,6 +31,7 @@ import (
 )
 
 func TestGCBlock1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -71,6 +73,7 @@ func TestGCBlock1(t *testing.T) {
 }
 
 func TestAutoGC1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -86,6 +89,7 @@ func TestAutoGC1(t *testing.T) {
 	bats := bat.Split(100)
 	createRelation(t, tae, "db", schema, true)
 	pool, _ := ants.NewPool(50)
+	defer pool.Release()
 	var wg sync.WaitGroup
 	for _, data := range bats {
 		wg.Add(1)
@@ -119,6 +123,7 @@ func TestAutoGC1(t *testing.T) {
 // 3. Create a table w one appendable block data and commit
 // 4. Drop the table and commit
 func TestGCTable(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -202,6 +207,7 @@ func TestGCTable(t *testing.T) {
 	// 8. Append blocks and drop
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(5)
+	defer pool.Release()
 	bat = catalog.MockBatch(schema, int(schema.BlockMaxRows*10))
 	defer bat.Close()
 	bats = bat.Split(20)
@@ -234,6 +240,7 @@ func TestGCTable(t *testing.T) {
 // 1. Create a db with 2 tables w/o data
 // 2. Drop the db
 func TestGCDB(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -297,6 +304,7 @@ func TestGCDB(t *testing.T) {
 
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(4)
+	defer pool.Release()
 	routine := func() {
 		defer wg.Done()
 		schema := catalog.MockSchema(3, 2)
