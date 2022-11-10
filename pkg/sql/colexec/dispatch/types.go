@@ -20,7 +20,7 @@ import (
 )
 
 type container struct {
-	flag []bool
+	i int
 }
 
 type Argument struct {
