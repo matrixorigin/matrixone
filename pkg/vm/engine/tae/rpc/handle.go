@@ -51,8 +51,7 @@ type txnContext struct {
 	//createAt is used to GC the abandoned txn.
 	createAt time.Time
 	meta     txn.TxnMeta
-	//is2PC    bool
-	req []any
+	req      []any
 	//res      []any
 }
 
@@ -83,6 +82,7 @@ func (h *Handle) HandleCommit(
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	//Handle precommit-write command for 1PC
+	var txn moengine.Txn
 	if ok {
 		for _, e := range txnCtx.req {
 			switch req := e.(type) {
@@ -93,9 +93,6 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.CreateDatabaseResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
@@ -103,9 +100,6 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.CreateRelationResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
@@ -113,9 +107,6 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropDatabaseResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
@@ -123,9 +114,6 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
@@ -133,15 +121,17 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.WriteResp{},
 				)
-				if err != nil {
-					return
-				}
 			default:
 				panic(moerr.NewNYI("Pls implement me"))
 			}
+			//Need to rollback the txn.
+			if err != nil {
+				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn.Rollback()
+				return
+			}
 		}
 	}
-	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
