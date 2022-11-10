@@ -4160,3 +4160,40 @@ func TestTransfer(t *testing.T) {
 	assert.NoError(t, err)
 	_ = txn2.Commit()
 }
+
+func TestTransfer2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 200)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+
+	txn1, rel1 := tae.getRelation()
+	err := rel1.DeleteByFilter(filter)
+	assert.NoError(t, err)
+
+	tae.mergeBlocks(false)
+
+	err = txn1.Commit()
+	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+	assert.NoError(t, err)
+
+	txn2, rel2 := tae.getRelation()
+	_, err = rel2.GetValueByFilter(filter, 3)
+	t.Log(err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	v, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
+	expectV := bat.Vecs[2].Get(4)
+	assert.Equal(t, expectV, v)
+	assert.NoError(t, err)
+	_ = txn2.Commit()
+}

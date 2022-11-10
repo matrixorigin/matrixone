@@ -16,6 +16,7 @@ package txnentries
 
 import (
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -158,6 +159,30 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			skippedCnt++
 			continue
 		}
+
+		page := model.NewTransferHashPage(dropped.AsCommonID(), time.Now())
+		var length uint32
+		if fromPos-skippedCnt+1 == len(entry.fromAddr) {
+			length = uint32(len(entry.mapping)) - entry.fromAddr[fromPos-skippedCnt]
+		} else {
+			length = entry.fromAddr[fromPos-skippedCnt+1] - entry.fromAddr[fromPos-skippedCnt]
+		}
+		for i := uint32(0); i < length; i++ {
+			if entry.deletes[fromPos] != nil && entry.deletes[fromPos].Contains(i) {
+				continue
+			}
+			newOffset := i
+			if entry.deletes[fromPos] != nil {
+				newOffset = i - uint32(entry.deletes[fromPos].Rank(i))
+			}
+			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, newOffset)
+			toId := entry.createdBlks[toPos].AsCommonID()
+			prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+			rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+			page.Train(toRow, rowid)
+		}
+		_ = entry.scheduler.AddTransferPage(page)
+
 		dataBlock := dropped.GetBlockData()
 		view, err = dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
 		if err != nil {
