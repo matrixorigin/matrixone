@@ -504,6 +504,7 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 }
 
 func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+	// logutil.Infof("RangeDelete ID=%s, Start=%d, End=%d", id.BlockString(), start, end)
 	if isLocalSegment(id) {
 		return tbl.RangeDeleteLocalRows(start, end)
 	}

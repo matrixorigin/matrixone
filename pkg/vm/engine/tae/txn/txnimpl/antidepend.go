@@ -89,6 +89,9 @@ func (checker *warChecker) Insert(block *catalog.BlockEntry) {
 }
 
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
+	// defer func() {
+	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
+	// }()
 	if checker.HasConflict(id) {
 		err = moerr.NewTxnRWConflict()
 		return
