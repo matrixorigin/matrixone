@@ -21,6 +21,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -35,39 +36,39 @@ var (
 	ErrDuplicateNode = moerr.NewInternalError("tae: duplicate node")
 )
 
-type TxnEntries struct {
+type txnEntries struct {
 	entries []txnif.TxnEntry
 	mask    *roaring.Bitmap
 }
 
-func NewTxnEntries() *TxnEntries {
-	return &TxnEntries{
+func newTxnEntries() *txnEntries {
+	return &txnEntries{
 		entries: make([]txnif.TxnEntry, 0),
 		mask:    roaring.New(),
 	}
 }
 
-func (entries *TxnEntries) Len() int {
+func (entries *txnEntries) Len() int {
 	return len(entries.entries)
 }
 
-func (entries *TxnEntries) Append(entry txnif.TxnEntry) {
+func (entries *txnEntries) Append(entry txnif.TxnEntry) {
 	entries.entries = append(entries.entries, entry)
 }
 
-func (entries *TxnEntries) Delete(idx int) {
+func (entries *txnEntries) Delete(idx int) {
 	entries.mask.Add(uint32(idx))
 }
 
-func (entries *TxnEntries) IsDeleted(idx int) bool {
+func (entries *txnEntries) IsDeleted(idx int) bool {
 	return entries.mask.ContainsInt(idx)
 }
 
-func (entries *TxnEntries) AnyDelete() bool {
+func (entries *txnEntries) AnyDelete() bool {
 	return !entries.mask.IsEmpty()
 }
 
-func (entries *TxnEntries) Close() {
+func (entries *txnEntries) Close() {
 	entries.mask = nil
 	entries.entries = nil
 }
@@ -96,7 +97,7 @@ type txnTable struct {
 	maxSegId     uint64
 	maxBlkId     uint64
 
-	txnEntries *TxnEntries
+	txnEntries *txnEntries
 	csnStart   uint32
 
 	idx int
@@ -109,7 +110,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		schema:      entry.GetSchema(),
 		deleteNodes: make(map[common.ID]*deleteNode),
 		logs:        make([]wal.LogEntry, 0),
-		txnEntries:  NewTxnEntries(),
+		txnEntries:  newTxnEntries(),
 	}
 	return tbl
 }
@@ -127,6 +128,10 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 		return
 	}
 	for id, node := range tbl.deleteNodes {
+		// search the read set to check wether the delete node relevant
+		// block was deleted.
+		// if not deleted, go to next
+		// if deleted, try to transfer the delete node
 		if err = tbl.store.warChecker.checkOne(
 			&id,
 			ts,
@@ -134,9 +139,16 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 			continue
 		}
 
+		// if the error is not a r-w conflict. something wrong really happened
 		if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
 			return
 		}
+
+		// try to transfer the delete node
+		// here are some possible returns
+		// nil: transferred successfully
+		// ErrTxnRWConflict: the target block was also be compacted
+		// ErrTxnWWConflict: w-w error
 		if _, err = tbl.TransferDelete(&id, node); err != nil {
 			return
 		}
@@ -145,8 +157,22 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 }
 
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
+	logutil.Info("[Start]",
+		common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+		common.OperationField("transfer-deletes"),
+		common.OperandField(id.BlockString()))
+	defer func() {
+		logutil.Info("[End]",
+			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+			common.OperationField("transfer-deletes"),
+			common.OperandField(id.BlockString()),
+			common.ErrorField(err))
+	}()
 	pinned, err := tbl.store.transferTable.Pin(*id)
+	// cannot find a transferred record. maybe the transferred record was TTL'ed
+	// here we can convert the error back to r-w conflict
 	if err != nil {
+		err = moerr.NewTxnRWConflict()
 		return
 	}
 	defer pinned.Close()
@@ -157,7 +183,8 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	for _, row := range rows {
 		rowID, ok := page.Transfer(row)
 		if !ok {
-			err = moerr.NewTxnRWConflict()
+			err = moerr.NewTxnWWConflict()
+			logutil.Warnf("TransferDelete %s Row=%d, Err=%v", id.BlockString(), row, err)
 			return
 		}
 		segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
@@ -170,15 +197,24 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 			return
 		}
 	}
+
+	// rollback transferred delete node. should not fail
 	if err = node.PrepareRollback(); err != nil {
-		return
+		panic(err)
 	}
-	err = node.ApplyRollback(nil)
+	if err = node.ApplyRollback(nil); err != nil {
+		panic(err)
+	}
+
+	tbl.commitTransferDeleteNode(id, node)
+	transferred = true
+	return
+}
+
+func (tbl *txnTable) commitTransferDeleteNode(id *common.ID, node *deleteNode) {
 	tbl.store.warChecker.Delete(id)
 	tbl.txnEntries.Delete(node.idx)
 	delete(tbl.deleteNodes, *id)
-	transferred = err == nil
-	return
 }
 
 func (tbl *txnTable) LogSegmentID(sid uint64) {
