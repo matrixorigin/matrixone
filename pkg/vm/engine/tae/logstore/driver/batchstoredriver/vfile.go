@@ -119,6 +119,9 @@ func (vf *vFile) Close() error {
 	if err != nil {
 		return err
 	}
+	if vf.vInfo != nil {
+		vf.vInfo.close()
+	}
 	vf.buf = nil
 	return nil
 }
