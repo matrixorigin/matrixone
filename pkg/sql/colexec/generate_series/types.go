@@ -17,6 +17,7 @@ package generate_series
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Number interface {
@@ -30,4 +31,7 @@ type Param struct {
 
 type Argument struct {
 	Es *Param
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
