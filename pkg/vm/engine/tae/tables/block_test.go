@@ -17,6 +17,7 @@ package tables
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -26,6 +27,7 @@ import (
 )
 
 func TestGetActiveRow(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	ts2 := types.BuildTS(2, 0)
 	mvcc := updates.NewMVCCHandle(nil)
