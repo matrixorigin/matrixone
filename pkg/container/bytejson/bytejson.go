@@ -71,6 +71,10 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (bj ByteJson) IsNull() bool {
+	return bj.Type == TpCodeLiteral && bj.Data[0] == LiteralNull
+}
+
 func (bj ByteJson) GetElemCnt() int {
 	return int(endian.Uint32(bj.Data))
 }

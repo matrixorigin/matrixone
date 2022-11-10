@@ -15,11 +15,17 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -394,4 +400,106 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 		}
 	}
 	return pl, nil
+}
+
+func makeTimeExpr(s string, p int32) *plan.Expr {
+	dt, _ := types.ParseTime(s, 0)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id:        int32(types.T_time),
+			Precision: p,
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Timeval{
+					Timeval: int64(dt),
+				},
+			},
+		},
+	}
+}
+
+func makeDateExpr(s string) *plan.Expr {
+	dt, _ := types.ParseDate(s)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_date),
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Dateval{
+					Dateval: int32(dt),
+				},
+			},
+		},
+	}
+}
+
+func makeTimestampExpr(s string, p int32, loc *time.Location) *plan.Expr {
+	dt, _ := types.ParseTimestamp(loc, s, p)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_timestamp),
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Timestampval{
+					Timestampval: int64(dt),
+				},
+			},
+		},
+	}
+}
+func makeDatetimeExpr(s string, p int32) *plan.Expr {
+	dt, _ := types.ParseDatetime(s, p)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_datetime),
+		},
+		Expr: &plan2.Expr_C{
+			C: &plan.Const{
+				Value: &plan2.Const_Datetimeval{
+					Datetimeval: int64(dt),
+				},
+			},
+		},
+	}
+}
+
+func TestTime(t *testing.T) {
+	s := "12:34:56"
+	e := makeTimeExpr(s, 0)
+	bat := batch.NewWithSize(1)
+	bat.InitZsOne(1)
+	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Length())
+}
+
+func TestDatetime(t *testing.T) {
+	s := "2019-12-12 12:34:56"
+	e := makeDatetimeExpr(s, 0)
+	bat := batch.NewWithSize(1)
+	bat.InitZsOne(1)
+	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Length())
+}
+func TestTimestamp(t *testing.T) {
+	s := "2019-12-12 12:34:56"
+	e := makeTimestampExpr(s, 0, time.Local)
+	bat := batch.NewWithSize(1)
+	bat.InitZsOne(1)
+	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Length())
+}
+func TestDate(t *testing.T) {
+	s := "2019-12-12"
+	e := makeDateExpr(s)
+	bat := batch.NewWithSize(1)
+	bat.InitZsOne(1)
+	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	require.NoError(t, err)
+	require.Equal(t, 1, r.Length())
 }

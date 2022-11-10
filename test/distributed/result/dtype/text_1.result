@@ -256,27 +256,16 @@ delete from t8 where col9 is not NULL;
 insert into t8(col10) values ('this is a char type');
 insert into t8(col10) values ('this is a varchar type');
 select cast(col10 as char) from t8;
-cast(col10 as char)
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar) from t8;
-cast(col10 as varchar)
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as char(1)) from t8;
-cast(col10 as char(1))
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar(1)) from t8;
-cast(col10 as varchar(1))
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
-insert into t8(col11) values (2020-01-01);
-insert into t8(col11) values (2020-01-01 13:10:10);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as date) from t8;
 cast(col11 as date)
 2020-01-01
@@ -292,8 +281,6 @@ delete from t8 where col11 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 insert into t8(col11) values ('2020-01-01 13:10:59.999999');
-insert into t8(col11) values (2020-01-01 13:10:59.999999);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as timestamp) from t8;
 cast(col11 as timestamp(26))
 2020-01-01 00:00:00
@@ -311,10 +298,17 @@ false
 true
 false
 delete from t8 where col12 is not NULL;
-insert into t8(col12) values ('hello');
+insert into t8(col12) values ('true');
+insert into t8(col12) values ('trUe');
+insert into t8(col12) values ('falSe');
 select cast(col12 as bool) from t8;
 cast(col12 as bool)
+true
+true
 false
+insert into t8(col12) values ('hello');
+select cast(col12 as bool) from t8;
+invalid input: 'hello' is not a valid bool expression
 delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;
@@ -479,7 +473,7 @@ insert into t10 values (10, 'aabsdfsb', 'aabdsfsfsdb');
 insert into t10 values (10, 'aa,bb', 'aa,bb');
 insert into t10 values (10, 'aa%bb', 'aa%bb');
 select * from t10 where c=1;
-invalid argument cast to int, bad value 
+invalid argument cast to int, bad value
 update t10 set c=10000 where a=10;
 update t10 set c=true where a=10;
 update t10 set c='true' where a=10;

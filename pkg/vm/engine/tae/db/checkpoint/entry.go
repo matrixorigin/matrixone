@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
@@ -47,6 +48,17 @@ func (e *CheckpointEntry) GetState() State {
 	e.RLock()
 	defer e.RUnlock()
 	return e.state
+}
+func (e *CheckpointEntry) IsCommitted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Finished
+}
+func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
+	if e.start.Greater(to) || e.end.Less(from) {
+		return false
+	}
+	return true
 }
 
 func (e *CheckpointEntry) SetLocation(location string) {
@@ -111,15 +123,30 @@ func (e *CheckpointEntry) Replay(
 	c *catalog.Catalog,
 	fs *objectio.ObjectFS,
 	dataFactory catalog.DataFactory) (err error) {
-	reader, err := blockio.NewCheckpointReader(fs, e.location)
+	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 
 	data := logtail.NewCheckpointData()
+	defer data.Close()
 	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	err = data.ApplyReplayTo(c, dataFactory)
+	return
+}
+
+func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns *api.Batch, err error) {
+	reader, err := blockio.NewCheckpointReader(fs.Service, e.location)
+	if err != nil {
+		return
+	}
+	data := logtail.NewCheckpointData()
+	defer data.Close()
+	if err = data.ReadFrom(reader, common.DefaultAllocator); err != nil {
+		return
+	}
+	ins, del, cnIns, err = data.GetTableData(tid)
 	return
 }

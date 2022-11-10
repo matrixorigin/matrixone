@@ -31,7 +31,7 @@ func (c *strCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if nulls.Any(c.vs[vecSrc].Nsp) && nulls.Contains(c.vs[vecSrc].Nsp, uint64(src)) {
+	if nulls.Contains(c.vs[vecSrc].Nsp, uint64(src)) {
 		nulls.Add(c.vs[vecDst].Nsp, uint64(dst))
 		return nil
 	}

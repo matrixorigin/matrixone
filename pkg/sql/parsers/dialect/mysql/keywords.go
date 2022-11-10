@@ -200,6 +200,7 @@ func init() {
 		"int3":                     INT3,
 		"int4":                     INT4,
 		"int8":                     INT8,
+		"s3option":                 S3OPTION,
 		"integer":                  INTEGER,
 		"interval":                 INTERVAL,
 		"into":                     INTO,

@@ -25,12 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -49,7 +51,7 @@ func NewService(
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +94,18 @@ func NewService(
 		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
 	)
 	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}
 	srv.pu = pu
 
+	compile.InitAddress(cfg.ServiceAddress)
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
+		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -140,21 +146,47 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
+	defer logutil.LogClose(s.logger, "cnservice")()
+
+	s.stopper.Stop()
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
 	if err := s.stopTask(); err != nil {
 		return err
 	}
-	s.stopper.Stop()
+	if err := s.stopRPCs(); err != nil {
+		return err
+	}
 	return s.server.Close()
 }
 
 func (s *service) stopFrontend() error {
+	defer logutil.LogClose(s.logger, "cnservice/frontend")()
+
 	if err := s.serverShutdown(true); err != nil {
 		return err
 	}
 	s.cancelMoServerFunc()
+	return nil
+}
+
+func (s *service) stopRPCs() error {
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -284,7 +316,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender)
+		c = client.NewTxnClient(sender, client.WithLogger(s.logger))
 		s._txnClient = c
 	})
 	c = s._txnClient

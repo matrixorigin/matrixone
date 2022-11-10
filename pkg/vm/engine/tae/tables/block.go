@@ -377,7 +377,11 @@ func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView, rwlocker *sync.R
 	}
 	dnode := n.(*updates.DeleteNode)
 	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
+		if view.DeleteMask == nil {
+			view.DeleteMask = dnode.GetDeleteMaskLocked()
+		} else {
+			view.DeleteMask.Or(dnode.GetDeleteMaskLocked())
+		}
 	}
 	return
 }
@@ -594,7 +598,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 		err = moerr.NewNotFound()
 		return
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
 	}
 	err = nil
@@ -659,7 +663,7 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 			err = moerr.NewNotFound()
 			return
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			return
 		}
 		err = nil
@@ -671,14 +675,14 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 		err = sortKey.Foreach(func(v any, offset int) error {
 			if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
 				row = uint32(offset)
-				return moerr.NewDuplicate()
+				return moerr.GetOkExpectedDup()
 			}
 			return nil
 		}, nil)
 		if err == nil {
 			return 0, moerr.NewNotFound()
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 			return
 		}
 
@@ -720,7 +724,10 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 	return 0, moerr.NewNotFound()
 }
 
-func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.TS) func(row uint32) (err error) {
+func (blk *dataBlock) onCheckConflictAndDedup(
+	dupRow *uint32,
+	rowmask *roaring.Bitmap,
+	ts types.TS) func(row uint32) (err error) {
 	return func(row uint32) (err error) {
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
@@ -740,7 +747,8 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
 		if deleteNode == nil {
-			return moerr.NewDuplicate()
+			*dupRow = row
+			return moerr.GetOkExpectedDup()
 		}
 		needWait, txn = deleteNode.NeedWaitCommitting(ts)
 		if needWait {
@@ -749,7 +757,7 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 			blk.mvcc.RLock()
 		}
 		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
-			return moerr.NewDuplicate()
+			return moerr.GetOkExpectedDup()
 		}
 		if err = appendnode.CheckConflict(ts); err != nil {
 			return
@@ -761,17 +769,35 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 	}
 }
 
+func (blk *dataBlock) dedupWithPK(
+	keys containers.Vector,
+	ts types.TS,
+	rowmask *roaring.Bitmap) (selects *roaring.Bitmap, dupRow uint32, err error) {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	selects, err = blk.pkIndex.BatchDedup(
+		keys,
+		blk.onCheckConflictAndDedup(
+			&dupRow,
+			rowmask,
+			ts),
+	)
+	return
+}
+
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
+	var dupRow uint32
 	if blk.meta.IsAppendable() {
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
 		var keyselects *roaring.Bitmap
-		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
+		keyselects, err = blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(&dupRow, rowmask, ts))
 		if err == nil {
 			return
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
+		pkDef := blk.meta.GetSchema().GetSingleSortKey()
+		if moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			if keyselects == nil {
 				panic("unexpected error")
 			}
@@ -780,7 +806,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			sortKey, err = blk.ResolveColumnFromMeta(
 				metaLoc,
 				txn.GetStartTS(),
-				blk.meta.GetSchema().GetSingleSortKeyIdx(),
+				pkDef.Idx,
 				nil)
 			if err != nil {
 				return
@@ -789,30 +815,34 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
-						return moerr.NewDuplicate()
+						entry := common.TypeStringValue(pks.GetType(), v1)
+						return moerr.NewDuplicateEntry(entry, pkDef.Name)
 					}
 					return nil
 				}, nil)
 			}
 			err = pks.Foreach(deduplicate, keyselects)
+		} else if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			v := blk.node.data.Vecs[pkDef.Idx].Get(int(dupRow))
+			entry := common.TypeStringValue(pks.GetType(), v)
+			return moerr.NewDuplicateEntry(entry, pkDef.Name)
 		}
 		return err
 	}
-	if blk.indexes == nil {
-		panic("index not found")
-	}
-	keyselects, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, txn.GetStartTS()))
+
+	keyselects, _, err := blk.dedupWithPK(pks, txn.GetStartTS(), rowmask)
 	if err == nil {
 		return
 	}
 	if keyselects == nil {
 		panic("unexpected error")
 	}
+	pkDef := blk.meta.GetSchema().GetSingleSortKey()
 	metaLoc := blk.meta.GetMetaLoc()
 	sortKey, err := blk.ResolveColumnFromMeta(
 		metaLoc,
 		txn.GetStartTS(),
-		blk.meta.GetSchema().GetSingleSortKeyIdx(),
+		pkDef.Idx,
 		nil)
 	if err != nil {
 		return
@@ -820,7 +850,8 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
-			return moerr.NewDuplicate()
+			entry := common.TypeStringValue(pks.GetType(), v)
+			return moerr.NewDuplicateEntry(entry, blk.meta.GetSchema().GetSingleSortKey().Name)
 		}
 		return nil
 	}

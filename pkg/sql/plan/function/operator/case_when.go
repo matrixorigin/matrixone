@@ -121,6 +121,10 @@ var (
 	CaseWhenText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwString(vs, proc, types.Type{Oid: types.T_text})
 	}
+
+	CaseWhenJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_json})
+	}
 )
 
 // CwTypeCheckFn is type check function for case-when operator

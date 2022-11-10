@@ -240,7 +240,7 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8
+%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -422,17 +422,17 @@ import (
 %type <groupBy> group_by_opt
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
-%type <parenTableExpr> derived_table
+%type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
-%type <funcExpr> function_call_json
+//%type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
 %type <str> sql_id charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -2233,6 +2233,15 @@ show_index_stmt:
             Where: $6,
         }
     }
+|	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
+     {
+     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7), ExplicitSchema: true}
+         tbl := tree.NewTableName(tree.Identifier($5), prefix)
+         $$ = &tree.ShowIndex{
+             TableName: *tbl,
+             Where: $8,
+         }
+     }
 
 extended_opt:
     {}
@@ -3651,13 +3660,13 @@ table_factor:
     {
         $$ = $1
     }
-|   derived_table as_opt ident column_list_opt
+|   table_subquery as_opt_id column_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
-                Alias: tree.Identifier($3),
-                Cols: $4,
+                Alias: tree.Identifier($2),
+                Cols: $3,
             },
         }
     }
@@ -3679,178 +3688,27 @@ table_factor:
 		$$ = $2
 	}
 
-derived_table:
-    '(' select_no_parens ')'
+table_subquery:
+    select_with_parens %prec SUBQUERY_AS_EXPR
     {
-        $$ = &tree.ParenTableExpr{Expr: $2}
+    	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
 
 table_function:
-    UNNEST '(' STRING ')'
+    UNNEST '(' expression_list ')'
     {
-        a1 := $3
-        a2 := "$"
-        a3 := false
-        e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
        	name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.TableFunction{
 	    Func: &tree.FuncExpr{
                 Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ')'
-    {
-	a1 := $3
-	a2 := "$"
-	if len($5) > 0 {
-       	    a2 = $5
-        }
-        a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-        if len($5) > 0 {
-            a2 = $5
-        }
-	a3 := true
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-            a2 = $5
-        }
-    	a3 := false
-	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "false",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := true
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
-                Type: tree.FUNC_TYPE_TABLE,
-            },
-	}
-    }
-|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
-    {
-    	a1 := $3
-    	a2 := "$"
-    	if len($5) > 0 {
-    	    a2 = $5
-    	}
-    	a3 := false
-	e1 := a1
-        e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-        e3 := tree.NewNumValWithType(constant.MakeBool(a3), "true",false, tree.P_bool)
-        exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: exprs,
+                Exprs: $3,
                 Type: tree.FUNC_TYPE_TABLE,
             },
 	}
     }
 |   GENERATE_SERIES '(' expression_list ')'
     {
-	name := tree.SetUnresolvedName(strings.ToLower($1))
+       	name := tree.SetUnresolvedName(strings.ToLower($1))
 	$$ = &tree.TableFunction{
 	    Func: &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -3859,11 +3717,6 @@ table_function:
 	    },
 	}
     }
-
-
-as_opt:
-    {}
-|   AS {}
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -4677,13 +4530,40 @@ load_param_opt:
     	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
     		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
     		return 1
-    	    }
+    	}
     	$$ = &tree.ExternParam{
     	    Filepath: $5,
     	    CompressType: $9,
     	    Format: strings.ToLower($13),
     	    JsonData: strings.ToLower($17),
     	}
+    }
+|   URL S3OPTION '{' s3params '}'
+    {
+        $$ = &tree.ExternParam{
+            ScanType: tree.S3,
+            S3option: $4,
+        }
+    }
+
+s3params:
+    s3param
+    {
+        $$ = $1
+    }
+|   s3params ',' s3param
+    {
+        $$ = append($1, $3...)
+    }
+
+s3param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
     }
 
 tail_param_opt:
@@ -5780,10 +5660,10 @@ simple_expr:
     {
         $$ = $1
     }
-|   function_call_json
-    {
-        $$ = $1
-    }
+//|     function_call_json
+//    {
+//        $$ = $1
+//    }
 
 else_opt:
     {
@@ -6229,17 +6109,6 @@ function_call_generic:
         }
     }
 
-function_call_json:
-    JSON_EXTRACT '(' STRING ',' STRING ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{a1, a2},
-        }
-    }
 
 trim_direction:
     BOTH
@@ -7963,6 +7832,7 @@ non_reserved_keyword:
 |   TRIGGERS
 |   HISTORY
 |   LOW_CARDINALITY
+|   S3OPTION
 
 func_not_keyword:
     DATE_ADD

@@ -41,6 +41,7 @@ type Column struct {
 	Type    string
 	Default string
 	Comment string
+	Alias   string // only use in view
 }
 
 // ToCreateSql return column scheme in create sql
@@ -140,7 +141,7 @@ func (tbl *Table) ToCreateSql(ifNotExists bool) string {
 		sb.WriteString(col.ToCreateSql())
 	}
 	// primary key
-	if len(tbl.PrimaryKeyColumn) > 0 {
+	if len(tbl.PrimaryKeyColumn) > 0 && tbl.Engine != ExternalTableEngine {
 		sb.WriteString(newLineCharacter)
 		sb.WriteString("PRIMARY KEY (")
 		for idx, col := range tbl.PrimaryKeyColumn {
@@ -212,6 +213,9 @@ func (tbl *View) ToCreateSql(ifNotExists bool) string {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		if len(col.Alias) > 0 {
+			sb.WriteString(fmt.Sprintf(" as `%s`", col.Alias))
+		}
 	}
 	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Condition.String())
@@ -301,6 +305,11 @@ func (r *Row) ToStrings() []string {
 			r.Columns[idx] = r.Table.Columns[idx].Default
 		}
 	}
+	return r.Columns
+}
+
+// ToRawStrings not format
+func (r *Row) ToRawStrings() []string {
 	return r.Columns
 }
 

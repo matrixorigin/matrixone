@@ -16,7 +16,6 @@ package unnest
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,23 +23,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 type unnestTestCase struct {
-	arg        *Argument
-	proc       *process.Process
-	isCol      bool
-	jsons      []string
-	inputTimes int
+	arg      *Argument
+	proc     *process.Process
+	jsons    []string
+	paths    []string
+	outers   []bool
+	success  bool
+	jsonType string
 }
 
 var (
-	utc            []unnestTestCase
-	defaultAttrs   = []string{"col", "seq", "key", "path", "index", "value", "this"}
+	utc          []unnestTestCase
+	defaultAttrs = []string{"col", "seq", "key", "path", "index", "value", "this"}
+	//defaultExprs   = []*plan.Expr{
+	//	&plan.Expr_C{
+	//		C: &plan.Const{
+	//			Isnull: false,
+	//			Value: &plan.Const_Sval{}
+	//		}
+	//	}
+	//}
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
@@ -102,35 +110,41 @@ var (
 
 func init() {
 	utc = []unnestTestCase{
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, []string{`{"a": 1}`}, 0),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "str", true),
+		newTestCase(mpool.MustNewZero(), []string{"key", "col"}, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "json", true),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false}, "json", true),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`, `$`}, []bool{false}, "str", false),
+		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false, true}, "json", true),
 	}
 }
 
-func newTestCase(m *mpool.MPool, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
+func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
 	proc := testutil.NewProcessWithMPool(m)
+	colDefs := make([]*plan.ColDef, len(attrs))
+	for i := range attrs {
+		for j := range defaultColDefs {
+			if attrs[i] == defaultColDefs[j].Name {
+				colDefs[i] = defaultColDefs[j]
+				break
+			}
+		}
+	}
+
 	ret := unnestTestCase{
 		proc: proc,
 		arg: &Argument{
 			Es: &Param{
 				Attrs: attrs,
 				Cols:  colDefs,
-				Extern: &ExternalParam{
-					Path:  path,
-					Outer: outer,
-				},
 			},
 		},
-		isCol:      isCol,
-		jsons:      jsons,
-		inputTimes: inputTimes,
+		jsons:    jsons,
+		paths:    paths,
+		outers:   outers,
+		success:  success,
+		jsonType: jsonType,
 	}
-	switch o := origin.(type) {
-	case string:
-		break
-	case *tree.UnresolvedName:
-		_, _, ret.arg.Es.Extern.ColName = o.GetNames()
-	}
+
 	return ret
 }
 
@@ -141,77 +155,177 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestUnnest(t *testing.T) {
-	for i, ut := range utc {
-		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			err := Prepare(ut.proc, ut.arg)
-			require.Nil(t, err)
-			if !ut.isCol {
-				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
-				require.Nil(t, err)
-				end, err := Call(0, ut.proc, ut.arg)
-				require.Nil(t, err)
-				require.False(t, end)
-				require.NotNil(t, ut.proc.InputBatch())
-				ut.proc.SetInputBatch(nil)
-				end, err = Call(0, ut.proc, ut.arg)
-				require.Nil(t, err)
-				require.True(t, end)
-				require.Nil(t, ut.proc.InputBatch())
-				return
-			}
+func TestCall(t *testing.T) {
+	for _, ut := range utc {
 
-			for i := 0; i < ut.inputTimes; i++ {
-				ut.proc.Reg.InputBatch, err = makeTestBatch2(ut.jsons, ut.proc)
-				require.Nil(t, err)
-				end, err := Call(0, ut.proc, ut.arg)
-				require.Nil(t, err)
-				require.False(t, end)
-				require.Nil(t, err)
-				require.NotNil(t, ut.proc.InputBatch())
-			}
-			ut.proc.Reg.InputBatch = nil
+		err := Prepare(ut.proc, ut.arg)
+		require.NotNil(t, err)
+		var inputBat *batch.Batch
+		switch ut.jsonType {
+		case "str":
+			beforeMem := ut.proc.Mp().CurrNB()
+			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
+			require.Nil(t, err)
+			ut.arg.Es.ExprList = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
+			ut.proc.SetInputBatch(inputBat)
 			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
-			require.True(t, end)
-		})
+			require.False(t, end)
+			ut.proc.InputBatch().Clean(ut.proc.Mp())
+			inputBat.Clean(ut.proc.Mp())
+			afterMem := ut.proc.Mp().CurrNB()
+			require.Equal(t, beforeMem, afterMem)
+		case "json":
+			beforeMem := ut.proc.Mp().CurrNB()
+			inputBat, err = makeTestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
+			require.Nil(t, err)
+			ut.arg.Es.ExprList = makeColExprs(ut.jsonType, ut.paths, ut.outers)
+			ut.proc.SetInputBatch(inputBat)
+			end, err := Call(0, ut.proc, ut.arg)
+			require.Nil(t, err)
+			require.False(t, end)
+			ut.proc.InputBatch().Clean(ut.proc.Mp())
+			inputBat.Clean(ut.proc.Mp())
+			afterMem := ut.proc.Mp().CurrNB()
+			require.Equal(t, beforeMem, afterMem)
+		}
 	}
 }
 
-func makeTestBatch1(json string, proc *process.Process) (*batch.Batch, error) {
-	bat := batch.New(true, []string{"src"})
-	bat.Vecs[0] = vector.New(types.Type{
-		Oid: types.T_varchar,
-	})
-	err := bat.Vecs[0].Append([]byte(json), false, proc.Mp())
-	if err != nil {
-		return nil, err
-	}
-	bat.InitZsOne(1)
-	return bat, nil
-}
-
-func makeTestBatch2(jsons []string, proc *process.Process) (*batch.Batch, error) {
+func makeTestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, error), proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.New(types.Type{
-			Oid:   types.T_json,
+			Oid:   typ,
 			Width: 256,
 		})
 	}
+	bat.Cnt = 1
 	for _, json := range jsons {
-		bj, err := types.ParseStringToByteJson(json)
-		if err != nil {
-			return nil, err
-		}
-		bjBytes, err := types.EncodeJson(bj)
+		bjBytes, err := fn(json)
 		if err != nil {
 			return nil, err
 		}
 		err = bat.GetVector(0).Append(bjBytes, false, proc.Mp())
 		if err != nil {
+			bat.Clean(proc.Mp())
 			return nil, err
 		}
 	}
+	bat.InitZsOne(len(jsons))
 	return bat, nil
+}
+
+func encodeJson(json string) ([]byte, error) {
+	bj, err := types.ParseStringToByteJson(json)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(bj)
+}
+func encodeStr(json string) ([]byte, error) {
+	return []byte(json), nil
+}
+
+func TestHandle(t *testing.T) {
+	for _, ut := range utc {
+
+		err := Prepare(ut.proc, ut.arg)
+		require.Nil(t, err)
+		var inputBat *batch.Batch
+		switch ut.jsonType {
+		case "str":
+			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
+			require.Nil(t, err)
+			jsonVec := inputBat.GetVector(0)
+			path, err := types.ParseStringToPath(ut.paths[0])
+			require.Nil(t, err)
+			outer := ut.outers[0]
+			rbat, err := handle(jsonVec, &path, outer, ut.arg.Es, ut.proc, parseStr)
+			require.Nil(t, err)
+			require.NotNil(t, rbat)
+		case "json":
+			inputBat, err = makeTestBatch(ut.jsons, types.T_varchar, encodeJson, ut.proc)
+			require.Nil(t, err)
+			jsonVec := inputBat.GetVector(0)
+			path, err := types.ParseStringToPath(ut.paths[0])
+			require.Nil(t, err)
+			outer := ut.outers[0]
+			rbat, err := handle(jsonVec, &path, outer, ut.arg.Es, ut.proc, parseJson)
+			require.Nil(t, err)
+			require.NotNil(t, rbat)
+		}
+	}
+}
+
+func makeConstInputExprs(jsons, paths []string, jsonType string, outers []bool) []*plan.Expr {
+	ret := make([]*plan.Expr, 3)
+	typeId := int32(types.T_varchar)
+	if jsonType == "json" {
+		typeId = int32(types.T_json)
+	}
+	ret[0] = &plan.Expr{
+		Typ: &plan.Type{
+			Id:    typeId,
+			Width: 256,
+		},
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Sval{
+					Sval: jsons[0],
+				},
+			},
+		},
+	}
+	ret = appendOtherExprs(ret, paths, outers)
+	return ret
+}
+
+func makeColExprs(jsonType string, paths []string, outers []bool) []*plan.Expr {
+	ret := make([]*plan.Expr, 3)
+	typeId := int32(types.T_varchar)
+	if jsonType == "json" {
+		typeId = int32(types.T_json)
+	}
+	ret[0] = &plan.Expr{
+		Typ: &plan.Type{
+			Id: typeId,
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: 0,
+			},
+		},
+	}
+	ret = appendOtherExprs(ret, paths, outers)
+	return ret
+}
+
+func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.Expr {
+	ret[1] = &plan.Expr{
+		Typ: &plan.Type{
+			Id:    int32(types.T_varchar),
+			Width: 256,
+		},
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Sval{
+					Sval: paths[0],
+				},
+			},
+		},
+	}
+	ret[2] = &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Bval{
+					Bval: outers[0],
+				},
+			},
+		},
+	}
+	return ret
 }

@@ -16,6 +16,8 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/pierrec/lz4"
 )
 
 type IndexDataType uint8
@@ -88,12 +90,16 @@ func (b *BloomFilter) GetData() []byte {
 
 func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {
 	var err error
-	offset, length, err := writer.buffer.Write(b.buf)
+	data := make([]byte, lz4.CompressBlockBound(len(b.buf)))
+	if data, err = compress.Compress(b.buf, data, compress.Lz4); err != nil {
+		return err
+	}
+	offset, length, err := writer.buffer.Write(data)
 	if err != nil {
 		return err
 	}
 	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.offset = uint32(offset)
 	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.length = uint32(length)
-	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(length)
+	block.columns[b.idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(len(b.buf))
 	return err
 }

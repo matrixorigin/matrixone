@@ -358,10 +358,10 @@ insert into t4 values (4,8),(3,8),(5,9);
 insert into t3 values (6),(7),(3);
 with qn as (select * from t2 where t2.b=t3.a)
 select * from t3 where exists (select * from qn);
-Unknown column 't3.a' in 'where clause'
+invalid input: missing FROM-clause entry for table 't3'
 with qn as (select * from t2 where t2.b=t3.a)
 select * from t3 where not exists (select * from qn);
-Unknown column 't3.a' in 'where clause'
+invalid input: missing FROM-clause entry for table 't3'
 drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;

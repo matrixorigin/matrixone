@@ -21,10 +21,6 @@ SELECT COUNT(0) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
 
--- @bvt:issue#5892
-SELECT * FROM rawlog LIMIT 1;
-SELECT * FROM log_info LIMIT 1;
--- @bvt:issue
 
 -- log_info
 SELECT COUNT(*) FROM (SELECT * FROM log_info LIMIT 10) AS temp;

@@ -106,7 +106,7 @@ func (e *IOEntry) setObjectFromData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	obj, size, err := e.ToObject(bytes.NewReader(e.Data))
+	obj, size, err := e.ToObject(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}

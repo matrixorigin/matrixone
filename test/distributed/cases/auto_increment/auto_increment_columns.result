@@ -8,7 +8,7 @@ Table    Create Table
 t1    CREATE TABLE `t1` (\n`a` BIGINT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(10) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
 insert into t1(b) values ('bbb');
 insert into t1 values (1, 'ccc');
-tae data: duplicate
+Duplicate entry '1' for key 'a'
 insert into t1 values (3, 'ccc');
 insert into t1(b) values ('bbb1111');
 select * from t1 order by a;
@@ -60,7 +60,7 @@ a    b
 insert into t1 values ('-2000', 'yyy');
 insert into t1 values ('200', 'yyy');
 insert into t1 values ('0', 'yyy');
-tae data: duplicate
+Duplicate entry '0' for key 'a'
 select * from t1;
 a    b
 1    bbb
@@ -92,9 +92,9 @@ a    b
 200    yyy
 201    yyy
 update t1 set a=0 where b='ccc';
-tae data: duplicate
+Duplicate entry '0' for key 'a'
 update t1 set a='200' where b='ccc';
-tae data: duplicate
+Duplicate entry '200' for key 'a'
 insert into t1(b) values ('xefrsdfgds');
 select * from t1 order by a;
 a    b
@@ -167,7 +167,7 @@ a    b
 2    bbb
 insert into t3 values (1, 'aaa');
 update t3 set a=10 where b='aaa';
-tae data: duplicate
+Duplicate entry '10' for key 'a'
 update t3 set a=10 where b='bbb';
 select * from t3 order by a;
 a    b
@@ -415,7 +415,7 @@ a    b    c    d    e
 101    401    200    200    200
 102    402    200    400    600
 insert into t6(a,b) values (100, 400);
-tae data: duplicate
+Duplicate entry '100' for key 'a'
 select * from t6 order by a;
 a    b    c    d    e
 1    1    1    1    1
@@ -536,7 +536,7 @@ c    d
 21    5
 22    1
 insert into t8(a) values (1);
-tae data: duplicate
+Duplicate entry '1' for key 'a'
 select * from t8 order by a;
 a    b
 1    1
@@ -546,7 +546,7 @@ a    b
 21    5
 22    1
 insert into t9 (c) values (1);
-tae data: duplicate
+Duplicate entry '1' for key 'c'
 select * from t9 order by c;
 c    d
 1    1
@@ -762,5 +762,5 @@ drop table if exists t1;
 create table t1 (a int not null auto_increment, b int);
 insert into t1(b) values (1);
 select * from t1;
-a    b   
+a    b
 1    1

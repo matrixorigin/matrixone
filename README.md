@@ -159,9 +159,7 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
 **Step 1. Install Go (version 1.19 is required)**
 
-**Step 2. Install MySQL Client (version [8.0.30](https://dev.mysql.com/downloads/installer/) is recommended)**
-
-**Step 3. Get the MatrixOne code to build MatrixOne**
+**Step 2. Get the MatrixOne code to build MatrixOne**
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
@@ -259,7 +257,15 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
    MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
+   To install MySQL client, enter into the [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) download page:
+
+   - According to your System, Select **Select Operating System**.
+
+   - Click **Select OS Version** from the drop-down list.  Version 8.0.30 or later is recommended.
+
 2. Connect to MatrixOne server:
+
+   When you finish installing and starting MatrixOne, many logs are generated in startup mode. Then you can start a new terminal and connect to a matrixone.
 
 ```
 $ mysql -h IP -P PORT -uUsername -p

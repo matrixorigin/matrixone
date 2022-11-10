@@ -28,9 +28,11 @@ type serviceType string
 
 var (
 	dn serviceType = "DN"
+	cn serviceType = "CN"
 
 	supportedServiceTypes = map[serviceType]struct{}{
 		dn: {},
+		cn: {},
 	}
 )
 
@@ -39,6 +41,7 @@ var (
 	supportedCmds = map[string]handleFunc{
 		strings.ToUpper(pb.CmdMethod_Ping.String()):  handlePing(),
 		strings.ToUpper(pb.CmdMethod_Flush.String()): handleFlush(),
+		strings.ToUpper(pb.CmdMethod_Task.String()):  handleTask,
 	}
 )
 

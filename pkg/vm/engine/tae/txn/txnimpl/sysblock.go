@@ -22,7 +22,6 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -201,21 +200,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_HasExpr:
 			colData.Append(bool2i8(true)) // @imlinjunhong says always has Default
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			expr := &plan.Expr{}
-			if colDef.Default.Expr != nil {
-				if err := expr.Unmarshal(colDef.Default.Expr); err != nil {
-					logutil.Warnf("deserialze default expr err: %v", err)
-					expr = nil
-				}
-			} else {
-				expr = nil
-			}
-			pDefault := &plan.Default{
-				NullAbility:  colDef.Default.NullAbility,
-				OriginString: colDef.Default.OriginString,
-				Expr:         expr,
-			}
-			if val, err := types.Encode(pDefault); err == nil {
+			if val, err := colDef.Default.Marshal(); err == nil {
 				colData.Append(val)
 			} else {
 				logutil.Warnf("encode plan default expr err: %v", err)
@@ -239,20 +224,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_HasUpdate:
 			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
 		case pkgcatalog.SystemColAttr_Update:
-			expr := &plan.Expr{}
-			if colDef.OnUpdate.Expr != nil {
-				if err := expr.Unmarshal(colDef.OnUpdate.Expr); err != nil {
-					logutil.Warnf("deserialze onUpdate expr err: %v", err)
-					expr = nil
-				}
-			} else {
-				expr = nil
-			}
-			pUpdate := &plan.OnUpdate{
-				OriginString: colDef.OnUpdate.OriginString,
-				Expr:         expr,
-			}
-			if val, err := types.Encode(pUpdate); err == nil {
+			if val, err := colDef.OnUpdate.Marshal(); err == nil {
 				colData.Append(val)
 			} else {
 				logutil.Warnf("encode plan onUpdate expr err: %v", err)

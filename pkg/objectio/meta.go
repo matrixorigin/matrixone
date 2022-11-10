@@ -42,6 +42,11 @@ import (
 // Reserved = 34 bytes reserved space
 type BlockMeta struct {
 	header BlockHeader
+	name   string
+}
+
+func (bm *BlockMeta) GetName() string {
+	return bm.name
 }
 
 func (bm *BlockMeta) GetHeader() BlockHeader {

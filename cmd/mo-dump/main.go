@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
 	"strings"
@@ -45,8 +46,8 @@ type Column struct {
 }
 
 type Table struct {
-	Name   string
-	IsView bool
+	Name string
+	Kind string
 }
 
 type Tables []Table
@@ -56,7 +57,7 @@ func (t *Tables) String() string {
 }
 
 func (t *Tables) Set(value string) error {
-	*t = append(*t, Table{value, false})
+	*t = append(*t, Table{value, ""})
 	return nil
 }
 
@@ -118,10 +119,10 @@ func main() {
 		fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", database)
 		fmt.Println(createDb, ";")
 		fmt.Printf("USE `%s`;\n\n\n", database)
-		tables, err = getTables(database)
-		if err != nil {
-			return
-		}
+	}
+	tables, err = getTables(database, tables)
+	if err != nil {
+		return
 	}
 	createTable = make([]string, len(tables))
 	for i, tbl := range tables {
@@ -133,7 +134,7 @@ func main() {
 
 	for i, create := range createTable {
 		tbl := tables[i]
-		if tbl.IsView {
+		if tbl.Kind == catalog.SystemViewRel || tbl.Kind == catalog.SystemExternalRel {
 			continue
 		}
 		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
@@ -147,8 +148,19 @@ func main() {
 			return
 		}
 	}
+
 	for i, tbl := range tables {
-		if !tbl.IsView {
+		if tbl.Kind != catalog.SystemExternalRel {
+			continue
+		}
+		fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
+		fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+		fmt.Printf("%s;\n\n\n", createTable[i])
+
+	}
+
+	for i, tbl := range tables {
+		if tbl.Kind != catalog.SystemViewRel {
 			continue
 		}
 		fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
@@ -157,28 +169,39 @@ func main() {
 	}
 }
 
-func getTables(db string) (Tables, error) {
-	r, err := conn.Query("select relname,viewdef from mo_catalog.mo_tables where reldatabase = '" + db + "'") //TODO: after unified sys table prefix, add condition in where clause
+func getTables(db string, tables Tables) (Tables, error) {
+	sql := "select relname,relkind from mo_catalog.mo_tables where reldatabase = '" + db + "'"
+	if len(tables) > 0 {
+		sql += " and relname in ("
+		for i, tbl := range tables {
+			if i != 0 {
+				sql += ","
+			}
+			sql += "'" + tbl.Name + "'"
+		}
+		sql += ")"
+	}
+	r, err := conn.Query(sql) //TODO: after unified sys table prefix, add condition in where clause
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	var tables Tables
+
+	if tables == nil {
+		tables = Tables{}
+	}
+	tables = tables[:0]
 	for r.Next() {
 		var table string
-		var viewdef string
-		err = r.Scan(&table, &viewdef)
+		var kind string
+		err = r.Scan(&table, &kind)
 		if err != nil {
 			return nil, err
 		}
 		if strings.HasPrefix(table, "__mo_") || strings.HasPrefix(table, "%!%") { //TODO: after adding condition in where clause, remove this
 			continue
 		}
-		if len(viewdef) > 0 {
-			tables = append(tables, Table{table, true})
-		} else {
-			tables = append(tables, Table{table, false})
-		}
+		tables = append(tables, Table{table, kind})
 	}
 	return tables, nil
 }

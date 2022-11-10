@@ -74,13 +74,9 @@ grant insert,select on table *.* to role_test_01;
 grant role_test_01 to user_test_2;
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name='role_test_01';
 drop role role_test_01;
--- @bvt:issue#6043
 select role_name from mo_catalog.mo_role where role_name='role_test_01';
--- @bvt:issue
 drop user user_test_2;
--- @bvt:issue#6043
 select user_name,authentication_string from mo_catalog.mo_user where user_name='user_test_2';
--- @bvt:issue
 create database db_test_01;
 use db_test_01;
 drop database db_test_01;

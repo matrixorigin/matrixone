@@ -64,6 +64,8 @@ func NewTaskServiceHolderWithTaskStorageFactorySelector(logger *zap.Logger,
 }
 
 func (h *taskServiceHolder) Close() error {
+	defer logutil.LogClose(h.logger, "taskservice/service-holder")()
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -73,9 +75,6 @@ func (h *taskServiceHolder) Close() error {
 	h.mu.closed = true
 	if h.mu.store == nil {
 		return nil
-	}
-	if err := h.mu.store.Close(); err != nil {
-		return err
 	}
 	return h.mu.service.Close()
 }
@@ -145,6 +144,8 @@ func newRefreshableTaskStorage(logger *zap.Logger,
 }
 
 func (s *refreshableTaskStorage) Close() error {
+	defer logutil.LogClose(s.logger, "taskservice/refreshable-storage")()
+
 	var err error
 	s.mu.Lock()
 	if s.mu.closed {
@@ -296,11 +297,18 @@ func (s *refreshableTaskStorage) maybeRefresh(lastAddress string) bool {
 }
 
 func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "taskservice/refreshable-storage/refresh-task")()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case lastAddress := <-s.refreshC:
+			s.mu.Lock()
+			if s.mu.store != nil {
+				_ = s.mu.store.Close()
+			}
+			s.mu.Unlock()
 			s.refresh(lastAddress)
 		}
 	}

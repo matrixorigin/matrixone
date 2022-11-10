@@ -127,8 +127,8 @@ github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1m
 github.com/envoyproxy/go-control-plane v0.9.9-0.20210217033140-668b12f5399d/go.mod h1:cXg6YxExXjJnVBQHBLXeUAgxn2UodCpnH306RInaBQk=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/etcd-io/bbolt v1.3.3/go.mod h1:ZF2nL25h33cCyBtcyWeZ2/I3HQOfTP+0PIEvHjkjCrw=
-github.com/fagongzi/goetty/v2 v2.0.3-0.20221102024939-2f1c255a410e h1:9W4J7EYQWx3Oh4JsMIvjjSnkXp93MBH7vhnLq8CiMOg=
-github.com/fagongzi/goetty/v2 v2.0.3-0.20221102024939-2f1c255a410e/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20221103025002-a4c7a0d38815 h1:3/GJ0uNS6LEVXuD7hfvyyA0Shq42XrIrI/4Ls6z4CC8=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20221103025002-a4c7a0d38815/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d h1:1pILVCatHj3eVo9i52dZyY4BwjTmSIeN+/hoJh8rD0Y=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d/go.mod h1:5cqSns2zMRcJeVGvAqeTrbXFqh5AqBFr5uVKP9T2kiE=
 github.com/fasthttp-contrib/websocket v0.0.0-20160511215533-1f3b11f56072/go.mod h1:duJ4Jxv5lDcvg4QuQr0oowTf7dz4/CR8NtyCooz9HL8=
@@ -312,8 +312,8 @@ github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406 h1:/OUpnb/8qjNhxQeSJuYuFzzNQMaYrWbC5vVp2iiJqEI=
 github.com/matrixorigin/memberlist v0.4.1-0.20221101065119-bb7bce164406/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
-github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8 h1:yr5ZAK1xhBs9i6YUNNjCXrMp2i2pA3gLH0ubNKOyxQU=
-github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
+github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8 h1:N1zB1P5vyHK7XEtMFZVEouEpvIZTMiLR9pjFpoQWUJE=
+github.com/matrixorigin/simdcsv v0.0.0-20221106123050-31511b2d3fa8/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376 h1:1XpEh8nPx1yFTeTFMj/aMipEiilDhQToQS8gjEU2HxM=
 github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376/go.mod h1:LOatfyR8Xeej1jbXybwYGVfCccR0u+BQRG9xg7BD7xo=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=

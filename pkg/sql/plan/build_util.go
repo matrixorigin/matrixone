@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -178,10 +179,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
-		OriginString: tree.String(expr, dialect.MYSQL),
+		OriginString: fmtCtx.String(),
 	}, nil
 }
 
@@ -293,4 +296,21 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 		}, nil
 	}
 	return d.Default.Expr, nil
+}
+
+func judgeUnixTimestampReturnType(timestr string) types.T {
+	retDecimal := 0
+	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
+		retDecimal = len(timestr) - dotIdx - 1
+	}
+
+	if retDecimal > 6 || retDecimal == -1 {
+		retDecimal = 6
+	}
+
+	if retDecimal == 0 {
+		return types.T_int64
+	} else {
+		return types.T_decimal128
+	}
 }

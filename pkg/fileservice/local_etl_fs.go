@@ -171,7 +171,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			defer f.Close()
 			if entry.Offset > 0 {
@@ -189,7 +189,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				obj, size, err := entry.ToObject(cr)
+				obj, size, err := entry.ToObject(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -215,7 +215,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			if entry.Offset > 0 {
 				if _, err := f.Seek(int64(entry.Offset), io.SeekStart); err != nil {
@@ -237,7 +237,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						obj, size, err := entry.ToObject(buf)
+						obj, size, err := entry.ToObject(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}
@@ -254,7 +254,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			defer f.Close()
 
@@ -330,9 +330,13 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 		if err != nil {
 			return nil, err
 		}
+		isDir, err := entryIsDir(nativePath, name, info)
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
-			IsDir: entry.IsDir(),
+			IsDir: isDir,
 			Size:  info.Size(),
 		})
 	}

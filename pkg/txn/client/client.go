@@ -93,3 +93,7 @@ func (client *txnClient) New(options ...TxnOption) (TxnOperator, error) {
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
 	return newTxnOperatorWithSnapshot(client.sender, snapshot, client.logger)
 }
+
+func (client *txnClient) Close() error {
+	return client.sender.Close()
+}

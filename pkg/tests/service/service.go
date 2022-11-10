@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -44,11 +45,12 @@ import (
 
 var (
 	defaultWaitInterval = 100 * time.Millisecond
+	defaultTestTimeout  = time.Minute
 )
 
 // Cluster describes behavior of test framework.
 type Cluster interface {
-	// Start starts svcs sequentially
+	// Start starts svcs sequentially, after start, system init is completed.
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
@@ -317,41 +319,25 @@ func (c *testCluster) Start() error {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
 	// start log services first
-	if err := c.startLogServices(); err != nil {
+	if err := c.startLogServices(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
-	if err := c.startDNServices(); err != nil {
+	if err := c.startDNServices(ctx); err != nil {
 		return err
 	}
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel1()
-	c.WaitDNShardsReported(ctx1)
 
-	if c.opt.initial.cnServiceNum != 0 {
-		if err := c.startCNServices(); err != nil {
-			return err
-		}
+	// start cn services
+	if err := c.startCNServices(ctx); err != nil {
+		return err
 	}
 
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.mu.running = true
-
-	log, err := c.GetLogServiceIndexed(0)
-	if err != nil {
-		return err
-	}
-	if err := log.CreateInitTasks(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -360,6 +346,9 @@ func (c *testCluster) Options() Options {
 }
 
 func (c *testCluster) Close() error {
+	defer logutil.LogClose(c.logger, "tests-framework")()
+	c.logger.Info("closing testCluster")
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1335,7 +1324,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1396,7 +1385,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1406,10 +1395,12 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 
 		opt = append(opt,
 			cnservice.WithLogger(c.logger))
-		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		ctx, cancel := context.WithCancel(context.Background())
+		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
 			panic(err)
 		}
+		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",
@@ -1423,7 +1414,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 }
 
 // startDNServices initializes and starts all dn services.
-func (c *testCluster) startDNServices() error {
+func (c *testCluster) startDNServices(ctx context.Context) error {
 	// initialize all dn services
 	c.dn.svcs = c.initDNServices(c.fileservices)
 
@@ -1434,11 +1425,12 @@ func (c *testCluster) startDNServices() error {
 		}
 	}
 
+	c.WaitDNShardsReported(ctx)
 	return nil
 }
 
 // startLogServices initializes and starts all log services.
-func (c *testCluster) startLogServices() error {
+func (c *testCluster) startLogServices(ctx context.Context) error {
 	// initialize all log service
 	c.log.svcs = c.initLogServices()
 
@@ -1459,16 +1451,21 @@ func (c *testCluster) startLogServices() error {
 		return err
 	}
 
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 	return nil
 }
 
-func (c *testCluster) startCNServices() error {
+func (c *testCluster) startCNServices(ctx context.Context) error {
 	c.cn.svcs = c.initCNServices(c.fileservices)
 
 	for _, cs := range c.cn.svcs {
 		if err := cs.Start(); err != nil {
 			return err
 		}
+	}
+
+	if err := c.waitSystemInitCompleted(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1490,7 +1487,7 @@ func (c *testCluster) closeDNServices() error {
 
 // closeLogServices closes all log services.
 func (c *testCluster) closeLogServices() error {
-	c.logger.Info("start to close log services")
+	defer logutil.LogClose(c.logger, "tests-framework/logservices")()
 
 	for i, ls := range c.log.svcs {
 		c.logger.Info("close log service", zap.Int("index", i))
@@ -1504,7 +1501,7 @@ func (c *testCluster) closeLogServices() error {
 }
 
 func (c *testCluster) closeCNServices() error {
-	c.logger.Info("start to close cn services")
+	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
 
 	for i, cs := range c.cn.svcs {
 		c.logger.Info("close cn service", zap.Int("index", i))
@@ -1591,6 +1588,26 @@ func (c *testCluster) rangeHAKeeperService(
 			break
 		}
 	}
+}
+
+func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
+	log, err := c.GetLogServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := log.CreateInitTasks(); err != nil {
+		return err
+	}
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	cn, err := c.GetCNServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FilterFunc returns true if traffic was allowed.

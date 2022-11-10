@@ -230,7 +230,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(bats[0])
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -368,14 +368,13 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		name := blockio.EncodeBlkName(dataBlk.GetID(), types.TS{})
+		name := blockio.EncodeObjectName()
 		writer := blockio.NewWriter(context.Background(), dataBlk.GetFs(), name)
 		_, err = writer.WriteBlock(bat)
 		assert.Nil(t, err)
 		blocks, err := writer.Sync()
 		assert.Nil(t, err)
-		metaLoc, err := blockio.EncodeBlkMetaLocWithObject(
-			dataBlk.GetID(),
+		metaLoc, err := blockio.EncodeMetaLocWithObject(
 			blocks[0].GetExtent(),
 			uint32(bat.Length()),
 			blocks)
@@ -1594,7 +1593,7 @@ func TestDedup(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(bat)
 	t.Log(err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	checkAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback()
 	assert.NoError(t, err)
@@ -3149,6 +3148,12 @@ func TestUpdateAttr(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 
+type dummyCpkGetter struct{}
+
+func (c *dummyCpkGetter) CollectCheckpointsInRange(start, end types.TS) (string, types.TS) {
+	return "", types.TS{}
+}
+
 func TestLogtailBasic(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
@@ -3271,7 +3276,7 @@ func TestLogtailBasic(t *testing.T) {
 	}
 
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err := logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3281,19 +3286,18 @@ func TestLogtailBasic(t *testing.T) {
 
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 3)                                 // 2 db + mo_catalog
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	assert.NoError(t, err)
-	assert.Equal(t, pkgcatalog.MO_CATALOG, datname.GetString(0))
-	assert.Equal(t, "todrop", datname.GetString(1))
-	assert.Equal(t, "db", datname.GetString(2))
+	assert.Equal(t, "todrop", datname.GetString(0))
+	assert.Equal(t, "db", datname.GetString(1))
 
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	assert.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3302,14 +3306,14 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 5)                                 // 2 tables + 3 sys tables
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	assert.NoError(t, err)
-	assert.Equal(t, schema.Name, relname.GetString(3))
-	assert.Equal(t, schema.Name, relname.GetString(4))
+	assert.Equal(t, schema.Name, relname.GetString(0))
+	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3318,11 +3322,11 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
-	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2+sysColumnsCount) // column count of 2 tables
+	// sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
+	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -3761,6 +3765,15 @@ func TestBlockRead(t *testing.T) {
 	assert.NotEmpty(t, metaloc)
 	assert.NotEmpty(t, deltaloc)
 
+	bid, sid := blkEntry.ID, blkEntry.GetSegment().ID
+
+	info := &pkgcatalog.BlockInfo{
+		BlockID:   bid,
+		SegmentID: sid,
+		MetaLoc:   metaloc,
+		DeltaLoc:  deltaloc,
+	}
+
 	columns := make([]string, 0)
 	colIdxs := make([]uint16, 0)
 	colTyps := make([]types.Type, 0)
@@ -3777,20 +3790,32 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	b1, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, beforeDel, fs, pool)
+	b1, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		beforeDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b1.Close()
 	assert.Equal(t, columns, b1.Attrs)
 	assert.Equal(t, len(columns), len(b1.Vecs))
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
-	b2, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterFirstDel, fs, pool)
+	b2, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		afterFirstDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b2.Close()
 	assert.Equal(t, columns, b2.Attrs)
 	assert.Equal(t, len(columns), len(b2.Vecs))
 	assert.Equal(t, 19, b2.Vecs[0].Length())
-	b3, err := blockio.BlockReadInner(context.Background(), columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, afterSecondDel, fs, pool)
+	b3, err := blockio.BlockReadInner(
+		context.Background(), info,
+		columns, colIdxs, colTyps, colNulls,
+		afterSecondDel, fs, pool,
+	)
 	assert.NoError(t, err)
 	defer b3.Close()
 	assert.Equal(t, columns, b2.Attrs)
@@ -3799,13 +3824,12 @@ func TestBlockRead(t *testing.T) {
 
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
-		context.Background(),
+		context.Background(), info,
 		[]string{catalog.AttrRowID},
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
 		[]bool{false},
-		metaloc, deltaloc, afterSecondDel,
-		fs, pool,
+		afterSecondDel, fs, pool,
 	)
 	assert.NoError(t, err)
 	defer b4.Close()
@@ -3937,4 +3961,161 @@ func TestFlushTable(t *testing.T) {
 		it.Next()
 	}
 	assert.NoError(t, txn.Commit())
+}
+
+func TestReadCheckpoint(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+	now := time.Now()
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(time.Since(now))
+	t.Logf("Checkpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+	tids := []uint64{
+		pkgcatalog.MO_DATABASE_ID,
+		pkgcatalog.MO_TABLES_ID,
+		pkgcatalog.MO_COLUMNS_ID,
+		1000,
+	}
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
+	tae.restart()
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		for _, tid := range tids {
+			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			assert.NoError(t, err)
+			t.Logf("table %d", tid)
+			t.Log(ins)
+			t.Log(del)
+		}
+	}
+}
+
+func TestDelete4(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.NewEmptySchema("xx")
+	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
+	schema.AppendCol("offset", types.T_uint32.ToType())
+	schema.Finalize(false)
+	schema.BlockMaxRows = 50
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	bat.Vecs[1].Update(0, uint32(0))
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+
+	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	var wg sync.WaitGroup
+	var count atomic.Uint32
+
+	run := func() {
+		defer wg.Done()
+		time.Sleep(time.Duration(rand.Intn(20)+1) * time.Millisecond)
+		cloneBat := bat.CloneWindow(0, 1)
+		defer cloneBat.Close()
+		txn, rel := tae.getRelation()
+		id, offset, err := rel.GetByFilter(filter)
+		if err != nil {
+			txn.Rollback()
+			return
+		}
+		v, err := rel.GetValue(id, offset, 1)
+		if err != nil {
+			txn.Rollback()
+			return
+		}
+		oldV := v.(uint32)
+		newV := oldV + 1
+		if err := rel.RangeDelete(id, offset, offset, handle.DT_Normal); err != nil {
+			txn.Rollback()
+			return
+		}
+		cloneBat.Vecs[1].Update(0, newV)
+		if err := rel.Append(cloneBat); err != nil {
+			txn.Rollback()
+			return
+		}
+		if err := txn.Commit(); err == nil {
+			count.CompareAndSwap(oldV, newV)
+			t.Logf("RangeDelete block-%d, offset-%d, %s", id.BlockID, offset, txn.GetCommitTS().ToString())
+		}
+	}
+
+	p, _ := ants.NewPool(20)
+	defer p.Release()
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		_ = p.Submit(run)
+	}
+	wg.Wait()
+
+	t.Logf("count=%v", count.Load())
+
+	getValueFn := func() {
+		txn, rel := tae.getRelation()
+		v, err := rel.GetValueByFilter(filter, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, int(count.Load()), int(v.(uint32)))
+		assert.NoError(t, txn.Commit())
+		t.Logf("GetV=%v", v)
+	}
+	scanFn := func() {
+		txn, rel := tae.getRelation()
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, err := blk.GetColumnDataById(0, nil)
+			assert.NoError(t, err)
+			defer view.Close()
+			view.ApplyDeletes()
+			if view.Length() != 0 {
+				t.Logf("block-%d, data=%s", blk.ID(), logtail.VectorToString(view.GetData()))
+			}
+			it.Next()
+		}
+		txn.Commit()
+	}
+
+	for i := 0; i < 20; i++ {
+		getValueFn()
+		scanFn()
+
+		tae.restart()
+
+		getValueFn()
+		scanFn()
+		for j := 0; j < 100; j++ {
+			wg.Add(1)
+			p.Submit(run)
+		}
+		wg.Wait()
+	}
+	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 }

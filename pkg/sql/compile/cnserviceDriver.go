@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -140,13 +140,13 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
 	// decode and run the scope.
-	s, err = decodeScope(m.GetData(), c.proc)
+	s, err = decodeScope(m.GetData(), c.proc, true)
 	if err != nil {
 		return nil, err
 	}
 	refactorScope(c, c.ctx, s)
 
-	err = s.ParallelRun(c)
+	err = s.ParallelRun(c, s.IsRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
-func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -284,7 +284,7 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil)
+	s, err := generateScope(proc, p, ctx, nil, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +426,8 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownId:   s.DataSource.PushdownId,
 			PushdownAddr: s.DataSource.PushdownAddr,
 			Expr:         s.DataSource.Expr,
+			TableDef:     s.DataSource.TableDef,
+			Timestamp:    &s.DataSource.Timestamp,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -473,14 +475,16 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 }
 
 // generateScope generate a scope from scope context and pipeline.
-func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
+func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
+	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
 
 	s := &Scope{
-		Magic:  int(p.GetPipelineType()),
-		IsEnd:  p.IsEnd,
-		IsJoin: p.IsJoin,
-		Plan:   p.Qry,
+		Magic:    int(p.GetPipelineType()),
+		IsEnd:    p.IsEnd,
+		IsJoin:   p.IsJoin,
+		Plan:     p.Qry,
+		IsRemote: isRemote,
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -491,6 +495,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			PushdownId:   dsc.PushdownId,
 			PushdownAddr: dsc.PushdownAddr,
 			Expr:         dsc.Expr,
+			TableDef:     dsc.TableDef,
+			Timestamp:    *dsc.Timestamp,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -524,7 +530,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			id:     p.Children[i].PipelineId,
 			regs:   make(map[*process.WaitRegister]int32),
 		}
-		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], analNodes); err != nil {
+		if s.PreScopes[i], err = generateScope(s.Proc, p.Children[i], ctx.children[i], analNodes, isRemote); err != nil {
 			return nil, err
 		}
 	}
@@ -748,22 +754,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnList:    t.OnList,
 		}
 	case *unnest.Argument:
-		var (
-			dt  []byte
-			err error
-		)
-		if dt, err = json.Marshal(t.Es.Extern); err != nil {
-			return ctxId, nil, err
-		}
-		in.Unnest = &pipeline.Unnest{
-			Attrs:  t.Es.Attrs,
-			Cols:   t.Es.Cols,
-			Extern: dt,
-		}
-	case *generate_series.Argument:
-		in.GenerateSeries = &pipeline.GenerateSeries{
+		in.TableFunction = &pipeline.TableFunction{
 			Attrs: t.Es.Attrs,
 			Cols:  t.Es.Cols,
+			Exprs: t.Es.ExprList,
+			Param: []byte(t.Es.ColName),
+		}
+	case *generate_series.Argument:
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs: t.Es.Attrs,
+			Exprs: t.Es.ExprList,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -786,6 +786,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Cols:          t.Es.Cols,
 			Name2ColIndex: name2ColIndexSlice,
 			CreateSql:     t.Es.CreateSql,
+			FileList:      t.Es.FileList,
 		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -984,23 +985,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: opr.OrderBy,
 		}
 	case vm.Unnest:
-		param := &unnest.ExternalParam{}
-		if err := json.Unmarshal(opr.Unnest.Extern, param); err != nil {
-			return v, err
-		}
-		logutil.Infof("unnest unmarshal %+v", param)
 		v.Arg = &unnest.Argument{
 			Es: &unnest.Param{
-				Attrs:  opr.Unnest.Attrs,
-				Cols:   opr.Unnest.Cols,
-				Extern: param,
+				Attrs:    opr.TableFunction.Attrs,
+				Cols:     opr.TableFunction.Cols,
+				ExprList: opr.TableFunction.Exprs,
+				ColName:  string(opr.TableFunction.Param),
 			},
 		}
 	case vm.GenerateSeries:
 		v.Arg = &generate_series.Argument{
 			Es: &generate_series.Param{
-				Attrs: opr.GenerateSeries.Attrs,
-				Cols:  opr.GenerateSeries.Cols,
+				Attrs:    opr.TableFunction.Attrs,
+				ExprList: opr.TableFunction.Exprs,
 			},
 		}
 	case vm.HashBuild:
@@ -1026,6 +1023,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CreateSql:     t.CreateSql,
 				Name2ColIndex: name2ColIndex,
 				Fileparam:     new(external.ExternalFileparam),
+				FileList:      t.FileList,
 			},
 		}
 	default:
@@ -1220,13 +1218,32 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 }
 
-func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	// TODO: allocate the memory from process may suitable.
+func decodeBatch(proc *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
 	bat := new(batch.Batch)
+	mp := proc.Mp()
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process then.
+	// allocated memory of vec from mPool.
 	for i := range bat.Vecs {
-		bat.Vecs[i].SetOriginal(true)
+		bat.Vecs[i], err = vector.Dup(bat.Vecs[i], mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+	}
+	// allocated memory of aggVec from mPool.
+	for i, ag := range bat.Aggs {
+		err = ag.WildAggReAlloc(mp)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				bat.Aggs[j].Free(mp)
+			}
+			for j := range bat.Vecs {
+				bat.Vecs[j].Free(mp)
+			}
+			return nil, err
+		}
 	}
 	return bat, err
 }

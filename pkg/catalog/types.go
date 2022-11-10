@@ -93,6 +93,7 @@ const (
 	BlockMeta_MetaLoc    = "meta_loc"
 	BlockMeta_DeltaLoc   = "delta_loc"
 	BlockMeta_CommitTs   = "committs"
+	BlockMeta_SegmentID  = "segment_id"
 
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
@@ -171,6 +172,7 @@ const (
 	BLOCKMETA_METALOC_IDX    = 3
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
+	BLOCKMETA_SEGID_IDX      = 6
 )
 
 type BlockInfo struct {
@@ -180,6 +182,7 @@ type BlockInfo struct {
 	MetaLoc    string
 	DeltaLoc   string
 	CommitTs   types.TS
+	SegmentID  uint64
 }
 
 // used for memengine and tae
@@ -282,6 +285,7 @@ var (
 		BlockMeta_MetaLoc,
 		BlockMeta_DeltaLoc,
 		BlockMeta_CommitTs,
+		BlockMeta_SegmentID,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0, 0),    // dat_id
@@ -339,6 +343,7 @@ var (
 		types.New(types.T_varchar, 0, 0, 0), // meta_loc
 		types.New(types.T_varchar, 0, 0, 0), // delta_loc
 		types.New(types.T_TS, 0, 0, 0),      // committs
+		types.New(types.T_uint64, 0, 0, 0),  // segment_id
 	}
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}

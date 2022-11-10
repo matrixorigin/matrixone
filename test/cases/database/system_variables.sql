@@ -57,7 +57,7 @@ show variables like 'wait_timeout';
 set wait_timeout = 10;
 show variables like 'wait_timeout';
 
--- @bvt:issue#6034
+
 drop table if exists t;
 create table t(
 	a int,
@@ -66,7 +66,7 @@ create table t(
 	primary key(a)
 );
 show indexes from t;
--- @bvt:issue
+
 
 -- Support More System Views
 use information_schema;
@@ -74,7 +74,7 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
-select table_name, column_name from columns;
+select table_name, column_name from columns limit 2;
 desc profiling;
 select seq, state from profiling;
 

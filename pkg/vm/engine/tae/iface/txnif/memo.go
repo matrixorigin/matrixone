@@ -14,7 +14,12 @@
 
 package txnif
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"encoding/binary"
+	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
 type TxnMemo struct {
 	*common.Tree
@@ -49,4 +54,38 @@ func (memo *TxnMemo) GetDirtyTableByID(id uint64) *common.TableTree {
 
 func (memo *TxnMemo) GetDirty() *common.Tree {
 	return memo.Tree
+}
+
+func (memo *TxnMemo) WriteTo(w io.Writer) (n int64, err error) {
+	var tmpn int64
+	if tmpn, err = memo.Tree.WriteTo(w); err != nil {
+		return
+	}
+	n += tmpn
+	isCatalogChanged := int8(0)
+	if memo.isCatalogChanged {
+		isCatalogChanged = 1
+	}
+	if err = binary.Write(w, binary.BigEndian, isCatalogChanged); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+
+func (memo *TxnMemo) ReadFrom(r io.Reader) (n int64, err error) {
+	var tmpn int64
+	if tmpn, err = memo.Tree.ReadFrom(r); err != nil {
+		return
+	}
+	n += tmpn
+	isCatalogChanged := int8(0)
+	if err = binary.Read(r, binary.BigEndian, &isCatalogChanged); err != nil {
+		return
+	}
+	n += 1
+	if isCatalogChanged == 1 {
+		memo.isCatalogChanged = true
+	}
+	return
 }

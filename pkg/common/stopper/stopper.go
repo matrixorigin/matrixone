@@ -106,6 +106,7 @@ type Stopper struct {
 // NewStopper create a stopper
 func NewStopper(name string, opts ...Option) *Stopper {
 	s := &Stopper{
+		name:  name,
 		opts:  &options{},
 		stopC: make(chan struct{}),
 	}

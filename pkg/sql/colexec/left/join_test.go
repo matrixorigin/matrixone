@@ -120,6 +120,7 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		nb1 := tc.proc.Mp().CurrNB()
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, nb0, nb1)
 	}
 }
@@ -230,7 +231,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Args: args,
-				Func: &plan.ObjectRef{Obj: fid},
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
 			},
 		},
 	}

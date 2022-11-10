@@ -17,18 +17,20 @@ package export
 import (
 	"context"
 	"errors"
+	"path"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"path"
-	"strings"
-	"testing"
-	"time"
 )
 
 func init() {
@@ -105,26 +107,28 @@ func initLogsFile(ctx context.Context, fs fileservice.FileService, table *Table,
 		return filepath
 	}
 
+	buf := make([]byte, 0, 4096)
+
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1))
+	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts2 := ts.Add(time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts2), buf)
 	writer.WriteStrings(dummyFillTable("row3", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row4", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts3 := ts.Add(time.Hour)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts3), buf)
 	writer.WriteStrings(dummyFillTable("row5", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row6", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
 	ts1New := ts.Add(time.Hour + time.Minute)
-	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts1New))
+	writer, _ = NewCSVWriter(ctx, fs, newFilePath(ts1New), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 11.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 22.0).ToStrings())
 	writer.FlushAndClose()
@@ -143,8 +147,10 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, table *
 		return filepath
 	}
 
+	buf := make([]byte, 0, 4096)
+
 	ts1 := ts
-	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1))
+	writer, _ := NewCSVWriter(ctx, fs, newFilePath(ts1), buf)
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
@@ -153,7 +159,7 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, table *
 }
 
 func TestNewMerge(t *testing.T) {
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, t.TempDir())
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, t.TempDir())
 	require.Nil(t, err)
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 
@@ -170,9 +176,9 @@ func TestNewMerge(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx: context.Background(),
-				opts: []MergeOption{WithFileServiceName(etlFileServiceName),
+				opts: []MergeOption{WithFileServiceName(defines.ETLFileServiceName),
 					WithFileService(fs), WithTable(dummyTable),
-					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(mpool.PB), WithMaxMergeJobs(16)},
+					WithMaxFileSize(1), WithMinFilesMerge(1), WithMaxFileSize(16 * mpool.MB), WithMaxMergeJobs(16)},
 			},
 			want: nil,
 		},
@@ -209,10 +215,11 @@ func TestNewMerge(t *testing.T) {
 			r, err := NewCSVReader(tt.args.ctx, fs, files[0])
 			require.Nil(t, err)
 			lines := 0
-			for l := r.ReadLine(); l != nil; l = r.ReadLine() {
+			for l, err := r.ReadLine(); l != nil && err == nil; l, err = r.ReadLine() {
 				lines++
 				t.Logf("line %d: %s", lines, l)
 			}
+			require.Nil(t, err)
 			require.Equal(t, 6, lines)
 
 		})
@@ -221,7 +228,7 @@ func TestNewMerge(t *testing.T) {
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, path.Join(t.TempDir(), t.Name()))
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
 	require.Nil(t, err)
 	targetDate := "2021-01-01"
 	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
@@ -329,7 +336,7 @@ func TestCreateCronTask(t *testing.T) {
 func TestNewMergeService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	defer cancel()
-	fs, err := fileservice.NewLocalETLFS(etlFileServiceName, path.Join(t.TempDir(), t.Name()))
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, path.Join(t.TempDir(), t.Name()))
 	require.Nil(t, err)
 
 	type args struct {

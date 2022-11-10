@@ -325,14 +325,11 @@ SELECT "1900-01-01 00:00:00" + INTERVAL 1<<20 HOUR;
 "1900-01-01 00:00:00" + INTERVAL 1<<20 HOUR
 2019-08-15 16:00:00
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<38 SECOND;
-"1900-01-01 00:00:00" + INTERVAL 1<<38 SECOND
-null
+Data truncation: data out of range: data type datetime,
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<33 MINUTE;
-"1900-01-01 00:00:00" + INTERVAL 1<<33 MINUTE
-null
+Data truncation: data out of range: data type datetime,
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR;
-"1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR
-null
+Data truncation: data out of range: data type datetime,
 SELECT "1900-01-01 00:00:00" + INTERVAL "1000000000:214748364700" MINUTE_SECOND;
 Data truncation: data out of range: data type datetime, 
 SELECT "1997-12-31 23:59:59" + INTERVAL 1 SECOND;

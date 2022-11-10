@@ -15,11 +15,8 @@
 package plan
 
 import (
-	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -110,121 +107,9 @@ func _getDefaultColDefs() []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
-	var (
-		err             error
-		externParamData []byte
-		externParam     *unnest.ExternalParam
-		scanNode        *plan.Node
-		childId         int32 = -1
-	)
-	if externParam, err = genTblParam(tbl); err != nil {
-		return 0, err
-	}
-	if externParamData, err = json.Marshal(externParam); err != nil {
-		return 0, err
-	}
-	switch o := tbl.Func.Exprs[0].(type) {
-	case *tree.UnresolvedName:
-		schemaName, tableName, colName := o.GetNames()
-		if len(schemaName) == 0 {
-			cteRef := ctx.findCTE(tableName)
-			if cteRef != nil {
-				subCtx := NewBindContext(builder, ctx)
-				subCtx.maskedCTEs = cteRef.maskedCTEs
-				subCtx.cteName = tableName
-				//reset defaultDatabase
-				if len(cteRef.defaultDatabase) > 0 {
-					subCtx.defaultDatabase = cteRef.defaultDatabase
-				}
-
-				switch stmt := cteRef.ast.Stmt.(type) {
-				case *tree.Select:
-					childId, err = builder.buildSelect(stmt, subCtx, false)
-
-				case *tree.ParenSelect:
-					childId, err = builder.buildSelect(stmt.Select, subCtx, false)
-
-				default:
-					err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-				}
-
-				if err != nil {
-					return 0, err
-				}
-
-				if subCtx.isCorrelated {
-					return 0, moerr.NewNYI("correlated column in CTE")
-				}
-
-				if subCtx.hasSingleRow {
-					ctx.hasSingleRow = true
-				}
-
-				cols := cteRef.ast.Name.Cols
-
-				if len(cols) > len(subCtx.headings) {
-					return 0, moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", tableName, len(subCtx.headings), len(cols))
-				}
-
-				for i, col := range cols {
-					subCtx.headings[i] = string(col)
-				}
-				break
-			}
-			schemaName = ctx.defaultDatabase
-		}
-		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
-		if objRef == nil {
-			return 0, moerr.NewSyntaxError("schema %s not found", schemaName)
-		}
-		if tableDef == nil {
-			return 0, moerr.NewSyntaxError("table %s not found", tableName)
-		}
-		scanNode = &plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			TableDef:    tableDef,
-			ObjRef:      objRef,
-			Cost:        builder.compCtx.Cost(objRef, nil),
-			BindingTags: []int32{builder.genNewTag()},
-		}
-		for i := 0; i < len(tableDef.Cols); i++ {
-			if tableDef.Cols[i].Name == colName {
-				tmp := &plan.Expr{
-					Typ: tableDef.Cols[i].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							ColPos: int32(i),
-							Name:   tableName + "." + tableDef.Cols[i].Name,
-						},
-					},
-				}
-				scanNode.ProjectList = append(scanNode.ProjectList, tmp)
-				break
-			}
-		}
-	case *tree.NumVal:
-		jsonStr := o.String()
-		if len(jsonStr) == 0 {
-			return 0, moerr.NewInvalidInput("unnest param is empty")
-		}
-		scanNode = &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: []byte(jsonStr)}},
-			ProjectList: []*plan.Expr{
-				{
-					Typ:  &plan.Type{Id: int32(types.T_varchar)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-			},
-		}
-	default:
-		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
-	}
-	if scanNode != nil {
-		childId = builder.appendNode(scanNode, ctx)
-	}
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	colDefs := _getDefaultColDefs()
+	colName := findColName(tbl.Func)
 	node := &plan.Node{
 		NodeType: plan.Node_TABLE_FUNCTION,
 		Cost:     &plan.Cost{},
@@ -233,28 +118,20 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
 				Name:  "unnest",
-				Param: externParamData,
+				Param: []byte(colName),
 			},
 			Cols: colDefs,
 		},
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs,
+		Children:        []int32{childId},
 	}
-	node.Children = []int32{childId}
-	nodeID := builder.appendNode(node, ctx)
-	return nodeID, nil
+	return builder.appendNode(node, ctx), nil
 }
 
-func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
-	var err error
-	uParam := &unnest.ExternalParam{}
-	switch o := tbl.Func.Exprs[0].(type) {
-	case *tree.UnresolvedName:
-		_, _, uParam.ColName = o.GetNames()
-	case *tree.NumVal:
-	default:
-		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
+func findColName(fn *tree.FuncExpr) string {
+	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
+		return ""
 	}
-	uParam.Path = tbl.Func.Exprs[1].String()
-	uParam.Outer = tbl.Func.Exprs[2].(*tree.NumVal).String() == "true"
-	return uParam, err
+	return tree.String(fn.Exprs[0], dialect.MYSQL)
 }

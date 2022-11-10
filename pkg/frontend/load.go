@@ -957,7 +957,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return moerr.NewInternalError("the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
 								}
 								result.Warnings++
 								d = types.Decimal64_Zero
@@ -978,7 +978,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, proc *process.Proce
 								if !ignoreFieldError {
 									// XXX recreate another moerr, this may have side effect of
 									// another error log.
-									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+									return moerr.NewInternalError("the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
 								}
 								result.Warnings++
 								d = types.Decimal128_Zero
@@ -1699,6 +1699,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		//dbHandler := handler.dbHandler
 		var dbHandler engine.Database
 		var txnHandler *TxnHandler
+		var txn TxnOperator
 		tableHandler := handler.tableHandler
 		initSes := handler.ses
 		// XXX run backgroup session using initSes.Mp, is this correct thing?
@@ -1707,7 +1708,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = tmpSes.GetTxnHandler()
-				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txnHandler.GetTxn())
+				txn, err = txnHandler.GetTxn()
+				if err != nil {
+					goto handleError
+				}
+				dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txn)
 				if err != nil {
 					goto handleError
 				}
@@ -1853,10 +1858,15 @@ func writeBatchToStorage(handler *WriteBatchHandler, proc *process.Process, forc
 				tmpSes := NewBackgroundSession(ctx, initSes.GetMemPool(), initSes.GetParameterUnit(), gSysVariables)
 				defer tmpSes.Close()
 				var dbHandler engine.Database
+				var txn TxnOperator
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = tmpSes.GetTxnHandler()
-						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txnHandler.GetTxn())
+						txn, err = txnHandler.GetTxn()
+						if err != nil {
+							goto handleError2
+						}
+						dbHandler, err = tmpSes.GetStorage().Database(ctx, handler.dbName, txn)
 						if err != nil {
 							goto handleError2
 						}

@@ -84,13 +84,11 @@ var dummyTableCreateExistsSql = "CREATE EXTERNAL TABLE IF NOT EXISTS `db_dummy`.
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
 	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 var dummyTableCreateSql = "CREATE EXTERNAL TABLE `db_dummy`.`tbl_dummy`(" +
 	"\n" + dummyStrCreateSql +
 	",\n" + dummyInt64CreateSql +
 	",\n" + dummyFloat64CreateSql +
-	",\nPRIMARY KEY (`" + dummyStrColumn.Name + "`, `" + dummyInt64Column.Name + "`)" +
 	"\n) " + `infile{"filepath"="etl:/test/*/*/*/*/tbl_dummy/*.csv","compression"="none"} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
 
 type dummyCondition struct{}

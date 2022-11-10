@@ -14,11 +14,9 @@ select role_id,role_name,owner from mo_catalog.mo_role;
 -- @session
 
 --public只有连接权限
--- @bvt:issue#6041
 -- @session:id=2&user=account1:admin:public&password=123456
 show databases;
 -- @session
--- @bvt:issue
 
 --内置表不能增删改
 -- @bvt:issue#5707

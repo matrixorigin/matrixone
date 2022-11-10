@@ -62,6 +62,7 @@ type LogService interface {
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
 
+	// CreateInitTasks create init task
 	CreateInitTasks() error
 }
 

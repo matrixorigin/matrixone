@@ -366,7 +366,7 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	e.Lock()
 	//Deduplicate for tableId
 	if _, exist := e.entries[tableId]; exist {
-		return nil, moerr.NewDuplicate()
+		return nil, moerr.GetOkExpectedDup()
 	}
 	created = NewTableEntryWithTableId(e, schema, txn, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txn, false)

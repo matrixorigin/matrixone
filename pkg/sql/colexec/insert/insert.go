@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -47,6 +49,9 @@ type Argument struct {
 	IndexInfos    []*plan.IndexInfo
 }
 
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+}
+
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert select")
 }
@@ -56,6 +61,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
+	defer bat.Clean(proc.Mp())
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
@@ -70,10 +76,11 @@ func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *b
 		}
 		b.Clean(proc.Mp())
 	}
-	err := n.TargetTable.Write(ctx, bat)
-	bat.Clean(proc.Mp())
-	n.Affected += uint64(len(bat.Zs))
-	return err
+	if err := n.TargetTable.Write(ctx, bat); err != nil {
+		return err
+	}
+	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+	return nil
 }
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
@@ -111,6 +118,9 @@ func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 	)
 	defer cancel()
 	if err := n.Engine.Commit(ctx, txn); err != nil {
+		if err2 := RolllbackTxn(n, txn, ctx); err2 != nil {
+			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+		}
 		return err
 	}
 	err := txn.Commit(ctx)
@@ -168,6 +178,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		return false, err
 	}
 
+	n.Affected += uint64(len(bat.Zs))
 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
 		return false, err
 	}

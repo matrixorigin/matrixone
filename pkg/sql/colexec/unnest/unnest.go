@@ -16,12 +16,15 @@ package unnest
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -31,19 +34,10 @@ func String(arg any, buf *bytes.Buffer) {
 }
 
 func Prepare(_ *process.Process, arg any) error {
-	var err error
 	param := arg.(*Argument).Es
-	param.colName = "UNNEST_DEFAULT"
-	if len(param.Extern.ColName) != 0 {
-		param.colName = param.Extern.ColName
-		param.isCol = true
+	if len(param.ColName) == 0 {
+		param.ColName = "UNNEST_DEFAULT"
 	}
-	param.path = param.Extern.Path
-	param.outer = param.Extern.Outer
-	if err != nil {
-		return err
-	}
-	param.seq = 0
 	var filters []string
 	for i := range param.Attrs {
 		denied := false
@@ -58,84 +52,142 @@ func Prepare(_ *process.Process, arg any) error {
 		}
 	}
 	param.filters = filters
+	if len(param.ExprList) < 1 || len(param.ExprList) > 3 {
+		return moerr.NewInvalidInput("unnest: argument number must be 1, 2 or 3")
+	}
+	if len(param.ExprList) == 1 {
+		vType := types.T_varchar.ToType()
+		bType := types.T_bool.ToType()
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Sval{Sval: "$"}}}})
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+	} else if len(param.ExprList) == 2 {
+		bType := types.T_bool.ToType()
+		param.ExprList = append(param.ExprList, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_C{C: &plan2.Const{Value: &plan.Const_Bval{Bval: false}}}})
+	}
 	return nil
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	var (
+		err      error
+		rbat     *batch.Batch
+		jsonVec  *vector.Vector
+		pathVec  *vector.Vector
+		outerVec *vector.Vector
+		path     bytejson.Path
+		outer    bool
+	)
+	defer func() {
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
+		}
+		if jsonVec != nil {
+			jsonVec.Free(proc.Mp())
+		}
+		if pathVec != nil {
+			pathVec.Free(proc.Mp())
+		}
+		if outerVec != nil {
+			outerVec.Free(proc.Mp())
+		}
+	}()
 	param := arg.(*Argument).Es
-	if param.isCol {
-		return callByCol(param, proc)
-	}
-	return callByStr(param, proc)
-}
-
-func callByStr(param *Param, proc *process.Process) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	json, err := types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
+	jsonVec, err = colexec.EvalExpr(bat, proc, param.ExprList[0])
 	if err != nil {
 		return false, err
 	}
-	path, err := types.ParseStringToPath(param.path)
+	if jsonVec.Typ.Oid != types.T_json && jsonVec.Typ.Oid != types.T_varchar {
+		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.Typ.String()))
+	}
+	pathVec, err = colexec.EvalExpr(bat, proc, param.ExprList[1])
 	if err != nil {
 		return false, err
 	}
-	ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+	if pathVec.Typ.Oid != types.T_varchar {
+		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.Typ.String()))
+	}
+	outerVec, err = colexec.EvalExpr(bat, proc, param.ExprList[2])
 	if err != nil {
 		return false, err
 	}
-	rbat := batch.New(false, param.Attrs)
-	for i := range param.Cols {
-		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+	if outerVec.Typ.Oid != types.T_bool {
+		return false, moerr.NewInvalidInput(fmt.Sprintf("unnest: third argument must be bool, but got %s", outerVec.Typ.String()))
 	}
-	rbat, err = makeBatch(rbat, ures, param, proc)
+	if !pathVec.IsScalar() || !outerVec.IsScalar() {
+		return false, moerr.NewInvalidInput("unnest: second and third arguments must be scalar")
+	}
+	path, err = types.ParseStringToPath(pathVec.GetString(0))
 	if err != nil {
 		return false, err
 	}
-	rbat.InitZsOne(len(ures))
+	outer = vector.MustTCols[bool](outerVec)[0]
+
+	switch jsonVec.Typ.Oid {
+	case types.T_json:
+		rbat, err = handle(jsonVec, &path, outer, param, proc, parseJson)
+	case types.T_varchar:
+		rbat, err = handle(jsonVec, &path, outer, param, proc, parseStr)
+	}
+	if err != nil {
+		return false, err
+	}
 	proc.SetInputBatch(rbat)
 	return false, nil
 }
 
-func callByCol(param *Param, proc *process.Process) (bool, error) {
-	bat := proc.InputBatch()
-	if bat == nil {
-		return true, nil
-	}
-	if len(bat.Vecs) != 1 {
-		return false, moerr.NewInvalidArg("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
-	}
-	vec := bat.GetVector(0)
-	if vec.Typ.Oid != types.T_json {
-		return false, moerr.NewInvalidArg("unnest: invalid column type:%s", vec.Typ)
-	}
-	path, err := types.ParseStringToPath(param.path)
-	if err != nil {
-		return false, err
-	}
-	rbat := batch.New(false, param.Attrs)
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *Param, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+	var (
+		err  error
+		rbat *batch.Batch
+		json bytejson.ByteJson
+		ures []bytejson.UnnestResult
+	)
+
+	rbat = batch.New(false, param.Attrs)
+	rbat.Cnt = 1
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
-	col := vector.GetBytesVectorValues(vec)
-	rows := 0
-	for i := 0; i < len(col); i++ {
-		json := types.DecodeJson(col[i])
-		ures, err := json.Unnest(&path, param.outer, recursive, mode, param.filters)
+
+	if jsonVec.IsScalar() {
+		json, err = fn(jsonVec.GetBytes(0))
 		if err != nil {
-			return false, err
+			return nil, err
+		}
+		ures, err = json.Unnest(path, outer, recursive, mode, param.filters)
+		if err != nil {
+			return nil, err
 		}
 		rbat, err = makeBatch(rbat, ures, param, proc)
 		if err != nil {
-			return false, err
+			return nil, err
+		}
+		rbat.InitZsOne(len(ures))
+		return rbat, nil
+	}
+	jsonSlice := vector.MustBytesCols(jsonVec)
+	rows := 0
+	for i := range jsonSlice {
+		json, err = fn(jsonSlice[i])
+		if err != nil {
+			return nil, err
+		}
+		ures, err = json.Unnest(path, outer, recursive, mode, param.filters)
+		if err != nil {
+			return nil, err
+		}
+		rbat, err = makeBatch(rbat, ures, param, proc)
+		if err != nil {
+			return nil, err
 		}
 		rows += len(ures)
 	}
 	rbat.InitZsOne(rows)
-	proc.SetInputBatch(rbat)
-	return false, nil
+	return rbat, nil
 }
 
 func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, proc *process.Process) (*batch.Batch, error) {
@@ -145,9 +197,9 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 			var err error
 			switch param.Attrs[j] {
 			case "col":
-				err = vec.Append([]byte(param.colName), false, proc.Mp())
+				err = vec.Append([]byte(param.ColName), false, proc.Mp())
 			case "seq":
-				err = vec.Append(param.seq, false, proc.Mp())
+				err = vec.Append(int32(i), false, proc.Mp())
 			case "index":
 				val, ok := ures[i][param.Attrs[j]]
 				if !ok {
@@ -167,14 +219,16 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 			}
 		}
 	}
-	param.seq += 1
 	return bat, nil
 }
 func dupType(typ *plan.Type) types.Type {
-	return types.Type{
-		Oid:       types.T(typ.Id),
-		Width:     typ.Width,
-		Size:      typ.Size,
-		Precision: typ.Precision,
-	}
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale, typ.Precision)
+}
+
+func parseJson(dt []byte) (bytejson.ByteJson, error) {
+	ret := types.DecodeJson(dt)
+	return ret, nil
+}
+func parseStr(dt []byte) (bytejson.ByteJson, error) {
+	return types.ParseSliceToByteJson(dt)
 }

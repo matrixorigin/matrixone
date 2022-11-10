@@ -3,7 +3,7 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]
@@ -17,7 +17,8 @@ backend = "DISK"
 
 [[fileservice]]
 name = "S3"
-backend = "MEM"
+backend = "DISK"
+data-dir = "mo-data/s3"
 
 [[fileservice]]
 name = "ETL"

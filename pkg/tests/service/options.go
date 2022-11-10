@@ -46,6 +46,9 @@ const (
 	// default configuration for log service
 	defaultGossipSeedNum = 1
 	defaultHAKeeperNum   = 1
+	// we only use 3 seeds at most.
+	maxGossipSeedNum = 3
+	maxHAKeeperNum   = 3
 
 	// default hakeeper configuration
 	defaultTickPerSecond   = 10
@@ -342,22 +345,28 @@ func (opt Options) WithKeepData() Options {
 //
 // Select gossip addresses of the first 3 log services.
 // If the number of log services was less than 3,
-// then select all of them.
+// then just return the number.
 func gossipSeedNum(logServiceNum int) int {
 	if logServiceNum < defaultGossipSeedNum {
-		return logServiceNum
+		return defaultGossipSeedNum
 	}
-	return defaultGossipSeedNum
+	if logServiceNum > maxGossipSeedNum {
+		return maxGossipSeedNum
+	}
+	return logServiceNum
 }
 
 // haKeeperNum calculates the count of hakeeper replica.
 //
 // Select the first 3 log services to start hakeeper replica.
 // If the number of log services was less than 3,
-// then select the first of them.
-func haKeeperNum(logServiceNum int) int {
-	if logServiceNum < defaultHAKeeperNum {
-		return 1
+// then just return the number.
+func haKeeperNum(haKeeperNum int) int {
+	if haKeeperNum < defaultHAKeeperNum {
+		return defaultHAKeeperNum
 	}
-	return defaultHAKeeperNum
+	if haKeeperNum > maxHAKeeperNum {
+		return maxHAKeeperNum
+	}
+	return haKeeperNum
 }

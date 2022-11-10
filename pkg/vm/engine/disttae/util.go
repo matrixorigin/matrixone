@@ -14,10 +14,12 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -65,24 +67,26 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
+func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			getColumnMapByExpr(arg, tableDef, columnMap)
 		}
+
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
 		colName := exprImpl.Col.Name
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
-		columnMap[int(idx)] = int(tableDef.Name2ColIndex[colName])
+		colIdx := tableDef.Name2ColIndex[colName]
+		(*columnMap)[int(idx)] = int(colIdx)
 	}
 }
 
 func getColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) map[int]int {
 	columnMap := make(map[int]int)
-	getColumnMapByExpr(expr, tableDef, columnMap)
+	getColumnMapByExpr(expr, tableDef, &columnMap)
 	return columnMap
 }
 
@@ -180,10 +184,13 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 			return nil, nil, err
 		}
 
-		datas[i] = [2]any{
-			zm.GetMin(),
-			zm.GetMax(),
+		min := zm.GetMin()
+		max := zm.GetMax()
+		if min == nil || max == nil {
+			// that's fine, not a bug. if nil just read the block
+			return nil, nil, moerr.NewInternalError("zonemap is nil")
 		}
+		datas[i] = [2]any{min, max}
 	}
 
 	return datas, dataTypes, nil
@@ -281,58 +288,46 @@ func getConstantExprHashValue(constExpr *plan.Expr) (bool, uint64) {
 	return true, uint64(list[0])
 }
 
-func getNonIntPkExprValue(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
+func getPkExpr(expr *plan.Expr, pkIdx int32) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := getNonIntPkExprValue(exprImpl.F.Args[0], pkIdx)
+			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkIdx)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return getNonIntPkExprValue(exprImpl.F.Args[1], pkIdx)
+			return getPkExpr(exprImpl.F.Args[1], pkIdx)
 
 		case "=":
-			var pkVal *plan.Expr
-			leftIsConstant := false
-			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
+			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
 			case *plan.Expr_C:
-				pkVal = exprImpl.F.Args[0]
-				leftIsConstant = true
-			case *plan.Expr_Col:
-				if subExpr.Col.ColPos != pkIdx {
-					return false, nil
+				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+					if rightExpr.Col.ColPos == pkIdx {
+						return true, exprImpl.F.Args[0]
+					}
 				}
-			default:
-				return false, nil
+			case *plan.Expr_Col:
+				if leftExpr.Col.ColPos == pkIdx {
+					if _, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
+						return true, exprImpl.F.Args[1]
+					}
+				}
 			}
 
-			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				if leftIsConstant {
-					return false, nil
-				}
-				return true, exprImpl.F.Args[1]
-			case *plan.Expr_Col:
-				if !leftIsConstant {
-					return false, nil
-				}
-				if subExpr.Col.ColPos != pkIdx {
-					return false, nil
-				}
-				return true, pkVal
-			default:
-				return false, nil
-			}
+			return false, nil
+
+		default:
+			return false, nil
 		}
 	}
 
 	return false, nil
 }
 
-func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
-	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+func getPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, any) {
+	canCompute, valExpr := getPkExpr(expr, pkIdx)
 	if !canCompute {
 		return canCompute, nil
 	}
@@ -384,7 +379,7 @@ func getNonIntPkValueByExpr(expr *plan.Expr, pkIdx int32, oid types.T) (bool, an
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
 func computeRangeByNonIntPk(expr *plan.Expr, pkIdx int32) (bool, uint64) {
-	canCompute, valExpr := getNonIntPkExprValue(expr, pkIdx)
+	canCompute, valExpr := getPkExpr(expr, pkIdx)
 	if !canCompute {
 		return canCompute, 0
 	}
@@ -673,4 +668,124 @@ func checkIfDataInBlock(data any, meta BlockMeta, colIdx int, typ types.Type) (b
 		return false, err
 	}
 	return zm.Contains(data), nil
+}
+
+func findRowByPkValue(vec *vector.Vector, v any) int {
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		rows := vector.MustTCols[int8](vec)
+		val := v.(int8)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int16:
+		rows := vector.MustTCols[int16](vec)
+		val := v.(int16)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int32:
+		rows := vector.MustTCols[int32](vec)
+		val := v.(int32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_int64:
+		rows := vector.MustTCols[int64](vec)
+		val := v.(int64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint8:
+		rows := vector.MustTCols[uint8](vec)
+		val := v.(uint8)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint16:
+		rows := vector.MustTCols[uint16](vec)
+		val := v.(uint16)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint32:
+		rows := vector.MustTCols[uint32](vec)
+		val := v.(uint32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uint64:
+		rows := vector.MustTCols[uint64](vec)
+		val := v.(uint64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_float32:
+		rows := vector.MustTCols[float32](vec)
+		val := v.(float32)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_float64:
+		rows := vector.MustTCols[float64](vec)
+		val := v.(float64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_date:
+		rows := vector.MustTCols[types.Date](vec)
+		val := v.(types.Date)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_time:
+		rows := vector.MustTCols[types.Time](vec)
+		val := v.(types.Time)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_datetime:
+		rows := vector.MustTCols[types.Datetime](vec)
+		val := v.(types.Datetime)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_timestamp:
+		rows := vector.MustTCols[types.Timestamp](vec)
+		val := v.(types.Timestamp)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= val
+		})
+	case types.T_uuid:
+		rows := vector.MustTCols[types.Uuid](vec)
+		val := v.(types.Uuid)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_decimal64:
+		rows := vector.MustTCols[types.Decimal64](vec)
+		val := v.(types.Decimal64)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_decimal128:
+		rows := vector.MustTCols[types.Decimal128](vec)
+		val := v.(types.Decimal128)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx].Ge(val)
+		})
+	case types.T_char, types.T_text, types.T_varchar, types.T_json, types.T_blob:
+		// rows := vector.MustStrCols(vec)
+		// val := string(v.([]byte))
+		// return sort.SearchStrings(rows, val)
+		val := v.([]byte)
+		area := vec.GetArea()
+		varlenas := vector.MustTCols[types.Varlena](vec)
+		return sort.Search(vec.Length(), func(idx int) bool {
+			colVal := varlenas[idx].GetByteSlice(area)
+			return bytes.Compare(colVal, val) >= 0
+		})
+	}
+
+	return -1
 }

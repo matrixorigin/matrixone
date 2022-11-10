@@ -16,6 +16,9 @@ package memoryengine
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -56,6 +59,11 @@ func (b *BindedEngine) Delete(ctx context.Context, databaseName string, _ client
 
 func (b *BindedEngine) Hints() engine.Hints {
 	return b.engine.Hints()
+}
+
+func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]engine.Reader, error) {
+	return nil, nil
 }
 
 func (b *BindedEngine) New(ctx context.Context, _ client.TxnOperator) error {

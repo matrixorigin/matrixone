@@ -84,7 +84,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.Equal(t, 2, cnt)
 
 	_, err = txn1.CreateDatabase(name, "")
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedDup))
 
 	txn2, _ := txnMgr.StartTxn(nil)
 
@@ -170,7 +170,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = db1.CreateRelation(schema)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedDup))
 
 	txn2, _ := txnMgr.StartTxn(nil)
 	_, err = txn2.GetDatabase(schema.Name)

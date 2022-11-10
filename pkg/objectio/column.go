@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -50,6 +49,7 @@ func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 
 func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservice.IOVector, error) {
 	var err error
+	var object []byte
 	data := &fileservice.IOVector{
 		FilePath: cb.object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -58,20 +58,16 @@ func (cb *ColumnBlock) GetData(ctx context.Context, m *mpool.MPool) (*fileservic
 		Offset: int64(cb.meta.location.Offset()),
 		Size:   int64(cb.meta.location.Length()),
 	}
-	err = cb.allocData(data.Entries, m)
-	if err != nil {
-		return nil, err
-	}
+	data.Entries[0].ToObject = newDecompressToObject(object, int64(cb.meta.location.OriginSize()), m)
 	err = cb.object.fs.Read(ctx, data)
 	if err != nil {
-		cb.freeData(data.Entries, m)
+		cb.freeData(object, m)
 		return nil, err
 	}
 	return data, nil
 }
 
 func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *mpool.MPool) (IndexData, error) {
-	var err error
 	if dataType == ZoneMapType {
 		return &cb.meta.zoneMap, nil
 	} else if dataType == BloomFilterType {
@@ -83,16 +79,15 @@ func (cb *ColumnBlock) GetIndex(ctx context.Context, dataType IndexDataType, m *
 			Offset: int64(cb.meta.bloomFilter.Offset()),
 			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
-		err = cb.allocData(data.Entries, m)
-		if err != nil {
-			return nil, err
-		}
+		var object []byte
+		var err error
+		data.Entries[0].ToObject = newDecompressToObject(object, int64(cb.meta.bloomFilter.OriginSize()), m)
 		err = cb.object.fs.Read(ctx, data)
 		if err != nil {
-			cb.freeData(data.Entries, m)
+			cb.freeData(object, m)
 			return nil, err
 		}
-		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Data), nil
+		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Object.([]byte)), nil
 	}
 	return nil, nil
 }
@@ -195,18 +190,8 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	return err
 }
 
-func (cb *ColumnBlock) freeData(entry []fileservice.IOEntry, m *mpool.MPool) {
+func (cb *ColumnBlock) freeData(buf []byte, m *mpool.MPool) {
 	if m != nil {
-		m.Free(entry[0].Data)
+		m.Free(buf)
 	}
-}
-
-func (cb *ColumnBlock) allocData(entry []fileservice.IOEntry, m *mpool.MPool) (err error) {
-	if m != nil {
-		entry[0].Data, err = m.Alloc(int(entry[0].Size))
-		if err != nil {
-			return
-		}
-	}
-	return nil
 }

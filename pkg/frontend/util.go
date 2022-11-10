@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 	"runtime"
 	"strconv"
@@ -432,6 +433,18 @@ func getValueFromVector(vec *vector.Vector) (interface{}, error) {
 	case types.T_uuid:
 		val := vector.GetValueAt[types.Uuid](vec, 0)
 		return val.ToString(), nil
+	case types.T_date:
+		val := vector.GetValueAt[types.Date](vec, 0)
+		return val.String(), nil
+	case types.T_time:
+		val := vector.GetValueAt[types.Time](vec, 0)
+		return val.String(), nil
+	case types.T_datetime:
+		val := vector.GetValueAt[types.Datetime](vec, 0)
+		return val.String(), nil
+	case types.T_timestamp:
+		val := vector.GetValueAt[types.Timestamp](vec, 0)
+		return val.String(), nil
 	default:
 		return nil, moerr.NewInvalidArg("variable type", vec.Typ.Oid.String())
 	}
@@ -471,10 +484,40 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
-		logutil.Info("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
+		logInfo(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()))
 	} else {
-		logutil.Error("query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
+		logError(ses.GetConciseProfile(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err))
 	}
+}
+
+func logInfo(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Info(msg, fields...)
+}
+
+//func logDebug(info string, msg string, fields ...zap.Field) {
+//	fields = append(fields, zap.String("session_info", info))
+//	logutil.Debug(msg, fields...)
+//}
+
+func logError(info string, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Error(msg, fields...)
+}
+
+func logInfof(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Infof(msg+" %s", fields...)
+}
+
+func logDebugf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Debugf(msg+" %s", fields...)
+}
+
+func logErrorf(info string, msg string, fields ...interface{}) {
+	fields = append(fields, info)
+	logutil.Errorf(msg+" %s", fields...)
 }
 
 func fileExists(path string) (bool, error) {

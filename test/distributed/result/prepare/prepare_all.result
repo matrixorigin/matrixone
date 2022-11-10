@@ -27,7 +27,7 @@ PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
 pk    ui    si
 EXECUTE s2 USING @ui_max;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64,
 EXECUTE s2 USING @si_min;
 pk    ui    si
 0    0    -9223372036854775808
@@ -48,7 +48,7 @@ set @double_num1=1.223344556677889900;
 set @double_num2=1.223344556677889900;
 INSERT INTO test_table VALUES(0, @float1_num, @double_num1), (1, @float2_num, @double_num2);
 INSERT INTO test_table VALUES(0, 1.2345678, 1.223344556677889900), (1, 1.876599999432, 1.223344556677889900);
-tae data: duplicate
+Duplicate entry '0' for key 'pk'
 select * from test_table;
 pk    fl    dou
 0    1.23457    1.22334455667789
@@ -140,9 +140,9 @@ time3 TIMESTAMP
 );
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
 insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
-Data truncation: Datetime function: datetime field overflow
+truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
-Data truncation: Datetime function: datetime field overflow
+truncated type DATETIME value 9999-12-31 23:59:59.999999 for column time2, 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
 Data truncation: Incorrect datetime value: '1970-01-01 00:00:01.000000' for column 'time3' at row 1
 insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
@@ -207,6 +207,7 @@ execute s3 using @max_timestamp;
 time1    time2    time3
 execute s3 using @min_timestamp;
 time1    time2    time3
+1000-01-01    0001-01-01 00:00:00    2038-01-19 03:14:08
 DEALLOCATE PREPARE s3;
 set @time1='2022-10-24';
 set @time2='2022-10-25 10:10:10.000000';
@@ -629,7 +630,7 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64, 
+Data truncation: data out of range: data type int64,
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;

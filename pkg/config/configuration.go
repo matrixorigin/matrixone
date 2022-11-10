@@ -50,6 +50,9 @@ var (
 	//listening ip
 	defaultHost = "0.0.0.0"
 
+	//listening unix domain socket
+	defaultUnixAddr = "/var/lib/mysql/mysql.sock"
+
 	//host mmu limitation. 1 << 40 = 1099511627776
 	defaultHostMmuLimitation = 1099511627776
 
@@ -118,6 +121,9 @@ var (
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
+	// defaultMaxFileSize default: 128 MB
+	defaultMaxFileSize = 128
+
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
 
@@ -147,6 +153,9 @@ type FrontendParameters struct {
 
 	//listening ip
 	Host string `toml:"host"`
+
+	//listening unix domain socket
+	UAddr string `toml:"UAddr"`
 
 	//host mmu limitation. default: 1 << 40 = 1099511627776
 	HostMmuLimitation int64 `toml:"hostMmuLimitation"`
@@ -246,6 +255,9 @@ type FrontendParameters struct {
 
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
+
+	// MaxMessageSize max size for read messages from dn. Default is 10M
+	MaxMessageSize uint64 `toml:"max-message-size"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -271,6 +283,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.Host == "" {
 		fp.Host = defaultHost
+	}
+
+	if fp.UAddr == "" {
+		fp.UAddr = defaultUnixAddr
 	}
 
 	if fp.HostMmuLimitation == 0 {
@@ -346,6 +362,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 }
 
+func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
+	fp.MaxMessageSize = size
+}
+
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
 	fp.LogLevel = log.Level
 	fp.LogFormat = log.Format
@@ -402,6 +422,9 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
+	// MergeMaxFileSize default: 128 (MB)
+	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
+
 	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
 	PathBuilder string `toml:"PathBuilder"`
 }
@@ -439,6 +462,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.PathBuilder == "" {
 		op.PathBuilder = defaultPathBuilder
+	}
+
+	if op.MergeMaxFileSize <= 0 {
+		op.MergeMaxFileSize = defaultMaxFileSize
 	}
 }
 

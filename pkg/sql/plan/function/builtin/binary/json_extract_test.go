@@ -148,6 +148,10 @@ func TestJsonExtractByString(t *testing.T) {
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
+				if kase.want == "null" {
+					require.Equal(t, []byte{}, got[0])
+					break
+				}
 				bjson, err := types.ParseSliceToByteJson(got[0])
 				require.Nil(t, err)
 				require.JSONEq(t, kase.want.(string), bjson.String())
@@ -171,6 +175,10 @@ func TestJsonExtractByJson(t *testing.T) {
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
+				if kase.want == "null" {
+					require.Equal(t, []byte{}, bytes[0])
+					break
+				}
 				bjson, err := types.ParseSliceToByteJson(bytes[0])
 				require.Nil(t, err)
 				require.JSONEq(t, kase.want.(string), bjson.String())

@@ -29,7 +29,7 @@ func TranslateError(err error) error {
 		return err
 	}
 	if err == index.ErrDuplicate {
-		return moerr.NewDuplicate()
+		return moerr.GetOkExpectedDup()
 	}
 	if err == index.ErrNotFound {
 		return moerr.NewNotFound()

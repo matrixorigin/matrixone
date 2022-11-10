@@ -247,33 +247,33 @@ func TestIndex(t *testing.T) {
 	defer bat.Close()
 
 	idx := NewSimpleTableIndex()
-	err = idx.BatchDedup(bat.Vecs[0])
+	err = idx.BatchDedup(bat.Attrs[0], bat.Vecs[0])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[0], 0, bat.Vecs[0].Length(), 0, false)
+	err = idx.BatchInsert(bat.Attrs[0], bat.Vecs[0], 0, bat.Vecs[0].Length(), 0, false)
 	assert.NotNil(t, err)
 
-	err = idx.BatchDedup(bat.Vecs[1])
+	err = idx.BatchDedup(bat.Attrs[1], bat.Vecs[1])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[1], 0, bat.Vecs[1].Length(), 0, false)
+	err = idx.BatchInsert(bat.Attrs[1], bat.Vecs[1], 0, bat.Vecs[1].Length(), 0, false)
 	assert.Nil(t, err)
 
 	window := bat.Vecs[1].Window(20, 2)
 	assert.Equal(t, 2, window.Length())
-	err = idx.BatchDedup(window)
+	err = idx.BatchDedup(bat.Attrs[1], window)
 	assert.NotNil(t, err)
 
 	schema = catalog.MockSchemaAll(14, 12)
 	bat = catalog.MockBatch(schema, 500)
 	defer bat.Close()
 	idx = NewSimpleTableIndex()
-	err = idx.BatchDedup(bat.Vecs[12])
+	err = idx.BatchDedup(bat.Attrs[12], bat.Vecs[12])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[12], 0, bat.Vecs[12].Length(), 0, false)
+	err = idx.BatchInsert(bat.Attrs[12], bat.Vecs[12], 0, bat.Vecs[12].Length(), 0, false)
 	assert.Nil(t, err)
 
 	window = bat.Vecs[12].Window(20, 2)
 	assert.Equal(t, 2, window.Length())
-	err = idx.BatchDedup(window)
+	err = idx.BatchDedup(bat.Attrs[12], window)
 	assert.Error(t, err)
 }
 
@@ -739,7 +739,7 @@ func TestDedup1(t *testing.T) {
 		err := rel.Append(bats[0])
 		assert.NoError(t, err)
 		err = rel.Append(bats[0])
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.Nil(t, txn.Rollback())
 	}
 
@@ -756,7 +756,7 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.Nil(t, txn.Rollback())
 	}
 	{

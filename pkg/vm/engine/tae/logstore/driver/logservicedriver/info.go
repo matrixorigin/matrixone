@@ -69,6 +69,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 		info.truncating.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
+	info.appended.TryMerge(*common.NewClosedIntervalsBySlice(r.appended))
 }
 
 func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {

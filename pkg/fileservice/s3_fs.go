@@ -203,6 +203,9 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -260,6 +263,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -335,6 +341,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVector()
@@ -483,6 +492,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if len(filePaths) == 0 {
 		return nil
 	}

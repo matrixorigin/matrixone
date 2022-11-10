@@ -16,12 +16,14 @@ package logutil
 
 import (
 	"fmt"
+
 	"github.com/aws/smithy-go/logging"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"go.uber.org/zap"
 )
 
 func GetS3Logger() logging.Logger {
-	logger := GetSkip1Logger().Named("S3")
+	logger := GetSkip1Logger().Named(defines.S3FileServiceName)
 	return &S3Logger{
 		Logger: logger,
 	}

@@ -1,7 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
 SECONDS=0
 
+# mv log to mount path
 function packLog() {
     mv /matrixone-test/mo-service.log /matrixone-test/tester-log
     mv /matrixone-test/mo-tester/report /matrixone-test/tester-log
@@ -15,6 +18,9 @@ function prepare() {
   mkdir /root/scratch
   echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
   echo `locale`
+
+  echo ">>>>>>>>>>>>>>>>>>>>>>>> show launch"
+  echo "$LAUNCH"
 
   echo ">>>>>>>>>>>>>>>>>>>>>>> show go env"
   echo `go env`
@@ -34,13 +40,22 @@ function run_bvt() {
   make build
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start mo service"
-   ./optools/run_bvt.sh ./ ${LAUNCH}
+   ./optools/run_bvt.sh ./ "${LAUNCH}"
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
-  cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+  if [[ "$LAUNCH" == "launch-tae-logservice" ]]; then
+    echo "> test case: test/cases"
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/cases 2>&1
+  else
+    # use test/distributed/cases as default test cases
+    echo "> test case: test/distributed/cases"
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases 2>&1
+  fi
 }
 
 function bvt_ut() {
+  trap "packLog" EXIT
+
   prepare
 
   if [[ "$ENABLE_UT" == "true" ]]; then
@@ -54,4 +69,3 @@ function bvt_ut() {
 }
 
 bvt_ut
-trap "packLog" EXIT

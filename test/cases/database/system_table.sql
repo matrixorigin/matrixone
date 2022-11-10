@@ -1,5 +1,5 @@
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
-SELECT * FROM `information_schema`.`columns` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`columns` LIMIT 2;
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;

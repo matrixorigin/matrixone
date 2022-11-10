@@ -17,6 +17,7 @@ package txn
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -29,6 +30,7 @@ var (
 )
 
 func TestBasicSingleShard(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -58,7 +60,8 @@ func TestBasicSingleShard(t *testing.T) {
 	}
 }
 
-func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
+func TestBasicSingleShardCannotReadUncommittedValue(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -87,11 +90,14 @@ func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
 
 			checkWrite(t, t1, key, value, nil, false)
 			checkRead(t, t2, key, "", nil, true)
+
+			require.NoError(t, t1.Commit())
 		})
 	}
 }
 
 func TestWriteSkewIsAllowed(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// 1. start t1
 	// 2. start t2
@@ -144,6 +150,7 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 }
 
 func TestSingleShardWithCreateTable(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -170,6 +177,7 @@ func TestSingleShardWithCreateTable(t *testing.T) {
 	sqlTxn = txn.(SQLBasedTxn)
 	_, err = sqlTxn.ExecSQL("use test_db")
 	require.NoError(t, err)
+	require.NoError(t, sqlTxn.Commit())
 }
 
 func checkRead(t *testing.T, txn Txn, key string, expectValue string, expectError error, commit bool) {

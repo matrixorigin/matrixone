@@ -36,7 +36,11 @@ const (
 	OkStopCurrRecur uint16 = 1
 	OkExpectedEOF   uint16 = 2 // Expected End Of File
 	OkExpectedEOB   uint16 = 3 // Expected End of Batch
-	OkMax           uint16 = 99
+	OkExpectedDup   uint16 = 4 // Expected Duplicate
+
+	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
+
+	OkMax uint16 = 99
 
 	// 100 - 200 is Info
 	ErrInfo     uint16 = 100
@@ -70,6 +74,7 @@ const (
 	ErrConstraintViolation uint16 = 20304
 	ErrDuplicate           uint16 = 20305
 	ErrRoleGrantedToSelf   uint16 = 20306
+	ErrDuplicateEntry      uint16 = 20307
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -206,6 +211,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -440,6 +446,8 @@ func (e *Error) Succeeded() bool {
 var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000"}
 var errOkExptededEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExptededEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
+var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
+var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -460,6 +468,14 @@ func GetOkExpectedEOF() *Error {
 
 func GetOkExpectedEOB() *Error {
 	return &errOkExptededEOB
+}
+
+func GetOkExpectedDup() *Error {
+	return &errOkExpectedDup
+}
+
+func GetOkExpectedPossibleDup() *Error {
+	return &errOkExpectedPossibleDup
 }
 
 func NewInfo(msg string) *Error {
@@ -815,6 +831,10 @@ func NewNotFound() *Error {
 
 func NewDuplicate() *Error {
 	return newWithDepth(Context(), ErrDuplicate)
+}
+
+func NewDuplicateEntry(entry string, key string) *Error {
+	return newWithDepth(Context(), ErrDuplicateEntry, entry, key)
 }
 
 func NewRoleGrantedToSelf(from, to string) *Error {
