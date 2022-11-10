@@ -4103,7 +4103,7 @@ func TestDelete4(t *testing.T) {
 		txn.Commit()
 	}
 
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 20; i++ {
 		getValueFn()
 		scanFn()
 
