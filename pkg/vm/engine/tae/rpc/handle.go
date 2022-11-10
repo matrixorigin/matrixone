@@ -188,6 +188,7 @@ func (h *Handle) HandlePrepare(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
+	var txn moengine.Txn
 	if ok {
 		//handle pre-commit write for 2PC
 		for _, e := range txnCtx.req {
@@ -199,9 +200,6 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.CreateDatabaseResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.CreateRelationReq:
 				err = h.HandleCreateRelation(
 					ctx,
@@ -209,9 +207,6 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.CreateRelationResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.DropDatabaseReq:
 				err = h.HandleDropDatabase(
 					ctx,
@@ -219,9 +214,6 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropDatabaseResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.DropOrTruncateRelationReq:
 				err = h.HandleDropOrTruncateRelation(
 					ctx,
@@ -229,9 +221,6 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-				if err != nil {
-					return
-				}
 			case db.WriteReq:
 				err = h.HandleWrite(
 					ctx,
@@ -239,15 +228,17 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.WriteResp{},
 				)
-				if err != nil {
-					return
-				}
 			default:
 				panic(moerr.NewNYI("Pls implement me"))
 			}
+			//need to rollback the txn
+			if err != nil {
+				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn.Rollback()
+				return
+			}
 		}
 	}
-	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
