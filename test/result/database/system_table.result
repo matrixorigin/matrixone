@@ -1,17 +1,18 @@
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 character_set_name    default_collate_name    description    maxlen
-SELECT * FROM `information_schema`.`columns` LIMIT 2;
+SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 table_catalog    table_schema    table_name    column_name    ordinal_position    column_default    is_nullable    data_type    character_maximum_length    character_octet_length    numeric_precision    numeric_scale    datetime_precision    character_set_name    collation_name    column_type    column_key    extra    PRIVILEGES    column_comment    generation_expression    srs_id
-def    mo_catalog    mo_database    dat_id    1    null    NO    BIGINT UNSIGNED    0    0    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    1-dat_id                    0
-def    mo_catalog    mo_database    datname    2    null    YES    VARCHAR    100    100    0    0    0    utf8    utf8_bin    VARCHAR(100)    1-datname                    0
+def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED    0    0    0    0    0    utf8    utf8_bin    BIGINT UNSIGNED(0)    PRI        select,insert,update,references            0
+def    mo_catalog    mo_tables    relname    2    null    YES    VARCHAR    100    100    0    0    0    utf8    utf8_bin    VARCHAR(100)            select,insert,update,references            0
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
 SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
 id    user    host    db    command    time    state    info
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
-SELECT * FROM `information_schema`.`schemata` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+def    information_schema    utf8mb4    utf8mb4_0900_ai_ci    null    NO
 SELECT * FROM `information_schema`.`tables` LIMIT 0,1000;
 table_catalog    table_schema    table_name    table_type    engine    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    AUTO_INCREMENT    create_time    update_time    check_time    table_collation    checksum    create_options    table_comment
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
@@ -37,116 +38,116 @@ procs_priv
 columns_priv
 tables_priv
 show columns from `user`;
-Field    Type    Null    Key    Default    Comment
-host    CHAR    NO        ''
-user    CHAR    NO        ''
-select_priv    VARCHAR    NO        'N'
-insert_priv    VARCHAR    NO        'N'
-update_priv    VARCHAR    NO        'N'
-delete_priv    VARCHAR    NO        'N'
-create_priv    VARCHAR    NO        'N'
-drop_priv    VARCHAR    NO        'N'
-reload_priv    VARCHAR    NO        'N'
-shutdown_priv    VARCHAR    NO        'N'
-process_priv    VARCHAR    NO        'N'
-file_priv    VARCHAR    NO        'N'
-grant_priv    VARCHAR    NO        'N'
-references_priv    VARCHAR    NO        'N'
-index_priv    VARCHAR    NO        'N'
-alter_priv    VARCHAR    NO        'N'
-show_db_priv    VARCHAR    NO        'N'
-super_priv    VARCHAR    NO        'N'
-create_tmp_table_priv    VARCHAR    NO        'N'
-lock_tables_priv    VARCHAR    NO        'N'
-execute_priv    VARCHAR    NO        'N'
-repl_slave_priv    VARCHAR    NO        'N'
-repl_client_priv    VARCHAR    NO        'N'
-create_view_priv    VARCHAR    NO        'N'
-show_view_priv    VARCHAR    NO        'N'
-create_routine_priv    VARCHAR    NO        'N'
-alter_routine_priv    VARCHAR    NO        'N'
-create_user_priv    VARCHAR    NO        'N'
-event_priv    VARCHAR    NO        'N'
-trigger_priv    VARCHAR    NO        'N'
-create_tablespace_priv    VARCHAR    NO        'N'
-ssl_type    VARCHAR    NO        ''
-ssl_cipher    BLOB    NO        NULL
-x509_issuer    BLOB    NO        NULL
-x509_subject    BLOB    NO        NULL
-max_questions    INT UNSIGNED    NO        '0'
-max_updates    INT UNSIGNED    NO        '0'
-max_connections    INT UNSIGNED    NO        '0'
-max_user_connections    INT UNSIGNED    NO        '0'
-plugin    CHAR    NO        'caching_sha2_password'
-authentication_string    TEXT    YES        NULL
-password_expired    VARCHAR    NO        'N'
-password_last_changed    TIMESTAMP    YES        null
-password_lifetime    SMALLINT UNSIGNED    YES        null
-account_locked    VARCHAR    NO        'N'
-create_role_priv    VARCHAR    NO        'N'
-drop_role_priv    VARCHAR    NO        'N'
-password_reuse_history    SMALLINT UNSIGNED    YES        null
-password_reuse_time    SMALLINT UNSIGNED    YES        null
-password_require_current    VARCHAR    YES        null
-user_attributes    JSON    YES        null
-__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR    NO        ''        
+user    CHAR    NO        ''        
+select_priv    VARCHAR    NO        'N'        
+insert_priv    VARCHAR    NO        'N'        
+update_priv    VARCHAR    NO        'N'        
+delete_priv    VARCHAR    NO        'N'        
+create_priv    VARCHAR    NO        'N'        
+drop_priv    VARCHAR    NO        'N'        
+reload_priv    VARCHAR    NO        'N'        
+shutdown_priv    VARCHAR    NO        'N'        
+process_priv    VARCHAR    NO        'N'        
+file_priv    VARCHAR    NO        'N'        
+grant_priv    VARCHAR    NO        'N'        
+references_priv    VARCHAR    NO        'N'        
+index_priv    VARCHAR    NO        'N'        
+alter_priv    VARCHAR    NO        'N'        
+show_db_priv    VARCHAR    NO        'N'        
+super_priv    VARCHAR    NO        'N'        
+create_tmp_table_priv    VARCHAR    NO        'N'        
+lock_tables_priv    VARCHAR    NO        'N'        
+execute_priv    VARCHAR    NO        'N'        
+repl_slave_priv    VARCHAR    NO        'N'        
+repl_client_priv    VARCHAR    NO        'N'        
+create_view_priv    VARCHAR    NO        'N'        
+show_view_priv    VARCHAR    NO        'N'        
+create_routine_priv    VARCHAR    NO        'N'        
+alter_routine_priv    VARCHAR    NO        'N'        
+create_user_priv    VARCHAR    NO        'N'        
+event_priv    VARCHAR    NO        'N'        
+trigger_priv    VARCHAR    NO        'N'        
+create_tablespace_priv    VARCHAR    NO        'N'        
+ssl_type    VARCHAR    NO        ''        
+ssl_cipher    BLOB    NO        NULL        
+x509_issuer    BLOB    NO        NULL        
+x509_subject    BLOB    NO        NULL        
+max_questions    INT UNSIGNED    NO        '0'        
+max_updates    INT UNSIGNED    NO        '0'        
+max_connections    INT UNSIGNED    NO        '0'        
+max_user_connections    INT UNSIGNED    NO        '0'        
+plugin    CHAR    NO        'caching_sha2_password'        
+authentication_string    TEXT    YES        NULL        
+password_expired    VARCHAR    NO        'N'        
+password_last_changed    TIMESTAMP    YES        null        
+password_lifetime    SMALLINT UNSIGNED    YES        null        
+account_locked    VARCHAR    NO        'N'        
+create_role_priv    VARCHAR    NO        'N'        
+drop_role_priv    VARCHAR    NO        'N'        
+password_reuse_history    SMALLINT UNSIGNED    YES        null        
+password_reuse_time    SMALLINT UNSIGNED    YES        null        
+password_require_current    VARCHAR    YES        null        
+user_attributes    JSON    YES        null        
+__mo_cpkey_004host004user    VARCHAR    NO    PRI    NULL        
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''
-db    CHAR    NO        ''
-user    CHAR    NO        ''
-select_priv    VARCHAR    NO        'N'
-insert_priv    VARCHAR    NO        'N'
-update_priv    VARCHAR    NO        'N'
-delete_priv    VARCHAR    NO        'N'
-create_priv    VARCHAR    NO        'N'
-drop_priv    VARCHAR    NO        'N'
-grant_priv    VARCHAR    NO        'N'
-references_priv    VARCHAR    NO        'N'
-index_priv    VARCHAR    NO        'N'
-alter_priv    VARCHAR    NO        'N'
-create_tmp_table_priv    VARCHAR    NO        'N'
-lock_tables_priv    VARCHAR    NO        'N'
-create_view_priv    VARCHAR    NO        'N'
-show_view_priv    VARCHAR    NO        'N'
-create_routine_priv    VARCHAR    NO        'N'
-alter_routine_priv    VARCHAR    NO        'N'
-execute_priv    VARCHAR    NO        'N'
-event_priv    VARCHAR    NO        'N'
-trigger_priv    VARCHAR    NO        'N'
-__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        ''        
+db    CHAR    NO        ''        
+user    CHAR    NO        ''        
+select_priv    VARCHAR    NO        'N'        
+insert_priv    VARCHAR    NO        'N'        
+update_priv    VARCHAR    NO        'N'        
+delete_priv    VARCHAR    NO        'N'        
+create_priv    VARCHAR    NO        'N'        
+drop_priv    VARCHAR    NO        'N'        
+grant_priv    VARCHAR    NO        'N'        
+references_priv    VARCHAR    NO        'N'        
+index_priv    VARCHAR    NO        'N'        
+alter_priv    VARCHAR    NO        'N'        
+create_tmp_table_priv    VARCHAR    NO        'N'        
+lock_tables_priv    VARCHAR    NO        'N'        
+create_view_priv    VARCHAR    NO        'N'        
+show_view_priv    VARCHAR    NO        'N'        
+create_routine_priv    VARCHAR    NO        'N'        
+alter_routine_priv    VARCHAR    NO        'N'        
+execute_priv    VARCHAR    NO        'N'        
+event_priv    VARCHAR    NO        'N'        
+trigger_priv    VARCHAR    NO        'N'        
+__mo_cpkey_004host002db004user    VARCHAR    NO    PRI    NULL        
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''
-db    CHAR    NO        ''
-user    CHAR    NO        ''
-routine_name    CHAR    NO        ''
-routine_type    VARCHAR    NO        NULL
-grantor    VARCHAR    NO        ''
-proc_priv    VARCHAR    NO        ''
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        ''        
+db    CHAR    NO        ''        
+user    CHAR    NO        ''        
+routine_name    CHAR    NO        ''        
+routine_type    VARCHAR    NO        NULL        
+grantor    VARCHAR    NO        ''        
+proc_priv    VARCHAR    NO        ''        
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
+__mo_cpkey_004host002db004user012routine_name012routine_type    VARCHAR    NO    PRI    NULL        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''
-db    CHAR    NO        ''
-user    CHAR    NO        ''
-table_name    CHAR    NO        ''
-column_name    CHAR    NO        ''
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-column_priv    VARCHAR    NO        ''
-__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        ''        
+db    CHAR    NO        ''        
+user    CHAR    NO        ''        
+table_name    CHAR    NO        ''        
+column_name    CHAR    NO        ''        
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
+column_priv    VARCHAR    NO        ''        
+__mo_cpkey_004host002db004user010table_name011column_name    VARCHAR    NO    PRI    NULL        
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR    NO        ''
-db    CHAR    NO        ''
-user    CHAR    NO        ''
-table_name    CHAR    NO        ''
-grantor    VARCHAR    NO        ''
-timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP
-table_priv    VARCHAR    NO        ''
-column_priv    VARCHAR    NO        ''
-__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL
+host    CHAR    NO        ''        
+db    CHAR    NO        ''        
+user    CHAR    NO        ''        
+table_name    CHAR    NO        ''        
+grantor    VARCHAR    NO        ''        
+timestamp    TIMESTAMP    NO        CURRENT_TIMESTAMP        
+table_priv    VARCHAR    NO        ''        
+column_priv    VARCHAR    NO        ''        
+__mo_cpkey_004host002db004user010table_name    VARCHAR    NO    PRI    NULL        
 use information_schema;
 show tables;
 tables_in_information_schema
@@ -160,6 +161,8 @@ character_sets
 triggers
 tables
 engines
+routines
+parameters
 show columns from `KEY_COLUMN_USAGE`;
 no such table information_schema.KEY_COLUMN_USAGE
 show columns from `COLUMNS`;
@@ -168,14 +171,14 @@ show columns from `PROFILING`;
 no such table information_schema.PROFILING
 show columns from `PROCESSLIST`;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED    NO        '0'
-user    VARCHAR    NO        ''
-host    VARCHAR    NO        ''
-db    VARCHAR    YES        null
-command    VARCHAR    NO        ''
-time    INT    NO        '0'
-state    VARCHAR    YES        null
-info    BLOB    YES        NULL
+id    BIGINT UNSIGNED    NO        '0'        
+user    VARCHAR    NO        ''        
+host    VARCHAR    NO        ''        
+db    VARCHAR    YES        null        
+command    VARCHAR    NO        ''        
+time    INT    NO        '0'        
+state    VARCHAR    YES        null        
+info    BLOB    YES        NULL        
 show columns from `USER_PRIVILEGES`;
 no such table information_schema.USER_PRIVILEGES
 show columns from `SCHEMATA`;
