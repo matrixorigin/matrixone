@@ -120,8 +120,6 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	}
 
 	var f = func(batch any) {
-		_, span := Start(DefaultContext(), "batchCSVHandler")
-		defer span.End()
 		switch b := batch.(type) {
 		case *CSVRequest:
 			handle(b)
@@ -320,9 +318,6 @@ func (b *buffer2Sql) GetBufferType() string {
 }
 
 func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
-	// fixme: CollectCycle
-	_, span := Start(DefaultContext(), "GenBatch")
-	defer span.End()
 	b.mux.Lock()
 	defer b.mux.Unlock()
 
