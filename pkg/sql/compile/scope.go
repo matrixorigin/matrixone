@@ -123,7 +123,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() {
+	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() || s.NodeInfo.Addr == Address {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -402,7 +402,7 @@ func dupScope(s *Scope) *Scope {
 	if err != nil {
 		return nil
 	}
-	rs, err := decodeScope(data, s.Proc, false)
+	rs, err := decodeScope(data, s.Proc, s.IsRemote)
 	if err != nil {
 		return nil
 	}
