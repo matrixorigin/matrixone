@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
@@ -53,7 +54,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		}
 
 		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok || value.IsNil() {
+		if !ok {
+			return false, moerr.NewInternalError("pipeline closed unexpectedly")
+		}
+		if value.IsNil() {
 			ctr.receiverListener[chosen].Chan = reflect.ValueOf(nil)
 			ctr.aliveMergeReceiver--
 			continue
