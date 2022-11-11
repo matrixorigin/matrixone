@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -94,6 +95,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 			overlap := n.HasOverlapLocked(start, end)
 			if overlap {
 				err = n.CheckConflict(ts)
+				logutil.Infof("[TS=%s] Delete W-W Start=%d End=%d BLK-%d", ts.ToString(), start, end, chain.mvcc.meta.ID)
 				if err == nil {
 					err = moerr.NewNotFound()
 				}

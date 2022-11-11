@@ -121,13 +121,12 @@ func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return e.getDB(defaultTestDB)
 }
 
-// unused
-// func (e *testEngine) doAppend(bat *containers.Batch) {
-// 	txn, rel := e.getRelation()
-// 	err := rel.Append(bat)
-// 	assert.NoError(e.t, err)
-// 	assert.NoError(e.t, txn.Commit())
-// }
+func (e *testEngine) DoAppend(bat *containers.Batch) {
+	txn, rel := e.getRelation()
+	err := rel.Append(bat)
+	assert.NoError(e.t, err)
+	assert.NoError(e.t, txn.Commit())
+}
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
 	rel := e.getRelationWithTxn(txn)
@@ -170,9 +169,10 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 		assert.NoError(e.t, err)
 		it.Next()
 	}
-	checkAllColRowsByScan(e.t, rel, 0, true)
+	// checkAllColRowsByScan(e.t, rel, 0, true)
 	err := txn.Commit()
 	if !skipConflict {
+		checkAllColRowsByScan(e.t, rel, 0, true)
 		assert.NoError(e.t, err)
 	}
 	return err
