@@ -149,6 +149,10 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
 		ses.MakeProfile()
+		if executor.(*MysqlCmdExecutor).GetQuit() {
+			logErrorf(ses.GetConciseProfile(), "the connection has been closed.")
+			break
+		}
 		tenant := ses.GetTenantInfo()
 		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
@@ -170,18 +174,17 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
 		}
 
-		if executor.(*MysqlCmdExecutor).GetQuit() {
-			logErrorf(ses.GetConciseProfile(), "the connection has been closed. Rollback the txn.")
-			if ses != nil {
-				err = ses.TxnRollback()
-				if err != nil {
-					logErrorf(ses.GetConciseProfile(), "rollback txn after connection closed failed.error:%v", err)
-				}
-			}
-			cancelRequestFunc()
-			break
-		}
 		cancelRequestFunc()
+	}
+
+	// ensure that the transaction can be cleaned.
+	ses := routine.GetSession()
+	if ses != nil {
+		ses.MakeProfile()
+		err = ses.TxnRollback()
+		if err != nil {
+			logErrorf(ses.GetConciseProfile(), "rollback txn failed. error:%v", err)
+		}
 	}
 }
 
