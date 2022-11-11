@@ -54,7 +54,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 			})
 			cancel()
 			if err != nil {
-				s.logger.Error("send DNShard heartbeat request failed",
+				s.logger.Error("send CNShard heartbeat request failed",
 					zap.Error(err))
 				break
 			}

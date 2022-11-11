@@ -14,7 +14,9 @@
 
 package merge
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type container struct {
 	i int

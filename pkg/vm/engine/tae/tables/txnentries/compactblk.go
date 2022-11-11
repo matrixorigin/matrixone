@@ -16,6 +16,7 @@ package txnentries
 
 import (
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -34,27 +36,38 @@ type compactBlockEntry struct {
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
-	mapping   []uint32
 	deletes   *roaring.Bitmap
 }
 
-func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler, sortIdx []uint32, deletes *roaring.Bitmap) *compactBlockEntry {
-	mapping := make([]uint32, len(sortIdx))
+func NewCompactBlockEntry(
+	txn txnif.AsyncTxn,
+	from, to handle.Block,
+	scheduler tasks.TaskScheduler,
+	sortIdx []uint32,
+	deletes *roaring.Bitmap) *compactBlockEntry {
+
+	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
+	toId := to.Fingerprint()
+	prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
 	for i, idx := range sortIdx {
-		mapping[idx] = uint32(i)
+		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		page.Train(idx, rowid)
 	}
+	_ = scheduler.AddTransferPage(page)
+
 	return &compactBlockEntry{
 		txn:       txn,
 		from:      from,
 		to:        to,
 		scheduler: scheduler,
-		mapping:   mapping,
 		deletes:   deletes,
 	}
 }
 
+func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
+	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
 	return
 }
 func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {

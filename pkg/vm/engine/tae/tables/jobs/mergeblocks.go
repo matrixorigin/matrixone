@@ -105,7 +105,13 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []containers.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []containers.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumn(
+	vecs []containers.Vector,
+	sortedIdx *[]uint32,
+	isPrimary bool,
+	fromLayout,
+	toLayout []uint32,
+	sort bool) (column []containers.Vector, mapping []uint32) {
 	if len(vecs) == 0 {
 		return
 	}
@@ -345,9 +351,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		mapping,
 		fromAddr,
 		toAddr,
-		task.scheduler,
 		task.deletes,
-		skipBlks)
+		skipBlks,
+		task.scheduler)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}
