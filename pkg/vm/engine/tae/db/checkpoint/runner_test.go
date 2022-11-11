@@ -18,14 +18,14 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
 )
 
 func TestCkpCheck(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	r := &runner{}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(b.end)
@@ -59,7 +59,7 @@ func TestCkpCheck(t *testing.T) {
 }
 
 func TestGetCheckpoints(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	r := NewRunner(nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]

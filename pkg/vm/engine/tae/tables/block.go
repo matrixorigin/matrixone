@@ -16,6 +16,7 @@ package tables
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -66,6 +67,7 @@ type dataBlock struct {
 	score        *statBlock
 	fs           *objectio.ObjectFS
 	appendFrozen bool
+	dataFlushed  bool
 }
 
 func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -99,6 +101,7 @@ func newBlock(meta *catalog.BlockEntry, fs *objectio.ObjectFS, bufMgr base.INode
 		}
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
+		block.dataFlushed = true
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
@@ -551,6 +554,45 @@ func (blk *dataBlock) LoadColumnData(
 	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.fs, uint16(colIdx), metaLoc, def)
 }
 
+func (blk *dataBlock) LoadCommitTS() containers.Vector {
+	if !blk.GetMeta().(*catalog.BlockEntry).IsAppendable() {
+		return nil
+	}
+	metaloc := blk.GetMeta().(*catalog.BlockEntry).GetMetaLoc()
+	if metaloc == "" {
+		return nil
+	}
+	reader, _ := blockio.NewReader(context.Background(), blk.fs, metaloc)
+	meta, _ := reader.ReadMeta(nil)
+	bat, _ := reader.LoadBlkColumnsByMetaAndIdx(
+		[]types.Type{types.T_TS.ToType()},
+		[]string{catalog.AttrCommitTs},
+		[]bool{false},
+		meta,
+		len(blk.meta.GetSchema().NameIndex),
+	)
+	return bat.Vecs[0]
+}
+
+func (blk *dataBlock) LoadDeleteCommitTS() containers.Vector {
+	if !blk.GetMeta().(*catalog.BlockEntry).IsAppendable() {
+		return nil
+	}
+	deltaloc := blk.GetMeta().(*catalog.BlockEntry).GetDeltaLoc()
+	if deltaloc == "" {
+		return nil
+	}
+	reader, _ := blockio.NewReader(context.Background(), blk.fs, deltaloc)
+	meta, _ := reader.ReadMeta(nil)
+	bat, _ := reader.LoadBlkColumnsByMetaAndIdx(
+		[]types.Type{types.T_TS.ToType()},
+		[]string{catalog.AttrCommitTs},
+		[]bool{false},
+		meta,
+		1,
+	)
+	return bat.Vecs[0]
+}
 func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
 	deltaloc := blk.meta.GetDeltaLoc()
 	if deltaloc == "" {
@@ -670,7 +712,61 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
-	if blk.meta != nil && blk.meta.GetVisibleMetaLoc(ts) != "" {
+	if blk.meta != nil && blk.dataFlushed {
+		if blk.meta.IsAppendable() {
+			err = blk.pkIndex.Dedup(key)
+			if err == nil {
+				err = moerr.NewNotFound()
+				return
+			}
+			if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+				return
+			}
+			err = nil
+			var sortKey containers.Vector
+			if sortKey, err = blk.LoadColumnData(blk.meta.GetSchema().GetSingleSortKeyIdx(), nil); err != nil {
+				return
+			}
+			rows := make([]uint32, 0)
+			defer sortKey.Close()
+			err = sortKey.Foreach(func(v any, offset int) error {
+				if compute.CompareGeneric(v, key, sortKey.GetType()) == 0 {
+					row := uint32(offset)
+					rows = append(rows, row)
+					return nil
+				}
+				return nil
+			}, nil)
+			if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+				return
+			}
+			if len(rows) == 0 {
+				err = moerr.NewNotFound()
+				return
+			}
+			commitTSVec := blk.LoadCommitTS()
+			exist := false
+			for _, offset := range rows {
+				commitTS := commitTSVec.Get(int(offset)).(types.TS)
+				if commitTS.Greater(ts) {
+					break
+				}
+				var deleted bool
+				deleted, err = blk.mvcc.IsDeletedLocked(offset, ts, blk.mvcc.RWMutex)
+				if err != nil {
+					return
+				}
+				if !deleted {
+					exist = true
+					row = offset
+					break
+				}
+			}
+			if !exist {
+				err = moerr.NewNotFound()
+			}
+			return
+		}
 		err = blk.pkIndex.Dedup(key)
 		if err == nil {
 			err = moerr.NewNotFound()
@@ -795,6 +891,16 @@ func (blk *dataBlock) dedupWithPK(
 			rowmask,
 			ts),
 	)
+	return
+}
+
+func (blk *dataBlock) DumpData(attr string) (view *model.ColumnView, err error) {
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
+		return blk.ResolveColumnFromANode(types.MaxTs(), colIdx, nil, false)
+	}
+	view, err = blk.ResolveColumnFromMeta(metaLoc, types.MaxTs(), colIdx, nil)
 	return
 }
 
