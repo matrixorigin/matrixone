@@ -74,7 +74,7 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
 	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
-	store := newStore(nil, driver, mgr, nil)
+	store := newStore(nil, driver, nil, mgr, nil)
 	store.BindTxn(txn)
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
 }
@@ -363,7 +363,7 @@ func TestNodeCommand(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
@@ -425,7 +425,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
 	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
 	return c, mgr, driver
