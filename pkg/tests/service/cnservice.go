@@ -169,7 +169,7 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 	cfg.Frontend.StorePath = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
-	cfg.HAKeeper.HeatbeatDuration.Duration = opt.heartbeat.cn
+	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.cn
 	cfg.Engine.Type = opt.storage.cnEngine
 	cfg.TaskRunner.Parallelism = 4
 
