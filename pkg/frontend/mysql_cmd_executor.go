@@ -3085,6 +3085,8 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		}
 	}()
 
+	var sql string
+	var procID uint64
 	ses := mce.GetSession()
 	logDebugf(ses.GetCompleteProfile(), "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
@@ -3118,7 +3120,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 				Then, the client quit this connection.
 			*/
 			procIdStr := seps[len(seps)-1]
-			procID, err := strconv.ParseUint(procIdStr, 10, 64)
+			procID, err = strconv.ParseUint(procIdStr, 10, 64)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, nil
@@ -3126,13 +3128,13 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 			err = mce.GetRoutineManager().killStatement(procID)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
-				return resp, err
+				return resp, nil
 			}
 			resp = NewGeneralOkResponse(COM_QUERY)
 			return resp, nil
 		}
 
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -3141,7 +3143,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -3151,7 +3153,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err := mce.doComQuery(requestCtx, query)
+		err = mce.doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -3164,7 +3166,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql := string(req.GetData().([]byte))
+		sql = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 
 		// rewrite to "prepare stmt_name from 'xxx'"
@@ -3173,7 +3175,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -3182,7 +3184,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 	case COM_STMT_EXECUTE:
 		ses.SetCmd(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
-		sql, err := mce.parseStmtExecute(data)
+		sql, err = mce.parseStmtExecute(data)
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
@@ -3198,18 +3200,17 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		// rewrite to "deallocate prepare stmt_name"
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
-		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		logInfo(ses.GetConciseProfile(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err := mce.doComQuery(requestCtx, sql)
+		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}
 		return resp, nil
 
 	default:
-		err := moerr.NewInternalError("unsupported command. 0x%x", req.GetCmd())
-		resp = NewGeneralErrorResponse(req.GetCmd(), err)
+		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError("unsupported command. 0x%x", req.GetCmd()))
 	}
 	return resp, nil
 }
@@ -3255,25 +3256,7 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
-	mce.mu.Lock()
-	defer mce.mu.Unlock()
-	return mce.cancelRequestFunc
-}
-
-func (mce *MysqlCmdExecutor) Close() {
-	cancelRequestFunc := mce.getCancelRequestFunc()
-	if cancelRequestFunc != nil {
-		cancelRequestFunc()
-	}
-	ses := mce.GetSession()
-	if ses != nil {
-		err := ses.TxnRollback()
-		if err != nil {
-			logErrorf(ses.GetConciseProfile(), "rollback txn in mce.Close failed.error:%v", err)
-		}
-	}
-}
+func (mce *MysqlCmdExecutor) Close() {}
 
 /*
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
