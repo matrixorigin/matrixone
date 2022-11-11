@@ -141,7 +141,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: getFunctionObjRef(funcID, "case"),
-						Args: []*Expr{isNullExpr, zeroExpr, retExpr},
+						Args: []*Expr{isNullExpr, zeroExpr, DeepCopyExpr(retExpr)},
 					},
 				},
 				Typ: makePlan2Type(&returnType),
