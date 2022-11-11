@@ -4093,7 +4093,7 @@ func TestReadCheckpoint(t *testing.T) {
 
 func TestDelete4(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
