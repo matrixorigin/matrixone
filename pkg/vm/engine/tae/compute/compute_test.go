@@ -17,17 +17,17 @@ package compute
 import (
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestShuffleByDeletes(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	origMask := roaring.New()
 	origVals := make(map[uint32]any)
 	origMask.Add(1)
@@ -49,7 +49,7 @@ func TestShuffleByDeletes(t *testing.T) {
 }
 
 func TestCheckRowExists(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	typ := types.T_int32.ToType()
 	vec := containers.MockVector2(typ, 100, 0)
 	_, exist := GetOffsetByVal(vec, int32(55), nil)
@@ -73,7 +73,7 @@ func TestCheckRowExists(t *testing.T) {
 }
 
 func TestAppendNull(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	colTypes := types.MockColTypes(17)
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)
@@ -89,7 +89,7 @@ func TestAppendNull(t *testing.T) {
 }
 
 func TestBinarySearch(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	slice := []int{1, 2, 6, 9, 12}
 	pos := BinarySearch(slice, 3)
 	assert.Equal(t, -1, pos)
