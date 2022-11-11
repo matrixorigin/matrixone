@@ -68,6 +68,7 @@ type Block interface {
 	DumpData(attr string) (view *model.ColumnView, err error)
 	LoadCommitTS() containers.Vector
 	LoadDeleteCommitTS() containers.Vector
+	DeletesInfo() string
 
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
