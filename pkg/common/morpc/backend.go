@@ -137,6 +137,7 @@ type remoteBackend struct {
 		sync.RWMutex
 		state          int32
 		readLoopActive bool
+		locked         bool
 	}
 
 	mu struct {
@@ -256,7 +257,7 @@ func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, er
 	return f, nil
 }
 
-func (rb *remoteBackend) NewStream() (Stream, error) {
+func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	rb.active()
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
@@ -269,7 +270,7 @@ func (rb *remoteBackend) NewStream() (Stream, error) {
 	defer rb.mu.Unlock()
 
 	st := rb.acquireStream()
-	st.init(rb.nextID())
+	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
 	return st, nil
 }
@@ -318,6 +319,30 @@ func (rb *remoteBackend) Busy() bool {
 
 func (rb *remoteBackend) LastActiveTime() time.Time {
 	return rb.atomic.lastActiveTime.Load().(time.Time)
+}
+
+func (rb *remoteBackend) Lock() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if rb.stateMu.locked {
+		panic("backend is already locked")
+	}
+	rb.stateMu.locked = true
+}
+
+func (rb *remoteBackend) Unlock() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if !rb.stateMu.locked {
+		panic("backend is not locked")
+	}
+	rb.stateMu.locked = false
+}
+
+func (rb *remoteBackend) Locked() bool {
+	rb.stateMu.RLock()
+	defer rb.stateMu.RUnlock()
+	return rb.stateMu.locked
 }
 
 func (rb *remoteBackend) active() {
@@ -558,6 +583,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 
 	delete(rb.mu.activeStreams, s.id)
 	delete(rb.mu.futures, s.id)
+	if s.unlockAfterClose {
+		rb.Unlock()
+	}
 	rb.pool.streams.Put(s)
 }
 
@@ -726,12 +754,13 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 }
 
 type stream struct {
-	c              chan Message
-	sendFunc       func(m backendSendMessage) error
-	activeFunc     func()
-	unregisterFunc func(*stream)
-	ctx            context.Context
-	cancel         context.CancelFunc
+	c                chan Message
+	sendFunc         func(m backendSendMessage) error
+	activeFunc       func()
+	unregisterFunc   func(*stream)
+	unlockAfterClose bool
+	ctx              context.Context
+	cancel           context.CancelFunc
 
 	// reset fields
 	id uint64
@@ -758,8 +787,9 @@ func newStream(c chan Message,
 	return s
 }
 
-func (s *stream) init(id uint64) {
+func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
+	s.unlockAfterClose = unlockAfterClose
 	s.mu.closed = false
 	for {
 		select {

@@ -137,7 +137,7 @@ func TestStreamServer(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr)
+		st, err := c.NewStream(testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close())
