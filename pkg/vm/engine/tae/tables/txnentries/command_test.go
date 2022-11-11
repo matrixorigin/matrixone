@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -26,7 +25,7 @@ import (
 )
 
 func TestCompactBlockCmd(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	from := &common.ID{TableID: 1, SegmentID: 2, BlockID: 3}
 	to := &common.ID{TableID: 1, SegmentID: 3, BlockID: 1}
@@ -56,7 +55,7 @@ func checkIDIsEqual(t *testing.T, id1, id2 *common.ID) {
 }
 
 func TestMergeBlocksCmd(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	droppedSegs := []*common.ID{{TableID: 1, SegmentID: 2}, {TableID: 1, SegmentID: 2}}
 	createdSegs := []*common.ID{{TableID: 1, SegmentID: 3}}

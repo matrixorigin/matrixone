@@ -188,5 +188,7 @@ drop table if exists t5;
 CREATE TABLE t5 (b datetime);
 INSERT INTO t5 VALUES ('2010-01-01 00:00:00'), ('2010-01-01 00:00:00');
 SELECT * FROM t5 WHERE b <= coalesce(NULL, now());
-Operator '<=' with parameters [DATETIME TIMESTAMP] will be implemented in future version.
+b
+2010-01-01 00:00:00
+2010-01-01 00:00:00
 DROP TABLE t5;

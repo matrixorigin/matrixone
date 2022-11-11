@@ -130,7 +130,7 @@ var (
 	defaultPathBuilder = "AccountDate"
 
 	// defaultSessionTimeout default: 10 minutes
-	defaultSessionTimeout = 10 * time.Minute
+	defaultSessionTimeout = 24 * time.Hour
 )
 
 // FrontendParameters of the frontend
