@@ -98,7 +98,7 @@ func (h *mockHandle) HandlePreCommit(
 	req api.PrecommitWriteCmd,
 	resp *api.SyncLogTailResp) error {
 
-	return h.Handle.HandlePreCommit(ctx, *meta, req, resp)
+	return h.Handle.HandlePreCommitWrite(ctx, *meta, req, resp)
 }
 
 func (h *mockHandle) handleCmds(
@@ -112,7 +112,7 @@ func (h *mockHandle) handleCmds(
 			if !ok {
 				return moerr.NewInfo("cmd is not PreCommitWriteCmd")
 			}
-			if err = h.Handle.HandlePreCommit(ctx, *txn,
+			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
 				cmd, new(api.SyncLogTailResp)); err != nil {
 				return
 			}
@@ -154,6 +154,7 @@ func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
 	mh.Handle = &Handle{
 		eng: moengine.NewEngine(tae),
 	}
+	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
 }
 
