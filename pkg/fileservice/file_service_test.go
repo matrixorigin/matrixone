@@ -158,6 +158,70 @@ func testFileService(
 
 	})
 
+	t.Run("WriterForRead", func(t *testing.T) {
+		fs := newFS(fsName)
+		ctx := context.Background()
+		err := fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset: 0,
+					Size:   4,
+					Data:   []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+		buf := new(bytes.Buffer)
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:        0,
+					Size:          4,
+					WriterForRead: buf,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), buf.Bytes())
+	})
+
+	t.Run("ReadCloserForRead", func(t *testing.T) {
+		fs := newFS(fsName)
+		ctx := context.Background()
+		err := fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset: 0,
+					Size:   4,
+					Data:   []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+		var r io.ReadCloser
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:            0,
+					Size:              4,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		data, err := io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), data)
+		err = r.Close()
+		assert.Nil(t, err)
+	})
+
 	t.Run("random", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()

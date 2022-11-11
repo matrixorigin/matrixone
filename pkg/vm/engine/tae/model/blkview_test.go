@@ -18,12 +18,14 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestEval(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var zeroV types.TS
 	view := NewBlockView(zeroV.Next().Next())
 	colTypes := types.MockColTypes(14)

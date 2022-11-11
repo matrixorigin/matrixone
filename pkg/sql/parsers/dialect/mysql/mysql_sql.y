@@ -6686,6 +6686,11 @@ literal:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
+|   UNDERSCORE_BINARY STRING
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_ScoreBinary)
+    }
+
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
