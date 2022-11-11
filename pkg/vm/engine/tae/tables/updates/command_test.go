@@ -18,16 +18,16 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCompactBlockCmd(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()

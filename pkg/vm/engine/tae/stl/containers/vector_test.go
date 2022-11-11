@@ -20,9 +20,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,7 +35,7 @@ func withAllocator(opts *Options) *Options {
 }
 
 func TestVector1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int64](opts)
 	now := time.Now()
@@ -75,7 +75,7 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vec := NewVector[[]byte]()
 	defer vec.Close()
 	vec.Append([]byte("hello"))
@@ -91,7 +91,7 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -114,7 +114,7 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -136,7 +136,7 @@ func TestVector4(t *testing.T) {
 }
 
 func TestVector5(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	vec.Append([]byte("h1"))
@@ -187,7 +187,7 @@ func TestVector5(t *testing.T) {
 }
 
 func TestVector6(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	w := bytes.Buffer{}
 	for i := 0; i < 10; i++ {
 		v := int64(i)
@@ -221,7 +221,7 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int16](opts)
 	vec.Append(int16(1))
@@ -268,7 +268,7 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[int32](opts)
 	vec.AppendMany(int32(1), int32(3), int32(9))
@@ -292,7 +292,7 @@ func TestVector8(t *testing.T) {
 }
 
 func TestVector9(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	allocator := mpool.MustNewZero()
 	opts := new(Options)
 	opts.Allocator = allocator
@@ -321,7 +321,7 @@ func TestVector9(t *testing.T) {
 }
 
 func TestVector10(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -364,7 +364,7 @@ func TestVector10(t *testing.T) {
 }
 
 func TestVector11(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -393,7 +393,7 @@ func TestVector11(t *testing.T) {
 }
 
 func TestVector12(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewVector[[]byte](opts)
 	h1 := "h1"
@@ -424,7 +424,7 @@ func TestVector12(t *testing.T) {
 }
 
 func TestStrVector1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -487,7 +487,7 @@ func TestStrVector1(t *testing.T) {
 }
 
 func TestStrVector2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -523,7 +523,7 @@ func TestStrVector2(t *testing.T) {
 }
 
 func TestStrVector3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
@@ -600,7 +600,7 @@ func getBytes(i int) []byte {
 }
 
 func TestStrVector4(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := withAllocator(nil)
 	vec := NewStrVector[[]byte](opts)
 	for i := 0; i < 10000; i++ {

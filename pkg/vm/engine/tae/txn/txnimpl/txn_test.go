@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -80,7 +79,7 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 }
 
 func TestInsertNode(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	tbl := makeTable(t, dir, 2, 1, common.K*6)
@@ -143,7 +142,7 @@ func TestInsertNode(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -182,7 +181,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -233,7 +232,7 @@ func TestAppend(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
@@ -284,7 +283,7 @@ func TestIndex(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -318,7 +317,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -361,7 +360,7 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
@@ -437,7 +436,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -482,7 +481,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -533,7 +532,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -570,7 +569,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestSegment1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -646,7 +645,7 @@ func TestSegment1(t *testing.T) {
 }
 
 func TestSegment2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -678,7 +677,7 @@ func TestSegment2(t *testing.T) {
 }
 
 func TestBlock1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -726,7 +725,7 @@ func TestBlock1(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -44,7 +43,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
@@ -158,7 +157,7 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)
