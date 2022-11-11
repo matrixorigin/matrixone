@@ -65,6 +65,7 @@ type Block interface {
 	CheckpointUnit
 	BlockReplayer
 
+	DeletesInfo() string
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool

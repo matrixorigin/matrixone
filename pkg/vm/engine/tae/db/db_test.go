@@ -2217,7 +2217,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 
 	tae.createRelAndAppend(bats[0], true)
 
-	assert.NoError(t, tae.deleteAll(false))
+	assert.NoError(t, tae.deleteAll(true))
 
 	txn, rel := tae.getRelation()
 	assert.NoError(t, rel.Append(bats[1]))
@@ -2811,7 +2811,7 @@ func TestDelete3(t *testing.T) {
 	}, nil)
 	hb.Start()
 	defer hb.Stop()
-	schema := catalog.MockSchemaAll(1, -1)
+	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
@@ -2825,7 +2825,7 @@ func TestDelete3(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		if deleted {
 			tae.checkRowsByScan(0, true)
-			// tae.doAppend(bat)
+			tae.DoAppend(bat)
 			deleted = false
 			tae.checkRowsByScan(rows, true)
 		} else {

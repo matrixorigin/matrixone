@@ -494,7 +494,11 @@ func (blk *dataBlock) ResolveColumnFromANode(
 
 	return
 }
-
+func (blk *dataBlock) DeletesInfo() string {
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	return blk.mvcc.GetDeleteChain().StringLocked()
+}
 func (blk *dataBlock) RangeDelete(
 	txn txnif.AsyncTxn,
 	start, end uint32, dt handle.DeleteType) (node txnif.DeleteNode, err error) {
