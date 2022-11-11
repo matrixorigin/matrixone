@@ -121,21 +121,7 @@ type MysqlCmdExecutor struct {
 
 	cancelRequestFunc context.CancelFunc
 
-	quit bool
-
 	mu sync.Mutex
-}
-
-func (mce *MysqlCmdExecutor) SetQuit(q bool) {
-	mce.mu.Lock()
-	defer mce.mu.Unlock()
-	mce.quit = q
-}
-
-func (mce *MysqlCmdExecutor) GetQuit() bool {
-	mce.mu.Lock()
-	defer mce.mu.Unlock()
-	return mce.quit
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
@@ -3259,9 +3245,7 @@ func (mce *MysqlCmdExecutor) setCancelRequestFunc(cancelFunc context.CancelFunc)
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) Close() {
-	mce.SetQuit(true)
-}
+func (mce *MysqlCmdExecutor) Close() {}
 
 /*
 StatementCanBeExecutedInUncommittedTransaction checks the statement can be executed in an active transaction.
