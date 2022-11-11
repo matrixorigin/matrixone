@@ -15,82 +15,19 @@
 package memorytable
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
-type Time struct {
-	Timestamp timestamp.Timestamp
-	Statement int
-}
+type Time = timestamp.Timestamp
 
 func Now(clock clock.Clock) Time {
 	now, _ := clock.Now()
-	return Time{
-		Timestamp: now,
-	}
-}
-
-func (t *Time) Tick() {
-	t.Statement++
-}
-
-func (t Time) After(t2 Time) bool {
-	if t.Timestamp.Greater(t2.Timestamp) {
-		return true
-	}
-	if t.Timestamp.Less(t2.Timestamp) {
-		return false
-	}
-	return t.Statement > t2.Statement
-}
-
-func (t Time) Before(t2 Time) bool {
-	if t.Timestamp.Less(t2.Timestamp) {
-		return true
-	}
-	if t.Timestamp.Greater(t2.Timestamp) {
-		return false
-	}
-	return t.Statement < t2.Statement
-}
-
-func (t Time) Equal(t2 Time) bool {
-	if !t.Timestamp.Equal(t2.Timestamp) {
-		return false
-	}
-	if t.Statement != t2.Statement {
-		return false
-	}
-	return true
-}
-
-func (t Time) String() string {
-	return fmt.Sprintf("Time{%d, %d, %d}",
-		t.Timestamp.PhysicalTime,
-		t.Timestamp.LogicalTime,
-		t.Statement,
-	)
-}
-
-func (t Time) IsZero() bool {
-	return t.Timestamp.IsEmpty() && t.Statement == 0
-}
-
-func (t Time) ToTxnTS() types.TS {
-	return types.BuildTS(
-		t.Timestamp.PhysicalTime,
-		t.Timestamp.LogicalTime,
-	)
+	return now
 }
 
 func ts(i int64) Time {
-	return Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: i,
-		},
+	return timestamp.Timestamp{
+		PhysicalTime: i,
 	}
 }

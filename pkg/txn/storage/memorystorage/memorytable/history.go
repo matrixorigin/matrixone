@@ -31,7 +31,7 @@ func (t *Table[K, V, R]) EraseHistory(before Time) {
 	defer t.Unlock()
 	i := sort.Search(len(t.history), func(i int) bool {
 		return before.Equal(t.history[i].Before) ||
-			before.Before(t.history[i].Before)
+			before.Less(t.history[i].Before)
 	})
 	if i < len(t.history) {
 		t.history = t.history[i:]

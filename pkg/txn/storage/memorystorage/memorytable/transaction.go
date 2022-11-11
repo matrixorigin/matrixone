@@ -92,9 +92,9 @@ func (t *Table[K, V, R]) commit(tx *Transaction, state any, commitTime Time) err
 		return err
 	}
 	t.state.Store(newState)
-	if !commitTime.IsZero() && len(t.history) > 0 {
+	if !commitTime.IsEmpty() && len(t.history) > 0 {
 		last := t.history[len(t.history)-1]
-		if !commitTime.After(last.Before) {
+		if !commitTime.Greater(last.Before) {
 			return moerr.NewInternalError("commit time too old")
 		}
 	}

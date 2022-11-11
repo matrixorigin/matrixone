@@ -78,15 +78,15 @@ func (t *Table[K, V, R]) getTransactionTable(
 
 		t.Lock()
 		defer t.Unlock()
-		if !tx.BeginTime.IsZero() && len(t.history) > 0 {
+		if !tx.BeginTime.IsEmpty() && len(t.history) > 0 {
 			// get from history
 			i := sort.Search(len(t.history), func(i int) bool {
 				t := t.history[i]
-				return tx.BeginTime.Equal(t.Before) || tx.BeginTime.Before(t.Before)
+				return tx.BeginTime.Equal(t.Before) || tx.BeginTime.Less(t.Before)
 			})
 			if i < len(t.history) {
 				if i == 0 {
-					if tx.BeginTime.Before(t.history[0].Before) {
+					if tx.BeginTime.Less(t.history[0].Before) {
 						// too old
 						return nil, moerr.NewInternalError("transaction begin time too old")
 					}
