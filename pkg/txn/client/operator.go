@@ -109,6 +109,7 @@ func WithTxnCacheWrite() TxnOption {
 type txnOperator struct {
 	logger *zap.Logger
 	sender rpc.TxnSender
+	txnID  []byte
 
 	option struct {
 		readyOnly        bool
@@ -128,6 +129,7 @@ type txnOperator struct {
 func newTxnOperator(sender rpc.TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
+	tc.txnID = txnMeta.ID
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -145,6 +147,7 @@ func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *z
 	tc := &txnOperator{sender: sender}
 	tc.logger = logger
 	tc.mu.txn = v.Txn
+	tc.txnID = v.Txn.ID
 	tc.option.disable1PCOpt = v.Disable1PCOpt
 	tc.option.enableCacheWrite = v.EnableCacheWrite
 	tc.option.readyOnly = v.ReadyOnly
@@ -230,6 +233,8 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	util.LogTxnRead(tc.logger, tc.getTxnMeta(false))
+
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
 	}
@@ -243,6 +248,8 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	util.LogTxnWrite(tc.logger, tc.getTxnMeta(false))
+
 	return tc.doWrite(ctx, requests, false)
 }
 
@@ -251,6 +258,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	util.LogTxnCommit(tc.logger, tc.getTxnMeta(false))
+
 	if tc.option.readyOnly {
 		return nil
 	}
@@ -266,6 +275,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	util.LogTxnRollback(tc.logger, tc.getTxnMeta(false))
+
 	tc.mu.Lock()
 	defer func() {
 		tc.mu.closed = true
@@ -388,7 +399,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(tc.txnID)
 	}
 	return nil
 }
@@ -536,7 +547,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(tc.txnID)
 	}
 
 	switch txnMeta.Status {
@@ -544,7 +555,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		return nil
 	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(tc.txnID)
 	default:
 		tc.logger.Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
@@ -578,7 +589,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(tc.txnID)
 	}
 
 	switch txnMeta.Status {
@@ -596,7 +607,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(tc.txnID)
 	}
 
 	switch txnMeta.Status {

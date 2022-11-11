@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,13 +73,13 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
 	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
-	store := newStore(nil, driver, mgr, nil)
+	store := newStore(nil, driver, nil, mgr, nil)
 	store.BindTxn(txn)
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
 }
 
 func TestInsertNode(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	tbl := makeTable(t, dir, 2, 1, common.K*6)
@@ -143,7 +142,7 @@ func TestInsertNode(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -182,7 +181,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -233,7 +232,7 @@ func TestAppend(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
@@ -284,7 +283,7 @@ func TestIndex(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -318,7 +317,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -361,9 +360,9 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
@@ -425,7 +424,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
 	factory := tables.NewDataFactory(fs, mutBufMgr, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
 	return c, mgr, driver
@@ -437,7 +436,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -482,7 +481,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -519,7 +518,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)
@@ -533,7 +532,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -570,7 +569,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestSegment1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -646,7 +645,7 @@ func TestSegment1(t *testing.T) {
 }
 
 func TestSegment2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -678,7 +677,7 @@ func TestSegment2(t *testing.T) {
 }
 
 func TestBlock1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -726,7 +725,7 @@ func TestBlock1(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
@@ -802,9 +801,9 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, txn3.Commit())
 
 		err = rel.Append(bats[3])
-		// TODO: should be w-w error
-		assert.Error(t, err)
-		_ = txn.Rollback()
+		assert.NoError(t, err)
+		err = txn.Commit()
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }

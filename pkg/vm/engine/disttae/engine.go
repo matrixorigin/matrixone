@@ -67,7 +67,7 @@ var _ engine.Engine = new(Engine)
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
@@ -94,7 +94,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.NewTxnClosed()
+		return nil, moerr.NewTxnClosed(op.Txn().ID)
 	}
 	key := genDatabaseKey(ctx, name)
 	if db, ok := txn.databaseMap.Load(key); ok {
@@ -129,7 +129,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.NewTxnClosed()
+		return nil, moerr.NewTxnClosed(op.Txn().ID)
 	}
 	return txn.getDatabaseList(ctx)
 }
@@ -139,7 +139,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	key := genDatabaseKey(ctx, name)
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -276,7 +276,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.NewTxnClosed()
+		return moerr.NewTxnClosed(op.Txn().ID)
 	}
 	defer e.delTransaction(txn)
 	if txn.readOnly {

@@ -195,6 +195,7 @@ type DeleteNode interface {
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
+	DeletedRows() []uint32
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
 	IsDeletedLocked(row uint32) bool

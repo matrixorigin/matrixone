@@ -375,6 +375,11 @@ var (
 			"DTD_IDENTIFIER mediumtext," +
 			"ROUTINE_TYPE  varchar(64)" +
 			");",
+		"CREATE TABLE IF NOT EXISTS KEYWORDS (" +
+			"WORD varchar(64)," +
+			"RESERVED int unsigned" +
+			");",
+		informationSchemaKeywordsData,
 	}
 )
 

@@ -118,6 +118,9 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 }
 
 func newS3FSFromArguments(arguments []string) (*S3FS, error) {
+	if len(arguments) < 6 {
+		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+	}
 	endpoint := arguments[0]
 	region := arguments[1]
 	bucket := arguments[2]
@@ -170,6 +173,9 @@ func newS3FSFromArguments(arguments []string) (*S3FS, error) {
 }
 
 func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
+	if len(arguments) < 4 {
+		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+	}
 	endpoint := arguments[0]
 	region := arguments[1]
 	bucket := arguments[2]
@@ -213,6 +219,9 @@ func newS3FSFromArgumentsWithoutKey(arguments []string) (*S3FS, error) {
 }
 
 func newMinioS3FSFromArguments(arguments []string) (*S3FS, error) {
+	if len(arguments) < 6 {
+		return nil, moerr.NewInvalidInput("invalid S3 arguments")
+	}
 	endpoint := arguments[0]
 	region := arguments[1]
 	_ = region
