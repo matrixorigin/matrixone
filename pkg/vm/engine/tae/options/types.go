@@ -65,6 +65,8 @@ type Options struct {
 	LogtailCfg    *LogtailCfg
 	Catalog       *catalog.Catalog
 
+	TransferTableTTL time.Duration
+
 	Clock     clock.Clock
 	Fs        fileservice.FileService
 	Lc        logservicedriver.LogServiceClientFactory

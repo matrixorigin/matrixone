@@ -157,6 +157,13 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 		node.chain.InsertInDeleteView(i, node)
 	}
 }
+func (node *DeleteNode) DeletedRows() (rows []uint32) {
+	if node.mask == nil {
+		return
+	}
+	rows = node.mask.ToArray()
+	return
+}
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {
@@ -173,6 +180,13 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
+	if node.dt == handle.DT_MergeCompact {
+		_, err = node.TxnMVCCNode.PrepareCommit()
+		if err != nil {
+			return
+		}
+		node.chain.UpdateLocked(node)
+	}
 	_, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
@@ -288,6 +302,7 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
 	node.chain.DeleteInDeleteView(node)
+	node.TxnMVCCNode.PrepareRollback()
 	return
 }
 
