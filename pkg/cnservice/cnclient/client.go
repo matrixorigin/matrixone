@@ -18,11 +18,12 @@ import (
 	"context"
 	"sync"
 
+	"time"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"time"
 )
 
 // client each node will hold only one client.
@@ -60,7 +61,7 @@ func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Messa
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
-	return c.client.NewStream(backend)
+	return c.client.NewStream(backend, true)
 }
 
 func (c *CNClient) Close() error {

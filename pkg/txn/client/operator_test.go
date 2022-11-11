@@ -82,7 +82,7 @@ func TestRollback(t *testing.T) {
 func TestRollbackWithClosedTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
-			return nil, moerr.NewTxnClosed()
+			return nil, moerr.NewTxnClosed(tc.txnID)
 		})
 
 		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
