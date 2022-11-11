@@ -4140,8 +4140,11 @@ func TestDelete4(t *testing.T) {
 			return
 		}
 		if err := txn.Commit(); err == nil {
-			count.CompareAndSwap(oldV, newV)
-			t.Logf("RangeDelete block-%d, offset-%d, %s", id.BlockID, offset, txn.GetCommitTS().ToString())
+			ok := count.CompareAndSwap(oldV, newV)
+			for !ok {
+				ok = count.CompareAndSwap(oldV, newV)
+			}
+			t.Logf("RangeDelete block-%d, offset-%d, old %d newV %d, %s", id.BlockID, offset, oldV, newV, txn.GetCommitTS().ToString())
 		}
 	}
 
@@ -4161,7 +4164,7 @@ func TestDelete4(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int(count.Load()), int(v.(uint32)))
 		assert.NoError(t, txn.Commit())
-		t.Logf("GetV=%v", v)
+		t.Logf("GetV=%v, %s", v, txn.GetStartTS().ToString())
 	}
 	scanFn := func() {
 		txn, rel := tae.getRelation()
