@@ -24,6 +24,42 @@ import (
 	"go.uber.org/zap"
 )
 
+// LogTxnRead log txn read
+func LogTxnRead(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn read"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnWrite log txn write
+func LogTxnWrite(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn write"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnCommit log txn commit
+func LogTxnCommit(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn commit"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
+// LogTxnRollback log txn rollback
+func LogTxnRollback(
+	logger *zap.Logger,
+	txnMeta txn.TxnMeta) {
+	if ce := logger.Check(zap.DebugLevel, "txn rollback"); ce != nil {
+		ce.Write(zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
 // LogTxnCreated log txn created
 func LogTxnCreated(
 	logger *zap.Logger,

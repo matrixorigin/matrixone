@@ -45,7 +45,7 @@ func main() {
 		panic(err)
 	}
 
-	st, err := cli.NewStream(addr)
+	st, err := cli.NewStream(addr, false)
 	if err != nil {
 		panic(err)
 	}
