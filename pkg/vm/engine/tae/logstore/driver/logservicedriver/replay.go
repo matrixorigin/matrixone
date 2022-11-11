@@ -44,6 +44,8 @@ type replayer struct {
 	nextToReadLsn uint64
 	d             *LogServiceDriver
 	appended      []uint64
+
+	applyDuration time.Duration
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
@@ -137,7 +139,9 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	if err != nil {
 		panic(err)
 	}
+	t0 := time.Now()
 	intervals := record.replay(r.replayHandle)
+	r.applyDuration += time.Since(t0)
 	r.d.onReplayRecordEntry(logserviceLsn, intervals)
 	r.onReplayDriverLsn(intervals.GetMax())
 	r.onReplayDriverLsn(intervals.GetMin())
