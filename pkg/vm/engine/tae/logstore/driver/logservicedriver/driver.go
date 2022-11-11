@@ -63,6 +63,8 @@ type LogServiceDriver struct {
 
 	flushtimes  int
 	appendtimes int
+
+	readDuration time.Duration
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -113,5 +115,11 @@ func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 	r := newReplayer(h, ReplayReadSize, d)
 	r.replay()
 	d.onReplay(r)
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("backend", "logservice"),
+		common.AnyField("apply cost", r.applyDuration),
+		common.AnyField("read cost", d.readDuration))
+
 	return nil
 }

@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -29,12 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -132,6 +132,19 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		defs,
 	)
 	assert.Nil(t, err)
+
+	createTbEntries1, err := makeCreateTableEntries(
+		"",
+		ac,
+		"tbtest1",
+		IDAlloc.NextTable(),
+		dbTestId,
+		dbName,
+		handle.m,
+		defs,
+	)
+	assert.Nil(t, err)
+	createTbEntries = append(createTbEntries, createTbEntries1...)
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		createTbTxn,
@@ -153,7 +166,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	dbId := dbHandle.GetDatabaseID(ctx)
 	assert.True(t, dbTestId == dbId)
 	names, _ = dbHandle.RelationNames(ctx)
-	assert.Equal(t, 1, len(names))
+	assert.Equal(t, 2, len(names))
 	tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbHandle.GetRelationID(ctx)
@@ -264,7 +277,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 }
 
 func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -549,7 +562,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 }
 
 func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
@@ -855,7 +868,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 }
 
 func TestHandle_MVCCVisibility(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())

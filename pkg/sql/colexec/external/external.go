@@ -151,9 +151,14 @@ func InitS3Param(param *tree.ExternParam) error {
 
 func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
+		var err error
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
-		err := w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		if param.S3Param.APIKey == "" && param.S3Param.APISecret == "" {
+			err = w.Write([]string{"s3-no-key", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, ""})
+		} else {
+			err = w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		}
 		if err != nil {
 			return nil, "", err
 		}

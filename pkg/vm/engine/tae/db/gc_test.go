@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -31,7 +30,7 @@ import (
 )
 
 func TestGCBlock1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
@@ -73,7 +72,7 @@ func TestGCBlock1(t *testing.T) {
 }
 
 func TestAutoGC1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -123,7 +122,7 @@ func TestAutoGC1(t *testing.T) {
 // 3. Create a table w one appendable block data and commit
 // 4. Drop the table and commit
 func TestGCTable(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -240,7 +239,7 @@ func TestGCTable(t *testing.T) {
 // 1. Create a db with 2 tables w/o data
 // 2. Drop the db
 func TestGCDB(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	t.Skip(any("GC is not working, refactor needed"))
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)

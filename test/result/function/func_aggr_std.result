@@ -34,20 +34,15 @@ select std(h) from t1;
 std(h)
 47.47713870906711
 select std(i) from t1;
-std(i)
-4303.2222810351805
+invalid argument aggregate function std, bad value [DATE]
 select std(k) from t1;
-std(k)
-2.680951323690943E10
+invalid argument aggregate function std, bad value [DATETIME]
 select std(l) from t1;
-std(l)
-1.1076438961767E11
+invalid argument aggregate function std, bad value [TIMESTAMP]
 select std(m) from t1;
-std(m)
-1.299038105676658
+invalid argument aggregate function std, bad value [CHAR]
 select std(n) from t1;
-std(n)
-1.299038105676658
+invalid argument aggregate function std, bad value [VARCHAR]
 select STDDEV_POP(a) from t1;
 STDDEV_POP(a)
 30.310889132455355
@@ -73,14 +68,11 @@ select STDDEV_POP(h) from t1;
 STDDEV_POP(h)
 47.47713870906711
 select STDDEV_POP(i) from t1;
-STDDEV_POP(i)
-4303.2222810351805
+invalid argument aggregate function stddev_pop, bad value [DATE]
 select STDDEV_POP(k) from t1;
-STDDEV_POP(k)
-2.680951323690943E10
+invalid argument aggregate function stddev_pop, bad value [DATETIME]
 select STDDEV_POP(l) from t1;
-STDDEV_POP(l)
-1.1076438961767E11
+invalid argument aggregate function stddev_pop, bad value [TIMESTAMP]
 select STDDEV_POP(m) from t1;
 invalid argument aggregate function stddev_pop, bad value [CHAR]
 select STDDEV_POP(n) from t1;
