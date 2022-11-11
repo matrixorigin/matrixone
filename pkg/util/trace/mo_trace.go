@@ -106,6 +106,13 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	return ContextWithSpan(ctx, span), span
 }
 
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
+	if !t.provider.debugMode {
+		return ctx, noopSpan{}
+	}
+	return t.Start(ctx, name, opts...)
+}
+
 var _ Span = (*MOSpan)(nil)
 var _ IBuffer2SqlItem = (*MOSpan)(nil)
 var _ CsvFields = (*MOSpan)(nil)

@@ -62,7 +62,7 @@ type tracerProviderConfig struct {
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *Resource // WithMOVersion, WithNode,
 
-	// TODO: can check span's END
+	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
 	batchProcessMode string // WithBatchProcessMode
