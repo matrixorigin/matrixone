@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -254,7 +254,7 @@ func BenchmarkLocalSend(b *testing.B) {
 }
 
 func TestNewSenderWithOptions(t *testing.T) {
-	defer testutils.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 
 	s, err := NewSender(newTestClock(),
 		nil,
