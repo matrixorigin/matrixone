@@ -46,8 +46,8 @@ func readWriteConfilictCheck(entry catalog.BaseEntry, ts types.TS) (err error) {
 type warChecker struct {
 	txn         txnif.AsyncTxn
 	catalog     *catalog.Catalog
-	conflictSet map[common.ID]bool
-	readSet     map[common.ID]*catalog.BlockEntry
+	conflictSet map[uint64]bool
+	readSet     map[uint64]*catalog.BlockEntry
 	cache       map[uint64]*catalog.BlockEntry
 }
 
@@ -55,8 +55,8 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	checker := &warChecker{
 		txn:         txn,
 		catalog:     c,
-		conflictSet: make(map[common.ID]bool),
-		readSet:     make(map[common.ID]*catalog.BlockEntry),
+		conflictSet: make(map[uint64]bool),
+		readSet:     make(map[uint64]*catalog.BlockEntry),
 		cache:       make(map[uint64]*catalog.BlockEntry),
 	}
 	return checker
@@ -112,22 +112,21 @@ func (checker *warChecker) Cache(block *catalog.BlockEntry) {
 
 func (checker *warChecker) Insert(block *catalog.BlockEntry) {
 	checker.Cache(block)
-	id := block.AsCommonID()
-	if checker.HasConflict(id) {
+	if checker.HasConflict(block.ID) {
 		panic(fmt.Sprintf("cannot add conflicted %s into readset", block.String()))
 	}
-	checker.readSet[*id] = block
+	checker.readSet[block.ID] = block
 }
 
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	// defer func() {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
-	if checker.HasConflict(id) {
+	if checker.HasConflict(id.BlockID) {
 		err = moerr.NewTxnRWConflict()
 		return
 	}
-	entry := checker.readSet[*id]
+	entry := checker.readSet[id.BlockID]
 	if entry == nil {
 		return
 	}
@@ -144,11 +143,11 @@ func (checker *warChecker) checkAll(ts types.TS) (err error) {
 }
 
 func (checker *warChecker) Delete(id *common.ID) {
-	checker.conflictSet[*id] = true
-	delete(checker.readSet, *id)
+	checker.conflictSet[id.BlockID] = true
+	delete(checker.readSet, id.BlockID)
 }
 
-func (checker *warChecker) HasConflict(id *common.ID) (y bool) {
-	_, y = checker.conflictSet[*id]
+func (checker *warChecker) HasConflict(id uint64) (y bool) {
+	_, y = checker.conflictSet[id]
 	return
 }

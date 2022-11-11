@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
@@ -905,6 +906,11 @@ func (blk *dataBlock) DumpData(attr string) (view *model.ColumnView, err error) 
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("BatchDedup BLK-%d: %v", blk.meta.ID, err)
+		}
+	}()
 	var dupRow uint32
 	if blk.meta.IsAppendable() {
 		ts := txn.GetStartTS()
@@ -933,6 +939,9 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			defer sortKey.Close()
 			deduplicate := func(v1 any, _ int) error {
 				return sortKey.GetData().Foreach(func(v2 any, row int) error {
+					if sortKey.DeleteMask != nil && sortKey.DeleteMask.ContainsInt(row) {
+						return nil
+					}
 					if compute.CompareGeneric(v1, v2, pks.GetType()) == 0 {
 						entry := common.TypeStringValue(pks.GetType(), v1)
 						return moerr.NewDuplicateEntry(entry, pkDef.Name)
