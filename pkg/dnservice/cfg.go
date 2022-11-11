@@ -31,7 +31,7 @@ var (
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
 	defaultConnectTimeout   = time.Second * 30
-	defaultHeatbeatTimeout  = time.Millisecond * 500
+	defaultHeatbeatTimeout  = time.Second * 3
 
 	defaultFlushInterval       = time.Second * 60
 	defaultScanInterval        = time.Second * 5
