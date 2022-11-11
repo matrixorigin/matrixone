@@ -107,6 +107,24 @@ func TestCannotGetLocedBackend(t *testing.T) {
 	}
 }
 
+func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
+	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(3))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	c.mu.backends["b1"] = append(c.mu.backends["b1"],
+		&testBackend{id: 1, locked: true, busy: false, activeTime: time.Now()},
+		&testBackend{id: 2, locked: true, busy: false, activeTime: time.Now()})
+	c.mu.ops["b1"] = &op{}
+
+	b, err := c.getBackend("b1", false)
+	assert.NoError(t, err)
+	assert.False(t, b.Locked())
+}
+
 func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
 	rc, err := NewClient(newTestBackendFactory(), WithClientMaxBackendPerHost(1))
 	assert.NoError(t, err)

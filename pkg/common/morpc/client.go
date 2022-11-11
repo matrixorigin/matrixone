@@ -229,6 +229,8 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 		return nil, moerr.NewClientClosed()
 	}
 
+	lockedCnt := 0
+	inactiveCnt := 0
 	if backends, ok := c.mu.backends[backend]; ok {
 		n := uint64(len(backends))
 		var b Backend
@@ -238,16 +240,30 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 			if !b.Locked() && b.LastActiveTime() != (time.Time{}) {
 				break
 			}
+
+			if b.Locked() {
+				lockedCnt++
+			}
+			if b.LastActiveTime() == (time.Time{}) {
+				inactiveCnt++
+			}
 			b = nil
 		}
 
 		// all backend inactived, trigger gc inactive.
 		if b == nil && n > 0 {
 			c.triggerGCInactive(backend)
-			return nil, moerr.NewNoAvailableBackend()
+			c.logger.Debug("no available backends",
+				zap.String("backend", backend),
+				zap.Int("locked", lockedCnt),
+				zap.Int("inactive", inactiveCnt),
+				zap.Int("max", c.options.maxBackendsPerHost))
+			if !c.canCreateLocked(backend) {
+				return nil, moerr.NewNoAvailableBackend()
+			}
 		}
 
-		if lock {
+		if lock && b != nil {
 			b.Lock()
 		}
 		c.maybeCreateLocked(backend)
