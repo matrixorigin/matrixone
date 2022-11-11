@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,8 +37,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
+// TODO::GC the abandoned txn.
 type Handle struct {
 	eng moengine.TxnEngine
+	mu  struct {
+		sync.RWMutex
+		//map txn id to txnContext.
+		txnCtxs map[string]*txnContext
+	}
+}
+
+type txnContext struct {
+	//createAt is used to GC the abandoned txn.
+	createAt time.Time
+	meta     txn.TxnMeta
+	req      []any
+	//res      []any
 }
 
 func (h *Handle) GetTxnEngine() moengine.TxnEngine {
@@ -56,26 +71,95 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 	h := &Handle{
 		eng: moengine.NewEngine(tae),
 	}
+	h.mu.txnCtxs = make(map[string]*txnContext)
 	return h
 }
+
 func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
+	h.mu.RLock()
+	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
+	h.mu.RUnlock()
+	//Handle precommit-write command for 1PC
 	var txn moengine.Txn
+	if ok {
+		for _, e := range txnCtx.req {
+			switch req := e.(type) {
+			case db.CreateDatabaseReq:
+				err = h.HandleCreateDatabase(
+					ctx,
+					meta,
+					req,
+					&db.CreateDatabaseResp{},
+				)
+			case db.CreateRelationReq:
+				err = h.HandleCreateRelation(
+					ctx,
+					meta,
+					req,
+					&db.CreateRelationResp{},
+				)
+			case db.DropDatabaseReq:
+				err = h.HandleDropDatabase(
+					ctx,
+					meta,
+					req,
+					&db.DropDatabaseResp{},
+				)
+			case db.DropOrTruncateRelationReq:
+				err = h.HandleDropOrTruncateRelation(
+					ctx,
+					meta,
+					req,
+					&db.DropOrTruncateRelationResp{},
+				)
+			case db.WriteReq:
+				err = h.HandleWrite(
+					ctx,
+					meta,
+					req,
+					&db.WriteResp{},
+				)
+			default:
+				panic(moerr.NewNYI("Pls implement me"))
+			}
+			//Need to rollback the txn.
+			if err != nil {
+				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn.Rollback()
+				return
+			}
+		}
+	}
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
-		return err
+		return
 	}
+	//if txn is 2PC ,need to set commit timestamp passed by coordinator.
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
 	err = txn.Commit()
+
+	//delete the txn's context.
+	h.mu.Lock()
+	delete(h.mu.txnCtxs, string(meta.GetID()))
+	h.mu.Unlock()
 	return
 }
 
 func (h *Handle) HandleRollback(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
+	h.mu.Lock()
+	_, ok := h.mu.txnCtxs[string(meta.GetID())]
+	delete(h.mu.txnCtxs, string(meta.GetID()))
+	h.mu.Unlock()
+	//Rollback after pre-commit write.
+	if ok {
+		return
+	}
 	var txn moengine.Txn
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -101,7 +185,60 @@ func (h *Handle) HandleCommitting(
 func (h *Handle) HandlePrepare(
 	ctx context.Context,
 	meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
+	h.mu.RLock()
+	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
+	h.mu.RUnlock()
 	var txn moengine.Txn
+	if ok {
+		//handle pre-commit write for 2PC
+		for _, e := range txnCtx.req {
+			switch req := e.(type) {
+			case db.CreateDatabaseReq:
+				err = h.HandleCreateDatabase(
+					ctx,
+					meta,
+					req,
+					&db.CreateDatabaseResp{},
+				)
+			case db.CreateRelationReq:
+				err = h.HandleCreateRelation(
+					ctx,
+					meta,
+					req,
+					&db.CreateRelationResp{},
+				)
+			case db.DropDatabaseReq:
+				err = h.HandleDropDatabase(
+					ctx,
+					meta,
+					req,
+					&db.DropDatabaseResp{},
+				)
+			case db.DropOrTruncateRelationReq:
+				err = h.HandleDropOrTruncateRelation(
+					ctx,
+					meta,
+					req,
+					&db.DropOrTruncateRelationResp{},
+				)
+			case db.WriteReq:
+				err = h.HandleWrite(
+					ctx,
+					meta,
+					req,
+					&db.WriteResp{},
+				)
+			default:
+				panic(moerr.NewNYI("Pls implement me"))
+			}
+			//need to rollback the txn
+			if err != nil {
+				txn, _ = h.eng.GetTxnByID(meta.GetID())
+				txn.Rollback()
+				return
+			}
+		}
+	}
 	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
@@ -114,6 +251,10 @@ func (h *Handle) HandlePrepare(
 	var ts types.TS
 	ts, err = txn.Prepare()
 	pts = ts.ToTimestamp()
+	//delete the txn's context.
+	h.mu.Lock()
+	delete(h.mu.txnCtxs, string(meta.GetID()))
+	h.mu.Unlock()
 	return
 }
 
@@ -121,7 +262,8 @@ func (h *Handle) HandleStartRecovery(
 	ctx context.Context,
 	ch chan txn.TxnMeta) {
 	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
-	//TODO:: TAE replay
+	//TODO:: 1.  Get the 2PC transactions which be in prepared or committing state from txn engine's recovery.
+	//       2.  Feed these transaction into ch.
 	close(ch)
 }
 
@@ -167,8 +309,27 @@ func (h *Handle) HandleFlushTable(
 	return err
 }
 
-// TODO:: need to handle resp.
-func (h *Handle) HandlePreCommit(
+func (h *Handle) CacheTxnRequest(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req any,
+	rsp any) (err error) {
+	h.mu.Lock()
+	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
+	if !ok {
+		txnCtx = &txnContext{
+			createAt: time.Now(),
+			meta:     meta,
+		}
+		h.mu.txnCtxs[string(meta.GetID())] = txnCtx
+	}
+	h.mu.Unlock()
+	txnCtx.req = append(txnCtx.req, req)
+	return nil
+}
+
+// HandlePreCommitWrite only cache the req.
+func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req apipb.PrecommitWriteCmd,
@@ -194,7 +355,7 @@ func (h *Handle) HandlePreCommit(
 						AccountID: cmd.AccountId,
 					},
 				}
-				if err = h.HandleCreateDatabase(ctx, meta, req,
+				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateDatabaseResp)); err != nil {
 					return err
 				}
@@ -213,7 +374,7 @@ func (h *Handle) HandlePreCommit(
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
 				}
-				if err = h.HandleCreateRelation(ctx, meta, req,
+				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateRelationResp)); err != nil {
 					return err
 				}
@@ -224,7 +385,7 @@ func (h *Handle) HandlePreCommit(
 					Name: cmd.Name,
 					ID:   cmd.Id,
 				}
-				if err = h.HandleDropDatabase(ctx, meta, req,
+				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.DropDatabaseResp)); err != nil {
 					return err
 				}
@@ -239,7 +400,7 @@ func (h *Handle) HandlePreCommit(
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
-				if err = h.HandleDropOrTruncateRelation(ctx, meta, req,
+				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.DropOrTruncateRelationResp)); err != nil {
 					return err
 				}
@@ -259,7 +420,7 @@ func (h *Handle) HandlePreCommit(
 				TableName:    pe.GetTableName(),
 				Batch:        moBat,
 			}
-			if err = h.HandleWrite(ctx, meta, req,
+			if err = h.CacheTxnRequest(ctx, meta, req,
 				new(db.WriteResp)); err != nil {
 				return err
 			}
