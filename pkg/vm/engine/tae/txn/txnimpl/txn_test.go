@@ -518,7 +518,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)
