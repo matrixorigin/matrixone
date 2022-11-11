@@ -170,6 +170,17 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			logDebugf(ses.GetConciseProfile(), "the time of handling the request %s", time.Since(reqBegin).String())
 		}
 
+		if executor.(*MysqlCmdExecutor).GetQuit() {
+			logErrorf(ses.GetConciseProfile(), "the connection has been closed. Rollback the txn.")
+			if ses != nil {
+				err = ses.TxnRollback()
+				if err != nil {
+					logErrorf(ses.GetConciseProfile(), "rollback txn after connection closed failed.error:%v", err)
+				}
+			}
+			cancelRequestFunc()
+			break
+		}
 		cancelRequestFunc()
 	}
 }

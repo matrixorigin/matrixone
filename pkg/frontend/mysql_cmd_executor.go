@@ -121,7 +121,21 @@ type MysqlCmdExecutor struct {
 
 	cancelRequestFunc context.CancelFunc
 
+	quit bool
+
 	mu sync.Mutex
+}
+
+func (mce *MysqlCmdExecutor) SetQuit(q bool) {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	mce.quit = q
+}
+
+func (mce *MysqlCmdExecutor) GetQuit() bool {
+	mce.mu.Lock()
+	defer mce.mu.Unlock()
+	return mce.quit
 }
 
 func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
@@ -3252,17 +3266,7 @@ func (mce *MysqlCmdExecutor) getCancelRequestFunc() context.CancelFunc {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	cancelRequestFunc := mce.getCancelRequestFunc()
-	if cancelRequestFunc != nil {
-		cancelRequestFunc()
-	}
-	ses := mce.GetSession()
-	if ses != nil {
-		err := ses.TxnRollback()
-		if err != nil {
-			logErrorf(ses.GetConciseProfile(), "rollback txn in mce.Close failed.error:%v", err)
-		}
-	}
+	mce.SetQuit(true)
 }
 
 /*
