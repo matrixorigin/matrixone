@@ -121,12 +121,13 @@ func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return e.getDB(defaultTestDB)
 }
 
-func (e *testEngine) doAppend(bat *containers.Batch) {
-	txn, rel := e.getRelation()
-	err := rel.Append(bat)
-	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
-}
+// unused
+// func (e *testEngine) doAppend(bat *containers.Batch) {
+// 	txn, rel := e.getRelation()
+// 	err := rel.Append(bat)
+// 	assert.NoError(e.t, err)
+// 	assert.NoError(e.t, txn.Commit())
+// }
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
 	rel := e.getRelationWithTxn(txn)
