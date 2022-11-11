@@ -47,8 +47,9 @@ import (
 
 // The initial state of the block when scoring
 type statBlock struct {
-	rows      uint32
-	startTime time.Time
+	rows               uint32
+	startTime          time.Time
+	startCheckRowsTime time.Time
 }
 
 type dataBlock struct {
@@ -267,18 +268,26 @@ func (blk *dataBlock) EstimateScore(interval time.Duration, force bool) int {
 	}
 	rows := uint32(blk.Rows()) - blk.mvcc.GetDeleteCnt()
 	if blk.score == nil {
+		t := time.Now()
 		blk.score = &statBlock{
-			rows:      rows,
-			startTime: time.Now(),
+			rows:               rows,
+			startTime:          t,
+			startCheckRowsTime: t,
 		}
 		return 1
+	}
+	sinceStart := time.Since(blk.score.startTime)
+	// TODO: Now it is 2 times the interval time must be compact
+	// Requires extensive testing to give a reasonable score
+	if sinceStart > interval*3 {
+		return 100
 	}
 	if blk.score.rows != rows {
 		// When the rows in the data block are modified, reset the statBlock
 		blk.score.rows = rows
-		blk.score.startTime = time.Now()
+		blk.score.startCheckRowsTime = time.Now()
 	} else {
-		s := time.Since(blk.score.startTime)
+		s := time.Since(blk.score.startCheckRowsTime)
 		if s > interval {
 			return 100
 		}

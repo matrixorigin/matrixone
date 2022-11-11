@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -26,6 +27,7 @@ import (
 )
 
 func TestZoneMapNumeric(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_int32}
 	zm := NewZoneMap(typ)
@@ -129,6 +131,7 @@ func TestZoneMapNumeric(t *testing.T) {
 }
 
 func TestZoneMapString(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_char}
 	zm := NewZoneMap(typ)
@@ -186,6 +189,7 @@ func TestZoneMapString(t *testing.T) {
 }
 
 func TestZMEmptyString(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	typ := types.Type{Oid: types.T_varchar}
 	zm := NewZoneMap(typ)
 	require.Equal(t, typ.Oid, zm.GetType().Oid)
@@ -221,6 +225,7 @@ func TestZMEmptyString(t *testing.T) {
 }
 
 func TestZMTruncatedString(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	mockBytes := func(init byte, size int) []byte {
 		ret := make([]byte, size)
 		for i := 0; i < size; i++ {

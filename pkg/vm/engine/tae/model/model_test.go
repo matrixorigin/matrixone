@@ -17,12 +17,14 @@ package model
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPrepareHiddenData(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	typ := types.T_Rowid.ToType()
 	id := common.ID{
 		TableID:   1,

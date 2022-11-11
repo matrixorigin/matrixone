@@ -121,12 +121,13 @@ func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return e.getDB(defaultTestDB)
 }
 
-func (e *testEngine) doAppend(bat *containers.Batch) {
-	txn, rel := e.getRelation()
-	err := rel.Append(bat)
-	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
-}
+// unused
+// func (e *testEngine) doAppend(bat *containers.Batch) {
+// 	txn, rel := e.getRelation()
+// 	err := rel.Append(bat)
+// 	assert.NoError(e.t, err)
+// 	assert.NoError(e.t, txn.Commit())
+// }
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
 	rel := e.getRelationWithTxn(txn)
@@ -193,6 +194,7 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
+	defer pool.Release()
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10

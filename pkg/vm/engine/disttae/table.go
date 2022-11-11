@@ -345,7 +345,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 		}
 		return rds, nil
 	}
-	step := len(ranges) / num
+	step := (len(ranges)) / num
 	if step < 1 {
 		step = 1
 	}

@@ -309,6 +309,7 @@ func (ckp *garbageCollector) refreshRunTime() {
 }
 
 func (ckp *garbageCollector) PostExecute() (err error) {
+	ckp.db.TransferTable.RunTTL(time.Now())
 	if !ckp.canRun() {
 		return
 	}
