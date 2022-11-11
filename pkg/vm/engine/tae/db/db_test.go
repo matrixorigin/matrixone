@@ -2003,11 +2003,11 @@ func TestSnapshotIsolation1(t *testing.T) {
 // 2. Start txn2 and append one row and commit
 // 3. Start txn3 and delete the row and commit
 // 4. Txn1 try to append the row. (W-W). Rollback
-// 5. Start txn4 and append the row.
 func TestSnapshotIsolation2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
@@ -2035,9 +2035,10 @@ func TestSnapshotIsolation2(t *testing.T) {
 
 	// Step 4
 	err = rel1.Append(bat)
+	assert.NoError(t, err)
+	err = txn1.Commit()
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
-	_ = txn1.Rollback()
 }
 
 // 1. Append 3 blocks and delete last 5 rows of the 1st block
@@ -2796,7 +2797,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 }
 
 func TestDelete3(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
@@ -4092,8 +4093,8 @@ func TestReadCheckpoint(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
+	defer testutils.AfterTest(t)()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -4321,36 +4322,36 @@ func TestTransfer2(t *testing.T) {
 	_ = txn2.Commit()
 }
 
-// FIXME: do not remove
-// enable it when r-w is fixed
-// func TestTransfer3(t *testing.T) {
-// 	opts := config.WithLongScanAndCKPOpts(nil)
-// 	tae := newTestEngine(t, opts)
-// 	defer tae.Close()
-// 	schema := catalog.MockSchemaAll(5, 3)
-// 	schema.BlockMaxRows = 100
-// 	schema.SegmentMaxBlocks = 10
-// 	tae.bindSchema(schema)
+func TestTransfer3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
 
-// 	bat := catalog.MockBatch(schema, 10)
-// 	defer bat.Close()
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
 
-// 	tae.createRelAndAppend(bat, true)
+	tae.createRelAndAppend(bat, true)
 
-// 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
 
-// 	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.getRelation()
 
-// 	var err error
-// 	err = rel1.DeleteByFilter(filter)
-// 	assert.NoError(t, err)
-// 	meta := rel1.GetMeta().(*catalog.TableEntry)
-// 	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
-// 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
-// 	assert.NoError(t, err)
+	var err error
+	err = rel1.DeleteByFilter(filter)
+	assert.NoError(t, err)
 
-// 	err = rel1.Append(bat.Window(3, 1))
-// 	assert.NoError(t, err)
-// 	err = txn1.Commit()
-// 	assert.NoError(t, err)
-// }
+	meta := rel1.GetMeta().(*catalog.TableEntry)
+	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+		types.BuildTS(time.Now().UTC().UnixNano(), 0))
+	assert.NoError(t, err)
+
+	err = rel1.Append(bat.Window(3, 1))
+	assert.NoError(t, err)
+	err = txn1.Commit()
+	assert.NoError(t, err)
+}

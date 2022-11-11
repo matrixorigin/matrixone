@@ -140,15 +140,16 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 	if table.IsDeleted() {
 		return moerr.NewNotFound()
 	}
-	if start == end {
-		return db.DeleteOne(table, id, start, dt)
-	}
-	for i := start; i <= end; i++ {
-		if err = db.DeleteOne(table, id, i, dt); err != nil {
-			return
-		}
-	}
-	return
+	return table.RangeDelete(id, start, end, dt)
+	// if start == end {
+	// 	return db.DeleteOne(table, id, start, dt)
+	// }
+	// for i := start; i <= end; i++ {
+	// 	if err = db.DeleteOne(table, id, i, dt); err != nil {
+	// 		return
+	// 	}
+	// }
+	// return
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
