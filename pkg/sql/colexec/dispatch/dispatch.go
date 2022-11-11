@@ -16,11 +16,12 @@ package dispatch
 
 import (
 	"bytes"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"sync/atomic"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -30,69 +31,60 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.flag = make([]bool, len(ap.Regs))
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
-	vecs := ap.vecs[:0]
-	for i := range bat.Vecs {
-		if bat.Vecs[i].IsOriginal() {
-			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
+
+	// source vectors should be cloned and instead before it was sent.
+	for i, vec := range bat.Vecs {
+		if vec.IsOriginal() {
+			cloneVec, err := vector.Dup(vec, proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return false, err
 			}
-			vecs = append(vecs, vec)
+			bat.Vecs[i] = cloneVec
 		}
 	}
-	for i := range bat.Vecs {
-		if bat.Vecs[i].IsOriginal() {
-			bat.Vecs[i] = vecs[0]
-			vecs = vecs[1:]
-		}
-	}
+
+	// send to each one
 	if ap.All {
-		atomic.AddInt64(&bat.Cnt, int64(len(ap.Regs))-1)
-		if bat.Ht != nil {
-			jm, ok := bat.Ht.(*hashmap.JoinMap)
-			if ok {
-				jm.IncRef(int64(len(ap.Regs)) - 1)
-			}
+		refCountAdd := int64(len(ap.Regs) - 1)
+		atomic.AddInt64(&bat.Cnt, refCountAdd)
+		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+			jm.IncRef(refCountAdd)
 		}
-		flag := false
+
 		for _, reg := range ap.Regs {
 			select {
 			case <-reg.Ctx.Done():
-				flag = true
+				return false, moerr.NewInternalError("pipeline context has done.")
 			case reg.Ch <- bat:
 			}
 		}
-		return flag, nil
+		return false, nil
 	}
-
-	for i := 0; i < len(ap.Regs); i++ {
-		if i == len(ap.Regs) {
-			i = 0
-			for j := range ap.ctr.flag {
-				ap.ctr.flag[j] = false
-			}
+	// send to any one
+	for len(ap.Regs) > 0 {
+		if ap.ctr.i == len(ap.Regs) {
+			ap.ctr.i = 0
 		}
-		if ap.ctr.flag[i] {
-			continue
-		}
-		reg := ap.Regs[i]
+		reg := ap.Regs[ap.ctr.i]
 		select {
 		case <-reg.Ctx.Done():
-			return true, nil
+			// XXX is that suitable ? should we return err
+			return false, moerr.NewInternalError("pipeline context has done.")
 		case reg.Ch <- bat:
-			ap.ctr.flag[i] = true
+			ap.ctr.i++
 			return false, nil
 		}
 	}
+	logutil.Warnf("no pipeline to receive the batch from dispatch. but still get batch need to send.")
 	return true, nil
 }

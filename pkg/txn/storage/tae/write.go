@@ -38,7 +38,7 @@ func (s *taeStorage) Write(
 		return handleWrite(
 			ctx, s,
 			txnMeta, payload,
-			s.taeHandler.HandlePreCommit,
+			s.taeHandler.HandlePreCommitWrite,
 		)
 
 	default:
