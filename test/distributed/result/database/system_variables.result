@@ -114,6 +114,7 @@ tables
 engines
 routines
 parameters
+keywords
 desc key_column_usage;
 Field    Type    Null    Key    Default    Extra    Comment
 constraint_catalog    VARCHAR    YES        NULL        
