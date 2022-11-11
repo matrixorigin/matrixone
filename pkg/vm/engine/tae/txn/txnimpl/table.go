@@ -219,7 +219,11 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 		rowID, ok := page.Transfer(row)
 		if !ok {
 			err = moerr.NewTxnWWConflict()
-			logutil.Warnf("TransferDelete %s Row=%d, Err=%v", id.BlockString(), row, err)
+			logutil.Warnf("[Txn=%s]TransferDelete %s Row=%d, Err=%v",
+				tbl.store.txn.Repr(),
+				id.BlockString(),
+				row,
+				err)
 			return
 		}
 		segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
