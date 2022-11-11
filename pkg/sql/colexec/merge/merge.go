@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

@@ -62,7 +62,7 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) error
 
-	HandlePreCommit(
+	HandlePreCommitWrite(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req apipb.PrecommitWriteCmd,

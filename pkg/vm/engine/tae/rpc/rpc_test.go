@@ -132,6 +132,19 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		defs,
 	)
 	assert.Nil(t, err)
+
+	createTbEntries1, err := makeCreateTableEntries(
+		"",
+		ac,
+		"tbtest1",
+		IDAlloc.NextTable(),
+		dbTestId,
+		dbName,
+		handle.m,
+		defs,
+	)
+	assert.Nil(t, err)
+	createTbEntries = append(createTbEntries, createTbEntries1...)
 	err = handle.HandlePreCommit(
 		context.TODO(),
 		createTbTxn,
@@ -153,7 +166,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	dbId := dbHandle.GetDatabaseID(ctx)
 	assert.True(t, dbTestId == dbId)
 	names, _ = dbHandle.RelationNames(ctx)
-	assert.Equal(t, 1, len(names))
+	assert.Equal(t, 2, len(names))
 	tbHandle, err := dbHandle.GetRelation(ctx, schema.Name)
 	assert.NoError(t, err)
 	tbTestId := tbHandle.GetRelationID(ctx)
