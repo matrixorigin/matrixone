@@ -58,13 +58,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			return false, moerr.NewInternalError("pipeline closed unexpectedly")
 		}
 
-		//if value.IsNil() {
-		//	ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-		//	ctr.aliveMergeReceiver--
-		//	continue
-		//}
 		pointer := value.UnsafePointer()
-		//bat := value.Interface().(*batch.Batch)
 		bat := (*batch.Batch)(pointer)
 		if bat == nil {
 			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
@@ -72,7 +66,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			continue
 		}
 		if bat.Length() == 0 {
-			println("bat length is 0")
 			continue
 		}
 		anal.Input(bat)
