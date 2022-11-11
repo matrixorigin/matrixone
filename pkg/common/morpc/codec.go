@@ -325,10 +325,8 @@ func writePayload(out *buf.ByteBuf, payload []byte, conn io.Writer, copyBuffer i
 		return nil
 	}
 
-	// TODO: case 1, ok.
-	// out.MustWrite(payload)
+	defer out.Reset()
 
-	// TODO: case2, fail. I do not known why?
 	// first, write header and body to socket
 	if _, err := out.WriteTo(conn); err != nil {
 		return err
