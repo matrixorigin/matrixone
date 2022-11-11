@@ -111,7 +111,7 @@ drop view view_t5;
 drop table t4;
 
 
--- @bvt:issue#3588
+
 drop table if exists t5;
 CREATE TABLE t5 (b datetime);
 
@@ -119,4 +119,3 @@ INSERT INTO t5 VALUES ('2010-01-01 00:00:00'), ('2010-01-01 00:00:00');
 SELECT * FROM t5 WHERE b <= coalesce(NULL, now());
 
 DROP TABLE t5;
--- @bvt:issue

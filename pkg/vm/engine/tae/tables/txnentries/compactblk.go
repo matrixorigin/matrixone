@@ -79,10 +79,12 @@ func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
 	return
 }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().FreeData()
-	if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
-		return
+	if entry.from.IsAppendableBlock() {
+		if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
+			return
+		}
 	}
+	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().FreeData()
 	return
 }
 
