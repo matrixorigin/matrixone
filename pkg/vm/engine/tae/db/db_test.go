@@ -577,7 +577,8 @@ func TestCompactBlock1(t *testing.T) {
 func TestCompactBlock2(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := initDB(t, opts)
 	defer db.Close()
 
 	worker := ops.NewOpWorker("xx")
@@ -704,7 +705,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 
 		err = txn2.Commit()
-		assert.Error(t, err)
+		assert.NoError(t, err)
 	}
 }
 
@@ -4196,3 +4197,114 @@ func TestDelete4(t *testing.T) {
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 }
+
+func TestTransfer(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+
+	txn1, rel1 := tae.getRelation()
+	err := rel1.DeleteByFilter(filter)
+	assert.NoError(t, err)
+
+	meta := rel1.GetMeta().(*catalog.TableEntry)
+	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+		types.BuildTS(time.Now().UTC().UnixNano(), 0))
+	assert.NoError(t, err)
+
+	err = txn1.Commit()
+	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+	assert.NoError(t, err)
+
+	txn2, rel2 := tae.getRelation()
+	_, err = rel2.GetValueByFilter(filter, 3)
+	t.Log(err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	v, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
+	expectV := bat.Vecs[2].Get(4)
+	assert.Equal(t, expectV, v)
+	assert.NoError(t, err)
+	_ = txn2.Commit()
+}
+
+func TestTransfer2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 200)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+
+	txn1, rel1 := tae.getRelation()
+	err := rel1.DeleteByFilter(filter)
+	assert.NoError(t, err)
+
+	tae.mergeBlocks(false)
+
+	err = txn1.Commit()
+	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+	assert.NoError(t, err)
+
+	txn2, rel2 := tae.getRelation()
+	_, err = rel2.GetValueByFilter(filter, 3)
+	t.Log(err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	v, err := rel2.GetValueByFilter(handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
+	expectV := bat.Vecs[2].Get(4)
+	assert.Equal(t, expectV, v)
+	assert.NoError(t, err)
+	_ = txn2.Commit()
+}
+
+// FIXME: do not remove
+// enable it when r-w is fixed
+// func TestTransfer3(t *testing.T) {
+// 	opts := config.WithLongScanAndCKPOpts(nil)
+// 	tae := newTestEngine(t, opts)
+// 	defer tae.Close()
+// 	schema := catalog.MockSchemaAll(5, 3)
+// 	schema.BlockMaxRows = 100
+// 	schema.SegmentMaxBlocks = 10
+// 	tae.bindSchema(schema)
+
+// 	bat := catalog.MockBatch(schema, 10)
+// 	defer bat.Close()
+
+// 	tae.createRelAndAppend(bat, true)
+
+// 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+
+// 	txn1, rel1 := tae.getRelation()
+
+// 	var err error
+// 	err = rel1.DeleteByFilter(filter)
+// 	assert.NoError(t, err)
+// 	meta := rel1.GetMeta().(*catalog.TableEntry)
+// 	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
+// 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
+// 	assert.NoError(t, err)
+
+// 	err = rel1.Append(bat.Window(3, 1))
+// 	assert.NoError(t, err)
+// 	err = txn1.Commit()
+// 	assert.NoError(t, err)
+// }
