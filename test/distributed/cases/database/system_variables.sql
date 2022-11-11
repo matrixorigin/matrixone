@@ -60,10 +60,10 @@ show variables like 'wait_timeout';
 
 drop table if exists t;
 create table t(
-	a int,
-	b int,
-	c int,
-	primary key(a)
+                  a int,
+                  b int,
+                  c int,
+                  primary key(a)
 );
 show indexes from t;
 
@@ -74,19 +74,17 @@ show tables;
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
-select TABLE_CATALOG from `columns` LIMIT 2;
+select table_name, column_name from columns where table_schema = 'mo_catalog' limit 5;
 desc profiling;
 select seq, state from profiling;
 
--- @bvt:issue#6036
-desc PROCESSLIST;
-select * from PROCESSLIST limit 2;
--- @bvt:issue
+desc `PROCESSLIST`;
+select * from `PROCESSLIST` limit 2;
 
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
-select catalog_name, schema_name from schemata;
+select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task';
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
 desc triggers;
