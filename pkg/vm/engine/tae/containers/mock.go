@@ -313,6 +313,33 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	return vec
 }
 
+func MockVector3(typ types.Type, rows int) Vector {
+	vec := MakeVector(typ, true)
+	switch typ.Oid {
+	case types.T_int32:
+		for i := 0; i < rows; i++ {
+			vec.Append(int32(rows))
+		}
+	case types.T_int64:
+		for i := 0; i < rows; i++ {
+			vec.Append(int64(rows))
+		}
+	case types.T_uint32:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint32(i))
+			vec.Append(uint32(i))
+			i++
+		}
+	case types.T_uint64:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint64(rows))
+		}
+	default:
+		panic("not support")
+	}
+	return vec
+}
+
 func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
 	bat = MockNullableBatch(vecTypes, nullables, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
