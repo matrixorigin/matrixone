@@ -2217,7 +2217,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 
 	tae.createRelAndAppend(bats[0], true)
 
-	assert.NoError(t, tae.deleteAll(false))
+	assert.NoError(t, tae.deleteAll(true))
 
 	txn, rel := tae.getRelation()
 	assert.NoError(t, rel.Append(bats[1]))
