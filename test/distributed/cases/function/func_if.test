@@ -78,9 +78,7 @@ INSERT INTO t1 VALUES(2),(3);
 SELECT a FROM t1 WHERE a IN(1, (SELECT IF(1=0,1,2/1)));
 DROP TABLE t1;
 
--- @bvt:issue#3588
 select IF(0,"ERROR","this"),IF(1,"is","ERROR"),IF(NULL,"ERROR","a"),IF(1,2,3)|0,IF(1,2.0,3.0)+0 ;
--- @bvt:issue
 
 
 
