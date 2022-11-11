@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -49,6 +50,9 @@ func NewCompactBlockEntry(
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	toId := to.Fingerprint()
 	prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+	for i, idx := range sortIdx {
+		sortIdx[i] = compute.ShuffleOffset(idx, deletes)
+	}
 	for i, idx := range sortIdx {
 		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
 		page.Train(idx, rowid)
