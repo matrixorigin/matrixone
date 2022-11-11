@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -263,7 +264,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoAvailableBackend: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
 
 	// Group 6: txn
-	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction has been committed or aborted"},
+	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
 	ErrTxnWriteConflict:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn write conflict %s"},
 	ErrMissingTxn:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
 	ErrUnresolvedConflict:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
@@ -685,8 +686,12 @@ func NewNoAvailableBackend() *Error {
 	return newWithDepth(Context(), ErrNoAvailableBackend)
 }
 
-func NewTxnClosed() *Error {
-	return newWithDepth(Context(), ErrTxnClosed)
+func NewTxnClosed(txnID []byte) *Error {
+	id := "unknown"
+	if len(txnID) > 0 {
+		id = hex.EncodeToString(txnID)
+	}
+	return newWithDepth(Context(), ErrTxnClosed, id)
 }
 
 func NewTxnWriteConflict(msg string, args ...any) *Error {

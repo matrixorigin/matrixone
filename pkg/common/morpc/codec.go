@@ -32,6 +32,9 @@ var (
 	flagCustomHeader   byte = 4
 
 	defaultMaxMessageSize = 1024 * 1024 * 100
+	checksumFieldBytes    = 8
+	totalSizeFieldBytes   = 4
+	payloadSizeFieldBytes = 4
 )
 
 func GetMessageSize() int {
@@ -74,7 +77,17 @@ type messageCodec struct {
 	bc    *baseCodec
 }
 
-// NewMessageCodec create message codec
+// NewMessageCodec create message codec. The message encoding format consists of a message header and a message body.
+// Format:
+//  1. Size, 4 bytes, required. Inlucde header and body.
+//  2. Message header
+//     2.1. Flag, 1 byte, required.
+//     2.2. Checksum, 8 byte, optional. Set if has a checksun flag
+//     2.3. PayloadSize, 4 byte, optional. Set if the message is a morpc.PayloadMessage.
+//     2.4. Custom headers, optional. Set if has custom header codecs
+//  3. Message body
+//     3.1. message body, required.
+//     3.2. payload, optional. Set if has paylad flag.
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
@@ -109,185 +122,158 @@ type baseCodec struct {
 }
 
 func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
-	message := RPCMessage{Message: c.messageFactory()}
-	data := in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
-	flag := data[0]
-	data = data[1:]
+	msg := RPCMessage{Message: c.messageFactory()}
+	offset := 0
+	data := getDecodeData(in)
 
-	var checksum *xxhash.Digest
-	expectChecksum := uint64(0)
-	if flag&flagWithChecksum != 0 {
-		expectChecksum = buf.Byte2Uint64(data)
-		data = data[8:]
-		checksum = acquireChecksum()
-		defer releaseChecksum(checksum)
-	}
+	// 2.1
+	flag, n := readFlag(data, offset)
+	offset += n
 
-	var payloadData []byte
-	if flag&flagPayloadMessage != 0 {
-		msize := buf.Byte2Int(data)
-		// custom header + msg + payload
-		data = data[4:]
-		v := len(data) - msize
-		payloadData = data[v:]
-		data = data[:v]
-	}
+	// 2.2
+	expectChecksum, n := readChecksum(flag, data, offset)
+	offset += n
 
-	if flag&flagCustomHeader != 0 {
-		for _, hc := range c.headerCodecs {
-			n, err := hc.Decode(&message, data)
-			if err != nil {
-				return nil, false, err
-			}
-			data = data[n:]
-		}
-	}
+	// 2.3
+	payloadSize, n := readPayloadSize(flag, data, offset)
+	offset += n
 
-	if flag&flagWithChecksum != 0 {
-		_, err := checksum.Write(data)
-		if err != nil {
-			return nil, false, err
-		}
-		if len(payloadData) > 0 {
-			_, err := checksum.Write(payloadData)
-			if err != nil {
-				return nil, false, err
-			}
-		}
-		actulChecksum := checksum.Sum64()
-		if actulChecksum != expectChecksum {
-			return nil, false, moerr.NewInternalError("checksum mismatch, expect %d, got %d",
-				expectChecksum,
-				actulChecksum)
-		}
-	}
-
-	err := message.Message.Unmarshal(data)
+	// 2.4
+	n, err := c.readCustomHeaders(flag, &msg, data, offset)
 	if err != nil {
 		return nil, false, err
 	}
+	offset += n
 
-	if len(payloadData) > 0 {
-		message.Message.(PayloadMessage).SetPayloadField(payloadData)
+	// 3.1 and 3.2
+	if err := readMessage(flag, data, offset, expectChecksum, payloadSize, &msg); err != nil {
+		return nil, false, err
 	}
 
 	in.SetReadIndex(in.GetMarkIndex())
 	in.ClearMark()
-	return message, true, nil
+	return msg, true, nil
 }
 
 func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
-	// format:
-	// 4 bytes length
-	// 1 bytes flag
-	// 8 bytes checksum if has check flag
-	// 4 bytes message size if has payload flag
-	// custom headers
-	// message body
-	// payload body
-
-	if rpcMessage, ok := data.(RPCMessage); ok {
-		message := rpcMessage.Message
-		var checksum *xxhash.Digest
-		checksumIdx := 0
-		flag := byte(0)
-		size := 1 // 1 bytes flag
-
-		if c.enableChecksum {
-			flag |= flagWithChecksum
-			size += 8
-			checksum = acquireChecksum()
-			defer releaseChecksum(checksum)
-		}
-
-		// handle payload
-		var payloadData []byte
-		var payload PayloadMessage
-		hasPayload := false
-		if payload, hasPayload = message.(PayloadMessage); hasPayload {
-			payloadData = payload.GetPayloadField()
-			hasPayload = len(payloadData) > 0
-			if hasPayload {
-				payload.SetPayloadField(nil)
-				flag |= flagPayloadMessage
-				hasPayload = true
-				size += 4 + len(payloadData) // 4 bytes payload size + payload bytes
-			}
-		}
-
-		if len(c.headerCodecs) > 0 {
-			flag |= flagCustomHeader
-		}
-
-		msize := message.Size()
-		size += msize
-
-		// 4 bytes total length
-		sizeIdx := out.GetWriteIndex()
-		out.Grow(4)
-		out.SetWriteIndex(sizeIdx + 4)
-		// 1 byte flag
-		out.MustWriteByte(flag)
-		// 8 bytes checksum
-		if c.enableChecksum {
-			checksumIdx = out.GetWriteIndex()
-			out.Grow(8)
-			out.SetWriteIndex(checksumIdx + 8)
-		}
-		// 4 bytes payload message size
-		if hasPayload {
-			out.WriteInt(len(payloadData))
-		}
-
-		if len(c.headerCodecs) > 0 {
-			for _, hc := range c.headerCodecs {
-				v, err := hc.Encode(&rpcMessage, out)
-				if err != nil {
-					return err
-				}
-				size += v
-			}
-		}
-		// message size
-		buf.Int2BytesTo(size, out.RawSlice(sizeIdx, sizeIdx+4))
-
-		// message body
-		index := out.GetWriteIndex()
-		out.Grow(msize)
-		out.SetWriteIndex(index + msize)
-		if _, err := message.MarshalTo(out.RawSlice(index, index+msize)); err != nil {
-			return err
-		}
-
-		if c.enableChecksum {
-			_, err := checksum.Write(out.RawSlice(index, index+msize))
-			if err != nil {
-				return err
-			}
-			if hasPayload {
-				_, err = checksum.Write(payloadData)
-				if err != nil {
-					return err
-				}
-			}
-			buf.Uint64ToBytesTo(checksum.Sum64(), out.RawSlice(checksumIdx, checksumIdx+8))
-		}
-
-		// payload body
-		if hasPayload {
-			// recover payload
-			payload.SetPayloadField(payloadData)
-			if _, err := out.WriteTo(conn); err != nil {
-				return err
-			}
-			if err := buf.WriteTo(payloadData, conn, c.payloadBufSize); err != nil {
-				return err
-			}
-		}
-		return nil
+	msg, ok := data.(RPCMessage)
+	if !ok {
+		return moerr.NewInternalError("not support %T %+v", data, data)
 	}
 
-	return moerr.NewInternalError("not support %T %+v", data, data)
+	totalSize := 0
+	// The total message size cannot be determined at the beginning and needs to wait until all the
+	// dynamic content is determined before the total size can be determined. After the total size is
+	// determined, we need to write the total size data in the location of totalSizeAt
+	totalSizeAt := skip(totalSizeFieldBytes, out)
+
+	// 2.1 flag
+	flag := c.getFlag(msg.Message)
+	out.WriteByte(flag)
+	totalSize += 1
+
+	// 2.2 checksum, similar to totalSize, we do not currently know the size of the message body.
+	checksumAt := -1
+	if flag&flagWithChecksum != 0 {
+		checksumAt = skip(checksumFieldBytes, out)
+		totalSize += checksumFieldBytes
+	}
+
+	// 2.3 payload
+	var payloadData []byte
+	var payloadMsg PayloadMessage
+	var hasPayload bool
+	if payloadMsg, hasPayload = msg.Message.(PayloadMessage); hasPayload {
+		// set payload filed to nil to avoid payload being written to the out buffer, and write directly
+		// to the socket afterwards to reduce one payload.
+		payloadData = payloadMsg.GetPayloadField()
+		payloadMsg.SetPayloadField(nil)
+
+		out.WriteInt(len(payloadData))
+		totalSize += payloadSizeFieldBytes + len(payloadData)
+	}
+
+	// 2.4 Custom header size
+	n, err := c.encodeCustomHeaders(&msg, out)
+	if err != nil {
+		return err
+	}
+	totalSize += n
+
+	// 3.1 message body
+	bodySize, body, err := writeBody(out, msg.Message)
+	if err != nil {
+		return err
+	}
+
+	// now, header and body are all determined, we need to fill the totalSize and checksum
+	// fill total size
+	totalSize += bodySize
+	writeIntAt(totalSizeAt, out, totalSize)
+
+	// fill checksum
+	if checksumAt != -1 {
+		if err := writeChecksum(checksumAt, out, body, payloadData); err != nil {
+			return err
+		}
+	}
+
+	// 3.2 payload
+	if hasPayload {
+		// resume payload to payload message
+		payloadMsg.SetPayloadField(payloadData)
+		if err := writePayload(out, payloadData, conn, c.payloadBufSize); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *baseCodec) getFlag(msg Message) byte {
+	flag := byte(0)
+	if c.enableChecksum {
+		flag |= flagWithChecksum
+	}
+	if len(c.headerCodecs) > 0 {
+		flag |= flagCustomHeader
+	}
+	if _, ok := msg.(PayloadMessage); ok {
+		flag |= flagPayloadMessage
+	}
+	return flag
+}
+
+func (c *baseCodec) encodeCustomHeaders(msg *RPCMessage, out *buf.ByteBuf) (int, error) {
+	if len(c.headerCodecs) == 0 {
+		return 0, nil
+	}
+
+	size := 0
+	for _, hc := range c.headerCodecs {
+		v, err := hc.Encode(msg, out)
+		if err != nil {
+			return 0, err
+		}
+		size += v
+	}
+	return size, nil
+}
+
+func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, offset int) (int, error) {
+	if flag&flagCustomHeader == 0 {
+		return 0, nil
+	}
+
+	readed := 0
+	for _, hc := range c.headerCodecs {
+		n, err := hc.Decode(msg, data[offset+readed:])
+		if err != nil {
+			return 0, err
+		}
+		readed += n
+	}
+	return readed, nil
 }
 
 var (
@@ -305,4 +291,134 @@ func acquireChecksum() *xxhash.Digest {
 func releaseChecksum(checksum *xxhash.Digest) {
 	checksum.Reset()
 	checksumPool.Put(checksum)
+}
+
+func skip(n int, out *buf.ByteBuf) int {
+	idx := out.GetWriteIndex()
+	out.Grow(n)
+	out.SetWriteIndex(idx + n)
+	return idx
+}
+
+func writeIntAt(offset int, out *buf.ByteBuf, value int) {
+	buf.Int2BytesTo(value, out.RawSlice(offset, offset+4))
+}
+
+func writeUint64At(offset int, out *buf.ByteBuf, value uint64) {
+	buf.Uint64ToBytesTo(value, out.RawSlice(offset, offset+8))
+}
+
+func writeBody(out *buf.ByteBuf, msg Message) (int, []byte, error) {
+	size := msg.Size()
+	index := out.GetWriteIndex()
+	out.Grow(size)
+	out.SetWriteIndex(index + size)
+	data := out.RawSlice(index, index+size)
+	if _, err := msg.MarshalTo(data); err != nil {
+		return 0, nil, err
+	}
+	return size, data, nil
+}
+
+func writePayload(out *buf.ByteBuf, payload []byte, conn io.Writer, copyBuffer int) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	defer out.Reset()
+
+	// first, write header and body to socket
+	if _, err := out.WriteTo(conn); err != nil {
+		return err
+	}
+
+	// write payload to socket
+	if err := buf.WriteTo(payload, conn, copyBuffer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeChecksum(offset int, out *buf.ByteBuf, body, payload []byte) error {
+	checksum := acquireChecksum()
+	defer releaseChecksum(checksum)
+
+	_, err := checksum.Write(body)
+	if err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		_, err = checksum.Write(payload)
+		if err != nil {
+			return err
+		}
+	}
+	writeUint64At(offset, out, checksum.Sum64())
+	return nil
+}
+
+func getDecodeData(in *buf.ByteBuf) []byte {
+	return in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
+}
+
+func readFlag(data []byte, offset int) (byte, int) {
+	return data[offset], 1
+}
+
+func readChecksum(flag byte, data []byte, offset int) (uint64, int) {
+	if flag&flagWithChecksum == 0 {
+		return 0, 0
+	}
+
+	return buf.Byte2Uint64(data[offset:]), checksumFieldBytes
+}
+
+func readPayloadSize(flag byte, data []byte, offset int) (int, int) {
+	if flag&flagPayloadMessage == 0 {
+		return 0, 0
+	}
+
+	return buf.Byte2Int(data[offset:]), payloadSizeFieldBytes
+}
+
+func validChecksum(body, payload []byte, expectChecksum uint64) error {
+	checksum := acquireChecksum()
+	defer releaseChecksum(checksum)
+
+	_, err := checksum.Write(body)
+	if err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		_, err := checksum.Write(payload)
+		if err != nil {
+			return err
+		}
+	}
+	actulChecksum := checksum.Sum64()
+	if actulChecksum != expectChecksum {
+		return moerr.NewInternalError("checksum mismatch, expect %d, got %d",
+			expectChecksum,
+			actulChecksum)
+	}
+	return nil
+}
+
+func readMessage(flag byte, data []byte, offset int, expectChecksum uint64, payloadSize int, msg *RPCMessage) error {
+	body := data[offset : len(data)-payloadSize]
+	payload := data[len(data)-payloadSize:]
+	if flag&flagWithChecksum != 0 {
+		if err := validChecksum(body, payload, expectChecksum); err != nil {
+			return err
+		}
+	}
+
+	if err := msg.Message.Unmarshal(body); err != nil {
+		return err
+	}
+
+	if payloadSize > 0 {
+		msg.Message.(PayloadMessage).SetPayloadField(payload)
+	}
+	return nil
 }

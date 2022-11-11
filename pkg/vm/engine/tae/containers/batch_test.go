@@ -18,15 +18,15 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBatch1(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(4)[2:]
 	attrs := []string{"attr1", "attr2"}
 	nullable := []bool{false, true}
@@ -61,7 +61,7 @@ func TestBatch1(t *testing.T) {
 }
 
 func TestBatch2(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
@@ -77,7 +77,7 @@ func TestBatch2(t *testing.T) {
 }
 
 func TestBatch3(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
 	bat := MockBatch(vecTypes, 101, 3, nil)
 	defer bat.Close()

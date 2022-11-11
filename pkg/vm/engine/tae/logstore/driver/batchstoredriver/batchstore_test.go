@@ -19,12 +19,11 @@ import (
 	"sync"
 	"testing"
 
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -135,7 +134,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 }
 
 func TestDriver(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	defer testutils.AfterTest(t)()
 	s := initEnv(t)
 	concurrentAppendReadCheckpoint(s, t)
 	s = restartStore(s, t)
