@@ -4212,6 +4212,10 @@ func TestGetActiveRow(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
 	txn, rel := tae.getRelation()
 	v := getSingleSortKeyValue(bat, schema, 0)
 	filter := handle.NewEQFilter(v)
