@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -68,8 +67,6 @@ func (s *store) handleDebug(ctx context.Context, request *txn.TxnRequest, respon
 }
 
 func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	_, span := trace.Debug(ctx, "doRead")
-	defer span.End()
 	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
@@ -81,8 +78,6 @@ func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *t
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	ctx, span := trace.Debug(ctx, "doWrite")
-	defer span.End()
 	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
