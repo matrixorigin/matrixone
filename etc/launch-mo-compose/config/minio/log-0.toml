@@ -33,14 +33,16 @@ key-prefix = "server/etl"
 statusPort = 7001
 
 [hakeeper-client]
-discovery-address = "logservice:32001"
+service-addresses = [
+  "logservice-0:32001",
+]
 
 [logservice]
 deployment-id = 1
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 raft-address = "logservice-0:32000"
 logservice-address = "logservice-0:32001"
-gossip-address = "179.19.0.19:32002"
+gossip-address = "179.19.0.133:32002"
 logservice-listen-address = "0.0.0.0:32001"
 gossip-seed-addresses = [
   "logservice-0:32002",

@@ -1,21 +1,26 @@
 version: '3.9'
 
-x-build: &build
+x-common: &common
   build:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
+  image:  matrixorigin/matrixone:nightly-b9c225f4
+  volumes:
+      - ../../etc/launch-mo-compose/config:/config
+  environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - LAUNCH=${LAUNCH}
+  tty: true
+  restart: on-failure
 
 services:
   cn-0:
     container_name: cn-0
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-b9c225f4
+    <<: *common
     entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/cn-0.toml"]
     profiles:
       - launch-tae-CN-tae-DN-minio
@@ -23,58 +28,31 @@ services:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
     depends_on:
-      - dn
+      - dn-0
     ports:
       - "6001:6001"
       - "6002"
-    restart: on-failure
-    volumes:
-      - ../../etc/launch-mo-compose/config:/config
-    environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - LAUNCH=${LAUNCH}
-    tty: true
     networks:
       monet:
 
   cn-1:
     container_name: cn-1
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-b9c225f4
+    <<: *common
     entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/cn-1.toml"]
     depends_on:
-      - dn
+      - dn-0
     ports:
       - "7001:6001"
       - "6002"
-    restart: on-failure
     profiles:
       - launch-tae-multi-CN-tae-DN-minio
       - launch-tae-multi-CN-tae-DN
-    volumes:
-      - ../../etc/launch-mo-compose/config:/config
-    environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - LAUNCH=${LAUNCH}
-    tty: true
     networks:
       monet:
 
   dn-0:
     container_name: dn-0
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
+    <<: *common
     image: matrixorigin/matrixone:nightly-b9c225f4
     entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/dn-0.toml"]
     profiles:
@@ -83,29 +61,15 @@ services:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
     depends_on:
-      - logservice
+      - logservice-0
     ports:
       - "41010"
-    restart: on-failure
-    tty: true
-    volumes:
-      - ../../etc/launch-mo-compose/config:/config
-    environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - LAUNCH=${LAUNCH}
     networks:
       monet:
 
   logservice-0:
     container_name: logservice-0
-    build:
-      context: ../../
-      dockerfile: ./optools/images/Dockerfile
-      args:
-        GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-b9c225f4
+    <<: *common
     profiles:
       - launch-tae-CN-tae-DN-minio
       - launch-tae-multi-CN-tae-DN-minio
@@ -118,18 +82,9 @@ services:
       - "32000"
       - "32001"
       - "32002"
-    environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - LAUNCH=${LAUNCH}
-    restart: on-failure
-    volumes:
-      - ../../etc/launch-mo-compose/config:/config
-    tty: true    
     networks:
       monet:
-        ipv4_address: 179.19.0.19
+        ipv4_address: 179.19.0.133
 
   minio:
     image: minio/minio

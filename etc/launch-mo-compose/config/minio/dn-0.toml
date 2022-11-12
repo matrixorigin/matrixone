@@ -29,7 +29,7 @@ endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [hakeeper-client]
-service-addresses = ["logservice-0:32001"]
+service-addresses = ["logservice:32001"]
 
 [dn]
 uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
