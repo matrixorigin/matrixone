@@ -4322,40 +4322,6 @@ func TestTransfer2(t *testing.T) {
 	_ = txn2.Commit()
 }
 
-// FIXME: do not remove
-// enable it when r-w is fixed
-// func TestTransfer3(t *testing.T) {
-// 	opts := config.WithLongScanAndCKPOpts(nil)
-// 	tae := newTestEngine(t, opts)
-// 	defer tae.Close()
-// 	schema := catalog.MockSchemaAll(5, 3)
-// 	schema.BlockMaxRows = 100
-// 	schema.SegmentMaxBlocks = 10
-// 	tae.bindSchema(schema)
-
-// 	bat := catalog.MockBatch(schema, 10)
-// 	defer bat.Close()
-
-// 	tae.createRelAndAppend(bat, true)
-
-// 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
-
-// 	txn1, rel1 := tae.getRelation()
-
-// 	var err error
-// 	err = rel1.DeleteByFilter(filter)
-// 	assert.NoError(t, err)
-// 	meta := rel1.GetMeta().(*catalog.TableEntry)
-// 	err = tae.FlushTable(0, meta.GetDB().ID, meta.ID,
-// 		types.BuildTS(time.Now().UTC().UnixNano(), 0))
-// 	assert.NoError(t, err)
-
-// 	err = rel1.Append(bat.Window(3, 1))
-// 	assert.NoError(t, err)
-// 	err = txn1.Commit()
-// 	assert.NoError(t, err)
-// }
-
 func TestCompactEmptyBlock(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
