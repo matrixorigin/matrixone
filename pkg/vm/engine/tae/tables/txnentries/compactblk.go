@@ -51,8 +51,16 @@ func NewCompactBlockEntry(
 	if to != nil {
 		toId := to.Fingerprint()
 		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
-		for i, idx := range sortIdx {
-			sortIdx[i] = compute.ShuffleOffset(idx, deletes)
+		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
+		if deletes != nil && !deletes.IsEmpty() {
+			delCnt := deletes.GetCardinality()
+			for i, idx := range sortIdx {
+				if i < len(offsetMapping) {
+					sortIdx[i] = offsetMapping[idx]
+				} else {
+					sortIdx[i] = idx + uint32(delCnt)
+				}
+			}
 		}
 		for i, idx := range sortIdx {
 			rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
