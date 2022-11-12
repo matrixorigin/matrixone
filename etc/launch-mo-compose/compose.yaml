@@ -76,15 +76,13 @@ services:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
     entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/log-0.toml"]
-    depends_on:
-      - createbuckets
     ports:
       - "32000"
       - "32001"
       - "32002"
     networks:
       monet:
-        ipv4_address: 179.19.0.133
+        ipv4_address: 179.19.0.9
 
   minio:
     image: minio/minio

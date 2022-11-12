@@ -32,7 +32,7 @@ endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [hakeeper-client]
-service-addresses = ["logservice:32001"]
+service-addresses = ["logservice-0:32001"]
 
 [observability]
 disableTrace = true
