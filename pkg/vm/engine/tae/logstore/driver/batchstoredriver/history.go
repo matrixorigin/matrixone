@@ -136,7 +136,7 @@ func (h *history) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, entry := range h.entries {
-		entry.Destroy()
+		_ = entry.Close()
 	}
 	h.entries = nil
 }
