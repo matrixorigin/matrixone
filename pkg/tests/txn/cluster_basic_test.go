@@ -17,25 +17,36 @@ package txn
 import (
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	testBackends = []string{memKVTxnStorage, memTxnStorage}
+	testOptionsSet = map[string][]func(opts service.Options) service.Options{
+		"tae-cn-tae-dn": {useDistributedTAEEngine, useTAEStorage},
+	}
 )
 
 func TestBasicSingleShard(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
-	for _, backend := range testBackends {
-		t.Run(backend, func(t *testing.T) {
+	for name, options := range testOptionsSet {
+		t.Run(name, func(t *testing.T) {
 			c, err := NewCluster(t,
-				getBasicClusterOptions(backend))
+				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			c.Start()
-			defer c.Stop()
+			defer func() {
+				c.Stop()
+			}()
 
 			cli := c.NewClient()
 
@@ -49,16 +60,22 @@ func TestBasicSingleShard(t *testing.T) {
 	}
 }
 
-func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
+func TestBasicSingleShardCannotReadUncommittedValue(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// 1. start t1
 	// 2. start t2
 	// 3. t1 write
 	// 4. t2 can not read t1's write
-	for _, backend := range testBackends {
-		t.Run(backend, func(t *testing.T) {
+	for name, options := range testOptionsSet {
+		t.Run(name, func(t *testing.T) {
 			c, err := NewCluster(t,
-				getBasicClusterOptions(backend))
+				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			c.Start()
 			defer c.Stop()
@@ -73,13 +90,74 @@ func TestBasicSingleShardCannotReadUncomittedValue(t *testing.T) {
 
 			checkWrite(t, t1, key, value, nil, false)
 			checkRead(t, t2, key, "", nil, true)
+
+			require.NoError(t, t1.Commit())
+		})
+	}
+}
+
+func TestWriteSkewIsAllowed(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
+	// 1. start t1
+	// 2. start t2
+	// 3. t1 reads x
+	// 4. t2 reads y
+	// 5. t1 writes x -> y
+	// 6. t2 writes y -> x
+	// 7. t1 commits
+	// 8. t2 commits
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+	for name, options := range testOptionsSet {
+		t.Run(name, func(t *testing.T) {
+			c, err := NewCluster(t,
+				getBasicClusterOptions(options...))
+			require.NoError(t, err)
+			c.Start()
+			defer c.Stop()
+
+			cli := c.NewClient()
+
+			k1 := "x"
+			k2 := "y"
+
+			checkWrite(t, mustNewTxn(t, cli), k1, "a", nil, true)
+			checkWrite(t, mustNewTxn(t, cli), k2, "b", nil, true)
+
+			t1 := mustNewTxn(t, cli)
+			t2 := mustNewTxn(t, cli)
+
+			x, err := t1.Read(k1)
+			require.NoError(t, err)
+			err = t1.Write(k2, x)
+			require.NoError(t, err)
+			y, err := t2.Read(k2)
+			require.NoError(t, err)
+			err = t2.Write(k1, y)
+			require.NoError(t, err)
+			err = t1.Commit()
+			require.NoError(t, err)
+			err = t2.Commit()
+			require.NoError(t, err)
+
+			checkRead(t, mustNewTxn(t, cli), k1, "b", nil, true)
+			checkRead(t, mustNewTxn(t, cli), k2, "a", nil, true)
 		})
 	}
 }
 
 func TestSingleShardWithCreateTable(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	c, err := NewCluster(t,
-		getBasicClusterOptions(memTxnStorage))
+		getBasicClusterOptions(useTAEStorage, useDistributedTAEEngine))
 	require.NoError(t, err)
 	c.Start()
 	defer c.Stop()
@@ -99,6 +177,7 @@ func TestSingleShardWithCreateTable(t *testing.T) {
 	sqlTxn = txn.(SQLBasedTxn)
 	_, err = sqlTxn.ExecSQL("use test_db")
 	require.NoError(t, err)
+	require.NoError(t, sqlTxn.Commit())
 }
 
 func checkRead(t *testing.T, txn Txn, key string, expectValue string, expectError error, commit bool) {
@@ -121,20 +200,26 @@ func checkWrite(t *testing.T, txn Txn, key, value string, expectError error, com
 	require.Equal(t, expectError, txn.Write(key, value))
 }
 
-func getBasicClusterOptions(txnStorageBackend string) service.Options {
-	options := service.DefaultOptions().
+func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) service.Options {
+	basic := service.DefaultOptions().
 		WithDNShardNum(1).
 		WithLogShardNum(1).
 		WithDNServiceNum(1).
 		WithLogServiceNum(3).
-		WithCNShardNum(0).
-		WithCNServiceNum(0).
-		WithDNTxnStorage(txnStorageBackend)
-	if txnStorageBackend != memKVTxnStorage {
-		options = options.WithCNShardNum(1).
-			WithCNServiceNum(1)
+		WithCNShardNum(1).
+		WithCNServiceNum(1)
+	for _, opt := range opts {
+		basic = opt(basic)
 	}
-	return options
+	return basic
+}
+
+func useTAEStorage(opts service.Options) service.Options {
+	return opts.WithDNUseTAEStorage()
+}
+
+func useDistributedTAEEngine(opts service.Options) service.Options {
+	return opts.WithCNUseDistributedTAEEngine()
 }
 
 func mustNewTxn(t *testing.T, cli Client, options ...client.TxnOption) Txn {

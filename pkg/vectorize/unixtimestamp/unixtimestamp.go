@@ -19,19 +19,38 @@ import (
 )
 
 var (
-	UnixTimestamp func([]types.Timestamp, []int64) []int64
+	UnixTimestampToInt        func([]types.Timestamp, []int64) []int64
+	UnixTimestampToFloat      func([]types.Timestamp, []float64) []float64
+	UnixTimestampToDecimal128 func([]types.Timestamp, []types.Decimal128) ([]types.Decimal128, error)
 )
 
 func init() {
-	UnixTimestamp = unixTimestamp
+	UnixTimestampToInt = unixTimestampToInt
+	UnixTimestampToFloat = unixTimestampToFloat
+	UnixTimestampToDecimal128 = unixTimestampToDecimal128
 }
 
-func unixTimestamp(xs []types.Timestamp, rs []int64) []int64 {
+func unixTimestampToInt(xs []types.Timestamp, rs []int64) []int64 {
 	for i := range xs {
 		rs[i] = xs[i].Unix()
-		if rs[i] < 0 {
-			rs[i] = 0
-		}
 	}
 	return rs
+}
+
+func unixTimestampToFloat(xs []types.Timestamp, rs []float64) []float64 {
+	for i := range xs {
+		rs[i] = xs[i].UnixToFloat()
+	}
+	return rs
+}
+
+func unixTimestampToDecimal128(xs []types.Timestamp, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i := range xs {
+		res, err := xs[i].UnixToDecimal128()
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = res
+	}
+	return rs, nil
 }

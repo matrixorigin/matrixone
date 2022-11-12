@@ -40,7 +40,7 @@ func TestCreateTxnStorage(t *testing.T) {
 		return mem.NewMemLog(), nil
 	}
 
-	s.cfg.Txn.Storage.Backend = memKVStorageBackend
+	s.cfg.Txn.Storage.Backend = StorageMEMKV
 	v, err := s.createTxnStorage(metadata.DNShard{})
 	assert.NoError(t, err)
 	assert.NotNil(t, v)

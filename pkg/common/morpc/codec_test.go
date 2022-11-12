@@ -161,3 +161,25 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
 	assert.False(t, ok)
 	assert.Error(t, err)
 }
+
+func TestNewWithMaxBodySize(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	maxBodySize := 1024 * 1024 * 20
+	codec := newTestCodec(WithCodecMaxBodySize(maxBodySize + 1024))
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = make([]byte, 1024*1024*11)
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}

@@ -122,7 +122,7 @@ func (a serviceAddresses) getLogListenAddress(index int) string {
 	return a.logAddresses[index].listenAddr
 }
 
-func (a serviceAddresses) getCnListenAddress(index int) string {
+func (a serviceAddresses) getCNListenAddress(index int) string {
 	a.assertCnService()
 
 	if index >= len(a.cnAddresses) || index < 0 {

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -96,6 +97,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Name2ColIndex: node.TableDef.Name2ColIndex,
 			Createsql:     node.TableDef.Createsql,
 			TblFunc:       node.TableDef.TblFunc,
+			TableType:     node.TableDef.TableType,
+			CompositePkey: node.TableDef.CompositePkey,
+			IndexInfos:    node.TableDef.IndexInfos,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -624,12 +628,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		if !IsTableFunctionValueScan(node) {
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ:  &plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
-			})
-		}
+		node.ProjectList = append(node.ProjectList, &plan.Expr{
+			Typ:  &plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+		})
 
 	default:
 		return nil, moerr.NewInternalError("unsupport node type")
@@ -768,15 +770,24 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if err != nil {
 				return 0, moerr.NewParseError("the %d column cann't cast to a same type", columnIdx)
 			}
+
+			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
+				for i := 0; i < len(argsCastType); i++ {
+					argsCastType[i].Precision = 0
+				}
+			}
 			var targetType *plan.Type
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
-				targetType = makePlan2Type(&tmpArgsType[0])
 				targetArgType = tmpArgsType[0]
 			} else {
-				targetType = makePlan2Type(&argsCastType[0])
 				targetArgType = argsCastType[0]
 			}
+			// if string union string, different length may cause error. use text type as the output
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+				targetArgType = types.T_text.ToType()
+			}
+			targetType = makePlan2Type(&targetArgType)
 
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
@@ -795,8 +806,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
+	// set ctx's headings  projects  results
+	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 
-	getProjectList := func(tag int32) []*plan.Expr {
+	getProjectList := func(tag int32, thisTag int32) []*plan.Expr {
 		projectList := make([]*plan.Expr, len(firstSelectProjectNode.ProjectList))
 		for i, expr := range firstSelectProjectNode.ProjectList {
 			projectList[i] = &plan.Expr{
@@ -808,6 +821,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					},
 				},
 			}
+			builder.nameByColRef[[2]int32{thisTag, int32(i)}] = ctx.headings[i]
 		}
 		return projectList
 	}
@@ -827,7 +841,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				NodeType:    unionTypes[utIdx],
 				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
 				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(leftNodeTag),
+				ProjectList: getProjectList(leftNodeTag, lastTag),
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -847,7 +861,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			NodeType:    newUnionType[utIdx],
 			Children:    []int32{lastNodeId, newNodes[i]},
 			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(leftNodeTag),
+			ProjectList: getProjectList(leftNodeTag, lastTag),
 		}, ctx)
 	}
 
@@ -855,11 +869,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	ctx.groupTag = builder.genNewTag()
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
-	// set ctx's headings  projects  results
-	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 	for i, v := range ctx.headings {
 		ctx.aliasMap[v] = int32(i)
-		builder.nameByColRef[[2]int32{lastTag, int32(i)}] = v
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
 	for i, expr := range firstSelectProjectNode.ProjectList {
@@ -940,6 +951,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			if err != nil {
 				return 0, err
 			}
+
+			if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					ctx.hasSingleRow = c.I64Val == 1
+				}
+			}
 		}
 	}
 
@@ -1004,6 +1021,28 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			ctx.cteByName[name] = &CTERef{
 				ast:        cte,
 				maskedCTEs: maskedCTEs,
+			}
+		}
+
+		// Try to do binding for CTE at declaration
+		for _, cte := range stmt.With.CTEs {
+			subCtx := NewBindContext(builder, ctx)
+			subCtx.maskedCTEs = ctx.cteByName[string(cte.Name.Alias)].maskedCTEs
+
+			var err error
+			switch stmt := cte.Stmt.(type) {
+			case *tree.Select:
+				_, err = builder.buildSelect(stmt, subCtx, false)
+
+			case *tree.ParenSelect:
+				_, err = builder.buildSelect(stmt.Select, subCtx, false)
+
+			default:
+				err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+			}
+
+			if err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -1271,8 +1310,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_Ival); ok {
-					ctx.hasSingleRow = c.Ival == 1
+				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
 		}
@@ -1609,10 +1648,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return
 				}
 
-				if subCtx.isCorrelated {
-					return 0, moerr.NewNYI("correlated column in CTE")
-				}
-
 				if subCtx.hasSingleRow {
 					ctx.hasSingleRow = true
 				}
@@ -1808,6 +1843,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
+		tag := subCtx.rootTag()
 		headings := subCtx.headings
 		projects := subCtx.projects
 
@@ -1819,14 +1855,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if len(alias.Alias) > 0 {
 			table = string(alias.Alias)
 		}
+		if len(table) == 0 {
+			table = fmt.Sprintf("mo_table_subquery_alias_%d", tag)
+		}
 		if _, ok := ctx.bindingByTable[table]; ok {
 			return moerr.NewSyntaxError("table name %q specified more than once", table)
 		}
 
 		cols = make([]string, len(headings))
 		types = make([]*plan.Type, len(headings))
-
-		tag := builder.ctxByNode[nodeID].rootTag()
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -1883,7 +1920,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
-
+	if _, ok := tbl.Right.(*tree.TableFunction); ok {
+		return 0, moerr.NewSyntaxError("Every table function must have an alias")
+	}
+	if tblFn, ok := tbl.Right.(*tree.AliasedTableExpr).Expr.(*tree.TableFunction); ok {
+		err = buildTableFunctionStmt(tblFn, tbl.Left, leftCtx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err
@@ -2241,13 +2286,41 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 }
 
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	var (
+		childId int32 = -1
+		err     error
+		nodeId  int32
+	)
+	if tbl.SelectStmt != nil {
+		childId, err = builder.buildSelect(tbl.SelectStmt, ctx, false)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if childId == -1 {
+		scanNode := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+		}
+		childId = builder.appendNode(scanNode, ctx)
+	}
+	ctx.binder = NewTableBinder(builder, ctx)
+	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
+	for _, v := range tbl.Func.Exprs {
+		curExpr, err := ctx.binder.BindExpr(v, 0, false)
+		if err != nil {
+			return 0, err
+		}
+		exprs = append(exprs, curExpr)
+	}
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		return builder.buildUnnest(tbl, ctx)
+		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
 	case "generate_series":
-		return builder.buildGenerateSeries(tbl, ctx)
+		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
 	default:
-		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
+		err = moerr.NewNotSupported("table function '%s' not supported", id)
 	}
+	clearBinding(ctx)
+	return nodeId, err
 }

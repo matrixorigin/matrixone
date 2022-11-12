@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,6 +42,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil, // no get cluster details func can be set
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
@@ -77,10 +77,6 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	return fs
-}
-
-func NewTaskService() taskservice.TaskService {
-	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
@@ -184,6 +180,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewDateVector(n, typ, m, random, vs)
 		}
 		return NewDateVector(n, typ, m, random, nil)
+	case types.T_time:
+		if vs, ok := Values.([]string); ok {
+			return NewTimeVector(n, typ, m, random, vs)
+		}
+		return NewTimeVector(n, typ, m, random, nil)
 	case types.T_datetime:
 		if vs, ok := Values.([]string); ok {
 			return NewDatetimeVector(n, typ, m, random, vs)
@@ -209,9 +210,46 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewStringVector(n, typ, m, random, vs)
 		}
 		return NewStringVector(n, typ, m, random, nil)
+	case types.T_json:
+		if vs, ok := Values.([]string); ok {
+			return NewJsonVector(n, typ, m, random, vs)
+		}
+		return NewJsonVector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
+}
+
+func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []string) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for _, v := range vs {
+			json, err := types.ParseStringToByteJson(v)
+			if err != nil {
+				vec.Free(m)
+				return nil
+			}
+			jbytes, err := json.Marshal()
+			if err != nil {
+				vec.Free(m)
+				return nil
+			}
+			if err := vec.Append(jbytes, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		json, _ := types.ParseStringToByteJson(`{"a":1}`)
+		jbytes, _ := json.Marshal()
+		if err := vec.Append(jbytes, false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func NewBoolVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []bool) *vector.Vector {
@@ -546,6 +584,34 @@ func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 			v = rand.Int()
 		}
 		if err := vec.Append(types.Date(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
+	vec := vector.New(typ)
+	if vs != nil {
+		for i := range vs {
+			d, err := types.ParseTime(vs[i], 6)
+			if err != nil {
+				return nil
+			}
+			if err := vec.Append(d, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vec.Append(types.Time(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

@@ -16,10 +16,10 @@ package dnservice
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -32,21 +32,11 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	memStorageBackend   = "MEM"
-	memKVStorageBackend = "MEMKV"
-	taeStorageBackend   = "TAE"
-
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
-)
-
 var (
-	supportTxnStorageBackends = map[string]struct{}{
-		memKVStorageBackend: {},
-		memStorageBackend:   {},
-		taeStorageBackend:   {},
+	supportTxnStorageBackends = map[StorageType]struct{}{
+		StorageMEMKV: {},
+		StorageMEM:   {},
+		StorageTAE:   {},
 	}
 )
 
@@ -60,7 +50,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	}
 
 	switch s.cfg.Txn.Storage.Backend {
-	case memStorageBackend:
+	case StorageMEM:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -72,14 +62,14 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 
-	case memKVStorageBackend:
+	case StorageMEMKV:
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
 		}
 		return s.newMemKVStorage(shard, logClient)
 
-	case taeStorageBackend:
+	case StorageTAE:
 		ts, err := s.newTAEStorage(shard, factory)
 		if err != nil {
 			return nil, err
@@ -111,6 +101,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 		LogShardID:       shard.LogShardID,
 		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
 
@@ -137,18 +128,26 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
-	// tae's ScannerInterval's unit is millisecond, convert here. Fix later
 	ckpcfg := &options.CheckpointCfg{
-		ScannerInterval:    int64(s.cfg.Ckp.ScannerInterval.Duration / time.Millisecond),
-		ExecutionInterval:  int64(s.cfg.Ckp.ExecutionInterval.Duration / time.Millisecond),
-		FlushInterval:      int64(s.cfg.Ckp.FlushInterval.Duration / time.Millisecond),
-		ExecutionLevels:    s.cfg.Ckp.ExecutionLevels,
-		CatalogCkpInterval: int64(s.cfg.Ckp.CatalogCkpInterval.Duration / time.Millisecond),
-		CatalogUnCkpLimit:  s.cfg.Ckp.CatalogUnCkpLimit,
+		MinCount:            s.cfg.Ckp.MinCount,
+		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,
+		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
+		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
+		GlobalInterval:      s.cfg.Ckp.GlobalInterval.Duration,
 	}
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, s.cfg.Txn.Storage.Name)
+
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	return taestorage.NewTAEStorage(shard, factory, fs, s.clock, ckpcfg)
+
+	return taestorage.NewTAEStorage(
+		s.cfg.Txn.Storage.dataDir,
+		shard,
+		factory,
+		fs,
+		s.clock,
+		ckpcfg,
+		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
 }

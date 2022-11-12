@@ -28,7 +28,7 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultListenAddress, c.ListenAddress)
 	assert.Equal(t, c.ListenAddress, defaultListenAddress)
 	assert.Equal(t, c.ServiceAddress, defaultServiceAddress)
-	assert.Equal(t, taeStorageBackend, c.Txn.Storage.Backend)
+	assert.Equal(t, StorageTAE, c.Txn.Storage.Backend)
 	assert.Equal(t, defaultZombieTimeout, c.Txn.ZombieTimeout.Duration)
 	assert.Equal(t, defaultDiscoveryTimeout, c.HAKeeper.DiscoveryTimeout.Duration)
 	assert.Equal(t, defaultHeatbeatDuration, c.HAKeeper.HeatbeatDuration.Duration)

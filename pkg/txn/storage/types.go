@@ -60,6 +60,9 @@ type TxnStorage interface {
 	Commit(ctx context.Context, txnMeta txn.TxnMeta) error
 	// Rollback rollback the transaction.
 	Rollback(ctx context.Context, txnMeta txn.TxnMeta) error
+
+	// Debug handle debug request
+	Debug(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error)
 }
 
 // ReadResult read result from TxnStorage. When a read operation encounters any concurrent write transaction,

@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/RoaringBitmap/roaring"
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,29 +48,22 @@ Notes:
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
+	info *pkgcatalog.BlockInfo,
 	columns []string,
+	colIdxs []uint16,
+	colTypes []types.Type,
+	colNulls []bool,
 	tableDef *plan.TableDef,
-	metaloc, deltaloc string,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*batch.Batch, error) {
 
-	// prepare
-	columnLength := len(columns)
-	colIdxs := make([]uint16, columnLength)
-	colTyps := make([]types.Type, columnLength)
-	colNulls := make([]bool, columnLength)
-	for i, column := range columns {
-		colIdxs[i] = uint16(tableDef.Name2ColIndex[column])
-		colDef := tableDef.Cols[colIdxs[i]]
-		colTyps[i] = types.T(colDef.Typ.Id).ToType()
-		if colDef.Default != nil {
-			colNulls[i] = colDef.Default.NullAbility
-		}
-	}
-
 	// read
-	columnBatch, err := BlockReadInner(ctx, columns, colIdxs, colTyps, colNulls, metaloc, deltaloc, types.TimestampToTS(ts), fs, pool)
+	columnBatch, err := BlockReadInner(
+		ctx, info,
+		columns, colIdxs, colTypes, colNulls,
+		types.TimestampToTS(ts), fs, pool,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -79,32 +73,34 @@ func BlockRead(
 	bat.Attrs = columns
 	for i, vec := range columnBatch.Vecs {
 		movec := containers.UnmarshalToMoVec(vec)
-		if vec.Allocated() != 0 { // allocated in mpool
-			movec.SetOriginal(false)
-		}
 		bat.Vecs[i] = movec
 	}
-	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
+	bat.SetZs(bat.Vecs[0].Length(), pool)
 
 	return bat, nil
 }
 
 func BlockReadInner(
 	ctx context.Context,
+	info *pkgcatalog.BlockInfo,
 	colNames []string,
 	colIdxs []uint16,
 	colTyps []types.Type,
 	colNulls []bool,
-	metaloc, deltaloc string,
 	ts types.TS,
 	fs fileservice.FileService,
 	pool *mpool.MPool) (*containers.Batch, error) {
-	columnBatch, err := readColumnBatchByMetaloc(metaloc, colNames, colIdxs, colTyps, colNulls, fs, pool)
+	columnBatch, err := readColumnBatchByMetaloc(
+		ctx, info.BlockID, info.SegmentID,
+		info.MetaLoc,
+		colNames, colIdxs, colTyps, colNulls,
+		fs, pool,
+	)
 	if err != nil {
 		return nil, err
 	}
-	if deltaloc != "" {
-		deleteBatch, err := readDeleteBatchByDeltaloc(deltaloc, fs)
+	if info.DeltaLoc != "" {
+		deleteBatch, err := readDeleteBatchByDeltaloc(ctx, info.DeltaLoc, fs)
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +111,9 @@ func BlockReadInner(
 }
 
 func readColumnBatchByMetaloc(
+	ctx context.Context,
+	blkid uint64,
+	segid uint64,
 	metaloc string,
 	colNames []string,
 	colIdxs []uint16,
@@ -125,22 +124,18 @@ func readColumnBatchByMetaloc(
 	name, extent, rows := DecodeMetaLoc(metaloc)
 	idxsWithouRowid := make([]uint16, 0, len(colIdxs))
 	var rowidData containers.Vector
+	var err error
 	// sift rowid column
 	for i, typ := range colTyps {
 		if typ.Oid == types.T_Rowid {
 			// generate rowid data
-			id, err := DecodeBlkName(name)
-			if err != nil {
-				return nil, err
-			}
-			prefix := model.EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
-			// rowid data will be allocated in mpool, so there is no copy when converting tae batch to mo batch
+			prefix := model.EncodeBlockKeyPrefix(segid, blkid)
 			rowidData, err = model.PreparePhyAddrDataWithPool(
 				types.T_Rowid.ToType(),
 				prefix,
 				0,
 				rows,
-				pool,
+				nil,
 			)
 			if err != nil {
 				return nil, err
@@ -168,7 +163,7 @@ func readColumnBatchByMetaloc(
 
 	// TODO: objectio will add mpool later
 	// the ioResult is managed by golang itself.
-	ioResult, err := reader.Read(extent, idxsWithouRowid, nil)
+	ioResult, err := reader.Read(ctx, extent, idxsWithouRowid, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +174,7 @@ func readColumnBatchByMetaloc(
 			bat.AddVector(colNames[i], rowidData)
 		} else {
 			vec := vector.New(colTyps[i])
-			err := vec.Read(entry[0].Data)
+			err := vec.Read(entry[0].Object.([]byte))
 			if err != nil {
 				return nil, err
 			}
@@ -191,7 +186,7 @@ func readColumnBatchByMetaloc(
 	return bat, nil
 }
 
-func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
+func readDeleteBatchByDeltaloc(ctx context.Context, deltaloc string, fs fileservice.FileService) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
@@ -201,13 +196,13 @@ func readDeleteBatchByDeltaloc(deltaloc string, fs fileservice.FileService) (*co
 	if err != nil {
 		return nil, err
 	}
-	ioResult, err := reader.Read(extent, []uint16{0, 1, 2}, nil)
+	ioResult, err := reader.Read(ctx, extent, []uint16{0, 1, 2}, nil)
 	if err != nil {
 		return nil, err
 	}
 	for i, entry := range ioResult.Entries {
 		vec := vector.New(colTypes[i])
-		err := vec.Read(entry.Data)
+		err := vec.Read(entry.Object.([]byte))
 		if err != nil {
 			return nil, err
 		}

@@ -16,44 +16,58 @@ package cnservice
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
 
 func (s *service) startCNStoreHeartbeat() error {
-	// TODO: always enable heartbeat task
 	if s._hakeeperClient == nil {
-		return nil
+		if _, err := s.getHAKeeperClient(); err != nil {
+			return err
+		}
 	}
 	return s.stopper.RunNamedTask("cnservice-heartbeat", s.heartbeatTask)
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
+	defer logutil.LogAsyncTask(s.logger, "cnservice/heartbeat-task")()
+
 	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatDuration.Duration)
 	defer ticker.Stop()
-
-	s.logger.Info("CNStore heartbeat started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Info("CNStore heartbeat stopped")
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
-			err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
-				UUID:           s.cfg.UUID,
-				ServiceAddress: s.cfg.ListenAddress,
-				Role:           s.metadata.Role,
+			batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
+				UUID:               s.cfg.UUID,
+				ServiceAddress:     s.cfg.ServiceAddress,
+				SQLAddress:         s.cfg.SQLAddress,
+				Role:               s.metadata.Role,
+				TaskServiceCreated: s.GetTaskRunner() != nil,
 			})
 			cancel()
-
 			if err != nil {
-				s.logger.Error("send DNShard heartbeat request failed",
+				s.logger.Error("send CNShard heartbeat request failed",
 					zap.Error(err))
+				break
 			}
+			for _, command := range batch.Commands {
+				if command.ServiceType != logservicepb.CNService {
+					panic(fmt.Sprintf("received a Non-CN Schedule Command: %s", command.ServiceType.String()))
+				}
+				s.logger.Info("applying schedule command", zap.String("command", command.LogString()))
+				if command.CreateTaskService != nil {
+					s.createTaskService(command.CreateTaskService)
+				}
+			}
+			s.logger.Debug("send DNShard heartbeat request completed")
 		}
 	}
 }

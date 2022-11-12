@@ -21,7 +21,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"container/list"
-	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -48,24 +49,33 @@ import (
 	"github.com/pierrec/lz4"
 )
 
+var (
+	ONE_BATCH_MAX_ROW = 40000
+)
+
 func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("external output")
 }
 
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
-	param.batchSize = 40000
-	param.records = make([][]string, param.batchSize)
+	if proc.Lim.MaxMsgSize == 0 {
+		param.maxBatchSize = uint64(morpc.GetMessageSize())
+	} else {
+		param.maxBatchSize = proc.Lim.MaxMsgSize
+	}
+	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
 		param.Fileparam.End = true
 		return err
 	}
-	/*if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
-		param.End = true
-		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
-	}*/
+	if param.extern.ScanType == tree.S3 {
+		if err := InitS3Param(param.extern); err != nil {
+			return err
+		}
+	}
 	if param.extern.Format == tree.JSONLINE {
 		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -73,54 +83,87 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 	}
 	param.extern.FileService = proc.FileService
+	param.extern.Ctx = proc.Ctx
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := ReadDir(param.extern)
-	if err != nil {
-		param.Fileparam.End = true
-		return err
-	}
-
-	if len(fileList) == 0 {
+	if len(param.FileList) == 0 {
 		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.Fileparam.End = true
 	}
-	param.FileList = fileList
 	param.extern.Filepath = ""
-	param.Fileparam.FileCnt = len(fileList)
+	param.Fileparam.FileCnt = len(param.FileList)
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any) (bool, error) {
+func Call(idx int, proc *process.Process, arg any) (bool, error) {
+	anal := proc.GetAnalyze(idx)
+	anal.Start()
+	defer anal.Stop()
+	anal.Input(nil)
 	param := arg.(*Argument).Es
-	param.Fileparam.mu.Lock()
 	if param.Fileparam.End {
-		param.Fileparam.mu.Unlock()
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	if param.extern.Filepath == "" {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
-			param.Fileparam.mu.Unlock()
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		param.extern.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	param.Fileparam.mu.Unlock()
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return false, err
 	}
 	proc.SetInputBatch(bat)
+	anal.Output(bat)
+	anal.Alloc(int64(bat.Size()))
 	return false, nil
 }
 
-func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
-	ctx := context.TODO()
+func InitS3Param(param *tree.ExternParam) error {
+	param.S3Param = &tree.S3Parameter{}
+	for i := 0; i < len(param.S3option); i += 2 {
+		switch strings.ToLower(param.S3option[i]) {
+		case "endpoint":
+			param.S3Param.Endpoint = param.S3option[i+1]
+		case "region":
+			param.S3Param.Region = param.S3option[i+1]
+		case "access_key_id":
+			param.S3Param.APIKey = param.S3option[i+1]
+		case "secret_access_key":
+			param.S3Param.APISecret = param.S3option[i+1]
+		case "bucket":
+			param.S3Param.Bucket = param.S3option[i+1]
+		case "filepath":
+			param.Filepath = param.S3option[i+1]
+		case "compression":
+			param.CompressType = param.S3option[i+1]
+		default:
+			return moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
+		}
+	}
+	return nil
+}
 
+func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+	if param.ScanType == tree.S3 {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{"s3", param.S3Param.Endpoint, param.S3Param.Region, param.S3Param.Bucket, param.S3Param.APIKey, param.S3Param.APISecret, ""})
+		if err != nil {
+			return nil, "", err
+		}
+		w.Flush()
+		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+	}
+	return fileservice.GetForETL(param.FileService, prefix)
+}
+
+func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
 	pathDir := strings.Split(filePath, "/")
 	l := list.New()
@@ -134,11 +177,11 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
-			fs, readPath, err := fileservice.GetForETL(param.FileService, prefix)
+			fs, readPath, err := GetForETLWithType(param, prefix)
 			if err != nil {
 				return nil, err
 			}
-			entries, err := fs.List(ctx, readPath)
+			entries, err := fs.List(param.Ctx, readPath)
 			if err != nil {
 				return nil, err
 			}
@@ -167,7 +210,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(param.FileService, param.Filepath)
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +225,7 @@ func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
 			},
 		},
 	}
-	ctx := context.TODO()
-	err = fs.Read(ctx, &vec)
+	err = fs.Read(param.Ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +368,6 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 
 	channelSize := 100
 	plh := &ParseLineHandler{}
-	plh.batchSize = param.batchSize
 	plh.simdCsvGetParsedLinesChan = atomic.Value{}
 	plh.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
 	if param.extern.Tail.Fields == nil {
@@ -357,35 +398,37 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, proc.Ctx, param.records)
+	plh.simdCsvLineArray = make([][]string, ONE_BATCH_MAX_ROW)
+	finish := false
+	plh.simdCsvLineArray, cnt, finish, err = plh.simdCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.simdCsvLineArray)
 	if err != nil {
 		return nil, err
 	}
-	if cnt < param.batchSize {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
+
+	if finish {
 		err := param.reader.Close()
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
 		}
 		plh.simdCsvReader.Close()
 		param.plh = nil
-		param.Fileparam.mu.Lock()
 		param.Fileparam.FileFin++
 		param.extern.Filepath = ""
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
-		param.Fileparam.mu.Unlock()
 	}
 	if param.IgnoreLine != 0 {
-		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
-			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if cnt >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:cnt]
+			cnt -= param.IgnoreLine
 		} else {
 			plh.simdCsvLineArray = nil
+			cnt = 0
 		}
 		param.IgnoreLine = 0
 	}
-	plh.batchSize = len(plh.simdCsvLineArray)
+	plh.batchSize = cnt
 	bat, err = GetBatchData(param, plh, proc)
 	if err != nil {
 		return nil, err
@@ -502,7 +545,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int8:
-			//cols := vec.Col.([]int8)
 			cols := vector.MustTCols[int8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -524,7 +566,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int16:
-			//cols := vec.Col.([]int16)
 			cols := vector.MustTCols[int16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -546,7 +587,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int32:
-			//cols := vec.Col.([]int32)
 			cols := vector.MustTCols[int32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -568,7 +608,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_int64:
-			//cols := vec.Col.([]int64)
 			cols := vector.MustTCols[int64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -590,7 +629,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint8:
-			//cols := vec.Col.([]uint8)
 			cols := vector.MustTCols[uint8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -612,7 +650,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint16:
-			//cols := vec.Col.([]uint16)
 			cols := vector.MustTCols[uint16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -634,7 +671,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint32:
-			//cols := vec.Col.([]uint32)
 			cols := vector.MustTCols[uint32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -656,7 +692,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_uint64:
-			//cols := vec.Col.([]uint64)
 			cols := vector.MustTCols[uint64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -678,30 +713,48 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_float32:
-			//cols := vec.Col.([]float32)
 			cols := vector.MustTCols[float32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := strconv.ParseFloat(field, 32)
+				// origin float32 data type
+				if vec.Typ.Precision < 0 {
+					d, err := strconv.ParseFloat(field, 32)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return moerr.NewInternalError("the input value '%v' is not float32 type for column %d", field, colIdx)
+					}
+					cols[rowIdx] = float32(d)
+					continue
+				}
+				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not float32 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = float32(d)
+				cols[rowIdx] = float32(d.ToFloat64())
 			}
 		case types.T_float64:
-			//cols := vec.Col.([]float64)
 			cols := vector.MustTCols[float64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := strconv.ParseFloat(field, 64)
+				// origin float64 data type
+				if vec.Typ.Precision < 0 {
+					d, err := strconv.ParseFloat(field, 64)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return moerr.NewInternalError("the input value '%v' is not float64 type for column %d", field, colIdx)
+					}
+					cols[rowIdx] = d
+					continue
+				}
+				d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not float64 type for column %d", field, colIdx)
 				}
-				cols[rowIdx] = d
+				cols[rowIdx] = d.ToFloat64()
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			if isNullOrEmpty {
@@ -733,7 +786,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 			}
 		case types.T_date:
-			//cols := vec.Col.([]types.Date)
 			cols := vector.MustTCols[types.Date](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -745,8 +797,19 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				}
 				cols[rowIdx] = d
 			}
+		case types.T_time:
+			cols := vector.MustTCols[types.Time](vec)
+			if isNullOrEmpty {
+				nulls.Add(vec.Nsp, uint64(rowIdx))
+			} else {
+				d, err := types.ParseTime(field, vec.Typ.Precision)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError("the input value '%v' is not Time type for column %d", field, colIdx)
+				}
+				cols[rowIdx] = d
+			}
 		case types.T_datetime:
-			//cols := vec.Col.([]types.Datetime)
 			cols := vector.MustTCols[types.Datetime](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -759,7 +822,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal64:
-			//cols := vec.Col.([]types.Decimal64)
 			cols := vector.MustTCols[types.Decimal64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -775,7 +837,6 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal128:
-			//cols := vec.Col.([]types.Decimal128)
 			cols := vector.MustTCols[types.Decimal128](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -791,12 +852,12 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam, 
 				cols[rowIdx] = d
 			}
 		case types.T_timestamp:
-			//cols := vec.Col.([]types.Timestamp)
 			cols := vector.MustTCols[types.Timestamp](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
-				d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+				t := time.Local
+				d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)

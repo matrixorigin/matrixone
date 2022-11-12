@@ -16,18 +16,18 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -36,18 +36,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var (
 	defaultWaitInterval = 100 * time.Millisecond
+	defaultTestTimeout  = time.Minute
 )
 
 // Cluster describes behavior of test framework.
 type Cluster interface {
-	// Start starts svcs sequentially
+	// Start starts svcs sequentially, after start, system init is completed.
 	Start() error
 	// Close stops svcs sequentially
 	Close() error
@@ -198,10 +201,22 @@ type ClusterWaitState interface {
 	WaitDNStoreReported(ctx context.Context, uuid string)
 	// WaitDNStoreReportedIndexed waits dn store reported by index.
 	WaitDNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitDNStoreTaskServiceCreated waits dn store task service started by uuid.
+	WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitDNStoreTaskServiceCreatedIndexed waits dn store task service started by index.
+	WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 	// WaitCNStoreReported waits cn store reported by uuid.
 	WaitCNStoreReported(ctx context.Context, uuid string)
 	// WaitCNStoreReportedIndexed waits cn store reported by index.
 	WaitCNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitCNStoreTaskServiceCreated waits cn store task service started by uuid.
+	WaitCNStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitCNStoreTaskServiceCreatedIndexed waits cn store task service started by index.
+	WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+	// WaitLogStoreTaskServiceCreated waits log store task service started by uuid
+	WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitLogStoreTaskServiceCreatedIndexed waits log store task service started by index
+	WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 
 	// WaitLogStoreTimeout waits log store timeout by uuid.
 	WaitLogStoreTimeout(ctx context.Context, uuid string)
@@ -220,6 +235,7 @@ type ClusterWaitState interface {
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
 	t       *testing.T
+	testID  string
 	opt     Options
 	logger  *zap.Logger
 	stopper *stopper.Stopper
@@ -269,12 +285,12 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	c := &testCluster{
 		t:       t,
+		testID:  uuid.New().String(),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}
-	c.logger = logutil.Adjust(c.logger).With(
-		zap.String("tests", "service"),
-	)
+	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
+	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
 
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
@@ -283,17 +299,14 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
-
-	// build FileService instances
-	c.fileservices = c.buildFileServices()
-
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
-
+	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
+	// build FileService instances
+	c.fileservices = c.buildFileServices()
 
 	return c, nil
 }
@@ -306,26 +319,22 @@ func (c *testCluster) Start() error {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
 	// start log services first
-	if err := c.startLogServices(); err != nil {
+	if err := c.startLogServices(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 
 	// start dn services
-	if err := c.startDNServices(); err != nil {
+	if err := c.startDNServices(ctx); err != nil {
 		return err
 	}
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel1()
-	c.WaitDNShardsReported(ctx1)
 
-	if c.opt.initial.cnServiceNum != 0 {
-		if err := c.startCNServices(); err != nil {
-			return err
-		}
+	// start cn services
+	if err := c.startCNServices(ctx); err != nil {
+		return err
 	}
 
 	c.mu.running = true
@@ -337,6 +346,9 @@ func (c *testCluster) Options() Options {
 }
 
 func (c *testCluster) Close() error {
+	defer logutil.LogClose(c.logger, "tests-framework")()
+	c.logger.Info("closing testCluster")
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -344,7 +356,12 @@ func (c *testCluster) Close() error {
 		return nil
 	}
 
-	// close all dn services first
+	// close all cn services first
+	if err := c.closeCNServices(); err != nil {
+		return err
+	}
+
+	// close all dn services
 	if err := c.closeDNServices(); err != nil {
 		return err
 	}
@@ -354,12 +371,14 @@ func (c *testCluster) Close() error {
 		return err
 	}
 
-	if err := c.closeCNServices(); err != nil {
-		return err
-	}
-
 	c.mu.running = false
 	c.stopper.Stop()
+
+	if !c.opt.keepData {
+		if err := os.RemoveAll(c.opt.rootDataDir); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -837,6 +856,90 @@ func (c *testCluster) WaitCNStoreReportedIndexed(ctx context.Context, index int)
 	c.WaitCNStoreReported(ctx, ds.ID())
 }
 
+func (c *testCluster) WaitCNStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ds, err := c.GetCNService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on cn store",
+				"cn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ds.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetCNServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitCNStoreTaskServiceCreated(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ds, err := c.GetDNService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on dn store",
+				"dn store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ds.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetDNServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitDNStoreTaskServiceCreated(ctx, ds.ID())
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ls, err := c.GetLogService(uuid)
+	require.NoError(c.t, err)
+
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(
+				c.t,
+				"terminated when waiting task service created on log store",
+				"log store %s, error: %s", uuid, ctx.Err(),
+			)
+		default:
+			_, ok := ls.GetTaskService()
+			if ok {
+				return
+			}
+			time.Sleep(defaultWaitInterval)
+		}
+	}
+}
+
+func (c *testCluster) WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetLogServiceIndexed(index)
+	require.NoError(c.t, err)
+	c.WaitLogStoreTaskServiceCreated(ctx, ds.ID())
+}
+
 func (c *testCluster) WaitLogStoreTimeout(ctx context.Context, uuid string) {
 	for {
 		select {
@@ -1153,11 +1256,6 @@ func (c *testCluster) buildServiceAddresses() serviceAddresses {
 		c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
 }
 
-// buildFileServices builds all file services.
-func (c *testCluster) buildFileServices() *fileServices {
-	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
-}
-
 // buildDNConfigs builds configurations for all dn services.
 func (c *testCluster) buildDNConfigs(
 	address serviceAddresses,
@@ -1204,10 +1302,10 @@ func (c *testCluster) buildCNConfigs(
 	cfgs := make([]*cnservice.Config, 0, batch)
 	opts := make([]cnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildCnConfig(i, c.opt, address)
+		cfg := buildCNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
-		opt := buildCnOptions()
+		opt := buildCNOptions()
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1226,7 +1324,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1234,6 +1332,8 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 			panic(err)
 		}
 
+		opt = append(opt,
+			dnservice.WithLogger(c.logger))
 		ds, err := newDNService(cfg, fs, opt)
 		require.NoError(c.t, err)
 
@@ -1259,7 +1359,9 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), taskservice.NewTaskService(c.opt.task.taskStorage, nil), opt)
+		opt = append(opt,
+			logservice.WithLogger(c.logger))
+		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1283,7 +1385,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			"LOCAL",
+			defines.LocalFileServiceName,
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1291,10 +1393,14 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			panic(err)
 		}
 
-		cs, err := newCNService(cfg, context.TODO(), fs, c.opt.task.taskStorage, opt)
+		opt = append(opt,
+			cnservice.WithLogger(c.logger))
+		ctx, cancel := context.WithCancel(context.Background())
+		cs, err := newCNService(cfg, ctx, fs, opt)
 		if err != nil {
 			panic(err)
 		}
+		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",
@@ -1308,7 +1414,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 }
 
 // startDNServices initializes and starts all dn services.
-func (c *testCluster) startDNServices() error {
+func (c *testCluster) startDNServices(ctx context.Context) error {
 	// initialize all dn services
 	c.dn.svcs = c.initDNServices(c.fileservices)
 
@@ -1319,11 +1425,12 @@ func (c *testCluster) startDNServices() error {
 		}
 	}
 
+	c.WaitDNShardsReported(ctx)
 	return nil
 }
 
 // startLogServices initializes and starts all log services.
-func (c *testCluster) startLogServices() error {
+func (c *testCluster) startLogServices(ctx context.Context) error {
 	// initialize all log service
 	c.log.svcs = c.initLogServices()
 
@@ -1344,16 +1451,21 @@ func (c *testCluster) startLogServices() error {
 		return err
 	}
 
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
 	return nil
 }
 
-func (c *testCluster) startCNServices() error {
+func (c *testCluster) startCNServices(ctx context.Context) error {
 	c.cn.svcs = c.initCNServices(c.fileservices)
 
 	for _, cs := range c.cn.svcs {
 		if err := cs.Start(); err != nil {
 			return err
 		}
+	}
+
+	if err := c.waitSystemInitCompleted(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1375,7 +1487,7 @@ func (c *testCluster) closeDNServices() error {
 
 // closeLogServices closes all log services.
 func (c *testCluster) closeLogServices() error {
-	c.logger.Info("start to close log services")
+	defer logutil.LogClose(c.logger, "tests-framework/logservices")()
 
 	for i, ls := range c.log.svcs {
 		c.logger.Info("close log service", zap.Int("index", i))
@@ -1389,7 +1501,7 @@ func (c *testCluster) closeLogServices() error {
 }
 
 func (c *testCluster) closeCNServices() error {
-	c.logger.Info("start to close cn services")
+	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
 
 	for i, cs := range c.cn.svcs {
 		c.logger.Info("close cn service", zap.Int("index", i))
@@ -1476,6 +1588,26 @@ func (c *testCluster) rangeHAKeeperService(
 			break
 		}
 	}
+}
+
+func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
+	log, err := c.GetLogServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := log.CreateInitTasks(); err != nil {
+		return err
+	}
+
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	cn, err := c.GetCNServiceIndexed(0)
+	if err != nil {
+		return err
+	}
+	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FilterFunc returns true if traffic was allowed.

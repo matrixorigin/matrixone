@@ -86,7 +86,8 @@ func TestPrepareWithTxnNotExist(t *testing.T) {
 	sender.AddTxnService(s)
 
 	wTxn := NewTestTxn(1, 1, 1, 2)
-	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1), newTxnError(moerr.ErrTxnNotFound, ""))
+	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1),
+		txn.WrapError(moerr.NewTxnNotFound(), 0))
 }
 
 func TestGetStatus(t *testing.T) {

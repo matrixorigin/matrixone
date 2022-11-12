@@ -1,0 +1,50 @@
+create table t_dates(
+a_date date,
+b_datetime datetime,
+c_timestamp timestamp
+);
+
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02','1999-04-05 11:01:02.123456');
+insert into t_dates values('2004-04-03','2004-04-03 13:11:10','2004-04-03 13:11:10.123456');
+insert into t_dates values('1999-04-05','1999-04-05 11:01:02.123456','1999-04-05 11:01:02.123456');
+insert into t_dates values('1999-04-05','2004-04-03 13:11:10.123456','2004-04-03 13:11:10.123456');
+
+
+#1.Various parameter type tests
+#date入参类型为date、datetime,timestamp
+select date_format(a_date, '%W %M %Y'),date_format(b_datetime, '%W %M %Y'),date_format(c_timestamp, '%W %M %Y') from t_dates;
+
+#The type of date parameter is null, or the type of format input parameter is null
+select date_format(NULL, '%W %M %Y'),date_format('1999-04-05 11:01:02', NULL),date_format(NULL, NULL);
+
+
+#Test with date input parameter type of string
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#2.The first parameter of the date_format function is a constant test
+#The format parameter contains all format matches
+SELECT DATE_FORMAT('2010-01-07 23:12:34.12345', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#The format parameter contains all format matches
+SELECT DATE_FORMAT('0001-01-01 00:00:00.123456', '%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%');
+
+#The format parameter contains all format matching characters mixed with other characters
+SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', 'abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z');
+
+#3.The first parameter of date_format function is table field batch test
+select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d %H:%i:%s'),date_format(c_timestamp,'%Y-%m-%d %H:%i:%s') from t_dates;
+
+#4.The first parameter of date_format function is expression batch test
+select date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s'),date_format(cast('2004-04-03 13:11:10' as datetime),'%Y-%m-%d %H:%i:%s') from t_dates;
+
+drop table t_dates;
+SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
+
+select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');

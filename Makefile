@@ -44,6 +44,7 @@
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 GOBIN := go
 BIN_NAME := mo-service
+MO_DUMP := mo-dump
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
@@ -116,6 +117,10 @@ build: config cgo cmd/mo-service/$(wildcard *.go)
 	$(info [Build $(BUILD_NAME)])
 	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
 
+.PHONY: modump
+modump:
+	$(GO) build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
@@ -138,6 +143,30 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
+
+###############################################################################
+# bvt and unit test
+###############################################################################
+UT_PARALLEL ?= 1
+ENABLE_UT ?= "false"
+GOPROXY ?= "https://proxy.golang.com.cn,direct"
+LAUNCH ?= "launch-tae-CN-tae-DN"
+
+.PHONY: ci
+ci:
+	@rm -rf $(ROOT_DIR)/tester-log
+	@docker image prune -f
+	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
+	@docker run --name tester -it \
+			-e LAUNCH=$(LAUNCH) \
+			-e UT_PARALLEL=$(UT_PARALLEL) \
+			-e ENABLE_UT=$(ENABLE_UT)\
+ 			--rm -v $(ROOT_DIR)/tester-log:/matrixone-test/tester-log matrixorigin/matrixone:local-ci
+
+.PHONY: ci-clean
+ci-clean:
+	@docker rmi matrixorigin/matrixone:local-ci
+	@docker image prune -f
 
 ###############################################################################
 # clean
@@ -169,7 +198,7 @@ install-static-check-tools:
 
 .PHONY: static-check
 static-check: config cgo err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) go vet -vettool=`which molint` $(shell go list ./... | grep -v github.com/matrixorigin/matrixone/cmd/mo-dump)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...

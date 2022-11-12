@@ -1,0 +1,2 @@
+select err_code, error, node_uuid, node_type, stack from system.error_info limit 0;
+err_code	error	node_uuid	node_type	stack

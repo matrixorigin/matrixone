@@ -16,7 +16,9 @@ package minus
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -41,4 +43,24 @@ type container struct {
 
 	// result batch of minus column execute operator
 	bat *batch.Batch
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	mp := proc.Mp()
+	arg.ctr.cleanBatch(mp)
+	arg.ctr.cleanHashMap()
+}
+
+func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+		ctr.bat = nil
+	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
 }

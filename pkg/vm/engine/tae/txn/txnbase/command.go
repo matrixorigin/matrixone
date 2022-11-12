@@ -330,6 +330,10 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 			n += 8
 		}
 	}
+	if sn, err = c.Memo.ReadFrom(r); err != nil {
+		return
+	}
+	n += sn
 	return
 
 }

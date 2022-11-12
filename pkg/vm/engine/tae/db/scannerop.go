@@ -87,21 +87,16 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 	}
 
 	blockEntry.RLock()
+	defer blockEntry.RUnlock()
+
 	// 1. Skip uncommitted entries
 	if !blockEntry.IsCommitted() {
-		blockEntry.RUnlock()
 		return nil
 	}
-	if blockEntry.GetSegment().IsAppendable() && catalog.ActiveWithNoTxnFilter(blockEntry.MetaBaseEntry) && catalog.NonAppendableBlkFilter(blockEntry) {
+	if blockEntry.GetSegment().IsAppendable() &&
+		catalog.ActiveWithNoTxnFilter(blockEntry.MetaBaseEntry) &&
+		catalog.NonAppendableBlkFilter(blockEntry) {
 		processor.blkCntOfSegment++
-	}
-	blockEntry.RUnlock()
-
-	data := blockEntry.GetBlockData()
-
-	// 3. Run calibration and estimate score for checkpoint
-	if data.RunCalibration() > 0 {
-		processor.db.CKPDriver.EnqueueCheckpointUnit(data)
 	}
 	return
 }

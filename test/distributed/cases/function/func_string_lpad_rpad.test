@@ -1,0 +1,145 @@
+#SELECT 
+SELECT LPAD('hi',4,'??');
+SELECT LPAD('hi',1,'??');
+SELECT RPAD('hi',5,'?');
+SELECT RPAD('hi',1,'?');
+
+#SELECT,嵌套
+CREATE TABLE t1 (title varchar(255));
+INSERT INTO t1 VALUES ('Congress reconvenes in September to debate welfare and adult education');
+INSERT INTO t1 VALUES ('House passes the CAREERS bill');
+SELECT RPAD("",(55 - LENGTH(title)),".") from t1;
+DROP TABLE t1;
+
+#EXTREME VALUE
+select rpad('a',4,'1'),rpad('a',4,'12'),rpad('abcd',3,'12'), rpad(11, 10 , 22), rpad("ab", 10, 22);
+select lpad('a',4,'1'),lpad('a',4,'12'),lpad('abcd',3,'12'), lpad(11, 10 , 22);
+select rpad(741653838,17,'0'),lpad(741653838,17,'0');
+select rpad('abcd',7,'ab'),lpad('abcd',7,'ab');
+select rpad('abcd',1,'ab'),lpad('abcd',1,'ab');
+select rpad('STRING', 20, CONCAT_WS('p','a','d') );
+select lpad('STRING', 20, CONCAT_WS('p','a','d') );
+select rpad('hello', -1, '1');
+select rpad('hello', -4294967295, '1');
+select rpad('hello', 4294967295, '1');
+select rpad('hello', -4294967296, '1');
+select rpad('hello', 4294967296, '1');
+select rpad('hello', -4294967297, '1');
+select rpad('hello', 4294967297, '1');
+
+select rpad('hello', -18446744073709551615, '1');
+select rpad('hello', 18446744073709551615, '1');
+select rpad('hello', -18446744073709551616, '1');
+select rpad('hello', 18446744073709551616, '1');
+select rpad('hello', -18446744073709551617, '1');
+select rpad('hello', 18446744073709551617, '1');
+
+select lpad('hello', -1, '1');
+select lpad('hello', -4294967295, '1');
+select lpad('hello', 4294967295, '1');
+select lpad('hello', -4294967296, '1');
+select lpad('hello', 4294967296, '1');
+select lpad('hello', -4294967297, '1');
+select lpad('hello', 4294967297, '1');
+
+select lpad('hello', -18446744073709551615, '1');
+select lpad('hello', 18446744073709551615, '1');
+select lpad('hello', -18446744073709551616, '1');
+select lpad('hello', 18446744073709551616, '1');
+select lpad('hello', -18446744073709551617, '1');
+select lpad('hello', 18446744073709551617, '1');
+
+SELECT RPAD('hi', year(FROM_UNIXTIME(-1)),'?');
+SELECT LPAD('hi', year(FROM_UNIXTIME(-1)),'?');
+
+
+#NULL
+SELECT LPAD(NULL, 5, 'x') AS result;
+SELECT LPAD(NULL, NULL, 'x') AS result;
+SELECT LPAD(NULL, NULL, NULL) AS result;
+SELECT LPAD('a', NULL, 'x') AS result;
+SELECT LPAD('a', NULL, NULL) AS result;
+SELECT LPAD('a', 5, NULL) AS result;
+SELECT LPAD(NULL, 5, NULL) AS result;
+SELECT LPAD('a', 0, 'x') AS result;
+SELECT LPAD('a', 0, '') AS result;
+SELECT LPAD('', 0, 'x') AS result;
+SELECT LPAD('', 0, '') AS result;
+SELECT LPAD('a', -1, 'x');
+SELECT RPAD(NULL, 5, 'x') AS result;
+SELECT RPAD(NULL, NULL, 'x') AS result;
+SELECT RPAD(NULL, NULL, NULL) AS result;
+SELECT RPAD('a', NULL, 'x') AS result;
+SELECT RPAD('a', NULL, NULL) AS result;
+SELECT RPAD('a', 5, NULL) AS result;
+SELECT RPAD(NULL, 5, NULL) AS result;
+SELECT RPAD('a', 0, 'x') AS result;
+SELECT RPAD('a', 0, '') AS result;
+SELECT RPAD('', 0, 'x') AS result;
+SELECT RPAD('', 0, '') AS result;
+SELECT RPAD('a', -1, 'x');
+
+
+#IN
+SELECT (rpad(1.0,2048,1)) IS NOT FALSE;
+
+
+SELECT ((+0) IN
+((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)),
+(32767.1)));
+
+SELECT ((rpad(1.0,2048,1)) = ('4(') ^ (0.1));
+
+
+#中文
+SELECT RPAD("你好", 10, "再见");
+SELECT LPAD("你好", 10, "再见");
+
+#WHERE
+drop table if exists t1;
+create table t1(a INT,  b varchar(255));
+insert into t1 values(1, "2012"),(2, "21241"),(3, "20032"),(4, "200");
+select * from t1 where rpad(b, 5, "32")="20032";
+drop table t1;
+
+
+#ON CONDITION
+create table t1(a INT,  b varchar(255));
+create table t2(a INT,  b varchar(255));
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+insert into t2 values(1, "2013-04-30"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (rpad(t1.b, 12, "ab") = rpad(t2.b, 12, "ab"));
+drop table t1;
+drop table t2;
+
+#INSERT, DISTINCT
+drop table if exists t1;
+create table t1(a varchar(255));
+insert into t1 select (rpad('a',4,'1'));
+insert into t1 select (rpad('a',4,'1'));
+insert into t1 select (rpad('a',4,'1'));
+insert into t1 select (lpad('a',4,'1'));
+select distinct * from t1;
+drop table t1;
+
+#HAVING
+drop table if exists t1;
+create table t1(a INT, b varchar(255));
+insert into t1 values(1, "2012"),(2, "21241"),(3, "20032"),(4, "200");
+select b from t1 group by b having rpad(b, 5, "12")="20012";
+drop table t1;
+
+#DATATYPE
+SELECT RPAD("123", 4, 123);
+
+SELECT RPAD(1234, 7, 123);
+SELECT RPAD("123", 4, 123.242);
+SELECT RPAD("123", 3.422, 123.242);
+
+SELECT RPAD(0.341, 3.422, 123.242);
+
+SELECT LPAD("123", 4, 123);
+SELECT LPAD(1234, 7, 123);
+SELECT LPAD("123", 4, 123.242);
+SELECT LPAD("123", 3.422, 123.242);
+SELECT LPAD(0.341, 3.422, 123.242);

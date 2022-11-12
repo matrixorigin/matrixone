@@ -30,6 +30,7 @@ import (
 
 const (
 	defaultDataDir           = "mo-data/logservice"
+	defaultSnapshotExportDir = "exported-snapshot"
 	defaultServiceAddress    = "0.0.0.0:32000"
 	defaultRaftAddress       = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
@@ -38,6 +39,9 @@ const (
 	defaultGossipProbeInterval = 5 * time.Second
 	defaultHeartbeatInterval   = time.Second
 	defaultLogDBBufferSize     = 768 * 1024
+	defaultTruncateInterval    = 10 * time.Second
+	defaultMaxExportedSnapshot = 20
+	defaultMaxMessageSize      = 1024 * 1024 * 100
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -56,6 +60,13 @@ type Config struct {
 	// DataDir is the name of the directory for storing all log service data. It
 	// should a locally mounted partition with good write and fsync performance.
 	DataDir string `toml:"data-dir"`
+	// SnapshotExportDir is the directory where the dragonboat snapshots are
+	// exported.
+	SnapshotExportDir string `toml:"snapshot-export-dir"`
+	// MaxExportedSnapshot is the max count of exported snapshots. If there are
+	// already MaxExportedSnapshot exported snapshots, no exported snapshot will
+	// be generated.
+	MaxExportedSnapshot int `toml:"max-exported-snapshot"`
 	// ServiceAddress is log service's service address that can be reached by
 	// other nodes such as DN nodes.
 	ServiceAddress string `toml:"logservice-address"`
@@ -81,6 +92,8 @@ type Config struct {
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
 	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
+	// GossipAllowSelfAsSeed allow use self as gossip seed
+	GossipAllowSelfAsSeed bool `toml:"gossip-allow-self-as-seed"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -90,6 +103,14 @@ type Config struct {
 	// HAKeeperCheckInterval is the interval of how often HAKeeper should run
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
+	// TruncateInterval is the interval of how often log service should
+	// process truncate.
+	TruncateInterval toml.Duration `toml:"truncate-interval"`
+
+	RPC struct {
+		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
+		MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+	}
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
 	// procedure. It only needs to be specified for Log Stores selected to host
@@ -253,6 +274,12 @@ func (c *Config) Validate() error {
 	if c.GossipProbeInterval.Duration == 0 {
 		return moerr.NewBadConfig("GossipProbeInterval not set")
 	}
+	if c.TruncateInterval.Duration == 0 {
+		return moerr.NewBadConfig("TruncateInterval not set")
+	}
+	if c.RPC.MaxMessageSize == 0 {
+		return moerr.NewBadConfig("MaxMessageSize not set")
+	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
@@ -291,6 +318,12 @@ func (c *Config) Fill() {
 	}
 	if len(c.DataDir) == 0 {
 		c.DataDir = defaultDataDir
+	}
+	if len(c.SnapshotExportDir) == 0 {
+		c.SnapshotExportDir = defaultSnapshotExportDir
+	}
+	if c.MaxExportedSnapshot == 0 {
+		c.MaxExportedSnapshot = defaultMaxExportedSnapshot
 	}
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
@@ -337,6 +370,12 @@ func (c *Config) Fill() {
 	if c.GossipProbeInterval.Duration == 0 {
 		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
 	}
+	if c.TruncateInterval.Duration == 0 {
+		c.TruncateInterval.Duration = defaultTruncateInterval
+	}
+	if c.RPC.MaxMessageSize == 0 {
+		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.
@@ -363,6 +402,8 @@ func (c *HAKeeperClientConfig) Validate() error {
 
 // ClientConfig is the configuration for log service clients.
 type ClientConfig struct {
+	// Tag client tag
+	Tag string
 	// ReadOnly indicates whether this is a read-only client.
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
@@ -374,6 +415,8 @@ type ClientConfig struct {
 	// LogService nodes service addresses. This field is provided for testing
 	// purposes only.
 	ServiceAddresses []string
+	// MaxMessageSize is the max message size for RPC.
+	MaxMessageSize int
 }
 
 // Validate validates the ClientConfig.

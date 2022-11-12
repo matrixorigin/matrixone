@@ -63,7 +63,12 @@ func (txn *OpTxn) Repr() string {
 	}
 }
 
-var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id []byte, startTS types.TS, info []byte) txnif.AsyncTxn {
+var DefaultTxnFactory = func(
+	mgr *TxnManager,
+	store txnif.TxnStore,
+	id []byte,
+	startTS types.TS,
+	info []byte) txnif.AsyncTxn {
 	return NewTxn(mgr, store, id, startTS, info)
 }
 
@@ -383,15 +388,19 @@ func (txn *Txn) GetUserAndRoleID() (uint32, uint32) {
 	return txn.UserID.Load(), txn.RoleID.Load()
 }
 
-func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabase(name, createSql string) (db handle.Database, err error) {
 	return
 }
 
-func (txn *Txn) CreateDatabaseWithID(name string, id uint64) (db handle.Database, err error) {
+func (txn *Txn) CreateDatabaseWithID(name, createSql string, id uint64) (db handle.Database, err error) {
 	return
 }
 
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) DropDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 
@@ -404,6 +413,10 @@ func (txn *Txn) UnsafeGetRelation(dbId, id uint64) (db handle.Relation, err erro
 }
 
 func (txn *Txn) GetDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) GetDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 

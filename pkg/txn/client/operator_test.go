@@ -353,6 +353,16 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 	})
 }
 
+func TestDebugTxnOperator(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		responses, err := tc.Debug(ctx,
+			[]txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1, Payload: []byte("OK")})})
+		assert.NoError(t, err)
+		assert.Equal(t, len(responses.Responses), 1)
+		assert.Equal(t, responses.Responses[0].CNOpResponse.Payload, []byte("OK"))
+	})
+}
+
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ts := newTestTxnSender()
 	c := NewTxnClient(ts,

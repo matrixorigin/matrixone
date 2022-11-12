@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -184,6 +185,13 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.Param != nil {
+		for i := 0; i < len(stmt.Param.S3option); i += 2 {
+			switch strings.ToLower(stmt.Param.S3option[i]) {
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
+			default:
+				return nil, moerr.NewBadConfig("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
+			}
+		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
@@ -203,8 +211,24 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				Properties: &plan.PropertiesDef{
 					Properties: properties,
 				},
+			}})
+	} else {
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemOrdinaryRel,
 			},
-		})
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: ctx.GetRootSql(),
+			},
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -225,7 +249,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(builder, bindContext)
-		err = buildPartitionByClause(partitionBinder, stmt.PartitionOption, createTable.TableDef)
+		err = buildPartitionByClause(partitionBinder, stmt, createTable.TableDef)
 		if err != nil {
 			return nil, err
 		}
@@ -245,16 +269,16 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported
-func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) (err error) {
-	switch partitionOp.PartBy.PType.(type) {
+func buildPartitionByClause(partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
+	switch stmt.PartitionOption.PartBy.PType.(type) {
 	case *tree.HashType:
-		err = buildHashPartition(partitionBinder, partitionOp, tableDef)
+		err = buildHashPartition(partitionBinder, stmt, tableDef)
 	case *tree.KeyType:
-		err = buildKeyPartition(partitionBinder, partitionOp, tableDef)
+		err = buildKeyPartition(partitionBinder, stmt, tableDef)
 	case *tree.RangeType:
-		err = buildRangePartition(partitionBinder, partitionOp, tableDef)
+		err = buildRangePartition(partitionBinder, stmt, tableDef)
 	case *tree.ListType:
-		err = buildListPartitiion(partitionBinder, partitionOp, tableDef)
+		err = buildListPartitiion(partitionBinder, stmt, tableDef)
 	}
 	return err
 }
@@ -328,14 +352,14 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				return err
 			}
 
+			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:          def.Name.Parts[0],
-				Alg:           plan.CompressType_Lz4,
-				Typ:           colType,
-				Default:       defaultValue,
-				OnUpdate:      onUpdateExpr,
-				Comment:       comment,
-				AutoIncrement: auto_incr,
+				Name:     def.Name.Parts[0],
+				Alg:      plan.CompressType_Lz4,
+				Typ:      colType,
+				Default:  defaultValue,
+				OnUpdate: onUpdateExpr,
+				Comment:  comment,
 			}
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
@@ -354,38 +378,16 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 				indexs = append(indexs, name)
 			}
 		case *tree.Index:
-			var idxType plan.IndexDef_IndexType
-			switch def.KeyType {
-			case tree.INDEX_TYPE_BSI:
-				idxType = plan.IndexDef_BSI
-			case tree.INDEX_TYPE_ZONEMAP:
-				idxType = plan.IndexDef_ZONEMAP
-			default:
-				idxType = plan.IndexDef_ZONEMAP //default
-			}
-
-			idxDef := &plan.IndexDef{
-				Typ:      idxType,
-				Name:     def.Name,
-				ColNames: make([]string, len(def.KeyParts)),
-			}
-
+			// TODO
 			nameMap := map[string]bool{}
-			for i, key := range def.KeyParts {
+			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of index column
 				if _, ok := nameMap[name]; ok {
 					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
 				}
-				idxDef.ColNames[i] = name
 				nameMap[name] = true
 				indexs = append(indexs, name)
 			}
-
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Idx{
-					Idx: idxDef,
-				},
-			})
 		case *tree.UniqueIndex:
 			indexInfos = append(indexInfos, def)
 		case *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
@@ -463,25 +465,32 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, createTable *plan.
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string) error {
 	indexNumber := 0
-	def := &plan.ComputeIndexDef{}
+	def := &plan.IndexDef{
+		Fields: make([]*plan.Field, 0),
+	}
 
 	for _, indexInfo := range indexInfos {
-		indexTableName := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		indexTableName, err := util.BuildIndexTableName(true, indexNumber, indexInfo.Name)
+		if err != nil {
+			return err
+		}
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
-		names := make([]string, 0)
+		field := &plan.Field{
+			ColNames: make([]string, 0),
+		}
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInput("column '%s' is not exist", name)
 			}
-			names = append(names, name)
+			field.ColNames = append(field.ColNames, name)
 		}
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = names[0]
+			keyName = field.ColNames[0]
 			tableDef.Cols = append(tableDef.Cols, &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -503,7 +512,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			})
 		} else {
-			keyName = util.BuildCompositePrimaryKeyColumnName(names)
+			keyName = util.BuildCompositePrimaryKeyColumnName(field.ColNames)
 			tableDef.Cols = append(tableDef.Cols, &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
@@ -525,14 +534,15 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				},
 			})
 		}
-		def.Names = append(def.Names, indexInfo.Name)
+		def.IndexNames = append(def.IndexNames, indexInfo.Name)
 		def.TableNames = append(def.TableNames, indexTableName)
 		def.Uniques = append(def.Uniques, true)
+		def.Fields = append(def.Fields, field)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 	}
 	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_ComputeIndex{
-			ComputeIndex: def,
+		Def: &plan.TableDef_DefType_Idx{
+			Idx: def,
 		},
 	})
 	return nil
@@ -607,10 +617,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
 		}
-		computeInfos := BuildComputeIndexInfos(ctx, dropTable.Database, tableDef.Defs)
-		dropTable.IndexTableNames = make([]string, len(computeInfos))
-		for i := range computeInfos {
-			dropTable.IndexTableNames[i] = computeInfos[i].TableName
+		indexInfos := BuildIndexInfos(ctx, dropTable.Database, tableDef.Defs)
+		dropTable.IndexTableNames = make([]string, len(indexInfos))
+		for i := range indexInfos {
+			dropTable.IndexTableNames[i] = indexInfos[i].TableName
 		}
 	}
 	return &Plan{

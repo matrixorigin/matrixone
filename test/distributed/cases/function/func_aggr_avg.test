@@ -1,0 +1,281 @@
+#null
+SELECT avg(null);
+
+#DATATYPE
+create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+select avg(a) from t1;
+select avg(b) from t1;
+select avg(c) from t1;
+select avg(d) from t1;
+select avg(e) from t1;
+select avg(f) from t1;
+select avg(g) from t1;
+select avg(h) from t1;
+
+-- @bvt:issue#3370
+select avg(i) from t1;
+select avg(k) from t1;
+select avg(l) from t1;
+select avg(m) from t1;
+select avg(n) from t1;
+-- @bvt:issue
+
+select avg(a) from t1 limit 1;
+select avg(b) from t1 limit 1;
+select avg(c) from t1 limit 1;
+select avg(d) from t1 limit 1;
+select avg(e) from t1 limit 1;
+select avg(f) from t1 limit 1;
+select avg(g) from t1 limit 1;
+select avg(h) from t1 limit 1;
+
+-- @bvt:issue#3370
+select avg(i) from t1 limit 1;
+select avg(k) from t1 limit 1;
+select avg(l) from t1 limit 1;
+select avg(m) from t1 limit 1;
+select avg(n) from t1 limit 1;
+-- @bvt:issue
+
+drop table t1;
+
+#0.5暂不支持time类型
+#create table t1(a time)
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#select avg(a) from t1;
+#drop table t1;
+
+
+#EXTREME VALUE
+create table t1(a bigint);
+select avg(a) from t1;
+insert into t1 values(null),(null),(null),(null);
+select avg(a) from t1;
+insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
+select avg(a) from t1 order by avg(a);
+drop table t1;
+
+
+#HAVING, 比较运算
+CREATE TABLE t1 (
+bug_id bigint(9) NOT NULL,
+groupset bigint(20) DEFAULT 0 NOT NULL,
+assigned_to bigint(9) DEFAULT 0 NOT NULL,
+bug_file_loc varchar(255)
+);
+CREATE TABLE t2 (
+value varchar(255),
+program varchar(64),
+initialowner varchar(255) NOT NULL,
+initialqacontact varchar(255) NOT NULL,
+description varchar(255) NOT NULL,
+id int not null
+);
+INSERT INTO t1 VALUES (1,0,0,'TestComponent');
+INSERT INTO t1 VALUES (2,0,0,'BBBBBBBBBBBBB');
+INSERT INTO t1 VALUES (3,0,0,'TestComponent2');
+INSERT INTO t1 VALUES (4,0,0,'TestComponent2');
+INSERT INTO t2 VALUES ('TestComponent','TestProduct','id0001','','',2);
+INSERT INTO t2 VALUES ('BBBBBBBBBBBBB - conversion','AAAAA','id0001','','',2);
+INSERT INTO t2 VALUES ('BBBBBBBBBBBBB - generic','AAAAA','id0001','','',3);
+INSERT INTO t2 VALUES ('TestComponent2','TestProduct','id0001','','',3);
+select any_value(value),any_value(description),avg(bug_id) from t2 left join t1 on t2.value=t1.bug_file_loc group by value having avg(bug_id)>0;
+SELECT avg(t1.bug_id) >= avg(t2.id) from t1 join t2 on t1.bug_file_loc = t2.value;
+drop table t1;
+drop table t2;
+
+#IF
+create table t1 (a int);
+insert t1 values (1),(2);
+select if(1>2,any_value(a),avg(a)) from t1;
+drop table t1;
+
+#CASE WHEN
+CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
+INSERT INTO t1 VALUES(1, 1, 1), (1, 1, 1);
+SELECT CASE AVG (c0) WHEN any_value(c1) * any_value(c2) THEN 1 END FROM t1;
+SELECT CASE any_value(c1) * any_value(c2) WHEN SUM(c0) THEN 1 WHEN AVG(c0) THEN 2 END FROM t1;
+SELECT CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END, ABS(AVG(c0)) FROM t1;
+DROP TABLE t1;
+
+
+#HAVING, IN
+CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
+INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
+INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
+#SELECT SUM( DISTINCT a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
+#SELECT SUM( DISTINCT b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
+#SELECT SUM( DISTINCT c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
+#SELECT SUM( DISTINCT d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
+#SELECT SUM( DISTINCT e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
+SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
+SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
+SELECT DISTINCT SUM(  c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
+SELECT DISTINCT SUM(  d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
+SELECT DISTINCT SUM(  e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
+DROP TABLE t1;
+
+
+#子查询
+CREATE TABLE t1 (
+a INT,
+b INT,
+c INT
+);
+INSERT INTO t1 VALUES
+( 1, 1,  1 ),
+( 1, 2,  2 ),
+( 1, 3,  3 ),
+( 1, 4,  6 ),
+( 1, 5,  5 ),
+( 1, 9, 13 ),
+( 2, 1,  6 ),
+( 2, 2,  7 ),
+( 2, 3,  8 );
+SELECT a, AVG(t1.b),
+(SELECT t11.c FROM t1 t11 WHERE t11.a = t1.a AND t11.b = AVG(t1.b)) AS t11c,
+(SELECT t12.c FROM t1 t12 WHERE t12.a = t1.a AND t12.b = AVG(t1.b)) AS t12c
+FROM t1 GROUP BY a;
+DROP TABLE t1;
+
+
+CREATE TABLE t1 (id int(11),value1 float(10,2));
+INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00); 
+CREATE TABLE t2 (id int(11),name char(20)); 
+INSERT INTO t2 VALUES (1,'Set One'),(2,'Set Two'); 
+select id, avg(value1), std(value1), variance(value1) from t1 group by id;
+select any_value(name), avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id;
+drop table t1;
+drop table t2;
+
+create table t1 (id int not null);
+create table t2 (id int not null,rating int null);
+insert into t1 values(1),(2),(3);
+insert into t2 values(1, 3),(2, NULL),(2, NULL),(3, 2),(3, NULL);
+select t1.id, avg(rating) from t1 left join t2 on ( t1.id = t2.id ) group by t1.id;
+drop table t1;
+drop table t2;
+
+
+CREATE TABLE t1 (a int, b int);
+select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+insert into t1 values (1,null);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+insert into t1 values (1,null);
+insert into t1 values (2,null);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+insert into t1 values (2,1);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+insert into t1 values (3,1);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+drop table t1;
+
+create table t1 (a int);
+select avg(2) from t1;
+drop table t1;
+
+
+
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(1,2),(2,3);
+SELECT (SELECT COUNT(DISTINCT t1.b)) FROM t1 GROUP BY t1.a;
+SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
+SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2), COUNT(*), COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
+DROP TABLE t1;
+
+
+
+CREATE TABLE t1 (col1 decimal(16,12));
+INSERT INTO t1 VALUES (-5.00000000001),(-5.00000000002),(-5.00000000003),(-5.00000000000),(-5.00000000001),(-5.00000000002);
+insert into t1 select * from t1;
+select col1,count(col1),sum(col1),avg(col1) from t1 group by col1;
+DROP TABLE t1;
+
+
+
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(1,2),(1,3),(1,4),(1,5),(1,6),(1,7),(1,8);
+INSERT INTO t1 SELECT a, b+8       FROM t1;
+INSERT INTO t1 SELECT a, b+16      FROM t1;
+INSERT INTO t1 SELECT a, b+32      FROM t1;
+INSERT INTO t1 SELECT a, b+64      FROM t1;
+INSERT INTO t1 SELECT a, b+128     FROM t1;
+INSERT INTO t1 SELECT a, b+256     FROM t1;
+INSERT INTO t1 SELECT a, b+512     FROM t1;
+INSERT INTO t1 SELECT a, b+1024    FROM t1;
+INSERT INTO t1 SELECT a, b+2048    FROM t1;
+INSERT INTO t1 SELECT a, b+4096    FROM t1;
+INSERT INTO t1 SELECT a, b+8192    FROM t1;
+INSERT INTO t1 SELECT a, b+16384   FROM t1;
+INSERT INTO t1 SELECT a, b+32768   FROM t1;
+SELECT a,COUNT(DISTINCT b) AS cnt FROM t1 GROUP BY a HAVING cnt > 50;
+#SELECT a,SUM(DISTINCT b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
+#SELECT a,AVG(DISTINCT b) AS average FROM t1 GROUP BY a HAVING average > 50;
+SELECT DISTINCT a, SUM( b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
+SELECT DISTINCT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
+SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
+SELECT DISTINCT a, SUM( b) FROM t1 GROUP BY a HAVING SUM( b) > 50;
+SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
+DROP TABLE t1;
+
+
+CREATE TABLE t1(a DOUBLE);
+INSERT INTO t1 VALUES (10), (20);
+SELECT AVG(a), CAST(AVG(a) AS DECIMAL) FROM t1;
+DROP TABLE t1;
+
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+-- @bvt:issue#3344
+select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t1;
+-- @bvt:issue
+select grp, sum(a),count(a),avg(a),std(a),variance(a),bit_or(a),bit_and(a),min(a),max(a),min(c),max(c) from t1 group by grp;
+select grp, sum(a)+count(a)+avg(a)+std(a)+variance(a)+bit_or(a)+bit_and(a)+min(a)+max(a)+min(c)+max(c) as sum from t1 group by grp;
+create table t2 (grp int, a bigint unsigned, c char(10));
+insert into t2 select grp,max(a)+max(grp),max(c) from t1 group by grp;
+select * from t2;
+drop table t1;
+drop table t2;
+
+
+#GROUP BY ERROR 
+CREATE TABLE t1(a DOUBLE);
+INSERT INTO t1 VALUES (10), (20);
+SELECT AVG(min(a)) FROM t1 group by a;
+DROP TABLE t1;
+
+
+#group by error
+CREATE TABLE t1 (id int(11),value1 float(10,2));
+INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00); 
+CREATE TABLE t2 (id int(11),name char(20)); 
+INSERT INTO t2 VALUES (1,'Set One'),(2,'Set Two'); 
+select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id;
+drop table t1;
+drop table t2;
+
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select avg(distinct a),avg(distinct grp) from t1;
+insert into t1 values (null,null,'');
+select avg(distinct a),avg(distinct grp) from t1;
+drop table t1;

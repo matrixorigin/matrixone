@@ -39,15 +39,15 @@ func TestGetTenantInfo(t *testing.T) {
 			wantErr bool
 		}
 		args := []input{
-			{"u1", "{tenantInfo sys:u1: -- 0:0:0}", false},
-			{"tenant1:u1", "{tenantInfo tenant1:u1: -- 0:0:0}", false},
-			{"tenant1:u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
-			{":u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", true},
-			{"tenant1:u1:", "{tenantInfo tenant1:u1:moadmin -- 0:0:0}", true},
-			{"tenant1::r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"tenant1:    :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"     : :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
-			{"   tenant1   :   u1   :   r1    ", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
+			{"u1", "{account sys:u1: -- 0:0:0}", false},
+			{"tenant1:u1", "{account tenant1:u1: -- 0:0:0}", false},
+			{"tenant1:u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
+			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
+			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
+			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
 		}
 
 		for _, arg := range args {
@@ -142,7 +142,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -205,7 +205,7 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -239,7 +239,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -289,7 +289,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -324,7 +324,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		newTi, _, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)
@@ -337,7 +337,7 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -378,7 +378,7 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -441,7 +441,7 @@ func Test_initRole(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -577,7 +577,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -611,7 +611,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -648,7 +648,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -693,7 +693,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -745,7 +745,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -783,7 +783,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -828,7 +828,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -880,7 +880,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -917,7 +917,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -962,7 +962,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1014,7 +1014,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1051,7 +1051,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1096,7 +1096,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1148,7 +1148,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1187,7 +1187,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1234,7 +1234,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1336,7 +1336,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1438,7 +1438,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1537,7 +1537,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1637,7 +1637,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1674,7 +1674,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1720,7 +1720,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1773,7 +1773,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1819,7 +1819,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses := newSes(priv)
 			ses.SetDatabaseName("db")
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -1921,7 +1921,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2032,7 +2032,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -2114,7 +2114,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2206,7 +2206,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -2267,7 +2267,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2339,7 +2339,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -2354,7 +2354,7 @@ func Test_determineRevokePrivilege(t *testing.T) {
 			priv := determinePrivilegeSetOfStatement(stmt)
 			ses := newSes(priv)
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -2374,7 +2374,7 @@ func Test_determineRevokePrivilege(t *testing.T) {
 				DefaultRoleID: 1001,
 			}
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -2412,7 +2412,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2457,7 +2457,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2509,7 +2509,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2547,7 +2547,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2591,7 +2591,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2642,7 +2642,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2680,7 +2680,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2725,7 +2725,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2777,7 +2777,7 @@ func Test_determineShowDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2817,7 +2817,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2864,7 +2864,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -2918,7 +2918,7 @@ func Test_determineUseDatabase(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2983,7 +2983,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3057,7 +3057,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3136,7 +3136,7 @@ func Test_determineCreateTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -3197,7 +3197,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3271,7 +3271,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -3350,7 +3350,7 @@ func Test_determineDropTable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -3483,7 +3483,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
@@ -3502,7 +3502,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3576,7 +3576,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
@@ -3600,7 +3600,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeTrue)
 		}
@@ -3662,7 +3662,7 @@ func Test_determineDML(t *testing.T) {
 			for _, entry := range priv.entries {
 				if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 					makeSql(entry)
-				} else if entry.privilegeEntryTyp == privilegeEntryTypeMulti {
+				} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 					for _, mi := range entry.compound.items {
 						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 						tempEntry.databaseName = mi.dbName
@@ -3690,7 +3690,7 @@ func Test_determineDML(t *testing.T) {
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
 
-			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			ok, err := authenticateUserCanExecuteStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
@@ -5621,6 +5621,10 @@ func Test_doDropUser(t *testing.T) {
 				{i, "111", "public"},
 			})
 			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5633,6 +5637,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user succ (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5672,6 +5677,9 @@ func Test_doDropUser(t *testing.T) {
 			}
 
 			bh.sql2result[sql] = mrs
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
+			bh.sql2result[sql] = mrs
 		}
 
 		for i := range stmt.Users {
@@ -5684,6 +5692,7 @@ func Test_doDropUser(t *testing.T) {
 		err := doDropUser(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("drop user fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5722,6 +5731,10 @@ func Test_doDropUser(t *testing.T) {
 				})
 			}
 
+			bh.sql2result[sql] = mrs
+
+			sql = getSqlForCheckUserHasRole(user.Username, moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
 			bh.sql2result[sql] = mrs
 		}
 
@@ -6017,7 +6030,7 @@ func Test_genRevokeCases(t *testing.T) {
 }
 
 func newSes(priv *privilege) *Session {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -6080,6 +6093,27 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
+
+func newMrsForSqlForCheckUserHasRole(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("user_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("role_id")
+	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
 
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
@@ -6472,5 +6506,98 @@ func Test_graph(t *testing.T) {
 
 		g2.addEdge(4, 1)
 		convey.So(g2.hasLoop(1), convey.ShouldBeTrue)
+	})
+}
+
+func Test_cache(t *testing.T) {
+	type arg struct {
+		db    string
+		table string
+	}
+	cnt := 10
+	args := make([]arg, 10)
+	for i := 0; i < cnt; i++ {
+		args[i].db = fmt.Sprintf("db%d", i)
+		args[i].table = fmt.Sprintf("table%d", i)
+	}
+
+	cache1 := &privilegeCache{}
+	convey.Convey("has", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	//add some privilege
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeCreateObject; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has2", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has3", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	//set
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.set(objectTypeTable, privilegeLevelStar, a.db, a.table)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeExecute; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStarStar, a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStarStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	cache1.invalidate()
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
 	})
 }

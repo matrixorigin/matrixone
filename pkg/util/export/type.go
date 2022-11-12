@@ -96,7 +96,7 @@ type MergeLogType string
 func (t MergeLogType) String() string { return string(t) }
 
 const MergeLogTypeMerged MergeLogType = "merged"
-const MergeLogTypeLog MergeLogType = "log"
+const MergeLogTypeLogs MergeLogType = "logs"
 const MergeLogTypeALL MergeLogType = "*"
 
 const FilenameSeparator = "_"
@@ -104,6 +104,8 @@ const CsvExtension = ".csv"
 
 const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
+
+const AccountAll = ETLParamAccountAll
 
 var ETLParamTSAll = time.Time{}
 
@@ -114,7 +116,7 @@ type PathBuilder interface {
 	// BuildETLPath return path for EXTERNAL table 'infile' options
 	//
 	// like: {account}/merged/*/*/*/{name}/*.csv
-	BuildETLPath(db string, name string) string
+	BuildETLPath(db, name, account string) string
 	// ParsePath
 	//
 	// switch path {
@@ -124,6 +126,12 @@ type PathBuilder interface {
 	ParsePath(path string) (CSVPath, error)
 	NewMergeFilename(timestampStart, timestampEnd string) string
 	NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string
+	// SupportMergeSplit const. if false, not support SCV merge|split task
+	SupportMergeSplit() bool
+	// SupportAccountStrategy const
+	SupportAccountStrategy() bool
+	// GetName const
+	GetName() string
 }
 
 type CSVPath interface {
@@ -182,7 +190,7 @@ func (p *MetricLogPath) Parse() error {
 		p.fileType = MergeLogTypeMerged
 		p.timestamps = fnElems[:2]
 	} else {
-		p.fileType = MergeLogTypeLog
+		p.fileType = MergeLogTypeLogs
 		p.timestamps = fnElems[:1]
 	}
 
@@ -197,15 +205,15 @@ func (p *MetricLogPath) Timestamp() []string {
 	return p.timestamps
 }
 
-var _ PathBuilder = (*MetricLogPathBuilder)(nil)
+var _ PathBuilder = (*AccountDatePathBuilder)(nil)
 
-type MetricLogPathBuilder struct{}
+type AccountDatePathBuilder struct{}
 
-func NewMetricLogPathBuilder() *MetricLogPathBuilder {
-	return &MetricLogPathBuilder{}
+func NewAccountDatePathBuilder() *AccountDatePathBuilder {
+	return &AccountDatePathBuilder{}
 }
 
-func (m *MetricLogPathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
+func (b *AccountDatePathBuilder) Build(account string, typ MergeLogType, ts time.Time, db string, name string) string {
 	if ts != ETLParamTSAll {
 		return path.Join(account,
 			typ.String(),
@@ -223,24 +231,28 @@ func (m *MetricLogPathBuilder) Build(account string, typ MergeLogType, ts time.T
 //
 // #     account | typ | ts   | table | filename
 // like: *       /*    /*/*/* /metric /*.csv
-func (m *MetricLogPathBuilder) BuildETLPath(db string, name string) string {
-	etlDirectory := m.Build(ETLParamAccountAll, ETLParamTypeAll, ETLParamTSAll, db, name)
+func (b *AccountDatePathBuilder) BuildETLPath(db, name, account string) string {
+	etlDirectory := b.Build(account, ETLParamTypeAll, ETLParamTSAll, db, name)
 	etlFilename := "*" + CsvExtension
-	return path.Join(etlDirectory, etlFilename)
+	return path.Join("/", etlDirectory, etlFilename)
 }
 
-func (m *MetricLogPathBuilder) ParsePath(path string) (CSVPath, error) {
+func (b *AccountDatePathBuilder) ParsePath(path string) (CSVPath, error) {
 	p := NewMetricLogPath(path)
 	return p, p.Parse()
 }
 
-func (m *MetricLogPathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
+func (b *AccountDatePathBuilder) NewMergeFilename(timestampStart, timestampEnd string) string {
 	return strings.Join([]string{timestampStart, timestampEnd, string(MergeLogTypeMerged)}, FilenameSeparator) + CsvExtension
 }
 
-func (m *MetricLogPathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string {
+func (b *AccountDatePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string {
 	return strings.Join([]string{fmt.Sprintf("%d", ts.Unix()), nodeUUID, nodeType}, FilenameSeparator) + CsvExtension
 }
+
+func (b *AccountDatePathBuilder) SupportMergeSplit() bool      { return true }
+func (b *AccountDatePathBuilder) SupportAccountStrategy() bool { return true }
+func (b *AccountDatePathBuilder) GetName() string              { return "AccountDate" }
 
 var _ PathBuilder = (*DBTablePathBuilder)(nil)
 
@@ -249,7 +261,7 @@ type DBTablePathBuilder struct{}
 // BuildETLPath implement PathBuilder
 //
 // like: system/metric_*.csv
-func (m *DBTablePathBuilder) BuildETLPath(db string, name string) string {
+func (m *DBTablePathBuilder) BuildETLPath(db, name, account string) string {
 	return fmt.Sprintf("%s/%s_*", db, name) + CsvExtension
 }
 
@@ -271,4 +283,19 @@ func (m *DBTablePathBuilder) NewMergeFilename(timestampStart, timestampEnd strin
 
 func (m *DBTablePathBuilder) NewLogFilename(name, nodeUUID, nodeType string, ts time.Time) string {
 	return fmt.Sprintf(`%s_%s_%s_%s`, name, nodeUUID, nodeType, ts.Format("20060102.150405.000000")) + CsvExtension
+}
+
+func (m *DBTablePathBuilder) SupportMergeSplit() bool      { return false }
+func (m *DBTablePathBuilder) SupportAccountStrategy() bool { return false }
+func (m *DBTablePathBuilder) GetName() string              { return "DBTable" }
+
+func PathBuilderFactory(pathBuilder string) PathBuilder {
+	switch pathBuilder {
+	case (*DBTablePathBuilder)(nil).GetName():
+		return NewDBTablePathBuilder()
+	case (*AccountDatePathBuilder)(nil).GetName():
+		return NewAccountDatePathBuilder()
+	default:
+		return nil
+	}
 }

@@ -30,10 +30,18 @@ import (
 var (
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
+
+	// bootstrapping indicates the dn is bootstrapping.
+	// When dn checker finds a new dn shard should be added,
+	// it waits for a while if bootstrapping is false to avoid thrashing.
+	// If bootstrapping is true, dn checker will construct create dn shard command immediately.
+	// This flag helps to accelarate cluster bootstrapping.
+	bootstrapping bool
 )
 
 func init() {
 	waitingShards = newInitialShards()
+	bootstrapping = true
 }
 
 // Check checks dn state and generate operator for expired dn store.
@@ -44,6 +52,7 @@ func Check(
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
 	dnState pb.DNState,
+	user pb.TaskTableUser,
 	currTick uint64,
 	logger *zap.Logger,
 ) []*operator.Operator {
@@ -79,6 +88,15 @@ func Check(
 	operators = append(operators,
 		checkInitiatingShards(reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick, logger)...,
 	)
+
+	if user.Username != "" {
+		for _, store := range stores.WorkingStores() {
+			if !dnState.Stores[store.ID].TaskServiceCreated {
+				operators = append(operators, operator.CreateTaskServiceOp("",
+					store.ID, pb.DNService, user))
+			}
+		}
+	}
 
 	return operators
 }

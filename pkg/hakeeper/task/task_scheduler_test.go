@@ -93,7 +93,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 
 func TestScheduleCreatedTasks(t *testing.T) {
 	service := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
-	scheduler := NewTaskScheduler(service, hakeeper.Config{})
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
 
@@ -133,7 +133,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 
 func TestReallocateExpiredTasks(t *testing.T) {
 	service := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
-	scheduler := NewTaskScheduler(service, hakeeper.Config{})
+	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{}, nil)
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1
 

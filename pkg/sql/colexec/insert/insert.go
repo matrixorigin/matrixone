@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,18 +35,21 @@ import (
 )
 
 type Argument struct {
-	Ts                 uint64
-	TargetTable        engine.Relation
-	TargetColDefs      []*plan.ColDef
-	Affected           uint64
-	Engine             engine.Engine
-	DB                 engine.Database
-	TableID            string
-	CPkeyColDef        *plan.ColDef
-	DBName             string
-	TableName          string
-	ComputeIndexTables []engine.Relation
-	ComputeIndexInfos  []*plan.ComputeIndexInfo
+	Ts            uint64
+	TargetTable   engine.Relation
+	TargetColDefs []*plan.ColDef
+	Affected      uint64
+	Engine        engine.Engine
+	DB            engine.Database
+	TableID       string
+	CPkeyColDef   *plan.ColDef
+	DBName        string
+	TableName     string
+	IndexTables   []engine.Relation
+	IndexInfos    []*plan.IndexInfo
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -55,24 +61,26 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func handleWrite(n *Argument, proc *process.Process, ctx context.Context, bat *batch.Batch) error {
+	defer bat.Clean(proc.Mp())
 	// XXX The original logic was buggy and I had to temporarily circumvent it
 	if bat.Length() == 0 {
 		bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	}
-	for idx, info := range n.ComputeIndexInfos {
+	for idx, info := range n.IndexInfos {
 		b, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, info.Cols, proc)
 		if rowNum != 0 {
-			err := n.ComputeIndexTables[idx].Write(ctx, b)
+			err := n.IndexTables[idx].Write(ctx, b)
 			if err != nil {
 				return err
 			}
 		}
 		b.Clean(proc.Mp())
 	}
-	err := n.TargetTable.Write(ctx, bat)
-	bat.Clean(proc.Mp())
-	n.Affected += uint64(len(bat.Zs))
-	return err
+	if err := n.TargetTable.Write(ctx, bat); err != nil {
+		return err
+	}
+	atomic.AddUint64(&n.Affected, uint64(bat.Vecs[0].Length()))
+	return nil
 }
 
 func NewTxn(n *Argument, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
@@ -110,6 +118,9 @@ func CommitTxn(n *Argument, txn client.TxnOperator, ctx context.Context) error {
 	)
 	defer cancel()
 	if err := n.Engine.Commit(ctx, txn); err != nil {
+		if err2 := RolllbackTxn(n, txn, ctx); err2 != nil {
+			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
+		}
 		return err
 	}
 	err := txn.Commit(ctx)
@@ -167,6 +178,7 @@ func handleLoadWrite(n *Argument, proc *process.Process, ctx context.Context, ba
 		return false, err
 	}
 
+	n.Affected += uint64(len(bat.Zs))
 	if err = CommitTxn(n, proc.TxnOperator, ctx); err != nil {
 		return false, err
 	}
@@ -186,7 +198,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	{
 		for i := range bat.Vecs {
 			// Not-null check, for more information, please refer to the comments in func InsertValues
-			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].AutoIncrement) {
+			if (n.TargetColDefs[i].Primary && !n.TargetColDefs[i].Typ.AutoIncr) || (n.TargetColDefs[i].Default != nil && !n.TargetColDefs[i].Default.NullAbility && !n.TargetColDefs[i].Typ.AutoIncr) {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
@@ -202,8 +214,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
 	}
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+	if err := colexec.UpdateInsertBatch(n.Engine, proc.Ctx, proc, n.TargetColDefs, bat, n.TableID, n.DBName, n.TableName); err != nil {
 		return false, err
 	}
 	if n.CPkeyColDef != nil {
@@ -222,8 +233,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 		}
 	}
-	if !proc.LoadTag {
-		return false, handleWrite(n, proc, ctx, bat)
+	// set null value's data
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.CheckInsertVector(bat.Vecs[i], proc.Mp())
 	}
-	return handleLoadWrite(n, proc, ctx, bat)
+	if !proc.LoadTag {
+		return false, handleWrite(n, proc, proc.Ctx, bat)
+	}
+	return handleLoadWrite(n, proc, proc.Ctx, bat)
 }

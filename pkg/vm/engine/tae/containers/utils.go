@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
@@ -99,8 +98,14 @@ func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	typ := vec.GetType()
 
 	if vec.GetType().IsVarlen() {
-		header := make([]types.Varlena, len(bs.Header))
-		copy(header, bs.Header)
+		var header []types.Varlena
+		if bs.AsWindow {
+			header = make([]types.Varlena, bs.WinLength)
+			copy(header, bs.Header[bs.WinOffset:bs.WinOffset+bs.WinLength])
+		} else {
+			header = make([]types.Varlena, len(bs.Header))
+			copy(header, bs.Header)
+		}
 		storage := make([]byte, len(bs.Storage))
 		if len(storage) > 0 {
 			copy(storage, bs.Storage)
@@ -161,8 +166,6 @@ func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
 	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
 		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
-		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
-			common.OperandField("Col length is 0"))
 	} else {
 		bs.Storage = types.EncodeSlice(movec.MustTCols[T](v))
 	}
@@ -198,6 +201,8 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		bs = movecToBytes[float64](v)
 	case types.T_date:
 		bs = movecToBytes[types.Date](v)
+	case types.T_time:
+		bs = movecToBytes[types.Time](v)
 	case types.T_datetime:
 		bs = movecToBytes[types.Datetime](v)
 	case types.T_timestamp:
@@ -224,7 +229,6 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	if v.Nsp.Np != nil {
 		np = roaring64.New()
 		np.AddMany(v.Nsp.Np.ToArray())
-		logutil.Infof("sie : %d", np.GetCardinality())
 	}
 	vec.ResetWithData(bs, np)
 	return vec
@@ -381,6 +385,12 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 			data = append(data, types.Date(i+offset))
 		}
 		_ = movec.AppendFixed(vec, data, mockMp)
+	case types.T_time:
+		data := make([]types.Time, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.Time(i+offset))
+		}
+		_ = movec.AppendFixed(vec, data, mockMp)
 	case types.T_datetime:
 		data := make([]types.Datetime, 0)
 		for i := 0; i < rows; i++ {
@@ -486,6 +496,8 @@ func AppendValue(vec *movec.Vector, v any) {
 		AppendFixedValue[float64](vec, v)
 	case types.T_date:
 		AppendFixedValue[types.Date](vec, v)
+	case types.T_time:
+		AppendFixedValue[types.Time](vec, v)
 	case types.T_timestamp:
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.T_datetime:
@@ -538,6 +550,8 @@ func GetValue(col *movec.Vector, row uint32) any {
 		return movec.GetValueAt[float64](col, int64(row))
 	case types.T_date:
 		return movec.GetValueAt[types.Date](col, int64(row))
+	case types.T_time:
+		return movec.GetValueAt[types.Time](col, int64(row))
 	case types.T_datetime:
 		return movec.GetValueAt[types.Datetime](col, int64(row))
 	case types.T_timestamp:
@@ -584,6 +598,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[float64](col, row, val)
 	case types.T_date:
 		GenericUpdateFixedValue[types.Date](col, row, val)
+	case types.T_time:
+		GenericUpdateFixedValue[types.Time](col, row, val)
 	case types.T_datetime:
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.T_timestamp:

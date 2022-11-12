@@ -21,3 +21,9 @@ const (
 	EOFHeader         byte = 0xfe
 	LocalInFileHeader byte = 0xfb
 )
+
+const (
+	S3FileServiceName    = "S3"
+	LocalFileServiceName = "LOCAL"
+	ETLFileServiceName   = "ETL"
+)

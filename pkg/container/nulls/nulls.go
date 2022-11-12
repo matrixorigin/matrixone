@@ -119,17 +119,15 @@ func String(n *Nulls) string {
 
 func TryExpand(n *Nulls, size int) {
 	if n.Np == nil {
-		n.Np = bitmap.New(0)
+		n.Np = bitmap.New(size)
+		return
 	}
 	n.Np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
-	if n.Any() {
-		return n.Np.Contains(row)
-	}
-	return false
+	return n != nil && n.Np != nil && n.Np.Contains(row)
 }
 
 func Add(n *Nulls, rows ...uint64) {
@@ -139,20 +137,12 @@ func Add(n *Nulls, rows ...uint64) {
 	if n == nil {
 		n = &Nulls{}
 	}
-	if n.Np == nil {
-		n.Np = bitmap.New(int(rows[len(rows)-1]) + 1)
-	} else {
-		n.Np.TryExpandWithSize(int(rows[len(rows)-1]) + 1)
-	}
+	TryExpand(n, int(rows[len(rows)-1])+1)
 	n.Np.AddMany(rows)
 }
 
 func AddRange(n *Nulls, start, end uint64) {
-	if n.Np == nil {
-		n.Np = bitmap.New(int(end + 1))
-	} else {
-		n.Np.TryExpandWithSize(int(end + 1))
-	}
+	TryExpand(n, int(end+1))
 	n.Np.AddRange(start, end)
 }
 
@@ -238,7 +228,11 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 	}
 	np := bitmap.New(len(sels))
+	upperLimit := uint64(n.Np.Len())
 	for i, sel := range sp {
+		if sel >= upperLimit {
+			continue
+		}
 		if n.Np.Contains(sel) {
 			np.Add(uint64(i))
 		}
@@ -255,19 +249,12 @@ func (n *Nulls) Any() bool {
 }
 
 func (n *Nulls) Set(row uint64) {
-	if n.Np == nil {
-		n.Np = bitmap.New(int(row) + 1)
-	} else {
-		n.Np.TryExpandWithSize(int(row) + 1)
-	}
+	TryExpand(n, int(row)+1)
 	n.Np.Add(row)
 }
 
 func (n *Nulls) Contains(row uint64) bool {
-	if n.Any() {
-		return n.Np.Contains(row)
-	}
-	return false
+	return n != nil && n.Np != nil && n.Np.Contains(row)
 }
 
 func (n *Nulls) Show() ([]byte, error) {

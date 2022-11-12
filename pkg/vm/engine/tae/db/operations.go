@@ -98,8 +98,15 @@ type AccessInfo struct {
 type CreateDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
+	CreateSql  string
 	//Global unique, allocated by CN .
 	DatabaseId uint64
+}
+
+type FlushTable struct {
+	AccessInfo AccessInfo
+	DatabaseID uint64
+	TableID    uint64
 }
 
 type CreateDatabaseResp struct {
@@ -107,9 +114,8 @@ type CreateDatabaseResp struct {
 }
 
 type DropDatabaseReq struct {
-	AccessInfo AccessInfo
-	Name       string
-	ID         uint64
+	Name string
+	ID   uint64
 }
 
 type DropDatabaseResp struct {
@@ -131,7 +137,6 @@ type CreateRelationResp struct {
 }
 
 type DropOrTruncateRelationReq struct {
-	AccessInfo   AccessInfo
 	IsDrop       bool
 	DatabaseID   uint64
 	DatabaseName string
@@ -151,8 +156,8 @@ const (
 )
 
 type WriteReq struct {
-	AccessInfo   AccessInfo
 	Type         EntryType
+	DatabaseId   uint64
 	TableID      uint64
 	DatabaseName string
 	TableName    string

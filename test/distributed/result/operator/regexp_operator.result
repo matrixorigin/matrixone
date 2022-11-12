@@ -1,0 +1,217 @@
+SELECT 'Corn' REGEXP 'Corn' AS 'Corn';
+Corn
+true
+SELECT 'Acorn' REGEXP 'Corn' AS 'Acorn';
+Acorn
+false
+SELECT 'Corner' REGEXP 'Corn' AS 'Corner';
+Corner
+true
+SELECT 'Cheese' REGEXP 'Corn' AS 'Cheese';
+Cheese
+false
+SELECT 'Corn' REGEXP '^Co' AS 'Corn';
+Corn
+true
+SELECT 'Acorn' REGEXP '^Co' AS 'Acorn';
+Acorn
+false
+SELECT 'Cheese' REGEXP '^Co' AS 'Cheese';
+Cheese
+false
+SELECT 'Corn' REGEXP 'rn$' AS 'Corn';
+Corn
+true
+SELECT 'Acorn' REGEXP 'rn$' AS 'Acorn';
+Acorn
+true
+SELECT 'Cheese' REGEXP 'rn$' AS 'Cheese';
+Cheese
+false
+SELECT 'Corn' REGEXP '.' AS 'Corn';
+Corn
+true
+SELECT 'Cheese' REGEXP '.' AS 'Cheese';
+Cheese
+true
+SELECT 'Corn' REGEXP '^C.rn$' AS 'Corn';
+Corn
+true
+SELECT 'Crn' REGEXP '^C.rn$' AS 'Crn';
+Crn
+false
+SELECT 'Tweet' REGEXP '^Tw..t$' AS 'Tweet';
+Tweet
+true
+SELECT 'Tweat' REGEXP '^Tw..t$' AS 'Tweat';
+Tweat
+true
+SELECT 'Tweet' REGEXP '^Tw.t$' AS 'Tweet';
+Tweet
+false
+SELECT 'Twit' REGEXP '^Tw..t$' AS 'Twit';
+Twit
+false
+SELECT 'Tweet' REGEXP '^Tw.{2}t$' AS 'Tweet';
+Tweet
+true
+SELECT 'Tweat' REGEXP '^Tw.{2}t$' AS 'Tweat';
+Tweat
+true
+SELECT 'Tweet' REGEXP '^Tw.{1}t$' AS 'Tweet';
+Tweet
+false
+SELECT 'Twit' REGEXP '^Tw.{2}t$' AS 'Twit';
+Twit
+false
+SELECT 'Twet' REGEXP '^Twe*t$' AS 'Twet';
+Twet
+true
+SELECT 'Tweet' REGEXP '^Twe*t$' AS 'Tweet';
+Tweet
+true
+SELECT 'Tweeet' REGEXP '^Twe*t$' AS 'Tweeet';
+Tweet
+true
+SELECT 'Twt' REGEXP '^Twe*t$' AS 'Twt';
+Twt
+true
+SELECT 'Twit' REGEXP '^Twe*t$' AS 'Twit';
+Twit
+false
+SELECT 'Twiet' REGEXP '^Twe*t$' AS 'Twiet';
+Twiet
+false
+SELECT 'Tweit' REGEXP '^Twe*t$' AS 'Tweit';
+Tweit
+false
+SELECT 'Twet' REGEXP '^Twe+t$' AS 'Twet';
+Twet
+true
+SELECT 'Tweet' REGEXP '^Twe+t$' AS 'Tweet';
+Tweet
+true
+SELECT 'Tweeet' REGEXP '^Twe+t$' AS 'Tweeet';
+Tweeet
+true
+SELECT 'Twt' REGEXP '^Twe+t$' AS 'Twt';
+Twt
+false
+SELECT 'Twit' REGEXP '^Twe+t$' AS 'Twit';
+Twit
+false
+SELECT 'Twiet' REGEXP '^Twe+t$' AS 'Twiet';
+Twiet
+false
+SELECT 'Tweit' REGEXP '^Twe+t$' AS 'Tweit';
+Tweit
+false
+SELECT 'Tweet' REGEXP 'Tw|et' AS 'Tweet';
+Tweet
+true
+SELECT 'For Let' REGEXP 'Tw|et' AS 'For Let';
+For Let
+true
+SELECT 'Banana' REGEXP 'Tw|et' AS 'Banana';
+Banana
+false
+SELECT 'Cat' REGEXP 'Cat|Dog' AS 'Cat';
+Cat
+true
+SELECT 'Dog' REGEXP 'Cat|Dog' AS 'Dog';
+Dog
+true
+SELECT 'Doggone' REGEXP 'Cat|Dog' AS 'Doggone';
+Doggone
+true
+SELECT 'Banana' REGEXP 'Cat|Dog' AS 'Banana';
+Banana
+false
+SELECT 'Banana' REGEXP '(an)*' AS 'Banana';
+Banana
+true
+SELECT 'Land' REGEXP '(an)*' AS 'Land';
+Land
+true
+SELECT 'Cheese' REGEXP '(an)*' AS 'Cheese';
+Cheese
+true
+SELECT 'Banana' REGEXP '^B(an)*d$' AS 'Banana';
+Banana
+false
+SELECT 'Band' REGEXP '^B(an)*d$' AS 'Band';
+Band
+true
+SELECT 'Bald' REGEXP '^B(an)*d$' AS 'Bald';
+Bald
+false
+SELECT 'Bad' REGEXP '^B(an)*d$' AS 'Bad';
+Bad
+false
+SELECT 'Tweeet' REGEXP 'e{3}' AS 'Tweeet';
+Tweeet
+true
+SELECT 'Tweet' REGEXP 'e{3}' AS 'Tweet';
+Tweet
+false
+SELECT 'Tweet 123' REGEXP '[0-9]' AS 'Tweet123';
+Tweet123
+true
+SELECT 'Tweet ABC' REGEXP '[0-9]' AS 'TweetABC';
+TweetABC
+false
+SELECT 'Tweet 123' REGEXP '[A-Z]' AS 'Tweet123';
+Tweet123
+true
+SELECT 'ABC' REGEXP '[A-Z]' AS 'ABC';
+ABC
+true
+SELECT '123' REGEXP '[A-Z]' AS '123';
+123
+false
+SELECT '123' REGEXP '[1-3]' AS '123';
+123
+true
+SELECT '012' REGEXP '[1-3]' AS '012';
+012
+true
+SELECT '045' REGEXP '[1-3]' AS '045';
+045
+false
+SELECT '123' REGEXP '[^1-3]' AS '123';
+123
+false
+SELECT '012' REGEXP '[^1-3]' AS '012';
+012
+true
+SELECT '045' REGEXP '[^1-3]' AS '045';
+045
+true
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+insert into t1 values( 9 , "Killers");
+insert into t1 values(10 , "No Prayer for the Dying");
+insert into t1 values(11 , "No Sound Without Silence");
+insert into t1 values(12 , "Big Swing Face");
+insert into t1 values(13 , "Blue Night");
+insert into t1 values(14 , "Eternity");
+insert into t1 values(15 , "Scandinavia");
+insert into t1 values(16 , "Long Lost Suitcase");
+insert into t1 values(17 , "Praise and Blame");
+insert into t1 values(18 , "Along Came Jones");
+insert into t1 values(19 , "All Night Wrong");
+insert into t1 values(20 , "The Sixteen Men of Tain");
+SELECT a, b
+FROM t1
+WHERE b REGEXP '^Power';
+a    b
+1    PowerSlave
+2    Powerage
+drop table t1;

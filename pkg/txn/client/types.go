@@ -36,6 +36,8 @@ type TxnClient interface {
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// Close closes client.sender
+	Close() error
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -76,6 +78,15 @@ type TxnOperator interface {
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error
+}
+
+// DebugableTxnOperator debugable txn operator
+type DebugableTxnOperator interface {
+	TxnOperator
+
+	// Debug send debug request to DN, after use, SendResult needs to call the Release
+	// method.
+	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 }
 
 // TxnIDGenerator txn id generator

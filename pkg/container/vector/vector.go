@@ -58,6 +58,9 @@ type Vector struct {
 	// TODO: check whether isBin should be changed into array/bitmap
 	// now we assumpt that it can only be true in the case of only one data in vector
 	isBin bool
+
+	// idx for low cardinality scenario.
+	idx any
 }
 
 func (v *Vector) SetIsBin(isBin bool) {
@@ -92,6 +95,18 @@ func (v *Vector) IsOriginal() bool {
 
 func (v *Vector) SetOriginal(status bool) {
 	v.original = status
+}
+
+func (v *Vector) IsLowCardinality() bool {
+	return v.idx != nil
+}
+
+func (v *Vector) Index() any {
+	return v.idx
+}
+
+func (v *Vector) SetIndex(idx any) {
+	v.idx = idx
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
@@ -283,6 +298,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Date](v)
 	case types.T_datetime:
 		fillDefaultValue[types.Datetime](v)
+	case types.T_time:
+		fillDefaultValue[types.Time](v)
 	case types.T_timestamp:
 		fillDefaultValue[types.Timestamp](v)
 	case types.T_decimal64:
@@ -333,6 +350,8 @@ func (v *Vector) ToConst(row int, mp *mpool.MPool) *Vector {
 		return toConstVector[types.Date](v, row, mp)
 	case types.T_datetime:
 		return toConstVector[types.Datetime](v, row, mp)
+	case types.T_time:
+		return toConstVector[types.Time](v, row, mp)
 	case types.T_timestamp:
 		return toConstVector[types.Timestamp](v, row, mp)
 	case types.T_decimal64:
@@ -392,6 +411,8 @@ func (v *Vector) ConstExpand(m *mpool.MPool) *Vector {
 		expandVector[types.Date](v, 4, m)
 	case types.T_datetime:
 		expandVector[types.Datetime](v, 8, m)
+	case types.T_time:
+		expandVector[types.Time](v, 8, m)
 	case types.T_timestamp:
 		expandVector[types.Timestamp](v, 8, m)
 	case types.T_decimal64:
@@ -599,6 +620,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Date, 1)
 	case types.T_datetime:
 		v.Col = make([]types.Datetime, 1)
+	case types.T_time:
+		v.Col = make([]types.Time, 1)
 	case types.T_timestamp:
 		v.Col = make([]types.Timestamp, 1)
 	case types.T_decimal64:
@@ -658,6 +681,7 @@ func (v *Vector) Free(m *mpool.MPool) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
+
 	// const vector's data & area allocate with nil,
 	// so we can't free it by using mpool.
 	if v.data != nil {
@@ -742,6 +766,8 @@ func (v *Vector) Append(w any, isNull bool, m *mpool.MPool) error {
 		return appendOne(v, w.(types.Date), isNull, m)
 	case types.T_datetime:
 		return appendOne(v, w.(types.Datetime), isNull, m)
+	case types.T_time:
+		return appendOne(v, w.(types.Time), isNull, m)
 	case types.T_timestamp:
 		return appendOne(v, w.(types.Timestamp), isNull, m)
 	case types.T_decimal64:
@@ -986,7 +1012,11 @@ func ShrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
 		vs[i] = vs[sel]
 	}
 	v.Col = vs[:len(sels)]
-	v.data = v.encodeColToByteSlice()
+	if len(sels) == 0 {
+		v.data = v.data[:0]
+	} else {
+		v.data = v.encodeColToByteSlice()
+	}
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 }
 func Shrink(v *Vector, sels []int64) {
@@ -1027,6 +1057,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[types.Date](v, sels)
 	case types.T_datetime:
 		ShrinkFixed[types.Datetime](v, sels)
+	case types.T_time:
+		ShrinkFixed[types.Time](v, sels)
 	case types.T_timestamp:
 		ShrinkFixed[types.Timestamp](v, sels)
 	case types.T_decimal64:
@@ -1047,7 +1079,7 @@ func Shrink(v *Vector, sels []int64) {
 		v.Col = vs[:len(sels)]
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	default:
-		panic("vector shrink unknonw type")
+		panic("vector shrink unknown type")
 	}
 }
 
@@ -1062,7 +1094,7 @@ func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mpool.MPool) e
 	}
 	ws := types.DecodeSlice[T](data)
 	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
-	v.data = types.EncodeSlice(ws)
+	v.data = types.EncodeSliceWithCap(ws)
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 
 	m.Free(olddata)
@@ -1103,6 +1135,8 @@ func Shuffle(v *Vector, sels []int64, m *mpool.MPool) error {
 		ShuffleFixed[types.Date](v, sels, m)
 	case types.T_datetime:
 		ShuffleFixed[types.Datetime](v, sels, m)
+	case types.T_time:
+		ShuffleFixed[types.Time](v, sels, m)
 	case types.T_timestamp:
 		ShuffleFixed[types.Timestamp](v, sels, m)
 	case types.T_decimal64:
@@ -1255,7 +1289,7 @@ func UnionOne(v, w *Vector, sel int64, m *mpool.MPool) (err error) {
 		return nil
 	}
 
-	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
+	if nulls.Contains(w.Nsp, uint64(sel)) {
 		pos := uint64(v.Length() - 1)
 		nulls.Add(v.Nsp, pos)
 	} else if v.GetType().IsVarlen() {
@@ -1385,18 +1419,7 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 		}
 	}
 
-	getUnionCount := func(flags []uint8) int {
-		var numAdd = 0
-		for _, flg := range flags {
-			if flg > 0 {
-				numAdd++
-			}
-		}
-		return numAdd
-	}
-
-	if nulls.Any(w.Nsp) {
-		v.TryExpandNulls(int(oldLen) + getUnionCount(flags))
+	if w.Nsp != nil {
 		for idx, flg := range flags {
 			if flg > 0 {
 				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
@@ -1405,10 +1428,6 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mpool.MPo
 				// Advance oldLen regardless if it is null
 				oldLen += 1
 			}
-		}
-	} else {
-		if nulls.Any(v.Nsp) {
-			nulls.TryExpand(v.Nsp, getUnionCount(flags))
 		}
 	}
 
@@ -1480,6 +1499,8 @@ func (v *Vector) String() string {
 		return VecToString[types.Date](v)
 	case types.T_datetime:
 		return VecToString[types.Datetime](v)
+	case types.T_time:
+		return VecToString[types.Time](v)
 	case types.T_timestamp:
 		return VecToString[types.Timestamp](v)
 	case types.T_decimal64:
@@ -1534,6 +1555,8 @@ func GetInitConstVal(typ types.Type) any {
 		return float64(0)
 	case types.T_date:
 		return types.Date(0)
+	case types.T_time:
+		return types.Time(0)
 	case types.T_datetime:
 		return types.Datetime(0)
 	case types.T_timestamp:

@@ -1,0 +1,88 @@
+drop database if exists revoke_db_01;
+drop role if exists revoke_role_1,revoke_role_2,revoke_role_3,revoke_role_4,revoke_role_5,revoke_role_6,revoke_role_7,revoke_role_8;
+drop user if exists revoke_user_1,revoke_user_2,revoke_user_3,revoke_user_4,revoke_user_5,revoke_user_6,revoke_user_7;
+create role if not exists revoke_role_1,revoke_role_2,revoke_role_3,revoke_role_4,revoke_role_5,revoke_role_6,revoke_role_7,revoke_role_8;
+create user if not exists revoke_user_1 identified by '12345678',revoke_user_2 identified by '12345678',revoke_user_3 identified by '12345678',revoke_user_4 identified by '12345678',revoke_user_5 identified by '12345678',revoke_user_6 identified by '12345678',revoke_user_7 identified by '12345678';
+create database revoke_db_01;
+grant create user, drop user, alter user, create role, drop role, create database,drop database on account * to revoke_role_1 with grant option;
+grant revoke_role_1 to revoke_user_1;
+revoke create user, drop user, alter user on account * from revoke_role_1;
+select role_name, privilege_name, privilege_level from mo_catalog.mo_role_privs where role_name='revoke_role_1';
+role_name    privilege_name    privilege_level
+revoke_role_1    create role    *
+revoke_role_1    drop role    *
+revoke_role_1    create database    *
+revoke_role_1    drop database    *
+create user re_test_user identified by '12345678';
+internal error: do not have privilege to execute the statement
+drop user re_test_user;
+internal error: do not have privilege to execute the statement
+create role revoke_role_9;
+drop role revoke_role_9;
+revoke all on account * from revoke_role_3;
+revoke create user, drop user, show tables on account * from revoke_role_1;
+internal error: the privilege "show tables" can only be granted to the object type "database"
+revoke create user, drop user, show tables on table *.* from revoke_role_1;
+internal error: the privilege "create user" can only be granted to the object type "account"
+revoke create user, drop user on account * from re_not_exists;
+internal error: there is no role re_not_exists
+revoke all on account * from revoke_role_1;
+grant create table,drop table,alter table on database *.* to revoke_role_2,revoke_role_3 with grant option;
+grant all on account * to revoke_role_2;
+grant revoke_role_2 to revoke_user_2;
+grant revoke_role_3 to revoke_user_3;
+revoke drop table,create table on database *.* from revoke_role_2,revoke_role_3;
+select role_name, privilege_name, privilege_level from mo_catalog.mo_role_privs where role_name in ('revoke_role_2','revoke_role_3');
+role_name    privilege_name    privilege_level
+revoke_role_2    alter table    *.*
+revoke_role_3    alter table    *.*
+revoke_role_2    account all    *
+create table revoke_db_01.revoke_table_1(a int,b varchar(20),c double);
+internal error: do not have privilege to execute the statement
+drop table revoke_db_01.revoke_table_1;
+internal error: do not have privilege to execute the statement
+create database revoke_db_02;
+drop database revoke_db_02;
+create table revoke_db_01.revoke_table_1(a int,b varchar(20),c double);
+internal error: do not have privilege to execute the statement
+drop table revoke_db_01.revoke_table_1;
+internal error: do not have privilege to execute the statement
+revoke create table,select,insert on database * from revoke_role_2,revoke_role_3;
+internal error: the privilege "select" can only be granted to the object type "table"
+revoke if exists create table,select,insert on database * from revoke_role_2,revoke_role_3;
+internal error: the privilege "select" can only be granted to the object type "table"
+revoke all on account * from revoke_role_2,revoke_role_3;
+revoke if exists all on account * from revoke_role_2,revoke_role_3;
+grant all on table *.* to revoke_role_4,revoke_role_5 with grant option;
+grant create table,drop table,alter table on database *.* to revoke_role_5;
+grant revoke_role_4 to revoke_user_4 with grant option;
+grant revoke_role_5 to revoke_user_5;
+revoke all on table *.* from revoke_role_4,revoke_role_5;
+select role_name, privilege_name, privilege_level from mo_catalog.mo_role_privs where role_name in ('revoke_role_4','revoke_role_5');
+role_name    privilege_name    privilege_level
+revoke_role_5    create table    *.*
+revoke_role_5    drop table    *.*
+revoke_role_5    alter table    *.*
+select * from mo_catalog.mo_user;
+internal error: do not have privilege to execute the statement
+select * from mo_catalog.mo_user;
+internal error: do not have privilege to execute the statement
+create table revoke_db_01.revoke_table_2(a int,b varchar(20),c double);
+internal error: do not have privilege to execute the statement
+drop table revoke_db_01.revoke_table_2;
+internal error: do not have privilege to execute the statement
+grant ownership on database revoke_db_01 to revoke_role_6;
+grant all on table *.* to revoke_role_6;
+grant revoke_role_6 to revoke_user_6;
+revoke ownership on database revoke_db_01 from revoke_role_6;
+create table revoke_test_table_1(a int);
+internal error: do not have privilege to execute the statement
+drop table revoke_test_table_1;
+internal error: do not have privilege to execute the statement
+grant ownership on database revoke_db_01 to revoke_role_7;
+internal error: do not have privilege to execute the statement
+select * from revoke_db_01.revoke_table_1;
+SQL parser error: table "revoke_table_1" does not exist
+drop database if exists revoke_db_01;
+drop role if exists revoke_role_1,revoke_role_2,revoke_role_3,revoke_role_4,revoke_role_5,revoke_role_6,revoke_role_7,revoke_role_8;
+drop user if exists revoke_user_1,revoke_user_2,revoke_user_3,revoke_user_4,revoke_user_5,revoke_user_6,revoke_user_7;

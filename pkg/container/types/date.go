@@ -123,7 +123,7 @@ func ParseDate(s string) (Date, error) {
 		d = (s[6]-'0')*10 + (s[7] - '0')
 	}
 
-	if validDate(y, m, d) {
+	if ValidDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
 	return -1, moerr.NewInvalidArg("parsedate", s)
@@ -190,14 +190,14 @@ func ParseDateCast(s string) (Date, error) {
 		// }
 	}
 
-	if validDate(y, m, d) {
+	if ValidDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
 	return -1, moerr.NewInvalidArg("parsedate", s)
 }
 
 // date[0001-01-01 to 9999-12-31]
-func validDate(year int32, month, day uint8) bool {
+func ValidDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
 			if day > 0 {
@@ -652,6 +652,10 @@ func isLeap(year int32) bool {
 
 func (d Date) ToDatetime() Datetime {
 	return Datetime(int64(d) * secsPerDay * microSecsPerSec)
+}
+
+func (d Date) ToTime() Time {
+	return Time(0)
 }
 
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {

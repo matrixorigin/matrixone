@@ -18,6 +18,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/assert"
@@ -64,7 +66,7 @@ func TestParseDNConfig(t *testing.T) {
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
+	assert.Equal(t, dnservice.StorageMEM, cfg.DN.Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, "s3", cfg.FileServices[1].Name)
@@ -78,15 +80,15 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    localFileServiceName,
+		Name:    defines.LocalFileServiceName,
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    s3FileServiceName,
+		Name:    defines.S3FileServiceName,
 		Backend: "MEM",
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    etlFileServiceName,
+		Name:    defines.ETLFileServiceName,
 		Backend: "DISK-ETL",
 	})
 

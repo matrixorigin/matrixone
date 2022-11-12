@@ -191,6 +191,7 @@ const (
 	SUM           // SUM
 	TAN           // TAN
 	TO_DATE
+	STR_TO_DATE
 	TO_INTERVAL // TO_INTERVAL
 	TRANSLATE   // TRANSLATE
 	TRIM        // TRIM
@@ -207,6 +208,7 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	TIME      //TIME
 	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
@@ -258,6 +260,12 @@ const (
 	MO_MEMORY_USAGE // Dump memory usage
 	MO_ENABLE_MEMORY_USAGE_DETAIL
 	MO_DISABLE_MEMORY_USAGE_DETAIL
+
+	// MO_CTL is used to check some internal status, and issue some ctl commands to the service.
+	// see builtin.ctl.ctl.go to get detail.
+	MO_CTL
+
+	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -337,7 +345,8 @@ var functionIdRegister = map[string]int32{
 	"find_in_set": FINDINSET,
 	"power":       POW,
 	"startswith":  STARTSWITH,
-	"to_date":     TO_DATE,
+	"to_date":     STR_TO_DATE,
+	"str_to_date": STR_TO_DATE,
 	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
@@ -364,6 +373,7 @@ var functionIdRegister = map[string]int32{
 	"acos":                           ACOS,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
+	"time":                           TIME,
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
@@ -427,6 +437,7 @@ var functionIdRegister = map[string]int32{
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
+	"timediff":                       TIMEDIFF,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -436,6 +447,8 @@ var functionIdRegister = map[string]int32{
 	"mo_memory_usage":                MO_MEMORY_USAGE,
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
+	"mo_ctl":                         MO_CTL,
+	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
@@ -444,5 +457,5 @@ func GetFunctionIsWinfunByName(name string) bool {
 		return false
 	}
 	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].Flag == plan.Function_WIN
+	return len(fs) > 0 && fs[0].GetFlag() == plan.Function_WIN
 }

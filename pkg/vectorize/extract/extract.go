@@ -54,6 +54,13 @@ var validDatetimeUnit = map[string]struct{}{
 	"year_month":         {},
 }
 
+var validTimeUnit = map[string]struct{}{
+	"microsecond": {},
+	"second":      {},
+	"minute":      {},
+	"hour":        {},
+}
+
 func ExtractFromOneDate(unit string, date types.Date) uint32 {
 	switch unit {
 	case "day":
@@ -209,6 +216,35 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results []stri
 	case "year_month":
 		for i, d := range datetimes {
 			value := d.ToDate().YearMonthStr()
+			results[i] = value
+		}
+	}
+	return results, nil
+}
+
+func ExtractFromTime(unit string, times []types.Time, results []string) ([]string, error) {
+	if _, ok := validTimeUnit[unit]; !ok {
+		return []string{}, moerr.NewInternalError("invalid unit")
+	}
+	switch unit {
+	case "microsecond":
+		for i, t := range times {
+			value := fmt.Sprintf("%d", int(t))
+			results[i] = value
+		}
+	case "second":
+		for i, t := range times {
+			value := fmt.Sprintf("%02d", int(t.Sec()))
+			results[i] = value
+		}
+	case "minute":
+		for i, t := range times {
+			value := fmt.Sprintf("%02d", int(t.Minute()))
+			results[i] = value
+		}
+	case "hour":
+		for i, t := range times {
+			value := fmt.Sprintf("%02d", int(t.Hour()))
 			results[i] = value
 		}
 	}

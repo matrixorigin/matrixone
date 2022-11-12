@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -522,10 +524,52 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 				Bval: vec.Col.([]bool)[0],
 			},
 		}
+	case types.T_int8:
+		return &plan.Const{
+			Value: &plan.Const_I8Val{
+				I8Val: int32(vec.Col.([]int8)[0]),
+			},
+		}
+	case types.T_int16:
+		return &plan.Const{
+			Value: &plan.Const_I16Val{
+				I16Val: int32(vec.Col.([]int16)[0]),
+			},
+		}
+	case types.T_int32:
+		return &plan.Const{
+			Value: &plan.Const_I32Val{
+				I32Val: vec.Col.([]int32)[0],
+			},
+		}
 	case types.T_int64:
 		return &plan.Const{
-			Value: &plan.Const_Ival{
-				Ival: vec.Col.([]int64)[0],
+			Value: &plan.Const_I64Val{
+				I64Val: vec.Col.([]int64)[0],
+			},
+		}
+	case types.T_uint8:
+		return &plan.Const{
+			Value: &plan.Const_U8Val{
+				U8Val: uint32(vec.Col.([]uint8)[0]),
+			},
+		}
+	case types.T_uint16:
+		return &plan.Const{
+			Value: &plan.Const_U16Val{
+				U16Val: uint32(vec.Col.([]uint16)[0]),
+			},
+		}
+	case types.T_uint32:
+		return &plan.Const{
+			Value: &plan.Const_U32Val{
+				U32Val: vec.Col.([]uint32)[0],
+			},
+		}
+	case types.T_uint64:
+		return &plan.Const{
+			Value: &plan.Const_U64Val{
+				U64Val: vec.Col.([]uint64)[0],
 			},
 		}
 	case types.T_float64:
@@ -569,7 +613,217 @@ func isConstant(e *plan.Expr) bool {
 	}
 }
 
-func IsTableFunctionValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
-	// node must be a value scan
-	return node.TableDef != nil && node.TableDef.TblFunc != nil && len(node.TableDef.TblFunc.Param) > 0
+func rewriteTableFunction(tblFunc *tree.TableFunction, leftCtx *BindContext) error {
+	//var err error
+	//newTableAliasMap := make(map[string]string)
+	//newColAliasMap := make(map[string]string)
+	//col2Table := make(map[string]string)
+	//for i := range tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables {
+	//	alias := string(tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).As.Alias)
+	//	if len(alias) == 0 {
+	//		alias = string(tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).Expr.(*tree.TableName).ObjectName)
+	//	}
+	//	newAlias := fmt.Sprintf("%s_tbl_%d", alias, i)
+	//	tblFunc.SelectStmt.Select.(*tree.SelectClause).From.Tables[i].(*tree.AliasedTableExpr).As.Alias = tree.Identifier(newAlias)
+	//	//newTableAliasMap[alias] = newAlias
+	//}
+	for i := range tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs {
+		selectExpr := tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i] //take care, this is not a pointer
+		expr := selectExpr.Expr.(*tree.UnresolvedName)
+		_, tableName, colName := expr.GetNames()
+		if len(tableName) == 0 {
+			if binding, ok := leftCtx.bindingByCol[colName]; ok {
+				tableName = binding.table
+				expr.Parts[1] = tableName
+			} else {
+				return moerr.NewInternalError("cannot find column '%s'", colName)
+			}
+		}
+		//newTableName = newTableAliasMap[tableName]
+		//newColAlias = fmt.Sprintf("%s_%d", colName, i)
+		//newColAliasMap[colName] = newColAlias
+		//col2Table[newColAlias] = newTableName
+		//newName, err := tree.NewUnresolvedName(newTableName, colName)
+		//if err != nil {
+		//	return err
+		//}
+		//tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i].Expr = newName
+		//tblFunc.SelectStmt.Select.(*tree.SelectClause).Exprs[i].As = tree.UnrestrictedIdentifier(newColAlias)
+	}
+
+	//for i, _ := range tblFunc.Func.Exprs {
+	//	tblFunc.Func.Exprs[i], err = rewriteTableFunctionExpr(tblFunc.Func.Exprs[i], newTableAliasMap, newColAliasMap, col2Table)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+	return nil
+}
+
+//
+//func rewriteTableFunctionExpr(ast tree.Expr, tableAlias map[string]string, colAlias map[string]string, col2Table map[string]string) (tree.Expr, error) {
+//	var err error
+//	switch item := ast.(type) {
+//	case *tree.UnresolvedName:
+//		_, tblName, colName := item.GetNames()
+//		if len(tblName) > 0 {
+//			if alias, ok := tableAlias[tblName]; ok {
+//				item.Parts[1] = alias
+//			}
+//		} else {
+//			newColName := colAlias[colName]
+//			newTblName := col2Table[newColName]
+//			item.Parts[1] = newTblName
+//		}
+//	case *tree.FuncExpr:
+//		for i, _ := range item.Exprs {
+//			item.Exprs[i], err = rewriteTableFunctionExpr(item.Exprs[i], tableAlias, colAlias, col2Table)
+//			if err != nil {
+//				return nil, err
+//			}
+//		}
+//	case *tree.NumVal:
+//		break
+//	default:
+//		return nil, moerr.NewNotSupported("table function expr '%s' not supported", item)
+//	}
+//	return ast, nil
+//}
+
+// lookUpFnCols looks up the columns in the function expression
+func lookUpFnCols(ret tree.SelectExprs, fn interface{}) tree.SelectExprs {
+	switch fnExpr := fn.(type) { //TODO add more cases
+	case *tree.UnresolvedName:
+		ret = append(ret, tree.SelectExpr{Expr: fnExpr})
+	case *tree.FuncExpr:
+		for _, arg := range fnExpr.Exprs {
+			ret = lookUpFnCols(ret, arg)
+		}
+	case *tree.BinaryExpr:
+		ret = lookUpFnCols(ret, fnExpr.Left)
+		ret = lookUpFnCols(ret, fnExpr.Right)
+	case *tree.UnaryExpr:
+		ret = lookUpFnCols(ret, fnExpr.Expr)
+	}
+	return ret
+}
+func buildTableFunctionStmt(tbl *tree.TableFunction, left tree.TableExpr, leftCtx *BindContext) error {
+	var selectExprs tree.SelectExprs
+	selectExprs = lookUpFnCols(selectExprs, tbl.Func)
+	tbl.SelectStmt = &tree.Select{
+		Select: &tree.SelectClause{
+			From: &tree.From{
+				Tables: []tree.TableExpr{left},
+			},
+			Exprs: selectExprs,
+		},
+	}
+	return rewriteTableFunction(tbl, leftCtx)
+}
+
+func clearBinding(ctx *BindContext) {
+	ctx.bindingByCol = make(map[string]*Binding)
+	ctx.bindingByTable = make(map[string]*Binding)
+	ctx.bindingByTag = make(map[int32]*Binding)
+	ctx.bindingTree = &BindingTreeNode{}
+	ctx.bindings = make([]*Binding, 0)
+}
+
+func unwindTupleComparison(nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
+	if idx == len(leftExprs)-1 {
+		return bindFuncExprImplByPlanExpr(op, []*plan.Expr{
+			leftExprs[idx],
+			rightExprs[idx],
+		})
+	}
+
+	expr, err := bindFuncExprImplByPlanExpr(nonEqOp, []*plan.Expr{
+		DeepCopyExpr(leftExprs[idx]),
+		DeepCopyExpr(rightExprs[idx]),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+		leftExprs[idx],
+		rightExprs[idx],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err := unwindTupleComparison(nonEqOp, op, leftExprs, rightExprs, idx+1)
+	if err != nil {
+		return nil, err
+	}
+
+	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
+	if err != nil {
+		return nil, err
+	}
+
+	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+}
+
+// checkNoNeedCast
+// if constant's type higher than column's type
+// and constant's value in range of column's type, then no cast was needed
+func checkNoNeedCast(constT, columnT types.T, constExpr *plan.Expr_C) bool {
+	key := [2]types.T{columnT, constT}
+	// lowIntCol > highIntConst
+	if _, ok := intCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
+		if !valOk {
+			return false
+		}
+		constVal := val.I64Val
+
+		switch columnT {
+		case types.T_int8:
+			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
+		case types.T_int16:
+			return constVal <= int64(math.MaxInt16) && constVal >= int64(math.MinInt16)
+		case types.T_int32:
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+		}
+	}
+
+	// lowUIntCol > highUIntConst
+	if _, ok := uintCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+		if !valOk {
+			return false
+		}
+		constVal := val.U64Val
+
+		switch columnT {
+		case types.T_uint8:
+			return constVal <= uint64(math.MaxUint8)
+		case types.T_uint16:
+			return constVal <= uint64(math.MaxUint16)
+		case types.T_uint32:
+			return constVal <= uint64(math.MaxUint32)
+		}
+	}
+
+	// lowUIntCol > highIntConst
+	if _, ok := uint2intCastTableForRewrite[key]; ok {
+		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
+		if !valOk {
+			return false
+		}
+		constVal := val.I64Val
+
+		switch columnT {
+		case types.T_uint8:
+			return constVal <= int64(math.MaxUint8)
+		case types.T_uint16:
+			return constVal <= int64(math.MaxUint16)
+		case types.T_uint32:
+			return constVal <= int64(math.MaxUint32)
+		}
+	}
+
+	return false
 }

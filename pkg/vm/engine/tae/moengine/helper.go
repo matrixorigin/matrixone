@@ -44,22 +44,22 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 
 func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err error) {
 	for _, col := range colDefs {
-		expr := &plan.Expr{}
+		defaultExpr := &plan.Expr{}
 		if col.Default.Expr != nil {
-			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			expr = nil
+			defaultExpr = nil
 		}
 
-		onUpdate := &plan.Expr{}
-		if col.OnUpdate != nil {
-			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+		onUpdateExpr := &plan.Expr{}
+		if col.OnUpdate.Expr != nil {
+			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			onUpdate = nil
+			onUpdateExpr = nil
 		}
 
 		attr := &engine.Attribute{
@@ -70,9 +70,12 @@ func ColDefsToAttrs(colDefs []*catalog.ColDef) (attrs []*engine.Attribute, err e
 			Default: &plan.Default{
 				NullAbility:  col.Default.NullAbility,
 				OriginString: col.Default.OriginString,
-				Expr:         expr,
+				Expr:         defaultExpr,
 			},
-			OnUpdate:      onUpdate,
+			OnUpdate: &plan.OnUpdate{
+				Expr:         onUpdateExpr,
+				OriginString: col.OnUpdate.OriginString,
+			},
 			AutoIncrement: col.IsAutoIncrement(),
 		}
 		attrs = append(attrs, attr)
@@ -101,10 +104,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 
 	if len(schema.IndexInfos) != 0 {
 		indexDef := new(engine.ComputeIndexDef)
+		indexDef.Fields = make([][]string, 0)
 		for _, indexInfo := range schema.IndexInfos {
-			indexDef.Names = append(indexDef.Names, indexInfo.Name)
+			indexDef.IndexNames = append(indexDef.IndexNames, indexInfo.Name)
 			indexDef.TableNames = append(indexDef.TableNames, indexInfo.TableName)
 			indexDef.Uniques = append(indexDef.Uniques, indexInfo.Unique)
+			indexDef.Fields = append(indexDef.Fields, indexInfo.Field)
 		}
 		defs = append(defs, indexDef)
 	}
@@ -114,22 +119,22 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 			continue
 		}
 
-		expr := &plan.Expr{}
+		defaultExpr := &plan.Expr{}
 		if col.Default.Expr != nil {
-			if err := expr.Unmarshal(col.Default.Expr); err != nil {
+			if err := defaultExpr.Unmarshal(col.Default.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			expr = nil
+			defaultExpr = nil
 		}
 
-		onUpdate := &plan.Expr{}
-		if col.OnUpdate != nil {
-			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+		onUpdateExpr := &plan.Expr{}
+		if col.OnUpdate.Expr != nil {
+			if err := onUpdateExpr.Unmarshal(col.OnUpdate.Expr); err != nil {
 				return nil, err
 			}
 		} else {
-			onUpdate = nil
+			onUpdateExpr = nil
 		}
 
 		def := &engine.AttributeDef{
@@ -141,9 +146,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Default: &plan.Default{
 					NullAbility:  col.Default.NullAbility,
 					OriginString: col.Default.OriginString,
-					Expr:         expr,
+					Expr:         defaultExpr,
 				},
-				OnUpdate:      onUpdate,
+				OnUpdate: &plan.OnUpdate{
+					Expr:         onUpdateExpr,
+					OriginString: col.OnUpdate.OriginString,
+				},
 				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}
@@ -216,11 +224,12 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			schema.View = defVal.View
 
 		case *engine.ComputeIndexDef:
-			for i := range defVal.Names {
+			for i := range defVal.IndexNames {
 				schema.IndexInfos = append(schema.IndexInfos, &catalog.ComputeIndexInfo{
-					Name:      defVal.Names[i],
+					Name:      defVal.IndexNames[i],
 					TableName: defVal.TableNames[i],
 					Unique:    defVal.Uniques[i],
+					Field:     defVal.Fields[i],
 				})
 			}
 

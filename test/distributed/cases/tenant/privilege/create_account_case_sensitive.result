@@ -1,0 +1,9 @@
+drop account if exists `DLmFjq026Cd5T`;
+create account `DLmFjq026Cd5T` admin_name '杷062廼鄮704凈4547' identified by '1罖914尘1029垳4鋧0';
+create account `DLmFjq026Cd5T` admin_name '杷062廼鄮704凈4547' identified by '1罖914尘1029垳4鋧0';
+internal error: the tenant DLmFjq026Cd5T exists
+create account if not exists `DLmFjq026Cd5T` admin_name '杷062廼鄮704凈4547' identified by '1罖914尘1029垳4鋧0';
+drop account `DLmFjq026Cd5T`;
+drop account `DLmFjq026Cd5T`;
+internal error: there is no account DLmFjq026Cd5T
+drop account if exists `DLmFjq026Cd5T`;

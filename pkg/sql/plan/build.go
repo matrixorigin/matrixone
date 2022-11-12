@@ -60,6 +60,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildExplainAnalyze(ctx, stmt)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
+	case *tree.Replace:
+		return buildReplace(stmt, ctx)
 	case *tree.Update:
 		return buildUpdate(stmt, ctx)
 	case *tree.Delete:
@@ -108,6 +110,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowIndex(stmt, ctx)
 	case *tree.ShowGrants:
 		return buildShowGrants(stmt, ctx)
+	case *tree.ShowCollation:
+		return buildShowCollation(stmt, ctx)
 	case *tree.ShowVariables:
 		return buildShowVariables(stmt, ctx)
 	case *tree.ShowStatus:

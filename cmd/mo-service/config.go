@@ -15,16 +15,19 @@
 package main
 
 import (
+	"fmt"
 	"hash/fnv"
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -36,10 +39,6 @@ const (
 	cnServiceType  = "CN"
 	dnServiceType  = "DN"
 	logServiceType = "LOG"
-
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
-	etlFileServiceName   = "ETL"
 )
 
 var (
@@ -62,10 +61,12 @@ type LaunchConfig struct {
 
 // Config mo-service configuration
 type Config struct {
+	// DataDir data dir
+	DataDir string `toml:"data-dir"`
 	// Log log config
 	Log logutil.LogConfig `toml:"log"`
 	// ServiceType service type, select the corresponding configuration to start the
-	// service according to the service type. [CN|DN|Log|Standalone]
+	// service according to the service type. [CN|DN|LOG]
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
@@ -111,6 +112,9 @@ func parseFromString(data string, cfg any) error {
 }
 
 func (c *Config) validate() error {
+	if c.DataDir == "" {
+		c.DataDir = "./mo-data"
+	}
 	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
 		return moerr.NewInternalError("service type %s not support", c.ServiceType)
 	}
@@ -125,6 +129,14 @@ func (c *Config) validate() error {
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
+	}
+	for idx := range c.FileServices {
+		switch c.FileServices[idx].Name {
+		case defines.LocalFileServiceName, defines.ETLFileServiceName:
+			if c.FileServices[idx].DataDir == "" {
+				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
+			}
+		}
 	}
 	return nil
 }
@@ -156,20 +168,20 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// ensure local exists
-	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure s3 exists
-	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.S3FileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	// ensure etl exists, for trace & metric
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
 		if err != nil {
 			return nil, moerr.ConvertPanicError(err)
 		}
@@ -182,12 +194,21 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
+	cfg.DataDir = filepath.Join(c.DataDir, "logservice-data", cfg.UUID)
+	// Should sync directory structure with dragonboat.
+	hostname, err := os.Hostname()
+	if err != nil {
+		panic(fmt.Sprintf("cannot get hostname: %s", err))
+	}
+	cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, hostname,
+		fmt.Sprintf("%020d", cfg.DeploymentID), "exported-snapshot")
 	return cfg
 }
 
 func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
+	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
 	return cfg
 }
 
@@ -195,6 +216,7 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
 	return cfg
 }
 

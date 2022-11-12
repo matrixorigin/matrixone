@@ -193,6 +193,10 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		for i := 1; i <= rows; i++ {
 			vec.Append(types.FromCalendar(int32(i)*100, 1, 1))
 		}
+	case types.T_time:
+		for i := 1; i <= rows; i++ {
+			vec.Append(types.FromTimeClock(false, 1, 1, 1, 1))
+		}
 	case types.T_timestamp:
 		for i := int32(1); i <= int32(rows); i++ {
 			vec.Append(types.Timestamp(common.NextGlobalSeqNum()))
@@ -291,6 +295,10 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Date(i + offset))
 		}
+	case types.T_time:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Time(i + offset))
+		}
 	case types.T_datetime:
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i + offset))
@@ -298,6 +306,33 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i + offset)))
+		}
+	default:
+		panic("not support")
+	}
+	return vec
+}
+
+func MockVector3(typ types.Type, rows int) Vector {
+	vec := MakeVector(typ, true)
+	switch typ.Oid {
+	case types.T_int32:
+		for i := 0; i < rows; i++ {
+			vec.Append(int32(rows))
+		}
+	case types.T_int64:
+		for i := 0; i < rows; i++ {
+			vec.Append(int64(rows))
+		}
+	case types.T_uint32:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint32(i))
+			vec.Append(uint32(i))
+			i++
+		}
+	case types.T_uint64:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint64(rows))
 		}
 	default:
 		panic("not support")

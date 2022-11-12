@@ -25,7 +25,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -34,25 +33,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-const DefaultReplayCacheSize = 2 * common.M
-
 type Replayer struct {
 	DataFactory  *tables.DataFactory
 	db           *DB
 	maxTs        types.TS
-	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
 	once         sync.Once
-	txns         map[string]txnif.AsyncTxn
+	ckpedTS      types.TS
 }
 
-func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
+func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
 	return &Replayer{
 		DataFactory:  dataFactory,
 		db:           db,
-		cache:        bytes.NewBuffer(make([]byte, DefaultReplayCacheSize)),
 		staleIndexes: make([]*wal.Index, 0),
-		txns:         make(map[string]txnif.AsyncTxn),
+		ckpedTS:      ckpedTS,
 	}
 }
 
@@ -60,8 +55,6 @@ func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
 		entry.InitData(replayer.DataFactory)
-		blkData := entry.GetBlockData()
-		replayer.OnTimeStamp(blkData.GetMaxCheckpointTS())
 		return
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
@@ -126,6 +119,9 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index, lsn uint64) {
 	var err error
 	txnCmd := cmd.(*txnbase.TxnCmd)
+	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {
+		return
+	}
 	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
 		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {

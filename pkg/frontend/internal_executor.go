@@ -85,7 +85,7 @@ func (res *internalExecResult) Column(i uint64) (name string, typ uint8, signed 
 	col, err := res.resultSet.GetColumn(i)
 	if err == nil {
 		name = col.Name()
-		typ = col.ColumnType()
+		typ = uint8(col.ColumnType())
 		signed = col.IsSigned()
 	}
 	return
@@ -180,6 +180,14 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) makeProfile(profileTyp profileType) {
+
+}
+
+func (ip *internalProtocol) getProfile(profileTyp profileType) string {
+	return ""
+}
+
 func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
@@ -204,7 +212,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 }
 
 // Peer gets the address [Host:Port] of the client
-func (ip *internalProtocol) Peer() (string, string) {
+func (ip *internalProtocol) Peer() (string, string, string, string) {
 	panic("not impl")
 }
 

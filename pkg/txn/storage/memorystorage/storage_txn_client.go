@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -57,6 +58,10 @@ func (s *StorageTxnClient) New(options ...client.TxnOption) (client.TxnOperator,
 
 func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
 	panic("unimplemented")
+}
+
+func (*StorageTxnClient) Close() error {
+	return nil
 }
 
 type StorageTxnOperator struct {
@@ -106,9 +111,7 @@ func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*r
 			op.CNRequest.Payload,
 		)
 		if err != nil {
-			txnResponse.TxnError = &txn.TxnError{
-				Message: err.Error(),
-			}
+			txnResponse.TxnError = txn.WrapError(err, moerr.ErrTAERead)
 		} else {
 			payload, err := res.Read()
 			if err != nil {
@@ -166,9 +169,7 @@ func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*
 			op.CNRequest.Payload,
 		)
 		if err != nil {
-			txnResponse.TxnError = &txn.TxnError{
-				Message: err.Error(),
-			}
+			txnResponse.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 		} else {
 			txnResponse.CNOpResponse.Payload = payload
 		}

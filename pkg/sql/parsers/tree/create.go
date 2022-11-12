@@ -174,6 +174,12 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("'" + node.Param.Filepath + "'")
+		} else if node.Param.ScanType == S3 {
+			ctx.WriteString(" url s3option ")
+			ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
+				"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" +
+				node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
+
 		} else {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
@@ -467,6 +473,18 @@ func NewAttributeGeneratedAlways(e Expr, s bool) *AttributeGeneratedAlways {
 		Expr:   e,
 		Stored: s,
 	}
+}
+
+type AttributeLowCardinality struct {
+	columnAttributeImpl
+}
+
+func (node *AttributeLowCardinality) Format(ctx *FmtCtx) {
+	ctx.WriteString("low_cardinality")
+}
+
+func NewAttributeLowCardinality() *AttributeLowCardinality {
+	return &AttributeLowCardinality{}
 }
 
 type KeyPart struct {

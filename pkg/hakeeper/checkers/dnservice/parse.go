@@ -156,7 +156,10 @@ func checkInitiatingShards(
 		}
 	}
 
-	logger.Info(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	logger.Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	if bootstrapping && len(ops) != 0 {
+		bootstrapping = false
+	}
 
 	return ops
 }
@@ -202,7 +205,7 @@ func (w *initialShards) remove(shardID uint64) bool {
 func (w *initialShards) listEligibleShards(fn func(tick uint64) bool) []uint64 {
 	ids := make([]uint64, 0)
 	for id, earliest := range w.shards {
-		if fn(earliest.tick) {
+		if bootstrapping || fn(earliest.tick) {
 			ids = append(ids, id)
 		}
 	}

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -163,3 +164,20 @@ type BackgroundExec interface {
 }
 
 var _ BackgroundExec = &BackgroundHandler{}
+
+type dumpTable struct {
+	name   string
+	ddl    string
+	rel    engine.Relation
+	attrs  []string
+	isView bool
+}
+
+// profile makes the debug info
+type profile interface {
+	makeProfile(profileTyp profileType)
+
+	getProfile(profileTyp profileType) string
+}
+
+var _ profile = &Session{}

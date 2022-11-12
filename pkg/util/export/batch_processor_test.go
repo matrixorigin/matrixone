@@ -287,9 +287,9 @@ func TestMOCollector_HangBug(t *testing.T) {
 	defer _stubSignalFunc.Reset()
 	// prepare awakeBuffer
 	var ctrlC = make(chan *bufferHolder, 1)
-	var ctrlTimer = time.NewTimer(timeo)
 	var ctrlTimeoutCnt = 0
 	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
+		var ctrlTimer = time.NewTimer(timeo)
 		return func(holder *bufferHolder) {
 			//c.awakeGenerate <- holder
 			select {

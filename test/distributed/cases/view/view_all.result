@@ -1,0 +1,283 @@
+DROP TABLE IF EXISTS t00;
+DROP TABLE IF EXISTS t01;
+DROP VIEW IF EXISTS v0;
+CREATE TABLE t00(a INTEGER);
+INSERT INTO t00 VALUES (1),(2);
+CREATE TABLE t01(a INTEGER);
+INSERT INTO t01 VALUES (1);
+CREATE VIEW v0 AS SELECT t00.a, t01.a AS b FROM t00 LEFT JOIN t01 USING(a);
+SELECT t00.a, t01.a AS b FROM t00 LEFT JOIN t01 USING(a);
+a    b
+1    1
+2    null
+SELECT * FROM v0 WHERE b >= 0;
+a    b
+1    1
+SHOW CREATE VIEW v0;
+View    Create View
+v0    CREATE VIEW v0 AS SELECT t00.a, t01.a AS b FROM t00 LEFT JOIN t01 USING(a);
+DROP TABLE IF EXISTS t00;
+DROP TABLE IF EXISTS t01;
+DROP TABLE IF EXISTS v0;
+CREATE VIEW v1 AS SELECT 1;
+create view v2 as select 'foo' from dual;
+SELECT * from v1;
+1
+1
+SELECT * from v2;
+foo
+foo
+DROP TABLE IF EXISTS v1;
+DROP TABLE IF EXISTS v2;
+CREATE VIEW v1 AS SELECT CAST(1/3 AS DOUBLE), CAST(1/3 AS FLOAT(2)), CAST(1/3 AS FLOAT(50));
+table v1 already exists
+SHOW CREATE VIEW v1;
+View    Create View
+v1    CREATE VIEW v1 AS SELECT 1;
+SELECT * FROM v1;
+1
+1
+DROP VIEW v1;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1(c1 INT PRIMARY KEY, c2 INT);
+CREATE VIEW v1 AS SELECT * FROM t1;
+INSERT INTO v1 VALUES(1,20);
+invalid input: cannot insert into view 'v1'
+INSERT INTO v1 VALUES(1,5);
+invalid input: cannot insert into view 'v1'
+SELECT * FROM t1;
+c1    c2
+SELECT * FROM v1;
+c1    c2
+DROP VIEW v1;
+DROP TABLE t1;
+drop table if exists t1;
+create table t1 (i int);
+insert into t1 values (0), (1);
+create view v1 as select * from t1;
+select count(distinct i) from v1;
+count(distinct i)
+2
+drop table t1;
+drop view v1;
+drop table if exists t;
+CREATE TABLE t (x char(3));
+INSERT INTO t VALUES ('foo'), ('bar');
+CREATE VIEW v AS SELECT 'x' AS x FROM t;
+SELECT DISTINCT x FROM v;
+x
+x
+DROP TABLE t;
+DROP VIEW v;
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (a INT);
+CREATE TABLE t2 (a INT);
+INSERT INTO t1 VALUES (1),(2),(3);
+INSERT INTO t2 VALUES (1),(2),(3);
+CREATE VIEW v1 AS SELECT t1.a FROM t1, t2;
+CREATE TABLE v1 (a INT);
+table v1 already exists
+select * from v1;
+a
+1
+1
+1
+2
+2
+2
+3
+3
+3
+DROP VIEW v1;
+drop table if exists t1;
+drop table if exists t2;
+create table t2 (a int);
+create view t1 as select a from t2;
+insert into t1 (a) values (1);
+invalid input: cannot insert into view 't1'
+select * from t1;
+a
+create table t1 (a int);
+table t1 already exists
+create table if not exists t1 (a int,b int);
+show create table t1;
+View    Create View
+t1    create view t1 as select a from t2;
+select * from t1;
+a
+drop table t2;
+drop view t1;
+drop view if exists t1;
+drop table if exists t2;
+create table t2 (a int);
+create view t1 as select a + 5 as a from t2;
+insert into t1 (a) values (1);
+invalid input: cannot insert into view 't1'
+update t1 set a=3 where a=2;
+internal error: view is not support update operation
+drop view if exists t1;
+drop table if exists t2;
+create view t1 as select 1 as a;
+insert into t1 (a) values (1);
+invalid input: cannot insert into view 't1'
+update t1 set a=3 where a=2;
+internal error: view is not support update operation
+drop view if exists t1;
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+DROP VIEW IF EXISTS v1;
+DROP VIEW IF EXISTS v2;
+CREATE TABLE t1(a INT);
+CREATE TABLE t2(b INT);
+insert into t1 values(1),(2);
+insert into t2 values(1),(2);
+CREATE VIEW v1 AS SELECT a, b FROM t1, t2;
+CREATE VIEW v2 AS SELECT a FROM t1;
+select * from v1;
+a    b
+1    1
+1    2
+2    1
+2    2
+select * from v2;
+a
+1
+2
+DELETE FROM v1;
+invalid input: cannot delete from view
+DELETE v2 FROM v2;
+invalid input: cannot delete from view
+select * from v1;
+a    b
+1    1
+1    2
+2    1
+2    2
+select * from v2;
+a
+1
+2
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+DROP VIEW IF EXISTS v1;
+DROP VIEW IF EXISTS v2;
+drop table if exists t;
+drop VIEW if exists v;
+CREATE TABLE t(f1 INTEGER);
+insert into t values(1),(2),(3),(6);
+CREATE VIEW v AS SELECT f1 FROM t;
+SELECT f1 FROM (SELECT f1 FROM v) AS dt1 NATURAL JOIN v dt2 WHERE f1 > 5;
+f1
+6
+SELECT f1 FROM v NATURAL JOIN v dt2 WHERE f1 > 5;
+f1
+6
+drop table if exists t;
+drop VIEW if exists v;
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1(f1 INTEGER PRIMARY KEY);
+CREATE TABLE t2(f1 INTEGER);
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5);
+CREATE VIEW v AS SELECT f1 FROM t1;
+INSERT INTO t2 SELECT * FROM v WHERE f1=2;
+select * from t2;
+f1
+2
+UPDATE t2 SET f1=3 WHERE f1 IN (SELECT f1 FROM v WHERE f1=2);
+select * from t2;
+f1
+3
+DELETE FROM t2 WHERE f1 IN (SELECT f1 FROM v WHERE f1=3);
+select * from t2;
+f1
+DROP TABLE t1;
+DROP TABLE t2;
+DROp VIEW v;
+CREATE TABLE C (
+col_varchar_10_key varchar(10) DEFAULT NULL,
+col_int_key int DEFAULT NULL,
+pk int NOT NULL AUTO_INCREMENT,
+col_date_key date DEFAULT NULL,
+PRIMARY KEY (`pk`),
+KEY `col_varchar_10_key` (`col_varchar_10_key`),
+KEY `col_int_key` (`col_int_key`),
+KEY `col_date_key` (`col_date_key`)
+);
+INSERT INTO C VALUES ('ok',3,1,'2003-04-02');
+INSERT INTO C VALUES ('ok',3,2,'2003-04-02');
+CREATE VIEW viewC AS SELECT * FROM C;
+SELECT  table1.col_date_key AS field1
+FROM
+C AS table1
+WHERE
+(table1.col_int_key <=ANY
+( SELECT SUBQUERY1_t1.col_int_key
+FROM viewC AS SUBQUERY1_t1
+WHERE SUBQUERY1_t1.col_varchar_10_key <= table1.col_varchar_10_key
+)
+)
+;
+field1
+2003-04-02
+2003-04-02
+DROP TABLE C;
+DROP VIEW viewC;
+DROP TABLE if exists t2;
+DROP TABLE if exists t1;
+DROP VIEW if exists v1;
+DROP VIEW if exists v2;
+CREATE TABLE t1(f1 int, f11 int);
+CREATE TABLE t2(f2 int, f22 int);
+INSERT INTO t1 VALUES(1,1),(2,2),(3,3),(5,5),(9,9),(7,7);
+INSERT INTO t2 VALUES(1,1),(3,3),(2,2),(4,4),(8,8),(6,6);
+CREATE VIEW v1 AS SELECT * FROM t1;
+CREATE VIEW v2 AS SELECT * FROM t1 JOIN t2 ON f1=f2;
+CREATE VIEW v3 AS SELECT * FROM t1 WHERE f1 IN (2,3);
+CREATE VIEW v4 AS SELECT * FROM t2 WHERE f2 IN (2,3);
+SELECT * FROM v1;
+f1    f11
+1    1
+2    2
+3    3
+5    5
+9    9
+7    7
+SELECT * FROM v2;
+f1    f11    f2    f22
+1    1    1    1
+2    2    2    2
+3    3    3    3
+SELECT * FROM v3 WHERE f11 IN (1,3);
+f1    f11
+3    3
+SELECT * FROM v3 JOIN v4 ON f1=f2;
+f1    f11    f2    f22
+2    2    2    2
+3    3    3    3
+SELECT * FROM v4 WHERE f2 IN (1,3);
+f2    f22
+3    3
+SELECT * FROM (SELECT * FROM t1 group by f1 HAVING f1=f1) tt;
+SQL syntax error: column "t1.f11" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT * FROM t1 JOIN (SELECT * FROM t2 GROUP BY f2) tt ON f1=f2;
+SQL syntax error: column "t2.f22" must appear in the GROUP BY clause or be used in an aggregate function
+DROP TABLE if exists t2;
+DROP TABLE if exists t1;
+DROP VIEW v1;
+DROP VIEW v2;
+DROP VIEW v3;
+DROP VIEW v4;
+CREATE TABLE t1 (f1 VARCHAR(1), key(f1));
+INSERT INTO t1 VALUES ('a');
+CREATE VIEW v1 AS SELECT f1 FROM t1 ORDER BY 1 LIMIT 0;
+CREATE VIEW v2 AS SELECT f1 FROM t1 ORDER BY 1 LIMIT 1;
+SELECT * FROM v1;
+f1
+SELECT * FROM v2;
+f1
+a
+DROP VIEW v1;
+DROP VIEW v2;
+DROP TABLE t1;

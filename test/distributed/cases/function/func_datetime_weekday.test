@@ -1,0 +1,154 @@
+#SELECT, 嵌套
+
+SELECT weekday(date('2007-02-03 03:42:24'));
+
+
+#NULL
+SELECT weekday(NULL);
+
+
+#DATATYPE
+create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
+insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-03-12 10:03:12", "2032-03-12 13:04:12", "abr23c", "3dcf");
+insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
+insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
+select weekday(a),weekday(b),weekday(c),weekday(d),weekday(e),weekday(f) from t1;
+select weekday(g),weekday(h),weekday(i),weekday(k),weekday(l),weekday(m),weekday(n) from t1;
+drop table t1;
+
+
+#0.5暂不支持time类型
+#create table t1(a time)
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#insert into t1 values("10:03:12");
+#select weekday(a) from t1;
+#drop table t1;
+
+
+
+SELECT weekday("2015-09-03") as weekday;
+SELECT weekday('20150904') as weekday;
+SELECT weekday(1340124) as weekday;
+SELECT weekday(0.45133) as weekday;
+SELECT weekday(10) as weekday;
+SELECT weekday(1=1) as weekday;
+SELECT weekday('2015-09.30') as weekday;
+
+SELECT weekday('2015-0') as weekday;
+
+SELECT weekday('2015-09.30 12') as weekday;
+SELECT weekday('2015-09-26 08:09:22') AS weekday;
+-- @bvt:issue
+
+#EXTREME VALUE
+
+select weekday("2020-08");
+select weekday("0000-00-00");
+select weekday("-0001-03-03");
+select weekday("10000-03-02");
+select weekday("2021-13-09");
+select weekday("2020-10-32");
+
+
+#算术操作
+SELECT weekday("2015-09-10")- weekday("2016-04-24");
+SELECT weekday("2015-09-10")+ weekday("2016-04-24");
+SELECT weekday("2015-09-10")*weekday("2016-04-24");
+SELECT weekday("2015-09-10")/weekday("2016-04-24");
+
+#比较操作
+SELECT weekday("2015-09-10")>weekday("2016-04-24");
+SELECT weekday("2015-09-10")<weekday("2016-04-24");
+SELECT weekday("2015-09-10")=weekday("2016-04-24");
+SELECT weekday("2015-09-10")<>weekday("2016-04-24");
+SELECT weekday("2015-09-10")!=weekday("2016-04-24");
+
+
+
+#SELECT, ORDER BY, GROUP BY
+CREATE TABLE Product(Product_id INT,  Product_name VARCHAR(100) NOT NULL,Buying_price DECIMAL(13, 2) NOT NULL,Selling_price DECIMAL(13, 2) NOT NULL,Selling_Date Date NOT NULL,PRIMARY KEY(Product_id));
+INSERT INTO  Product(Product_name, Buying_price, Selling_price, Selling_Date) VALUES ('Audi Q8', 10000000.00, 15000000.00, '2018-01-26' ),('Volvo XC40', 2000000.00, 3000000.00, '2018-04-20' ),('Audi A6', 4000000.00, 5000000.00, '2018-07-25' ),('BMW X5', 5000500.00, 7006500.00, '2018-10-18'  ),('Jaguar XF', 5000000, 7507000.00, '2019-01-27'  ),('Mercedes-Benz C-Class', 4000000.00, 6000000.00, '2019-04-01'  ),('Jaguar F-PACE', 5000000.00, 7000000.00, '2019-12-26'  ),('Porsche Macan', 6500000.00, 8000000.00, '2020-04-16' ) ;
+SELECT  weekday (Selling_Date) weekday,  COUNT(Product_id) Product_Sold FROM Product GROUP BY weekday (Selling_Date) ORDER BY weekday (Selling_Date);
+DROP TABLE Product;
+
+
+#INSERT
+
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 select weekday("2012-10-12"), "2012-10-12";
+insert into t1 select weekday("2004-04-24"), "2004-04-24";
+insert into t1 select weekday("2008-12-04"), "2008-12-04";
+select * from t1;
+drop table t1;
+
+
+
+#WHERE
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select * from t1 where weekday(b)<>0;
+drop table t1;
+
+
+#ON CONDITION
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a INT,  b date);
+create table t2(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+insert into t2 values(1, "2013-04-30"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-08-12");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (weekday(t1.b) <> weekday(t2.b));
+drop table t1;
+drop table t2;
+
+#HAVING
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(1, "2012-07-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select b from t1 group by b having weekday(b)>0;
+drop table t1;
+
+#distinct
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(1, "2012-07-12"),(2, "2004-04-24"),(3, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select distinct weekday(b) from t1;
+drop table t1;
+
+#Create table select
+#create table t1 select if(1,'1','0'), weekday("2002-08-02");
+#select * from t1;
+#drop table t1;
+
+
+CREATE TABLE t3(c1 DATE NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT WEEKDAY(c1) FROM t3;
+DROP TABLE t3;
+CREATE TABLE t3(c1 DATETIME NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT WEEKDAY(c1) FROM t3;
+DROP TABLE t3;
+
+
+CREATE TABLE t3(c1 TIMESTAMP NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT WEEKDAY(c1) FROM t3;
+DROP TABLE t3;

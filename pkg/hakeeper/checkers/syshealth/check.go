@@ -220,7 +220,7 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 
 // parseDnState separates dn stores as expired and working.
 func parseDnState(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
-	set := newStoreSet(pb.DnService)
+	set := newStoreSet(pb.DNService)
 	for id, storeInfo := range dnState.Stores {
 		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[id] = struct{}{}
@@ -244,7 +244,7 @@ func shutdownStores(serviceType pb.ServiceType, stores map[string]struct{}) []*o
 			)
 			ops = append(ops, op)
 		}
-	case pb.DnService:
+	case pb.DNService:
 		for id := range stores {
 			op := operator.NewOperator(
 				"dnservice", operator.NoopShardID, operator.NoopEpoch,

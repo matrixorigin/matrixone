@@ -127,7 +127,6 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		m.Free(a.da)
 		a.da = data
 		a.vs = types.DecodeSlice[T2](a.da)
 	}
@@ -343,6 +342,17 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		return vec, nil
 	}
 	return vector.NewWithFixed(a.otyp, a.eval(a.vs), nsp, m), nil
+}
+
+func (a *UnaryDistAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
+	d, err := m.Alloc(len(a.da))
+	if err != nil {
+		return err
+	}
+	copy(d, a.da)
+	a.da = d
+	setDistAggValues[T1, T2](a, a.otyp)
+	return nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {

@@ -17,12 +17,11 @@ package json_extract
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
-	QueryByString func([][]byte, [][]byte, [][]byte) ([][]byte, error)
-	QueryByJson   func([][]byte, [][]byte, [][]byte) ([][]byte, error)
+	QueryByString func([][]byte, [][]byte, []*bytejson.ByteJson) ([]*bytejson.ByteJson, error)
+	QueryByJson   func([][]byte, [][]byte, []*bytejson.ByteJson) ([]*bytejson.ByteJson, error)
 )
 
 func init() {
@@ -30,20 +29,42 @@ func init() {
 	QueryByJson = byJson
 }
 
-func byJson(json, path, result [][]byte) ([][]byte, error) {
-	// XXX The functoin only handles path is constant.
-	if len(path) != 1 {
-		panic("Json extract can only handle constant path for now.")
+func byJson(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.ByteJson, error) {
+	if len(path) == 1 {
+		pStar, err := types.ParseStringToPath(string(path[0]))
+		if err != nil {
+			return nil, err
+		}
+		for i := range json {
+			ret, err := byJsonOne(json[i], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
 	}
-	pStar, err := types.ParseStringToPath(string(path[0]))
-	if err != nil {
-		logutil.Infof("json extract: error:%v", err)
-		return nil, err
+	if len(json) == 1 {
+		for i := range path {
+			pStar, err := types.ParseStringToPath(string(path[i]))
+			if err != nil {
+				return nil, err
+			}
+			ret, err := byJsonOne(json[0], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
 	}
-	for i := range json {
+	for i := range path {
+		pStar, err := types.ParseStringToPath(string(path[i]))
+		if err != nil {
+			return nil, err
+		}
 		ret, err := byJsonOne(json[i], &pStar)
 		if err != nil {
-			logutil.Infof("json extract: error:%v", err)
 			return nil, err
 		}
 		result = append(result, ret)
@@ -51,37 +72,57 @@ func byJson(json, path, result [][]byte) ([][]byte, error) {
 	return result, nil
 }
 
-func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
-	//TODO check here
+func byJsonOne(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
-	return []byte(bj.Query(path).String()), nil
+	return bj.Query(path), nil
 }
 
-func byString(json, path, result [][]byte) ([][]byte, error) {
-	// XXX The functoin only handles path is constant.
-	if len(path) != 1 {
-		panic("Json extract can only handle constant path for now.")
+func byString(json, path [][]byte, result []*bytejson.ByteJson) ([]*bytejson.ByteJson, error) {
+	if len(path) == 1 {
+		pStar, err := types.ParseStringToPath(string(path[0]))
+		if err != nil {
+			return nil, err
+		}
+		for i := range json {
+			ret, err := byStringOne(json[i], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
 	}
-	pStar, err := types.ParseStringToPath(string(path[0]))
-	if err != nil {
-		logutil.Infof("json qv: error:%v", err)
-		return nil, err
+	if len(json) == 1 {
+		for i := range path {
+			pStar, err := types.ParseStringToPath(string(path[i]))
+			if err != nil {
+				return nil, err
+			}
+			ret, err := byStringOne(json[0], &pStar)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, ret)
+		}
+		return result, nil
 	}
-	for i := range json {
+	for i := range path {
+		pStar, err := types.ParseStringToPath(string(path[i]))
+		if err != nil {
+			return nil, err
+		}
 		ret, err := byStringOne(json[i], &pStar)
 		if err != nil {
-			logutil.Infof("json qv: error:%v", err)
 			return nil, err
 		}
 		result = append(result, ret)
 	}
 	return result, nil
 }
-func byStringOne(json []byte, path *bytejson.Path) ([]byte, error) {
+func byStringOne(json []byte, path *bytejson.Path) (*bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {
-		logutil.Debugf("json qvOne : error:%v", err)
 		return nil, err
 	}
-	return []byte(bj.Query(path).String()), nil
+	return bj.Query(path), nil
 }

@@ -143,10 +143,10 @@ func TestGetCnListenAddress(t *testing.T) {
 	cnNum := 3
 	address := newServiceAddresses(t, 1, 1, cnNum, "127.0.0.1")
 
-	addr0 := address.getCnListenAddress(0)
-	addr1 := address.getCnListenAddress(1)
-	addr2 := address.getCnListenAddress(2)
-	addr3 := address.getCnListenAddress(3)
+	addr0 := address.getCNListenAddress(0)
+	addr1 := address.getCNListenAddress(1)
+	addr2 := address.getCNListenAddress(2)
+	addr3 := address.getCNListenAddress(3)
 
 	require.NotEqual(t, addr0, addr1)
 	require.NotEqual(t, addr0, addr2)
@@ -185,23 +185,17 @@ func TestGetLogGossipAddress(t *testing.T) {
 }
 
 func TestListHAKeeperListenAddresses(t *testing.T) {
-	logNum := 3
+	logNum := 1
 	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 	addrs := address.listHAKeeperListenAddresses()
 	require.Equal(t, logNum, len(addrs))
-	require.NotEqual(t, addrs[0], addrs[1])
-	require.NotEqual(t, addrs[0], addrs[2])
-	require.NotEqual(t, addrs[1], addrs[2])
 }
 
 func TestGetLogGossipSeedAddresses(t *testing.T) {
-	logNum := 4
+	logNum := 1
 	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 	addrs := address.getLogGossipSeedAddresses()
 	require.Equal(t, defaultGossipSeedNum, len(addrs))
-	require.NotEqual(t, addrs[0], addrs[1])
-	require.NotEqual(t, addrs[0], addrs[2])
-	require.NotEqual(t, addrs[1], addrs[2])
 }
 
 func TestPartition(t *testing.T) {

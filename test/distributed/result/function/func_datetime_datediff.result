@@ -1,0 +1,75 @@
+SELECT DATEDIFF('2017-08-17','2017-08-17');
+datediff(2017-08-17, 2017-08-17)
+0
+SELECT DATEDIFF('2017-08-17','2017-08-08');
+datediff(2017-08-17, 2017-08-08)
+9
+SELECT DATEDIFF('2017-08-08','2017-08-17');
+datediff(2017-08-08, 2017-08-17)
+-9
+SELECT DATEDIFF(NULL,'2017-08-17');
+datediff(null, 2017-08-17)
+null
+SELECT DATEDIFF('2017-08-17',NULL);
+datediff(2017-08-17, null)
+null
+SELECT DATEDIFF(NULL, NULL);
+datediff(null, null)
+null
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-11");
+insert into t1 values(2, "2004-04-24");
+insert into t1 values(3, "2008-12-04");
+insert into t1 values(4, "2012-03-23");
+insert into t1 values(5, "2000-03-23");
+insert into t1 values(6, "2030-03-23");
+insert into t1 values(7, "2040-03-23");
+SELECT a, DATEDIFF('2022-10-9', b) from t1;
+a    datediff(2022-10-9, b)
+1    3650
+2    6742
+3    5057
+4    3852
+5    8235
+6    -2722
+7    -6375
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-11");
+insert into t1 values(2, "2004-04-24");
+insert into t1 values(3, "2008-12-04");
+insert into t1 values(4, "2012-03-23");
+insert into t1 values(5, "2000-03-23");
+insert into t1 values(6, "2030-03-23");
+insert into t1 values(7, "2040-03-23");
+SELECT a, DATEDIFF(b, '2022-10-9') from t1;
+a    datediff(b, 2022-10-9)
+1    -3650
+2    -6742
+3    -5057
+4    -3852
+5    -8235
+6    2722
+7    6375
+drop table t1;
+drop table if exists t1;
+create table t1(a date,  b date);
+insert into t1 values('2022-10-9', "2012-10-11");
+insert into t1 values('2022-10-9', "2004-04-24");
+insert into t1 values('2022-10-9', "2008-12-04");
+insert into t1 values('2022-10-9', "2012-03-23");
+insert into t1 values('2022-10-9', "2000-03-23");
+insert into t1 values('2022-10-9', "2030-03-23");
+insert into t1 values('2022-10-9', "2040-03-23");
+SELECT a, b, DATEDIFF(a, b) from t1;
+a    b    datediff(a, b)
+2022-10-09    2012-10-11    3650
+2022-10-09    2004-04-24    6742
+2022-10-09    2008-12-04    5057
+2022-10-09    2012-03-23    3852
+2022-10-09    2000-03-23    8235
+2022-10-09    2030-03-23    -2722
+2022-10-09    2040-03-23    -6375
+drop table t1;

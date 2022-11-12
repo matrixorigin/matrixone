@@ -56,6 +56,13 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 	}
 }
 
+// WithSenderMaxMessageSize set max rpc message size
+func WithSenderMaxMessageSize(maxMessageSize int) SenderOption {
+	return func(s *sender) {
+		s.options.maxMessageSize = maxMessageSize
+	}
+}
+
 type sender struct {
 	logger *zap.Logger
 	clock  clock.Clock
@@ -64,6 +71,7 @@ type sender struct {
 	options struct {
 		localDispatch         LocalDispatch
 		payloadCopyBufferSize int
+		maxMessageSize        int
 		backendCreateOptions  []morpc.BackendOption
 		clientOptions         []morpc.ClientOption
 	}
@@ -83,6 +91,7 @@ func NewSenderWithConfig(cfg Config,
 	cfg.adjust()
 	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(logger)...))
 	options = append(options, WithSenderClientOptions(cfg.getClientOptions(logger)...))
+	options = append(options, WithSenderMaxMessageSize(int(cfg.MaxMessageSize)))
 	return NewSender(clock, logger, options...)
 }
 
@@ -120,7 +129,8 @@ func NewSender(clock clock.Clock,
 	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
 		morpc.WithCodecIntegrationHLC(s.clock),
 		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
-		morpc.WithCodecEnableChecksum())
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
@@ -348,7 +358,7 @@ func (ls *localStream) start() {
 			response := v.responseFactory()
 			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
 			if err != nil {
-				response.TxnError = &txn.TxnError{Code: int32(moerr.ErrRpcError), Message: err.Error()}
+				response.TxnError = txn.WrapError(moerr.NewRpcError(err.Error()), 0)
 			}
 			out <- response
 		}

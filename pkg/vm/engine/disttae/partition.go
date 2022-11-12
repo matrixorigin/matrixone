@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -31,15 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const (
-	index_PrimaryKey = memtable.Text("primary key")
-	index_BlockID    = memtable.Text("block id")
-	index_Time_OP    = memtable.Text("time, op")
-)
-
-func NewPartition() *Partition {
+func NewPartition(
+	columnsIndexDefs []ColumnsIndexDef,
+) *Partition {
 	return &Partition{
-		data: memtable.NewTable[RowID, DataValue, *DataRow](),
+		data:             memtable.NewTable[RowID, DataValue, *DataRow](),
+		columnsIndexDefs: columnsIndexDefs,
 	}
 }
 
@@ -50,7 +50,7 @@ func (r RowID) Less(than RowID) bool {
 }
 
 type DataValue struct {
-	op    Op
+	op    uint8
 	value map[string]memtable.Nullable
 }
 
@@ -61,10 +61,8 @@ type DataRow struct {
 	uniqueIndexes []memtable.Tuple
 }
 
-type Op uint8
-
 const (
-	opInsert Op = iota + 1
+	opInsert = iota + 1
 	opDelete
 )
 
@@ -86,27 +84,37 @@ func (d *DataRow) UniqueIndexes() []memtable.Tuple {
 
 var _ MVCC = new(Partition)
 
-func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
+func (p *Partition) BlockList(ctx context.Context, ts timestamp.Timestamp,
+	blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int) {
 	blks := make([]BlockMeta, 0, len(blocks))
-	deletes := make(map[uint64]uint8)
-	p.IterDeletedRowIDs(ctx, ts, func(rowID RowID) bool {
-		deletes[rowIDToBlockID(rowID)] = 0
+	deletes := make(map[uint64][]int)
+	if len(blocks) == 0 {
+		return blks, deletes
+	}
+	ids := make([]uint64, len(blocks))
+	for i := range blocks {
+		ids[i] = blocks[i].Info.BlockID
+	}
+	p.IterDeletedRowIDs(ctx, ids, ts, func(rowID RowID) bool {
+		id, offset := catalog.DecodeRowid(types.Rowid(rowID))
+		deletes[id] = append(deletes[id], int(offset))
 		return true
 	})
 	for _, entry := range entries {
 		if entry.typ == DELETE {
 			vs := vector.MustTCols[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
-				deletes[rowIDToBlockID(RowID(v))] = 0
+				id, offset := catalog.DecodeRowid(v)
+				deletes[id] = append(deletes[id], int(offset))
 			}
 		}
 	}
 	for i := range blocks {
-		if _, ok := deletes[blocks[i].info.BlockID]; !ok {
+		if _, ok := deletes[blocks[i].Info.BlockID]; !ok {
 			blks = append(blks, blocks[i])
 		}
 	}
-	return blks
+	return blks, deletes
 }
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
@@ -155,11 +163,17 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		// indexes
 		var indexes []memtable.Tuple
-		// time, op
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
-			index_Time_OP,
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(rowIDToBlockID(rowID)),
 			ts,
 			memtable.Uint(opDelete),
+		})
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
 
 		err := p.data.Upsert(tx, &DataRow{
@@ -240,33 +254,129 @@ func (p *Partition) Insert(ctx context.Context, primaryKeyIndex int,
 				primaryKey,
 			})
 		}
-		// block id
+		// block id, time, op
 		indexes = append(indexes, memtable.Tuple{
-			index_BlockID,
+			index_BlockID_Time_OP,
 			memtable.ToOrdered(rowIDToBlockID(rowID)),
-		})
-		// time, op
-		indexes = append(indexes, memtable.Tuple{
-			index_Time_OP,
 			ts,
 			memtable.Uint(opInsert),
 		})
-
-		err = p.data.Upsert(tx, &DataRow{
-			rowID:   rowID,
-			value:   dataValue,
-			indexes: indexes,
+		// time
+		indexes = append(indexes, memtable.Tuple{
+			index_Time,
+			ts,
 		})
-		if err != nil {
-			return err
+		// columns indexes
+		for _, def := range p.columnsIndexDefs {
+			index := memtable.Tuple{
+				def.Name,
+			}
+			for _, col := range def.Columns {
+				index = append(index, memtable.ToOrdered(tuple[col].Value))
+			}
+			indexes = append(indexes, index)
 		}
 
-		if err := tx.Commit(t); err != nil {
+		_, err := p.data.Get(tx, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = p.data.Upsert(tx, &DataRow{
+				rowID:   rowID,
+				value:   dataValue,
+				indexes: indexes,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Commit(t); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (p *Partition) GC(ts timestamp.Timestamp) error {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	min := memtable.Tuple{
+		index_Time,
+		memtable.Min,
+	}
+	max := memtable.Tuple{
+		index_Time,
+		ts,
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		err := p.data.Delete(tx, entry.Key)
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(t); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *Partition) GetRowsByIndex(ts timestamp.Timestamp, index memtable.Tuple,
+	columns []string, deletes map[types.Rowid]uint8) (rows [][]any, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(tx, index, index)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if _, ok := deletes[types.Rowid(entry.Key)]; ok {
+			continue
+		}
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, genRow(&data, columns))
+	}
+	return
+}
+
+func (p *Partition) GetRowsByIndexPrefix(ts timestamp.Timestamp, prefix memtable.Tuple) (rows []DataValue, err error) {
+	t := memtable.Time{
+		Timestamp: ts,
+	}
+	tx := memtable.NewTransaction(
+		uuid.NewString(),
+		t,
+		memtable.SnapshotIsolation,
+	)
+	iter := p.data.NewIndexIter(
+		tx,
+		append(append(prefix[:0:0], prefix...), memtable.Min),
+		append(append(prefix[:0:0], prefix...), memtable.Max),
+	)
+	for ok := iter.First(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		data, err := p.data.Get(tx, entry.Key)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, data)
+	}
+	return
 }
 
 func rowIDToBlockID(rowID RowID) uint64 {
@@ -278,11 +388,19 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	pivot := memtable.Tuple{
-		index_BlockID,
+	min := memtable.Tuple{
+		index_BlockID_Time_OP,
 		memtable.ToOrdered(blockID),
+		memtable.Min,
+		memtable.Uint(opInsert),
 	}
-	iter := p.data.NewIndexIter(tx, pivot, append(pivot, memtable.Min))
+	max := memtable.Tuple{
+		index_BlockID_Time_OP,
+		memtable.ToOrdered(blockID),
+		memtable.Max,
+		memtable.Uint(opInsert),
+	}
+	iter := p.data.NewIndexIter(tx, min, max)
 	defer iter.Close()
 	for ok := iter.First(); ok; ok = iter.Next() {
 		entry := iter.Item()
@@ -290,52 +408,75 @@ func (p *Partition) DeleteByBlockID(ctx context.Context, ts timestamp.Timestamp,
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(tx.Time)
 }
 
-func (p *Partition) IterDeletedRowIDs(ctx context.Context, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
+func (p *Partition) IterDeletedRowIDs(ctx context.Context, blockIDs []uint64, ts timestamp.Timestamp, fn func(rowID RowID) bool) {
 	tx := memtable.NewTransaction(uuid.NewString(), memtable.Time{
 		Timestamp: ts,
 	}, memtable.SnapshotIsolation)
-	min := memtable.Tuple{
-		index_Time_OP,
-		types.TS{},
-	}
-	max := memtable.Tuple{
-		index_Time_OP,
-		types.TimestampToTS(ts),
-		memtable.Max,
-	}
-	iter := p.data.NewIndexIter(tx, min, max)
-	defer iter.Close()
-	deleted := make(map[RowID]bool)
-	inserted := make(map[RowID]bool)
-	for ok := iter.First(); ok; ok = iter.Next() {
-		entry := iter.Item()
-		rowID := entry.Key
-		switch Op(entry.Index[2].(memtable.Uint)) {
-		case opInsert:
-			inserted[rowID] = true
-		case opDelete:
-			deleted[rowID] = true
+
+	for _, blockID := range blockIDs {
+		min := memtable.Tuple{
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(blockID),
+			memtable.Min,
+			memtable.Min,
 		}
-	}
-	for rowID := range deleted {
-		if !inserted[rowID] {
-			if !fn(rowID) {
-				break
+		max := memtable.Tuple{
+			index_BlockID_Time_OP,
+			memtable.ToOrdered(blockID),
+			types.TimestampToTS(ts),
+			memtable.Max,
+		}
+		iter := p.data.NewIndexIter(tx, min, max)
+		defer iter.Close()
+		deleted := make(map[RowID]bool)
+		inserted := make(map[RowID]bool)
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			rowID := entry.Key
+			switch entry.Index[3].(memtable.Uint) {
+			case opInsert:
+				inserted[rowID] = true
+			case opDelete:
+				deleted[rowID] = true
+			}
+		}
+		for rowID := range deleted {
+			if !inserted[rowID] {
+				if !fn(rowID) {
+					break
+				}
 			}
 		}
 	}
 }
 
+func copyBlk(blk ModifyBlockMeta) ModifyBlockMeta {
+	newBlk := ModifyBlockMeta{
+		meta: BlockMeta{
+			Rows:    blk.meta.Rows,
+			Info:    blk.meta.Info,
+			Zonemap: make([][64]byte, len(blk.meta.Zonemap)),
+		},
+		deletes: make([]int, len(blk.deletes)),
+	}
+	copy(newBlk.deletes, blk.deletes)
+	copy(newBlk.meta.Zonemap, blk.meta.Zonemap)
+	return newBlk
+}
+
 func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
-	expr *plan.Expr,
+	index memtable.Tuple,
 	defs []engine.TableDef,
-	blocks []BlockMeta,
+	tableDef *plan.TableDef,
+	skipBlocks map[uint64]uint8,
+	blks []ModifyBlockMeta,
 	ts timestamp.Timestamp,
+	fs fileservice.FileService,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 
@@ -374,18 +515,75 @@ func (p *Partition) NewReader(
 		}
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
+
 	readers[0] = &PartitionReader{
-		typsMap:  mp,
-		iter:     p.data.NewIter(tx),
-		readTime: t,
-		tx:       tx,
-		expr:     expr,
-		inserts:  inserts,
-		deletes:  deletes,
+		typsMap:    mp,
+		readTime:   t,
+		tx:         tx,
+		index:      index,
+		inserts:    inserts,
+		deletes:    deletes,
+		skipBlocks: skipBlocks,
+		data:       p.data,
+		iter:       p.data.NewIter(tx),
+	}
+	if readerNumber == 1 {
+		for i := range blks {
+			readers = append(readers, &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{copyBlk(blks[i])},
+			})
+		}
+		return []engine.Reader{&mergeReader{readers}}, nil
+	}
+	if len(blks) < readerNumber-1 {
+		for i := range blks {
+			readers[i+1] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				sels:     make([]int64, 0, 1024),
+				blks:     []ModifyBlockMeta{copyBlk(blks[i])},
+			}
+		}
+		for j := len(blks) + 1; j < readerNumber; j++ {
+			readers[j] = &emptyReader{}
+		}
+		return readers, nil
+	}
+	step := len(blks) / (readerNumber - 1)
+	if step < 1 {
+		step = 1
 	}
 	for i := 1; i < readerNumber; i++ {
-		readers[i] = &emptyReader{}
+		newBlks := make([]ModifyBlockMeta, len(blks))
+		for i, item := range blks {
+			newBlks[i] = copyBlk(item)
+		}
+		if i == readerNumber-1 {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				blks:     newBlks[(i-1)*step:],
+				sels:     make([]int64, 0, 1024),
+			}
+		} else {
+			readers[i] = &blockMergeReader{
+				fs:       fs,
+				ts:       ts,
+				ctx:      ctx,
+				tableDef: tableDef,
+				blks:     newBlks[(i-1)*step : i*step],
+				sels:     make([]int64, 0, 1024),
+			}
+		}
 	}
-
 	return readers, nil
 }

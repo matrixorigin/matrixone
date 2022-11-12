@@ -1,0 +1,28 @@
+use tpch;
+select
+l_returnflag,
+l_linestatus,
+sum(l_quantity) as sum_qty,
+sum(l_extendedprice) as sum_base_price,
+sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+avg(l_quantity) as avg_qty,
+avg(l_extendedprice) as avg_price,
+avg(l_discount) as avg_disc,
+count(*) as count_order
+from
+lineitem
+where
+l_shipdate <= date '1998-12-01' - interval '112' day
+group by
+l_returnflag,
+l_linestatus
+order by
+l_returnflag,
+l_linestatus
+;
+l_returnflag	l_linestatus	sum_qty	sum_base_price	sum_disc_price	sum_charge	avg_qty	avg_price	avg_disc	count_order
+A	F	37474	3.756962463999998E7	3.5676192096999995E7	3.710141622242404E7	25.3545	25419.231826792948	0.050866035182679493	1478
+N	F	1041	1041301.07	999060.8979999998	1036450.80228	27.3947	27402.659736842103	0.042894736842105284	38
+N	O	73962	7.417730919999973E7	7.051221405270006E7	7.330801863822483E7	25.5217	25596.03492063483	0.04965148378191866	2898
+R	F	36511	3.657084124E7	3.473847287580004E7	3.616906011219294E7	25.0590	25100.09693891558	0.050027453671928686	1457

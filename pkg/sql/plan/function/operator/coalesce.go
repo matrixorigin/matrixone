@@ -70,6 +70,10 @@ var (
 		return coalesceGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
 	}
 
+	CoalesceTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceGeneral[types.Time](vs, proc, types.Type{Oid: types.T_time})
+	}
+
 	CoalesceDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
 	}
@@ -80,6 +84,18 @@ var (
 
 	CoalesceChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return coalesceString(vs, proc, types.Type{Oid: types.T_char})
+	}
+
+	CoalesceJson = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_json.ToType().Oid})
+	}
+
+	CoalesceBlob = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_blob.ToType().Oid})
+	}
+
+	CoalesceText = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return coalesceString(vs, proc, types.Type{Oid: types.T_text.ToType().Oid})
 	}
 
 	CoalesceDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

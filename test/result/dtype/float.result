@@ -445,3 +445,6 @@ select * from t1;
 a	b
 1.00000	apple
 2.00000	apple
+select cast(1.1 as float(255, 3));
+cast(1.1 as float(255, 3))
+1.1

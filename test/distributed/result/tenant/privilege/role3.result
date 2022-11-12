@@ -1,0 +1,296 @@
+drop role if exists role_r1;
+create role role_r1;
+drop database if exists d;
+create database d;
+use d;
+create table t(a int);
+revoke if exists create account on account * from role_r1,rx;
+revoke if exists drop account on account * from role_r1,rx;
+revoke if exists alter account on account * from role_r1,rx;
+revoke if exists create user on account * from role_r1,rx;
+revoke if exists drop user on account * from role_r1,rx;
+revoke if exists alter user on account * from role_r1,rx;
+revoke if exists create role on account * from role_r1,rx;
+revoke if exists drop role on account * from role_r1,rx;
+revoke if exists alter role on account * from role_r1,rx;
+revoke if exists create database on account * from role_r1,rx;
+revoke if exists drop database on account * from role_r1,rx;
+revoke if exists show databases on account * from role_r1,rx;
+revoke if exists connect on account * from role_r1,rx;
+revoke if exists manage grants on account * from role_r1,rx;
+revoke if exists all on account * from role_r1,rx;
+revoke if exists ownership on account * from role_r1,rx;
+internal error: the object type "account" do not support the privilege "ownership"
+revoke if exists ownership on account * from role_r1,rx;
+internal error: the object type "account" do not support the privilege "ownership"
+revoke if exists ownership on account * from role_r1,rx;
+internal error: the object type "account" do not support the privilege "ownership"
+revoke if exists show tables on database * from role_r1,rx;
+revoke if exists show tables on database *.* from role_r1,rx;
+revoke if exists show tables on database d from role_r1,rx;
+revoke if exists create table on database * from role_r1,rx;
+revoke if exists create table on database *.* from role_r1,rx;
+revoke if exists create table on database d from role_r1,rx;
+revoke if exists create view on database * from role_r1,rx;
+revoke if exists create view on database *.* from role_r1,rx;
+revoke if exists create view on database d from role_r1,rx;
+revoke if exists drop table on database * from role_r1,rx;
+revoke if exists drop table on database *.* from role_r1,rx;
+revoke if exists drop table on database d from role_r1,rx;
+revoke if exists drop view on database * from role_r1,rx;
+revoke if exists drop view on database *.* from role_r1,rx;
+revoke if exists drop view on database d from role_r1,rx;
+revoke if exists alter table on database * from role_r1,rx;
+revoke if exists alter table on database *.* from role_r1,rx;
+revoke if exists alter table on database d from role_r1,rx;
+revoke if exists alter view on database * from role_r1,rx;
+revoke if exists alter view on database *.* from role_r1,rx;
+revoke if exists alter view on database d from role_r1,rx;
+revoke if exists all on database * from role_r1,rx;
+revoke if exists all on database *.* from role_r1,rx;
+revoke if exists all on database d from role_r1,rx;
+revoke if exists ownership on database * from role_r1,rx;
+revoke if exists ownership on database *.* from role_r1,rx;
+revoke if exists ownership on database d from role_r1,rx;
+revoke if exists select on table * from role_r1,rx;
+revoke if exists select on table *.* from role_r1,rx;
+revoke if exists select on table d.* from role_r1,rx;
+revoke if exists select on table d.t from role_r1,rx;
+revoke if exists select on table t from role_r1,rx;
+revoke if exists insert on table * from role_r1,rx;
+revoke if exists insert on table *.* from role_r1,rx;
+revoke if exists insert on table d.* from role_r1,rx;
+revoke if exists insert on table d.t from role_r1,rx;
+revoke if exists insert on table t from role_r1,rx;
+revoke if exists update on table * from role_r1,rx;
+revoke if exists update on table *.* from role_r1,rx;
+revoke if exists update on table d.* from role_r1,rx;
+revoke if exists update on table d.t from role_r1,rx;
+revoke if exists update on table t from role_r1,rx;
+revoke if exists truncate on table * from role_r1,rx;
+revoke if exists truncate on table *.* from role_r1,rx;
+revoke if exists truncate on table d.* from role_r1,rx;
+revoke if exists truncate on table d.t from role_r1,rx;
+revoke if exists truncate on table t from role_r1,rx;
+revoke if exists delete on table * from role_r1,rx;
+revoke if exists delete on table *.* from role_r1,rx;
+revoke if exists delete on table d.* from role_r1,rx;
+revoke if exists delete on table d.t from role_r1,rx;
+revoke if exists delete on table t from role_r1,rx;
+revoke if exists reference on table * from role_r1,rx;
+revoke if exists reference on table *.* from role_r1,rx;
+revoke if exists reference on table d.* from role_r1,rx;
+revoke if exists reference on table d.t from role_r1,rx;
+revoke if exists reference on table t from role_r1,rx;
+revoke if exists index on table * from role_r1,rx;
+revoke if exists index on table *.* from role_r1,rx;
+revoke if exists index on table d.* from role_r1,rx;
+revoke if exists index on table d.t from role_r1,rx;
+revoke if exists index on table t from role_r1,rx;
+revoke if exists all on table * from role_r1,rx;
+revoke if exists all on table *.* from role_r1,rx;
+revoke if exists all on table d.* from role_r1,rx;
+revoke if exists all on table d.t from role_r1,rx;
+revoke if exists all on table t from role_r1,rx;
+revoke if exists ownership on table * from role_r1,rx;
+revoke if exists ownership on table *.* from role_r1,rx;
+revoke if exists ownership on table d.* from role_r1,rx;
+revoke if exists ownership on table d.t from role_r1,rx;
+revoke if exists ownership on table t from role_r1,rx;
+revoke if exists execute on table * from role_r1,rx;
+revoke if exists execute on table *.* from role_r1,rx;
+revoke if exists execute on table d.* from role_r1,rx;
+revoke if exists execute on table d.t from role_r1,rx;
+revoke if exists execute on table t from role_r1,rx;
+revoke create account on account * from role_r1,rx;
+internal error: there is no role rx
+revoke drop account on account * from role_r1,rx;
+internal error: there is no role rx
+revoke alter account on account * from role_r1,rx;
+internal error: there is no role rx
+revoke create user on account * from role_r1,rx;
+internal error: there is no role rx
+revoke drop user on account * from role_r1,rx;
+internal error: there is no role rx
+revoke alter user on account * from role_r1,rx;
+internal error: there is no role rx
+revoke create role on account * from role_r1,rx;
+internal error: there is no role rx
+revoke drop role on account * from role_r1,rx;
+internal error: there is no role rx
+revoke alter role on account * from role_r1,rx;
+internal error: there is no role rx
+revoke create database on account * from role_r1,rx;
+internal error: there is no role rx
+revoke drop database on account * from role_r1,rx;
+internal error: there is no role rx
+revoke show databases on account * from role_r1,rx;
+internal error: there is no role rx
+revoke connect on account * from role_r1,rx;
+internal error: there is no role rx
+revoke manage grants on account * from role_r1,rx;
+internal error: there is no role rx
+revoke all on account * from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on account * from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on account * from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on account * from role_r1,rx;
+internal error: there is no role rx
+revoke show tables on database * from role_r1,rx;
+internal error: there is no role rx
+revoke show tables on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke show tables on database d from role_r1,rx;
+internal error: there is no role rx
+revoke create table on database * from role_r1,rx;
+internal error: there is no role rx
+revoke create table on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke create table on database d from role_r1,rx;
+internal error: there is no role rx
+revoke create view on database * from role_r1,rx;
+internal error: there is no role rx
+revoke create view on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke create view on database d from role_r1,rx;
+internal error: there is no role rx
+revoke drop table on database * from role_r1,rx;
+internal error: there is no role rx
+revoke drop table on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke drop table on database d from role_r1,rx;
+internal error: there is no role rx
+revoke drop view on database * from role_r1,rx;
+internal error: there is no role rx
+revoke drop view on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke drop view on database d from role_r1,rx;
+internal error: there is no role rx
+revoke alter table on database * from role_r1,rx;
+internal error: there is no role rx
+revoke alter table on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke alter table on database d from role_r1,rx;
+internal error: there is no role rx
+revoke alter view on database * from role_r1,rx;
+internal error: there is no role rx
+revoke alter view on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke alter view on database d from role_r1,rx;
+internal error: there is no role rx
+revoke all on database * from role_r1,rx;
+internal error: there is no role rx
+revoke all on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke all on database d from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on database * from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on database *.* from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on database d from role_r1,rx;
+internal error: there is no role rx
+revoke select on table * from role_r1,rx;
+internal error: there is no role rx
+revoke select on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke select on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke select on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke select on table t from role_r1,rx;
+internal error: there is no role rx
+revoke insert on table * from role_r1,rx;
+internal error: there is no role rx
+revoke insert on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke insert on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke insert on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke insert on table t from role_r1,rx;
+internal error: there is no role rx
+revoke update on table * from role_r1,rx;
+internal error: there is no role rx
+revoke update on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke update on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke update on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke update on table t from role_r1,rx;
+internal error: there is no role rx
+revoke truncate on table * from role_r1,rx;
+internal error: there is no role rx
+revoke truncate on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke truncate on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke truncate on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke truncate on table t from role_r1,rx;
+internal error: there is no role rx
+revoke delete on table * from role_r1,rx;
+internal error: there is no role rx
+revoke delete on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke delete on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke delete on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke delete on table t from role_r1,rx;
+internal error: there is no role rx
+revoke reference on table * from role_r1,rx;
+internal error: there is no role rx
+revoke reference on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke reference on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke reference on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke reference on table t from role_r1,rx;
+internal error: there is no role rx
+revoke index on table * from role_r1,rx;
+internal error: there is no role rx
+revoke index on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke index on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke index on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke index on table t from role_r1,rx;
+internal error: there is no role rx
+revoke all on table * from role_r1,rx;
+internal error: there is no role rx
+revoke all on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke all on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke all on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke all on table t from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on table * from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke ownership on table t from role_r1,rx;
+internal error: there is no role rx
+revoke execute on table * from role_r1,rx;
+internal error: there is no role rx
+revoke execute on table *.* from role_r1,rx;
+internal error: there is no role rx
+revoke execute on table d.* from role_r1,rx;
+internal error: there is no role rx
+revoke execute on table d.t from role_r1,rx;
+internal error: there is no role rx
+revoke execute on table t from role_r1,rx;
+internal error: there is no role rx
+drop role role_r1;
+drop database if exists d;

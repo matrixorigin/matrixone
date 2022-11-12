@@ -47,7 +47,10 @@ func Fatal(msg string, fields ...zap.Field) {
 
 // Debugf only use in develop mode
 func Debugf(msg string, fields ...interface{}) {
-	GetSkip1Logger().Debug(fmt.Sprintf(msg, fields...))
+	logger := GetSkip1Logger()
+	if logger.Core().Enabled(zap.DebugLevel) {
+		logger.Debug(fmt.Sprintf(msg, fields...))
+	}
 }
 
 // Infof only use in develop mode
@@ -132,19 +135,18 @@ func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, s
 		cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 	}
 
-	GetLevelChangeFunc()(level)
 	return zap.New(zapcore.NewTee(cores...), options...)
 }
 
 // GetLogger get default zap logger
 func GetLogger(options ...zap.Option) *zap.Logger {
-	return GetLoggerWithOptions(zapcore.InfoLevel, nil, nil, options...)
+	return GetLoggerWithOptions(zapcore.DebugLevel, nil, nil, options...)
 }
 
 // GetPanicLogger returns a zap logger which will panic on Fatal(). The
 // returned zap logger should only be used in tests.
 func GetPanicLogger(options ...zap.Option) *zap.Logger {
-	return GetPanicLoggerWithLevel(zapcore.InfoLevel, options...)
+	return GetPanicLoggerWithLevel(zapcore.DebugLevel, options...)
 }
 
 // GetPanicLoggerWithLevel returns a zap logger which will panic on Fatal(). The

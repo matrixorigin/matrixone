@@ -54,7 +54,7 @@ func (s *service) initMemoryEngine(
 	pu.StorageEngine = memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
-		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
+		pu.GetClusterDetails,
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 	)
 

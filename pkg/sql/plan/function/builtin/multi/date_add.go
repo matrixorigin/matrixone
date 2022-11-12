@@ -55,6 +55,48 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	}
 }
 
+func TimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := vectors[0]
+	secondVector := vectors[1]
+	firstValues := vector.MustTCols[types.Time](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
+	precision := firstVector.Typ.Precision
+	switch types.IntervalType(thirdValues[0]) {
+	case types.MicroSecond:
+		precision = 6
+	}
+
+	resultType := types.Type{Oid: types.T_time, Precision: precision, Size: 8}
+
+	if firstVector.IsScalar() && secondVector.IsScalar() {
+		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := proc.AllocScalarVector(resultType)
+		rs := make([]types.Time, 1)
+		res, err := date_add.TimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, rs)
+		vector.SetCol(resultVector, res)
+		return resultVector, err
+	} else {
+		var maxLen int
+		if len(firstValues) > len(secondValues) {
+			maxLen = len(firstValues)
+		} else {
+			maxLen = len(secondValues)
+		}
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+		if err != nil {
+			return nil, err
+		}
+		resultValues := vector.MustTCols[types.Time](resultVector)
+		resultValues = resultValues[:maxLen]
+		_, err = date_add.TimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
+		return resultVector, err
+	}
+}
+
 func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
 	secondVector := vectors[1]

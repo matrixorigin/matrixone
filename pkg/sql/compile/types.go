@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -33,6 +34,8 @@ import (
 type (
 	TxnOperator = client.TxnOperator
 )
+
+var Address string
 
 // type of scope
 const (
@@ -63,6 +66,9 @@ type Source struct {
 	Attributes   []string
 	R            engine.Reader
 	Bat          *batch.Batch
+	Expr         *plan.Expr
+	TableDef     *plan.TableDef
+	Timestamp    timestamp.Timestamp
 }
 
 // Col is the information of attribute
@@ -85,6 +91,9 @@ type Scope struct {
 
 	// IsEnd means the pipeline is end
 	IsEnd bool
+
+	// IsRemote means the pipeline is remote
+	IsRemote bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.

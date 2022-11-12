@@ -36,6 +36,7 @@ func Test_initExport(t *testing.T) {
 	type args struct {
 		enableTracer bool
 		config       *tracerProviderConfig
+		needRecover  bool
 	}
 	ch := make(chan string, 10)
 	tests := []struct {
@@ -57,7 +58,9 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
-				}},
+				},
+				needRecover: true,
+			},
 			empty: false,
 		},
 		{
@@ -73,6 +76,15 @@ func Test_initExport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			export.ResetGlobalBatchProcessor()
+			if tt.args.needRecover {
+				defer func() {
+					if err := recover(); err != nil {
+						t.Logf("pass with panic.")
+						return
+					}
+					panic("not catch panic")
+				}()
+			}
 			initExporter(context.TODO(), tt.args.config)
 			if tt.empty {
 				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))

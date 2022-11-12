@@ -274,7 +274,7 @@ func TestLogString(t *testing.T) {
 					ChangeType:     StartReplica,
 					InitialMembers: nil,
 				},
-				ServiceType:   DnService,
+				ServiceType:   DNService,
 				ShutdownStore: nil,
 			},
 			expected: "D/Start storeA storeA:1:4:1",

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
 )
@@ -117,5 +118,5 @@ func TestGCZombieNonCoordinatorTxn(t *testing.T) {
 	defer cancel()
 	_, err := w1.wait(ctx)
 	assert.Error(t, err)
-	assert.Equal(t, ctx.Err(), err)
+	assert.Equal(t, moerr.ConvertGoError(ctx.Err()), err)
 }

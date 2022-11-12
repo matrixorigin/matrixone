@@ -95,10 +95,8 @@ DELETE t1,t2,t3 FROM t1 LEFT JOIN t2 ON t1.t1_id = t2.t1_id RIGHT JOIN t3 ON t3.
 -- Delete result is 0 rows affected on MO.
 DELETE t1,t2,t3 FROM t1 RIGHT JOIN t2 ON t1.t1_id = t2.t1_id RIGHT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
 
--- @bvt:issue#5219
 DELETE t1,t2,t3 FROM t1 RIGHT JOIN t2 ON t1.t1_id = t2.t1_id LEFT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
 DELETE t1,t2,t3 FROM t1 LEFT JOIN t2 ON t1.t1_id = t2.t1_id LEFT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;

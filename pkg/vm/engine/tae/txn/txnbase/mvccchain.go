@@ -116,6 +116,13 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	return
 }
 
+func (be *MVCCChain) MustOneNodeLocked() (txnif.MVCCNode, bool) {
+	if be.MVCC.Depth() != 1 {
+		return nil, be.MVCC.Depth() == 0
+	}
+	return be.MVCC.GetHead().GetPayload(), false
+}
+
 // GetLatestNodeLocked gets the latest mvcc node.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
@@ -192,12 +199,42 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	return un.NeedWaitCommitting(ts)
 }
 
-func (be *MVCCChain) IsCreating() bool {
-	un := be.GetLatestNodeLocked()
-	if un == nil {
+func (be *MVCCChain) HasUncommittedNode() bool {
+	var found bool
+	be.LoopChain(func(n txnif.MVCCNode) bool {
+		if n.IsCommitted() {
+			return false
+		} else {
+			if !n.IsAborted() {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func (be *MVCCChain) HasCommittedNode() bool {
+	var found bool
+	be.LoopChain(func(n txnif.MVCCNode) bool {
+		if n.IsCommitted() {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func (be *MVCCChain) IsCreatingOrAborted() bool {
+	un, empty := be.MustOneNodeLocked()
+	if empty {
 		return true
 	}
-	return un.IsActive()
+	if un == nil {
+		return false
+	}
+	return un.IsActive() || un.IsAborted()
 }
 
 func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
@@ -330,6 +367,7 @@ func (be *MVCCChain) PrepareRollback() (bool, error) {
 	be.Lock()
 	defer be.Unlock()
 	node := be.MVCC.GetHead()
+	_ = node.GetPayload().PrepareRollback()
 	be.MVCC.Delete(node)
 	isEmpty := be.IsEmpty()
 	return isEmpty, nil

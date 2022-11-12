@@ -16,10 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +137,69 @@ func TestS3FS(t *testing.T) {
 
 }
 
+func TestDynamicS3(t *testing.T) {
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	testFileService(t, func(name string) FileService {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{
+			"s3",
+			config.Endpoint,
+			config.Region,
+			config.Bucket,
+			config.APIKey,
+			config.APISecret,
+			time.Now().Format("2006-01-02.15:04:05.000000"),
+			name,
+		})
+		assert.Nil(t, err)
+		w.Flush()
+		fs, _, err := GetForETL(nil, JoinPath(
+			buf.String(),
+			"foo/bar/baz",
+		))
+		assert.Nil(t, err)
+		return fs
+	})
+}
+
+func TestDynamicS3NoKey(t *testing.T) {
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	testFileService(t, func(name string) FileService {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		err := w.Write([]string{
+			"s3-no-key",
+			config.Endpoint,
+			config.Region,
+			config.Bucket,
+			time.Now().Format("2006-01-02.15:04:05.000000"),
+			name,
+		})
+		assert.Nil(t, err)
+		w.Flush()
+		fs, _, err := GetForETL(nil, JoinPath(
+			buf.String(),
+			"foo/bar/baz",
+		))
+		assert.Nil(t, err)
+		return fs
+	})
+}
+
 func TestS3FSMinioServer(t *testing.T) {
 
 	// find minio executable
@@ -184,6 +249,7 @@ func TestS3FSMinioServer(t *testing.T) {
 					ep aws.Endpoint,
 					err error,
 				) {
+					_ = options
 					ep.URL = endpoint
 					ep.Source = aws.EndpointSourceCustom
 					ep.HostnameImmutable = true

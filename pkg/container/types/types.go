@@ -104,6 +104,7 @@ type Date int32
 
 type Datetime int64
 type Timestamp int64
+type Time int64
 
 type Decimal64 [8]byte
 type Decimal128 [16]byte
@@ -143,7 +144,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered | Date | Datetime | Timestamp
+	constraints.Ordered | Date | Time | Datetime | Timestamp
 }
 
 type Decimal interface {
@@ -182,6 +183,7 @@ var Types map[string]T = map[string]T{
 
 	"date":      T_date,
 	"datetime":  T_datetime,
+	"time":      T_time,
 	"timestamp": T_timestamp,
 	"interval":  T_interval,
 
@@ -285,7 +287,13 @@ func (t Type) String() string {
 }
 
 func (t Type) Eq(b Type) bool {
-	return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+	switch t.Oid {
+	// XXX need to find out why these types have different size/width
+	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
+		return t.Oid == b.Oid
+	default:
+		return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+	}
 }
 
 func (t T) ToType() Type {
@@ -301,7 +309,7 @@ func (t T) ToType() Type {
 		typ.Size = 2
 	case T_int32, T_date:
 		typ.Size = 4
-	case T_int64, T_datetime, T_timestamp:
+	case T_int64, T_datetime, T_time, T_timestamp:
 		typ.Size = 8
 	case T_uint8:
 		typ.Size = 1
@@ -366,6 +374,8 @@ func (t T) String() string {
 		return "DATE"
 	case T_datetime:
 		return "DATETIME"
+	case T_time:
+		return "TIME"
 	case T_timestamp:
 		return "TIMESTAMP"
 	case T_char:
@@ -431,6 +441,8 @@ func (t T) OidString() string {
 		return "T_date"
 	case T_datetime:
 		return "T_datetime"
+	case T_time:
+		return "T_time"
 	case T_timestamp:
 		return "T_timestamp"
 	case T_decimal64:
@@ -460,7 +472,7 @@ func (t T) TypeLen() int {
 		return 2
 	case T_int32, T_date:
 		return 4
-	case T_int64, T_datetime, T_timestamp:
+	case T_int64, T_datetime, T_time, T_timestamp:
 		return 8
 	case T_uint8:
 		return 1
@@ -486,6 +498,8 @@ func (t T) TypeLen() int {
 		return TxnTsSize
 	case T_Rowid:
 		return RowidSize
+	case T_tuple:
+		return 0
 	}
 	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
 }
@@ -501,7 +515,7 @@ func (t T) FixedLength() int {
 		return 2
 	case T_int32, T_uint32, T_date, T_float32:
 		return 4
-	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
+	case T_int64, T_uint64, T_datetime, T_time, T_float64, T_timestamp:
 		return 8
 	case T_decimal64:
 		return 8
@@ -520,7 +534,7 @@ func (t T) FixedLength() int {
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type
-func isUnsignedInt(t T) bool {
+func IsUnsignedInt(t T) bool {
 	if t == T_uint8 || t == T_uint16 || t == T_uint32 || t == T_uint64 {
 		return true
 	}
@@ -528,7 +542,7 @@ func isUnsignedInt(t T) bool {
 }
 
 // isSignedInt: return true if the types.T is Signed integer type
-func isSignedInt(t T) bool {
+func IsSignedInt(t T) bool {
 	if t == T_int8 || t == T_int16 || t == T_int32 || t == T_int64 {
 		return true
 	}
@@ -537,7 +551,7 @@ func isSignedInt(t T) bool {
 
 // if expr type is integer return true,else return false
 func IsInteger(t T) bool {
-	if isUnsignedInt(t) || isSignedInt(t) {
+	if IsUnsignedInt(t) || IsSignedInt(t) {
 		return true
 	}
 	return false
@@ -560,7 +574,7 @@ func IsString(t T) bool {
 }
 
 func IsDateRelate(t T) bool {
-	if t == T_date || t == T_datetime || t == T_timestamp {
+	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
 		return true
 	}
 	return false

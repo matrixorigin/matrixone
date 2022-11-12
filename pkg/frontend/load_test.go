@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -584,13 +584,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		proc := process.New(
-			ctx,
-			mp,
-			nil,
-			nil,
-			nil,
-		)
+		proc := testutil.NewProcessWithMPool(mp)
 		field := [][]string{{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "8", "9"}}
 		Oid := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16,
 			types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_char, types.T_date, types.T_datetime}

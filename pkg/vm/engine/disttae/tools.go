@@ -34,9 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -154,7 +156,7 @@ func genCreateTableTuple(tbl *table, sql string, accountId, userId, roleId uint3
 		}
 		idx = catalog.MO_TABLES_REL_CREATESQL_IDX
 		bat.Vecs[idx] = vector.New(catalog.MoTablesTypes[idx]) // rel_createsql
-		if err := bat.Vecs[idx].Append([]byte(sql), false, m); err != nil {
+		if err := bat.Vecs[idx].Append([]byte(tbl.createSql), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_CREATED_TIME_IDX
@@ -564,14 +566,7 @@ func newIntConstVal(v any) *plan.Expr {
 	case uint64:
 		val = int64(x)
 	}
-	return &plan.Expr{
-		Typ: types.NewProtoType(types.T_int64),
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Ival{Ival: int64(val)},
-			},
-		},
-	}
+	return plantool.MakePlan2Int64ConstExprWithType(val)
 }
 
 func newStringConstVal(v string) *plan.Expr {
@@ -743,7 +738,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 		}
 	}
 	if col.hasUpdate == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.updateExpr, attr.OnUpdate); err != nil {
 			panic(err)
 		}
@@ -908,7 +903,12 @@ func partitionDeleteBatch(tbl *table, bat *batch.Batch) ([]*batch.Batch, error) 
 	vs := vector.MustTCols[types.Rowid](vec)
 	for i, v := range vs {
 		for j, part := range tbl.parts {
-			if part.Get(v, txn.meta.SnapshotTS) {
+			var blks []BlockMeta
+
+			if tbl.meta != nil {
+				blks = tbl.meta.blocks[j]
+			}
+			if inParttion(v, part, txn.meta.SnapshotTS, blks) {
 				if err := vector.UnionOne(bats[j].GetVector(0), vec, int64(i), txn.proc.Mp()); err != nil {
 					for _, bat := range bats {
 						bat.Clean(txn.proc.Mp())
@@ -949,16 +949,22 @@ func isMetaTable(name string) bool {
 	return ok
 }
 
-func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m *mpool.MPool) ([]BlockMeta, error) {
+func genBlockMetas(
+	ctx context.Context,
+	rows [][]any,
+	columnLength int,
+	fs fileservice.FileService,
+	m *mpool.MPool) ([]BlockMeta, error) {
 	blockInfos := catalog.GenBlockInfo(rows)
 	{
 		mp := make(map[uint64]catalog.BlockInfo) // block list
 		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok &&
-				blk.CommitTs.Less(blockInfos[i].CommitTs) {
-				mp[blk.BlockID] = blockInfos[i]
+			if blk, ok := mp[blockInfos[i].BlockID]; ok {
+				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
+					mp[blk.BlockID] = blockInfos[i]
+				}
 			} else {
-				mp[blk.BlockID] = blockInfos[i]
+				mp[blockInfos[i].BlockID] = blockInfos[i]
 			}
 		}
 		blockInfos = blockInfos[:0]
@@ -966,7 +972,8 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 			blockInfos = append(blockInfos, blk)
 		}
 	}
-	metas := make([]BlockMeta, len(rows))
+
+	metas := make([]BlockMeta, len(blockInfos))
 
 	idxs := make([]uint16, columnLength)
 	for i := 0; i < columnLength; i++ {
@@ -974,13 +981,14 @@ func genBlockMetas(rows [][]any, columnLength int, fs fileservice.FileService, m
 	}
 
 	for i, blockInfo := range blockInfos {
-		zm, err := fetchZonemapFromBlockInfo(idxs, blockInfo, fs, m)
+		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
 		if err != nil {
 			return nil, err
 		}
 		metas[i] = BlockMeta{
-			info:    blockInfo,
-			zonemap: zm,
+			Rows:    int64(rows),
+			Info:    blockInfos[i],
+			Zonemap: zm,
 		}
 	}
 	return metas, nil
@@ -995,12 +1003,16 @@ func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
 	return false
 }
 
-func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []BlockMeta {
-	blks := make([]BlockMeta, 0, len(orgs)-len(modfs))
+func genModifedBlocks(ctx context.Context, deletes map[uint64][]int, orgs, modfs []BlockMeta,
+	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
+	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
-			if needRead(expr, blk, tableDef, proc) {
-				blks = append(blks, orgs[i])
+			if needRead(ctx, expr, blk, tableDef, proc) {
+				blks = append(blks, ModifyBlockMeta{
+					meta:    orgs[i],
+					deletes: deletes[orgs[i].Info.BlockID],
+				})
 			}
 		}
 	}
@@ -1041,4 +1053,254 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 
 func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
+}
+
+func inParttion(v types.Rowid, part *Partition,
+	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+	if part.Get(v, ts) {
+		return true
+	}
+	if len(blocks) == 0 {
+		return false
+	}
+	blkId := rowIDToBlockID(RowID(v))
+	for _, blk := range blocks {
+		if blk.Info.BlockID == blkId {
+			return true
+		}
+	}
+	return false
+}
+
+// transfer DataValue to rows
+func genRow(val *DataValue, cols []string) []any {
+	row := make([]any, len(cols))
+	for i, col := range cols {
+		switch v := val.value[col].Value.(type) {
+		case bool:
+			row[i] = v
+		case int8:
+			row[i] = v
+		case int16:
+			row[i] = v
+		case int32:
+			row[i] = v
+		case int64:
+			row[i] = v
+		case uint8:
+			row[i] = v
+		case uint16:
+			row[i] = v
+		case uint32:
+			row[i] = v
+		case uint64:
+			row[i] = v
+		case float32:
+			row[i] = v
+		case float64:
+			row[i] = v
+		case []byte:
+			row[i] = v
+		case types.Date:
+			row[i] = v
+		case types.Datetime:
+			row[i] = v
+		case types.Timestamp:
+			row[i] = v
+		case types.Decimal64:
+			row[i] = v
+		case types.Decimal128:
+			row[i] = v
+		case types.TS:
+			row[i] = v
+		case types.Rowid:
+			row[i] = v
+		case types.Uuid:
+			row[i] = v
+		default:
+			panic(fmt.Sprintf("unknown type: %T", v))
+		}
+	}
+	return row
+}
+
+func genDatabaseIndexKey(databaseName string, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Database,
+		memtable.ToOrdered([]byte(databaseName)),
+		memtable.ToOrdered(accountId),
+	}
+
+}
+
+func genTableIndexKey(tableName string, databaseId uint64, accountId uint32) memtable.Tuple {
+	return memtable.Tuple{
+		index_Table,
+		memtable.ToOrdered([]byte(tableName)),
+		memtable.ToOrdered(databaseId),
+		memtable.ToOrdered(accountId),
+	}
+}
+
+func genColumnIndexKey(id uint64) memtable.Tuple {
+	return memtable.Tuple{
+		index_Column,
+		memtable.ToOrdered(id),
+	}
+}
+
+func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_int8:
+		return true, int8(v)
+	case types.T_int16:
+		return true, int16(v)
+	case types.T_int32:
+		return true, int32(v)
+	case types.T_int64:
+		return true, int64(v)
+	case types.T_uint8:
+		return true, uint8(v)
+	case types.T_uint16:
+		return true, uint16(v)
+	case types.T_uint32:
+		return true, uint32(v)
+	case types.T_uint64:
+		return true, uint64(v)
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferFval(v float32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDval(v float64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_float32:
+		return true, float32(v)
+	case types.T_float64:
+		return true, float64(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferSval(v string, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_json:
+		return true, []byte(v)
+	case types.T_char, types.T_varchar:
+		return true, []byte(v)
+	case types.T_text, types.T_blob:
+		return true, []byte(v)
+	case types.T_uuid:
+		var uv types.Uuid
+		copy(uv[:], []byte(v)[:])
+		return true, uv
+	default:
+		return false, nil
+	}
+}
+
+func transferBval(v bool, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_bool:
+		return true, v
+	default:
+		return false, nil
+	}
+}
+
+func transferDateval(v int32, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_date:
+		return true, types.Date(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_time:
+		return true, types.Time(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDatetimeval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_datetime:
+		return true, types.Datetime(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferTimestampval(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_timestamp:
+		return true, types.Timestamp(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal64val(v int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal64:
+		return true, types.Decimal64FromInt64Raw(v)
+	default:
+		return false, nil
+	}
+}
+
+func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
+	switch oid {
+	case types.T_decimal128:
+		return true, types.Decimal128FromInt64Raw(a, b)
+	default:
+		return false, nil
+	}
 }

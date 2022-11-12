@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,13 +42,15 @@ type LocalFS struct {
 
 var _ FileService = new(LocalFS)
 
+const (
+	localFSSentinelFileName = ".thisisalocalfileservicedir"
+)
+
 func NewLocalFS(
 	name string,
 	rootPath string,
 	memCacheCapacity int64,
 ) (*LocalFS, error) {
-
-	const sentinelFileName = "thisisalocalfileservicedir"
 
 	// ensure dir
 	f, err := os.Open(rootPath)
@@ -57,7 +60,7 @@ func NewLocalFS(
 		if err != nil {
 			return nil, err
 		}
-		err = os.WriteFile(filepath.Join(rootPath, sentinelFileName), nil, 0644)
+		err = os.WriteFile(filepath.Join(rootPath, localFSSentinelFileName), nil, 0644)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +82,7 @@ func NewLocalFS(
 			}
 		} else {
 			// not empty, check sentinel file
-			_, err := os.Stat(filepath.Join(rootPath, sentinelFileName))
+			_, err := os.Stat(filepath.Join(rootPath, localFSSentinelFileName))
 			if os.IsNotExist(err) {
 				return nil, moerr.NewInternalError("%s is not a file service dir", rootPath)
 			} else if err != nil {
@@ -218,7 +221,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		return moerr.NewFileNotFound(path.File)
 	}
 	if err != nil {
-		return nil
+		return err
 	}
 	defer file.Close()
 
@@ -250,7 +253,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				obj, size, err := entry.ToObject(cr)
+				obj, size, err := entry.ToObject(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -276,7 +279,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
-				return nil
+				return err
 			}
 			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
@@ -303,7 +306,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						obj, size, err := entry.ToObject(buf)
+						obj, size, err := entry.ToObject(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}
@@ -390,10 +393,18 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		if err != nil {
 			return nil, err
 		}
+		fileSize := info.Size()
+		nBlock := ceilingDiv(fileSize, _BlockSize)
+		contentSize := fileSize - _ChecksumSize*nBlock
+
+		isDir, err := entryIsDir(nativePath, name, info)
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
-			IsDir: entry.IsDir(),
-			Size:  info.Size(),
+			IsDir: isDir,
+			Size:  contentSize,
 		})
 	}
 
@@ -624,4 +635,18 @@ func (l *LocalFS) CacheStats() *CacheStats {
 		return l.memCache.CacheStats()
 	}
 	return nil
+}
+
+func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
+	if entry.IsDir() {
+		return true, nil
+	}
+	if entry.Mode().Type()&fs.ModeSymlink > 0 {
+		stat, err := os.Stat(filepath.Join(path, name))
+		if err != nil {
+			return false, err
+		}
+		return entryIsDir(path, name, stat)
+	}
+	return false, nil
 }

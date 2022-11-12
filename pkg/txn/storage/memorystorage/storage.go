@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -63,4 +64,8 @@ func (s *Storage) Close(ctx context.Context) error {
 
 func (s *Storage) Destroy(ctx context.Context) error {
 	return s.handler.HandleDestroy(ctx)
+}
+
+func (s *Storage) Debug(context.Context, txn.TxnMeta, uint32, []byte) ([]byte, error) {
+	return nil, moerr.NewNotSupported("MemoryStorage not support debug method")
 }

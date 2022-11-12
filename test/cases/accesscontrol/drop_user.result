@@ -1,0 +1,88 @@
+drop user if exists drop_user_1,drop_user_2,drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7,drop_user_8,drop_user_9,drop_user_10,drop_user_11;
+drop user if exists drop_user_111,drop_user_112;
+drop role if exists drop_u_role_1,drop_u_role_2;
+create user drop_user_1 identified by '111';
+drop user drop_user_1;
+select user_name,authentication_string from mo_catalog.mo_user where user_name='drop_user_1';
+user_name    authentication_string
+drop user drop_user_1;
+internal error: there is no user drop_user_1
+drop user if exists drop_user_2;
+create user drop_user_2 identified by '111' comment '';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='drop_user_2';
+user_name    authentication_string
+drop_user_2    111
+drop user if exists drop_user_2;
+select user_name,authentication_string from mo_catalog.mo_user where user_name='drop_user_2';
+user_name    authentication_string
+drop user "";
+internal error: the name "" is invalid
+drop user root;
+[unknown result because it is related to issue#5705]
+drop user dump;
+[unknown result because it is related to issue#5705]
+drop if not exists d;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 7 near " if not exists d;";
+drop user if not exists d;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " not exists d;";
+create user drop_user_3 identified by '12345678',drop_user_4 identified by '12345678',drop_user_5 identified by '12345678',drop_user_6 identified by '12345678',drop_user_7 identified by '12345678',drop_user_8 identified by '12345678',drop_user_9 identified by '12345678',drop_user_10 identified by '12345678';
+select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
+user_name    authentication_string
+drop_user_3    12345678
+drop_user_4    12345678
+drop_user_5    12345678
+drop_user_6    12345678
+drop_user_7    12345678
+drop_user_8    12345678
+drop_user_9    12345678
+drop_user_10    12345678
+drop user drop_user_3,drop_user_4,drop_user_5;
+select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
+user_name    authentication_string
+drop_user_6    12345678
+drop_user_7    12345678
+drop_user_8    12345678
+drop_user_9    12345678
+drop_user_10    12345678
+drop user drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7;
+internal error: there is no user drop_user_3
+select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
+user_name    authentication_string
+drop_user_6    12345678
+drop_user_7    12345678
+drop_user_8    12345678
+drop_user_9    12345678
+drop_user_10    12345678
+drop user if exists drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7;
+select user_name,authentication_string from mo_catalog.mo_user where user_name like 'drop_user_%';
+user_name    authentication_string
+drop_user_8    12345678
+drop_user_9    12345678
+drop_user_10    12345678
+drop user if exists drop_user_8;
+select user_name,authentication_string from mo_catalog.mo_user where user_name in ('drop_user_8');
+user_name    authentication_string
+drop user drop_user_8,drop_user_user;
+internal error: there is no user drop_user_8
+create role drop_u_role_1,drop_u_role_2;
+create user drop_user_111 identified by '111',drop_user_112 identified by '111';
+grant all on table *.* to drop_u_role_1 with grant option;
+grant drop_u_role_1 to drop_user_111 with grant option;
+grant drop_u_role_2 to drop_user_112;
+select role_name from mo_catalog.mo_role where role_name in ('drop_u_role_1','drop_u_role_2');
+role_name
+drop_u_role_1
+drop_u_role_2
+grant drop_u_role_1 to drop_u_role_2;
+drop user drop_user_111;
+select user_name,authentication_string from mo_catalog.mo_user where  user_name='drop_user_111';
+user_name    authentication_string
+select role_name from mo_catalog.mo_role where role_name ='drop_u_role_1';
+role_name
+drop_u_role_1
+select role_name from mo_catalog.mo_user_grant mug ,mo_catalog.mo_role mr where mug.role_id=mr.role_id and mr.role_name in ('drop_u_role_1','drop_u_role_2');
+role_name
+drop_u_role_2
+drop user if exists drop_user_1,drop_user_2,drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7,drop_user_8,drop_user_9,drop_user_10,drop_user_11;
+drop user if exists drop_user_111,drop_user_112;
+drop role if exists drop_u_role_1,drop_u_role_2;

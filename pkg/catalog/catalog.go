@@ -129,9 +129,11 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 	for i, row := range rows {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(uint64)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
+		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
 		infos[i].MetaLoc = string(row[BLOCKMETA_METALOC_IDX].([]byte))
 		infos[i].DeltaLoc = string(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
+		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(uint64)
 	}
 	return infos
 }
@@ -241,7 +243,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 		}
 	}
 	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
-		attr.OnUpdate = new(plan.Expr)
+		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
 			return nil, err
 		}
@@ -318,6 +320,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			}
 		case types.T_date:
 			col := vector.GetFixedVectorValues[types.Date](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_time:
+			col := vector.GetFixedVectorValues[types.Time](vec)
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}

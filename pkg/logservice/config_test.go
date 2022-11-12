@@ -175,6 +175,8 @@ func TestFillConfig(t *testing.T) {
 
 	assert.Equal(t, uint64(0), c.DeploymentID)
 	assert.Equal(t, defaultDataDir, c.DataDir)
+	assert.Equal(t, defaultSnapshotExportDir, c.SnapshotExportDir)
+	assert.Equal(t, defaultMaxExportedSnapshot, c.MaxExportedSnapshot)
 	assert.Equal(t, defaultServiceAddress, c.ServiceAddress)
 	assert.Equal(t, defaultServiceAddress, c.ServiceListenAddress)
 	assert.Equal(t, defaultRaftAddress, c.RaftAddress)

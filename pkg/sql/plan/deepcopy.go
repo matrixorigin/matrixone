@@ -44,6 +44,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
 		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
+		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -87,7 +88,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			TblName:      deleteTablesCtx.TblName,
 			UseDeleteKey: deleteTablesCtx.UseDeleteKey,
 			CanTruncate:  deleteTablesCtx.CanTruncate,
-			IsHideKey:    deleteTablesCtx.IsHideKey,
 			ColIndex:     deleteTablesCtx.ColIndex,
 		}
 	}
@@ -175,6 +175,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			newNode.RowsetData.Schema = DeepCopyTableDef(node.RowsetData.Schema)
 		}
 	}
+	for idx, expr := range node.TblFuncExprList {
+		node.TblFuncExprList[idx] = DeepCopyExpr(expr)
+	}
 
 	return newNode
 }
@@ -191,6 +194,9 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 }
 
 func DeepCopyTyp(typ *plan.Type) *plan.Type {
+	if typ == nil {
+		return nil
+	}
 	return &plan.Type{
 		Id:        typ.Id,
 		Nullable:  typ.Nullable,
@@ -198,6 +204,7 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 		Precision: typ.Precision,
 		Size:      typ.Size,
 		Scale:     typ.Scale,
+		AutoIncr:  typ.AutoIncr,
 	}
 }
 
@@ -206,29 +213,38 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		Name:          col.Name,
-		Alg:           col.Alg,
-		Typ:           DeepCopyTyp(col.Typ),
-		Default:       DeepCopyDefault(col.Default),
-		AutoIncrement: col.AutoIncrement,
-		Primary:       col.Primary,
-		Pkidx:         col.Pkidx,
-		Comment:       col.Comment,
-		IsCPkey:       col.IsCPkey,
-		OnUpdate:      DeepCopyExpr(col.OnUpdate),
+		Name:     col.Name,
+		Alg:      col.Alg,
+		Typ:      DeepCopyTyp(col.Typ),
+		Default:  DeepCopyDefault(col.Default),
+		Primary:  col.Primary,
+		Pkidx:    col.Pkidx,
+		Comment:  col.Comment,
+		IsCPkey:  col.IsCPkey,
+		OnUpdate: DeepCopyOnUpdate(col.OnUpdate),
+	}
+}
+
+func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
+	if old == nil {
+		return nil
+	}
+	return &plan.OnUpdate{
+		Expr:         DeepCopyExpr(old.Expr),
+		OriginString: old.OriginString,
 	}
 }
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name:              table.Name,
-		Cols:              make([]*plan.ColDef, len(table.Cols)),
-		Defs:              make([]*plan.TableDef_DefType, len(table.Defs)),
-		TableType:         table.TableType,
-		Createsql:         table.Createsql,
-		Name2ColIndex:     table.Name2ColIndex,
-		CompositePkey:     nil,
-		ComputeIndexInfos: make([]*ComputeIndexInfo, len(table.ComputeIndexInfos)),
+		Name:          table.Name,
+		Cols:          make([]*plan.ColDef, len(table.Cols)),
+		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:     table.TableType,
+		Createsql:     table.Createsql,
+		Name2ColIndex: table.Name2ColIndex,
+		CompositePkey: nil,
+		IndexInfos:    make([]*IndexInfo, len(table.IndexInfos)),
 	}
 
 	for idx, col := range table.Cols {
@@ -247,17 +263,20 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
 	// }
 
-	for table.CompositePkey != nil {
-		table.CompositePkey = DeepCopyColDef(table.CompositePkey)
+	if table.CompositePkey != nil {
+		newTable.CompositePkey = DeepCopyColDef(table.CompositePkey)
 	}
-	for idx, indexInfo := range table.ComputeIndexInfos {
-		newTable.ComputeIndexInfos[idx] = &ComputeIndexInfo{
+	for idx, indexInfo := range table.IndexInfos {
+		newTable.IndexInfos[idx] = &IndexInfo{
 			TableName: indexInfo.TableName,
-			Attrs:     indexInfo.Attrs,
-			Cols:      make([]*plan.ColDef, len(table.ComputeIndexInfos[idx].Cols)),
+			ColNames:  indexInfo.ColNames,
+			Cols:      make([]*plan.ColDef, len(indexInfo.Cols)),
+			Field: &plan.Field{
+				ColNames: indexInfo.Field.ColNames,
+			},
 		}
-		for i, col := range table.ComputeIndexInfos[idx].Cols {
-			newTable.ComputeIndexInfos[idx].Cols[i] = DeepCopyColDef(col)
+		for i, col := range table.IndexInfos[idx].Cols {
+			newTable.IndexInfos[idx].Cols[i] = DeepCopyColDef(col)
 		}
 	}
 
@@ -274,15 +293,18 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 				},
 			}
 		case *plan.TableDef_DefType_Idx:
-			idxDef := &plan.IndexDef{
-				Typ:      defImpl.Idx.GetTyp(),
-				Name:     defImpl.Idx.GetName(),
-				ColNames: make([]string, len(defImpl.Idx.ColNames)),
+			indexDef := &plan.IndexDef{
+				Fields: make([]*plan.Field, len(defImpl.Idx.Fields)),
 			}
-			copy(idxDef.ColNames, defImpl.Idx.ColNames)
+			copy(indexDef.IndexNames, defImpl.Idx.IndexNames)
+			copy(indexDef.TableNames, defImpl.Idx.TableNames)
+			copy(indexDef.Uniques, defImpl.Idx.Uniques)
+			for i := range indexDef.Fields {
+				copy(indexDef.Fields[i].ColNames, defImpl.Idx.Fields[i].ColNames)
+			}
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Idx{
-					Idx: idxDef,
+					Idx: indexDef,
 				},
 			}
 		case *plan.TableDef_DefType_View:
@@ -344,16 +366,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 			newTable.Defs[idx] = &plan.TableDef_DefType{
 				Def: &plan.TableDef_DefType_Partition{
 					Partition: partitionDef,
-				},
-			}
-		case *TableDef_DefType_ComputeIndex:
-			computeIdxDef := &plan.ComputeIndexDef{}
-			copy(computeIdxDef.Names, defImpl.ComputeIndex.Names)
-			copy(computeIdxDef.TableNames, defImpl.ComputeIndex.TableNames)
-			copy(computeIdxDef.Uniques, defImpl.ComputeIndex.Uniques)
-			newTable.Defs[idx] = &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_ComputeIndex{
-					ComputeIndex: computeIdxDef,
 				},
 			}
 		}
@@ -572,14 +584,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: &plan.Type{
-			Id:        expr.Typ.GetId(),
-			Nullable:  expr.Typ.GetNullable(),
-			Width:     expr.Typ.GetWidth(),
-			Precision: expr.Typ.GetPrecision(),
-			Size:      expr.Typ.GetSize(),
-			Scale:     expr.Typ.GetScale(),
-		},
+		Typ: DeepCopyTyp(expr.Typ),
 	}
 
 	switch item := expr.Expr.(type) {
@@ -589,20 +594,34 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 		switch c := item.C.Value.(type) {
-		case *plan.Const_Ival:
-			pc.Value = &plan.Const_Ival{Ival: c.Ival}
+		case *plan.Const_I8Val:
+			pc.Value = &plan.Const_I8Val{I8Val: c.I8Val}
+		case *plan.Const_I16Val:
+			pc.Value = &plan.Const_I16Val{I16Val: c.I16Val}
+		case *plan.Const_I32Val:
+			pc.Value = &plan.Const_I32Val{I32Val: c.I32Val}
+		case *plan.Const_I64Val:
+			pc.Value = &plan.Const_I64Val{I64Val: c.I64Val}
 		case *plan.Const_Dval:
 			pc.Value = &plan.Const_Dval{Dval: c.Dval}
 		case *plan.Const_Sval:
 			pc.Value = &plan.Const_Sval{Sval: c.Sval}
 		case *plan.Const_Bval:
 			pc.Value = &plan.Const_Bval{Bval: c.Bval}
-		case *plan.Const_Uval:
-			pc.Value = &plan.Const_Uval{Uval: c.Uval}
+		case *plan.Const_U8Val:
+			pc.Value = &plan.Const_U8Val{U8Val: c.U8Val}
+		case *plan.Const_U16Val:
+			pc.Value = &plan.Const_U16Val{U16Val: c.U16Val}
+		case *plan.Const_U32Val:
+			pc.Value = &plan.Const_U32Val{U32Val: c.U32Val}
+		case *plan.Const_U64Val:
+			pc.Value = &plan.Const_U64Val{U64Val: c.U64Val}
 		case *plan.Const_Fval:
 			pc.Value = &plan.Const_Fval{Fval: c.Fval}
 		case *plan.Const_Dateval:
 			pc.Value = &plan.Const_Dateval{Dateval: c.Dateval}
+		case *plan.Const_Timeval:
+			pc.Value = &plan.Const_Timeval{Timeval: c.Timeval}
 		case *plan.Const_Datetimeval:
 			pc.Value = &plan.Const_Datetimeval{Datetimeval: c.Datetimeval}
 		case *plan.Const_Decimal64Val:
@@ -642,6 +661,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Col: &plan.ColRef{
 				RelPos: item.Col.GetRelPos(),
 				ColPos: item.Col.GetColPos(),
+				Name:   item.Col.GetName(),
 			},
 		}
 
@@ -685,14 +705,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
 			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:        item.T.Typ.GetId(),
-					Nullable:  item.T.Typ.GetNullable(),
-					Width:     item.T.Typ.GetWidth(),
-					Precision: item.T.Typ.GetPrecision(),
-					Size:      item.T.Typ.GetSize(),
-					Scale:     item.T.Typ.GetScale(),
-				},
+				Typ: DeepCopyTyp(item.T.Typ),
 			},
 		}
 

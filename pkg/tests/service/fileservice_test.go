@@ -21,7 +21,12 @@ import (
 )
 
 func TestFileServices(t *testing.T) {
-	fs := newFileServices(t, 3, 2)
+	c, err := NewCluster(t,
+		DefaultOptions().
+			WithDNServiceNum(3).
+			WithCNServiceNum(2))
+	require.NoError(t, err)
+	fs := c.(*testCluster).buildFileServices()
 	require.NotNil(t, fs.getDNLocalFileService(0))
 	require.NotNil(t, fs.getDNLocalFileService(1))
 	require.NotNil(t, fs.getDNLocalFileService(2))

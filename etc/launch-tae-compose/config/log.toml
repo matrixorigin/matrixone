@@ -1,0 +1,57 @@
+# service node type, [DN|CN|LOG]
+service-type = "LOG"
+
+[log]
+level = "debug"
+format = "console"
+max-size = 512
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "S3"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/etl"
+
+[observability]
+statusPort = 7001
+
+[hakeeper-client]
+discovery-address = "logservice:32001"
+
+[logservice]
+deployment-id = 1
+uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+raft-address = "logservice:32000"
+logservice-address = "logservice:32001"
+gossip-address = "179.19.0.4:32002"
+logservice-listen-address = "0.0.0.0:32001"
+gossip-seed-addresses = [
+  "logservice:32002",
+]
+gossip-allow-self-as-seed = true
+
+[logservice.BootstrapConfig]
+bootstrap-cluster = true
+num-of-log-shards = 1
+num-of-dn-shards = 1
+num-of-log-shard-replicas = 1
+init-hakeeper-members = [
+  "131072:7c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
+]

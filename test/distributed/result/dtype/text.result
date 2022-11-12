@@ -1,0 +1,241 @@
+drop table if exists t1;
+create table t1 (a text);
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by 1 asc;
+a
+ab_def
+select * from t1 where a not like 'a%' order by a desc;
+a
+_bcdef
+select * from t1 where a like "\__cdef" order by 1 desc;
+a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abc_ef
+abcd_f
+drop table t1;
+CREATE TABLE employees (
+employeeNumber int(11) NOT NULL,
+lastName text NOT NULL,
+firstName text NOT NULL,
+extension text NOT NULL,
+email text NOT NULL,
+officeCode text NOT NULL,
+reportsTo int(11) DEFAULT NULL,
+jobTitle text NOT NULL,
+PRIMARY KEY (employeeNumber)
+);
+insert  into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing'),
+(1088,'Patterson','William','x4871','wpatterson@classicmodelcars.com','6',1056,'Sales Manager (APAC)'),
+(1102,'Bondur','Gerard','x5408','gbondur@classicmodelcars.com','4',1056,'Sale Manager (EMEA)'),
+(1143,'Bow','Anthony','x5428','abow@classicmodelcars.com','1',1056,'Sales Manager (NA)'),
+(1165,'Jennings','Leslie','x3291','ljennings@classicmodelcars.com','1',1143,'Sales Rep'),
+(1166,'Thompson','Leslie','x4065','lthompson@classicmodelcars.com','1',1143,'Sales Rep'),
+(1188,'Firrelli','Julie','x2173','jfirrelli@classicmodelcars.com','2',1143,'Sales Rep'),
+(1216,'Patterson','Steve','x4334','spatterson@classicmodelcars.com','2',1143,'Sales Rep'),
+(1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
+(1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
+(1337,'Bondur','Loui','x6493','lbondur@classicmodelcars.com','4',1102,'Sales Rep'),
+(1370,'Hernandez','Gerard','x2028','ghernande@classicmodelcars.com','4',1102,'Sales Rep'),
+(1401,'Castillo','Pamela','x2759','pcastillo@classicmodelcars.com','4',1102,'Sales Rep'),
+(1501,'Bott','Larry','x2311','lbott@classicmodelcars.com','7',1102,'Sales Rep'),
+(1504,'Jones','Barry','x102','bjones@classicmodelcars.com','7',1102,'Sales Rep'),
+(1611,'Fixter','Andy','x101','afixter@classicmodelcars.com','6',1088,'Sales Rep');
+select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2;
+officeCode	count(officeCode)
+1	6
+4	4
+select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1;
+lastName	firstName
+Bott	Larry
+Jones	Barry
+select max(lastName),min(lastName) from employees;
+max(lastName)	min(lastName)
+Vanauf	Bondur
+select max(lastName),min(lastName),JobTitle from employees group by JobTitle;
+max(lastName)	min(lastName)	JobTitle
+Murphy	Murphy	President
+Patterson	Patterson	VP Sales
+Firrelli	Firrelli	VP Marketing
+Patterson	Patterson	Sales Manager (APAC)
+Bondur	Bondur	Sale Manager (EMEA)
+Bow	Bow	Sales Manager (NA)
+Vanauf	Bondur	Sales Rep
+select lastName,firstName from employees where lastName>=firstName;
+lastName	firstName
+Murphy	Diane
+Patterson	Mary
+Bow	Anthony
+Thompson	Leslie
+Tseng	Foon Yue
+Vanauf	George
+Hernandez	Gerard
+Jones	Barry
+Fixter	Andy
+select lastName,firstName from employees where lastName between firstName and JobTitle;
+lastName	firstName
+Murphy	Diane
+Patterson	Mary
+Bow	Anthony
+Hernandez	Gerard
+Jones	Barry
+Fixter	Andy
+select * from employees where officeCode in ('2','3','4') order by 1 asc,3 desc limit 1,2;
+employeeNumber	lastName	firstName	extension	email	officeCode	reportsTo	jobTitle
+1188	Firrelli	Julie	x2173	jfirrelli@classicmodelcars.com	2	1143	Sales Rep
+1216	Patterson	Steve	x4334	spatterson@classicmodelcars.com	2	1143	Sales Rep
+select * from employees where officeCode not in ('5','7','1');
+employeeNumber	lastName	firstName	extension	email	officeCode	reportsTo	jobTitle
+1088	Patterson	William	x4871	wpatterson@classicmodelcars.com	6	1056	Sales Manager (APAC)
+1102	Bondur	Gerard	x5408	gbondur@classicmodelcars.com	4	1056	Sale Manager (EMEA)
+1188	Firrelli	Julie	x2173	jfirrelli@classicmodelcars.com	2	1143	Sales Rep
+1216	Patterson	Steve	x4334	spatterson@classicmodelcars.com	2	1143	Sales Rep
+1286	Tseng	Foon Yue	x2248	ftseng@classicmodelcars.com	3	1143	Sales Rep
+1323	Vanauf	George	x4102	gvanauf@classicmodelcars.com	3	1143	Sales Rep
+1337	Bondur	Loui	x6493	lbondur@classicmodelcars.com	4	1102	Sales Rep
+1370	Hernandez	Gerard	x2028	ghernande@classicmodelcars.com	4	1102	Sales Rep
+1401	Castillo	Pamela	x2759	pcastillo@classicmodelcars.com	4	1102	Sales Rep
+1611	Fixter	Andy	x101	afixter@classicmodelcars.com	6	1088	Sales Rep
+select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
+officeCode	sum(cast(officeCode as unsigned))
+1	6
+6	12
+4	16
+2	4
+3	6
+7	14
+select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
+employeeNumber	officeCode	reportsTo
+1401	4	1102
+1611	6	1088
+1501	7	1102
+1504	7	1102
+create table job(
+jobid int primary key,
+jobTitle text
+);
+insert into job values
+(1,'President'),
+(2,'VP Sales'),
+(3,'VP Marketing'),
+(4,'Sales Manager (APAC)'),
+(5,'Sale Manager (EMEA)'),
+(6,'Sales Manager (NA)'),
+(7,'Sales Rep'),
+(8,'Marketing');
+CREATE TABLE t1 (a text, b int primary key);
+INSERT INTO t1 VALUES ('1',1),('1',2);
+update t1 set a=2 where a='1' limit 1;
+select * from t1;
+a	b
+2	1
+1	2
+INSERT INTO t1 VALUES ('1',3);
+update t1 set a='a' where a='1';
+select * from t1;
+a	b
+2	1
+a	2
+a	3
+drop table t1;
+create table t1 (
+a text not null,
+b text not null default '0'
+);
+Type text don't support default value
+create table t1 (a text primary key, b varchar(32));
+not supported: text type in primary key
+create table t1 (a text, index index_test(a));
+not supported: text type in index
+create table t1 (a tinytext);
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by 1 asc;
+a
+ab_def
+select * from t1 where a not like 'a%' order by a desc;
+a
+_bcdef
+select * from t1 where a like "\__cdef" order by 1 desc;
+a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abc_ef
+abcd_f
+drop table t1;
+create table t1 (a mediumtext);
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by 1 asc;
+a
+ab_def
+select * from t1 where a not like 'a%' order by a desc;
+a
+_bcdef
+select * from t1 where a like "\__cdef" order by 1 desc;
+a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abc_ef
+abcd_f
+drop table t1;
+create table t1 (a longtext);
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by 1 asc;
+a
+ab_def
+select * from t1 where a not like 'a%' order by a desc;
+a
+_bcdef
+select * from t1 where a like "\__cdef" order by 1 desc;
+a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abc_ef
+abcd_f
+drop table t1;

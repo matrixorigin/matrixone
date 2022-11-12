@@ -15,8 +15,11 @@
 package hakeeper
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 type IDAllocator interface {
@@ -36,7 +39,7 @@ type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc util.IDAllocator, cluster pb.ClusterInfo, dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand
+	Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand
 }
 
 // BootstrapManager is the interface suppose to be implemented by HAKeeper's
@@ -49,6 +52,10 @@ type BootstrapManager interface {
 
 type TaskScheduler interface {
 	Schedule(cnState pb.CNState, currentTick uint64)
+
+	// Create an asynchronous task that executes a single time, this method is idempotent, the
+	// same task is not created repeatedly based on multiple calls.
+	Create(context.Context, []task.TaskMetadata) error
 
 	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
 	// from the TaskStore at regular intervals, and a timer will be maintained in memory for all Cron's to be

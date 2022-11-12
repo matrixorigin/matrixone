@@ -97,11 +97,11 @@ cast(col1 as tinyint)
 127
 insert into t8(col1) values ('-129');
 select cast(col1 as tinyint) from t8;
-data out of range: data type int, value '-129'
+Data truncation: data out of range: data type int, value '-129'
 delete from t8 where col1='-129';
 insert into t8(col1) values ('128');
 select cast(col1 as tinyint) from t8;
-data out of range: data type int, value '128'
+Data truncation: data out of range: data type int, value '128'
 delete from t8 where col1 is not NULL;
 insert into t8(col2) values ('-32768');
 insert into t8(col2) values ('32767');
@@ -115,11 +115,11 @@ cast(col2 as smallint)
 32767
 insert into t8(col2) values ('-32769');
 select cast(col2 as smallint) from t8;
-data out of range: data type int, value '-32769'
+Data truncation: data out of range: data type int, value '-32769'
 delete from t8 where col2 is not NULL;
 insert into t8(col2) values ('32768');
 select cast(col2 as smallint) from t8;
-data out of range: data type int, value '32768'
+Data truncation: data out of range: data type int, value '32768'
 delete from t8 where col2 is not NULL;
 insert into t8(col3) values ('-2147483648');
 insert into t8(col3) values ('2147483647');
@@ -133,11 +133,11 @@ cast(col3 as int)
 2147483647
 insert into t8(col3) values ('-2147483649');
 select cast(col3 as int) from t8;
-data out of range: data type int, value '-2147483649'
+Data truncation: data out of range: data type int, value '-2147483649'
 delete from t8 where col3 is not NULL;
 insert into t8(col3) values ('2147483648');
 select cast(col3 as int) from t8;
-data out of range: data type int, value '2147483648'
+Data truncation: data out of range: data type int, value '2147483648'
 delete from t8 where col3 is not NULL;
 insert into t8(col4) values ('-9223372036854775808');
 insert into t8(col4) values ('9223372036854775807');
@@ -151,11 +151,11 @@ cast(col4 as bigint)
 9223372036854775807
 insert into t8(col4) values ('-9223372036854775809');
 select cast(col4 as bigint) from t8;
-data out of range: data type int, value '-9223372036854775809'
+Data truncation: data out of range: data type int, value '-9223372036854775809'
 delete from t8 where col4 is not NULL;
 insert into t8(col4) values ('9223372036854775808');
 select cast(col4 as bigint) from t8;
-data out of range: data type int, value '9223372036854775808'
+Data truncation: data out of range: data type int, value '9223372036854775808'
 delete from t8 where col4 is not NULL;
 insert into t8(col5) values ('0');
 insert into t8(col5) values ('255');
@@ -173,7 +173,7 @@ invalid argument cast to uint, bad value -1
 delete from t8 where col5 is not NULL;
 insert into t8(col5) values ('256');
 select cast(col5 as tinyint unsigned) from t8;
-data out of range: data type uint, value '256'
+Data truncation: data out of range: data type uint, value '256'
 delete from t8 where col5 is not NULL;
 insert into t8(col6) values ('0');
 insert into t8(col6) values ('65535');
@@ -191,7 +191,7 @@ invalid argument cast to uint, bad value -1
 delete from t8 where col6 is not NULL;
 insert into t8(col6) values ('65636');
 select cast(col6 as smallint unsigned) from t8;
-data out of range: data type uint, value '65636'
+Data truncation: data out of range: data type uint, value '65636'
 delete from t8 where col6 is not NULL;
 insert into t8(col7) values ('0');
 insert into t8(col7) values ('4294967295');
@@ -209,7 +209,7 @@ invalid argument cast to uint, bad value -1
 delete from t8 where col7 is not NULL;
 insert into t8(col7) values ('4294967296');
 select cast(col7 as int unsigned) from t8;
-data out of range: data type uint, value '4294967296'
+Data truncation: data out of range: data type uint, value '4294967296'
 delete from t8 where col7 is not NULL;
 insert into t8(col8) values ('0');
 insert into t8(col8) values ('18446744073709551615');
@@ -225,7 +225,7 @@ invalid argument cast to uint, bad value -1
 delete from t8 where col8 is not NULL;
 insert into t8(col8) values ('18446744073709551616');
 select cast(col8 as bigint unsigned) from t8;
-data out of range: data type uint, value '18446744073709551616'
+Data truncation: data out of range: data type uint, value '18446744073709551616'
 delete from t8 where col8 is not NULL;
 insert into t8(col9) values ('1.234567890434546457475756856');
 insert into t8(col9) values ('111.222333344445556667777888899999000008998');
@@ -256,27 +256,16 @@ delete from t8 where col9 is not NULL;
 insert into t8(col10) values ('this is a char type');
 insert into t8(col10) values ('this is a varchar type');
 select cast(col10 as char) from t8;
-cast(col10 as char)
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar) from t8;
-cast(col10 as varchar)
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as char(1)) from t8;
-cast(col10 as char(1))
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 select cast(col10 as varchar(1)) from t8;
-cast(col10 as varchar(1))
-this is a char type
-this is a varchar type
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
-insert into t8(col11) values (2020-01-01);
-insert into t8(col11) values (2020-01-01 13:10:10);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as date) from t8;
 cast(col11 as date)
 2020-01-01
@@ -292,8 +281,6 @@ delete from t8 where col11 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
 insert into t8(col11) values ('2020-01-01 13:10:59.999999');
-insert into t8(col11) values (2020-01-01 13:10:59.999999);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 44 near '13'; 
 select cast(col11 as timestamp) from t8;
 cast(col11 as timestamp(26))
 2020-01-01 00:00:00
@@ -311,10 +298,17 @@ false
 true
 false
 delete from t8 where col12 is not NULL;
-insert into t8(col12) values ('hello');
+insert into t8(col12) values ('true');
+insert into t8(col12) values ('trUe');
+insert into t8(col12) values ('falSe');
 select cast(col12 as bool) from t8;
 cast(col12 as bool)
+true
+true
 false
+insert into t8(col12) values ('hello');
+select cast(col12 as bool) from t8;
+invalid input: 'hello' is not a valid bool expression
 delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;
@@ -323,14 +317,18 @@ true
 delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
-select cast(col13 as decimal(5,3));
-Column 'col13' does not exist
+select cast(col13 as decimal(5,3)) from t8;
+invalid argument DECIMAL64, bad value 12345.123456789
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
-select cast(col13 as decimal(5,3));
-Column 'col13' does not exist
-select cast(col13 as decimal(20,15));
-Column 'col13' does not exist
+select cast(col13 as decimal(5,3)) from t8;
+invalid argument DECIMAL64, bad value 12345.123456789
+select cast(col13 as decimal(20,15)) from t8;
+cast(col13 as decimal(20, 15))
+12345.123456789000000
+12345.123456789000000
+1.234567000000000
+1.234567000000000
 drop table if exists t8;
 drop table if exists t9;
 create table t9 (

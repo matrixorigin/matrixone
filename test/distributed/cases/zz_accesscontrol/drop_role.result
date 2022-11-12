@@ -1,0 +1,53 @@
+drop role if exists drop_role1,drop_role2,drop_role3,drop_role4,drop_role5,drop_role6,drop_role7,drop_role8,drop_role9,drop_role10;
+drop role if exists drop_role_001,drop_role_002,drop_role_1,drop_role_2;
+drop user if exists drop_user_1,drop_user_2;
+create role drop_role_001;
+drop role drop_role_001;
+select role_name from mo_catalog.mo_role where role_name='drop_role_001';
+role_name
+drop role role_name;
+internal error: there is no role role_name
+drop role if exists drop_role_002;
+create role drop_role_002;
+drop role if exists drop_role_002;
+select role_name from mo_catalog.mo_role where role_name='drop_role_002';
+role_name
+drop role '';
+internal error: the name "" is invalid
+drop role moadmin;
+[unknown result because it is related to issue#5705]
+drop role public;
+[unknown result because it is related to issue#5705]
+drop if not exists d;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 7 near " if not exists d;";
+drop role if not exists d;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " not exists d;";
+create role if not exists drop_role1,drop_role2,drop_role3,drop_role4,drop_role5,drop_role6,drop_role7,drop_role8,drop_role9,drop_role10;
+drop role drop_role1,drop_role2,drop_role3,drop_role11;
+internal error: there is no role drop_role11
+drop role if exists drop_role1,drop_role2,drop_role3,drop_role11;
+drop role if exists drop_role4,drop_role5,drop_role6,root,drop_role8;
+drop role if exists drop_role9,drop_role10;
+select role_name from mo_catalog.mo_role where role_name like 'drop_role%';
+role_name
+drop_role7
+create role drop_role_1,drop_role_2;
+create user drop_user_1 identified by '111',drop_user_2 identified by '111';
+grant all on table *.* to drop_role_1 with grant option;
+grant drop_role_1 to drop_user_1;
+grant drop_role_2 to drop_user_2;
+select role_name from mo_catalog.mo_role where role_name in ('drop_role_1','drop_role_2');
+role_name
+drop_role_1
+drop_role_2
+grant drop_role_1 to drop_role_2;
+drop role drop_role_1;
+select role_name from mo_catalog.mo_role where role_name in ('drop_role_1','drop_role_2');
+role_name
+drop_role_2
+select role_name from mo_catalog.mo_user_grant mug ,mo_catalog.mo_role mr where mug.role_id=mr.role_id and mr.role_name in ('drop_role_1','drop_role_2');
+role_name
+drop_role_2
+drop role if exists drop_role1,drop_role2,drop_role3,drop_role4,drop_role5,drop_role6,drop_role7,drop_role8,drop_role9,drop_role10;
+drop role if exists drop_role_001,drop_role_002,drop_role_1,drop_role_2;
+drop user if exists drop_user_1,drop_user_2;

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -82,10 +83,11 @@ type MVCC interface {
 	Insert(ctx context.Context, primaryKeyIndex int, bat *api.Batch, needCheck bool) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries []Entry) []BlockMeta
+		blocks []BlockMeta, entries []Entry) ([]BlockMeta, map[uint64][]int)
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
-		blocks []BlockMeta, ts timestamp.Timestamp, entries []Entry) ([]engine.Reader, error)
+	NewReader(ctx context.Context, readerNumber int, index memtable.Tuple, defs []engine.TableDef,
+		tableDef *plan.TableDef, skipBlocks map[uint64]uint8, blks []ModifyBlockMeta,
+		ts timestamp.Timestamp, fs fileservice.FileService, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -95,7 +97,7 @@ type Engine struct {
 	db                *DB
 	cli               client.TxnClient
 	idGen             IDGenerator
-	getClusterDetails GetClusterDetailsFunc
+	getClusterDetails engine.GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
 	txnHeap *transactionHeap
@@ -115,7 +117,8 @@ type Partitions []*Partition
 type Partition struct {
 	sync.RWMutex
 	// multi-version data of logtail, implemented with reusee's memengine
-	data *memtable.Table[RowID, DataValue, *DataRow]
+	data             *memtable.Table[RowID, DataValue, *DataRow]
+	columnsIndexDefs []ColumnsIndexDef
 	// last updated timestamp
 	ts timestamp.Timestamp
 }
@@ -131,16 +134,19 @@ type Transaction struct {
 	blockId uint64
 	// use for solving halloween problem
 	statementId uint64
-	meta        txn.TxnMeta
-	op          client.TxnOperator
+	// local timestamp for workspace operations
+	localTS timestamp.Timestamp
+	meta    txn.TxnMeta
+	op      client.TxnOperator
 	// fileMaps used to store the mapping relationship between s3 filenames
 	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
-	writes   [][]Entry
-	dnStores []DNStore
-	proc     *process.Process
+	writes    [][]Entry
+	workspace *memtable.Table[RowID, *workspaceRow, *workspaceRow]
+	dnStores  []DNStore
+	proc      *process.Process
 
 	idGen IDGenerator
 
@@ -180,6 +186,7 @@ type database struct {
 	databaseName string
 	db           *DB
 	txn          *Transaction
+	fs           fileservice.FileService
 }
 
 type tableKey struct {
@@ -197,7 +204,7 @@ type databaseKey struct {
 type tableMeta struct {
 	tableName     string
 	blocks        [][]BlockMeta
-	modifedBlocks [][]BlockMeta
+	modifedBlocks [][]ModifyBlockMeta
 	defs          []engine.TableDef
 }
 
@@ -213,12 +220,16 @@ type table struct {
 	tableDef   *plan.TableDef
 	proc       *process.Process
 
-	primaryIdx int
+	primaryIdx int // -1 means no primary key
 	viewdef    string
 	comment    string
 	partition  string
 	relKind    string
 	createSql  string
+
+	updated bool
+	// use for skip rows
+	skipBlocks map[uint64]uint8
 }
 
 type column struct {
@@ -244,11 +255,33 @@ type column struct {
 }
 
 type blockReader struct {
-	blks     []BlockMeta
+	blks       []BlockMeta
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         timestamp.Timestamp
+	tableDef   *plan.TableDef
+	primaryIdx int
+	expr       *plan.Expr
+
+	// cached meta data.
+	colIdxs        []uint16
+	colTypes       []types.Type
+	colNulls       []bool
+	pkidxInColIdxs int
+}
+
+type blockMergeReader struct {
+	sels     []int64
+	blks     []ModifyBlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
 	tableDef *plan.TableDef
+
+	// cached meta data.
+	colIdxs  []uint16
+	colTypes []types.Type
+	colNulls []bool
 }
 
 type mergeReader struct {
@@ -259,8 +292,14 @@ type emptyReader struct {
 }
 
 type BlockMeta struct {
-	info    catalog.BlockInfo
-	zonemap [][64]byte
+	Rows    int64
+	Info    catalog.BlockInfo
+	Zonemap [][64]byte
+}
+
+type ModifyBlockMeta struct {
+	meta    BlockMeta
+	deletes []int
 }
 
 type Columns []column
@@ -270,5 +309,29 @@ func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
 func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
 
 func (a BlockMeta) Eq(b BlockMeta) bool {
-	return a.info.BlockID == b.info.BlockID
+	return a.Info.BlockID == b.Info.BlockID
+}
+
+type workspaceRow struct {
+	rowID   RowID
+	tableID uint64
+	indexes []memtable.Tuple
+}
+
+var _ memtable.Row[RowID, *workspaceRow] = new(workspaceRow)
+
+func (w *workspaceRow) Key() RowID {
+	return w.rowID
+}
+
+func (w *workspaceRow) Value() *workspaceRow {
+	return w
+}
+
+func (w *workspaceRow) Indexes() []memtable.Tuple {
+	return w.indexes
+}
+
+func (w *workspaceRow) UniqueIndexes() []memtable.Tuple {
+	return nil
 }

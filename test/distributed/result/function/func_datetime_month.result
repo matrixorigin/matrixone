@@ -1,0 +1,175 @@
+SELECT MONTH(date_add("2021-09-30", interval 200 day)) AS MONTH;
+MONTH
+4
+SELECT MONTH("10000-12-21") as month;
+month
+null
+SELECT MONTH("-1234-12-21") as month;
+month
+null
+SELECT MONTH("12415141412-12-21") as month;
+month
+null
+SELECT MONTH("0000-00-00") as month;
+month
+null
+SELECT MONTH("2049-14-34") as month;
+month
+null
+SELECT MONTH("13-12") as month;
+month
+null
+SELECT MONTH("2015-09") as MONTH;
+MONTH
+null
+SELECT MONTH(201509) as MONTH;
+month
+null
+SELECT MONTH(1340124) as MONTH;
+month
+null
+SELECT MONTH(0.45133) as MONTH;
+month
+null
+SELECT MONTH(10) as MONTH;
+month
+null
+SELECT MONTH(1=1) as MONTH;
+month
+null
+SELECT MONTH('2015-09.30') as MONTH;
+MONTH
+9
+SELECT MONTH('2015-0') as MONTH;
+MONTH
+null
+SELECT MONTH('2015-09.30 12') as MONTH;
+MONTH
+9
+SELECT MONTH('2015-09-26 08:09:22') AS MONTH;
+MONTH
+9
+SELECT MONTH("2015-09-10")- MONTH("2016-04-24");
+MONTH("2015-09-10")- MONTH("2016-04-24")
+5
+SELECT MONTH("2015-09-10")+ MONTH("2016-04-24");
+MONTH("2015-09-10")+ MONTH("2016-04-24")
+13
+SELECT MONTH("2015-09-10")*MONTH("2016-04-24");
+MONTH("2015-09-10")*MONTH("2016-04-24")
+36
+SELECT MONTH("2015-09-10")/MONTH("2016-04-24");
+MONTH("2015-09-10")/MONTH("2016-04-24")
+2.2500
+SELECT MONTH("2015-09-10")>MONTH("2016-04-24");
+month(2015-09-10) > month(2016-04-24)
+true
+SELECT MONTH("2015-09-10")<MONTH("2016-04-24");
+month(2015-09-10) < month(2016-04-24)
+false
+SELECT MONTH("2015-09-10")=MONTH("2016-04-24");
+month(2015-09-10) = month(2016-04-24)
+false
+SELECT MONTH("2015-09-10")<>MONTH("2016-04-24");
+month(2015-09-10) != month(2016-04-24)
+true
+SELECT MONTH("2015-09-10")!=MONTH("2016-04-24");
+month(2015-09-10) != month(2016-04-24)
+true
+SELECT MONTH(NULL) AS Month ;
+Month
+null
+CREATE TABLE Product(Product_id INT,  Product_name VARCHAR(100) NOT NULL,Buying_price DECIMAL(13, 2) NOT NULL,Selling_price DECIMAL(13, 2) NOT NULL,Selling_Date Date NOT NULL,PRIMARY KEY(Product_id));
+INSERT INTO  Product(Product_name, Buying_price, Selling_price, Selling_Date) VALUES ('Audi Q8', 10000000.00, 15000000.00, '2018-01-26' ),('Volvo XC40', 2000000.00, 3000000.00, '2018-04-20' ),('Audi A6', 4000000.00, 5000000.00, '2018-07-25' ),('BMW X5', 5000500.00, 7006500.00, '2018-10-18'  ),('Jaguar XF', 5000000, 7507000.00, '2019-01-27'  ),('Mercedes-Benz C-Class', 4000000.00, 6000000.00, '2019-04-01'  ),('Jaguar F-PACE', 5000000.00, 7000000.00, '2019-12-26'  ),('Porsche Macan', 6500000.00, 8000000.00, '2020-04-16' ) ;
+constraint violation: Column 'product_id' cannot be null
+SELECT  MONTH (Selling_Date) month,  COUNT(Product_id) Product_Sold FROM Product GROUP BY MONTH (Selling_Date) ORDER BY MONTH (Selling_Date);
+month	Product_Sold
+DROP TABLE Product;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 select month("2012-10-12"), "2012-10-12";
+insert into t1 select month("2004-04-24"), "2004-04-24";
+insert into t1 select month("2008-12-04"), "2008-12-04";
+select * from t1;
+a	b
+10	2012-10-12
+4	2004-04-24
+12	2008-12-04
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select * from t1 where month(b)=10;
+a	b
+1	2012-10-12
+drop table t1;
+create table t1(a INT,  b date);
+create table t2(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+insert into t2 values(1, "2013-04-30"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-08-12");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (month(t1.b) = month(t2.b));
+a	a
+2	1
+1	2
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(1, "2012-07-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select b from t1 group by b having month(b)=12;
+b
+2008-12-04
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(1, "2012-07-12"),(2, "2004-04-24"),(3, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select distinct month(b) from t1;
+month(b)
+10
+7
+4
+12
+3
+drop table t1;
+CREATE TABLE t3(c1 DATE NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT MONTH(c1) FROM t3;
+MONTH(c1)
+1
+12
+1
+12
+2
+DROP TABLE t3;
+CREATE TABLE t3(c1 DATETIME NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT MONTH(c1) FROM t3;
+MONTH(c1)
+1
+12
+1
+12
+2
+DROP TABLE t3;
+CREATE TABLE t3(c1 TIMESTAMP NOT NULL);
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('1999-12-31');
+INSERT INTO t3 VALUES('2000-01-01');
+INSERT INTO t3 VALUES('2006-12-25');
+INSERT INTO t3 VALUES('2008-02-29');
+SELECT MONTH(c1) FROM t3;
+MONTH(c1)
+1
+12
+1
+12
+2
+DROP TABLE t3;

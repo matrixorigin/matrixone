@@ -16,14 +16,16 @@ package txnentries
 
 import (
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -34,27 +36,38 @@ type compactBlockEntry struct {
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
-	mapping   []uint32
 	deletes   *roaring.Bitmap
 }
 
-func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler, sortIdx []uint32, deletes *roaring.Bitmap) *compactBlockEntry {
-	mapping := make([]uint32, len(sortIdx))
+func NewCompactBlockEntry(
+	txn txnif.AsyncTxn,
+	from, to handle.Block,
+	scheduler tasks.TaskScheduler,
+	sortIdx []uint32,
+	deletes *roaring.Bitmap) *compactBlockEntry {
+
+	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
+	toId := to.Fingerprint()
+	prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
 	for i, idx := range sortIdx {
-		mapping[idx] = uint32(i)
+		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		page.Train(idx, rowid)
 	}
+	_ = scheduler.AddTransferPage(page)
+
 	return &compactBlockEntry{
 		txn:       txn,
 		from:      from,
 		to:        to,
 		scheduler: scheduler,
-		mapping:   mapping,
 		deletes:   deletes,
 	}
 }
 
+func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
+	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
 	return
 }
 func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
@@ -66,26 +79,9 @@ func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 	if err = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().ReplayImmutIndex(); err != nil {
 		return
 	}
-	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
-		// TODO:
-		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
-		// We'll ensure the schduler can only be stopped after txn manager being stopped.
-		logutil.Warnf("Schedule checkpoint task failed: %v", err)
-		err = nil
-	}
-	return entry.PostCommit()
-}
-func (entry *compactBlockEntry) PostCommit() (err error) {
-	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	if _, err = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS())); err != nil {
-		// TODO:
-		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
-		// We'll ensure the schduler can only be stopped after txn manager being stopped.
-		logutil.Warnf("Schedule checkpoint task failed: %v", err)
-		err = nil
-	}
 	return
 }
+
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()), entry.txn, csn)
 	return
@@ -95,12 +91,8 @@ func (entry *compactBlockEntry) Set1PC()     {}
 func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-	if view == nil || err != nil {
-		return
-	}
-	if view.DeleteMask != nil && !view.DeleteMask.IsEmpty() {
-		return moerr.NewTxnWWConflict()
+	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS(), types.MaxTs()) {
+		err = moerr.NewTxnWWConflict()
 	}
 	return
 }

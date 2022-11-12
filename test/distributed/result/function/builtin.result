@@ -1,0 +1,662 @@
+drop table if exists t1;
+create table t1(a int,b int);
+insert into t1 values(5,-2),(10,3),(100,0),(4,3),(6,-3);
+select power(a,b) from t1;
+power(a, b)
+0.04
+1000.0
+1.0
+64.0
+0.004629629629629629
+select power(a,2) as a1, power(b,2) as b1 from t1 where power(a,2) > power(b,2) order by a1 asc;
+a1    b1
+16.0    9.0
+25.0    4.0
+36.0    9.0
+100.0    9.0
+10000.0    0.0
+drop table if exists t1;
+create table t1(a date,b datetime);
+insert into t1 values("2022-06-01","2022-07-01 00:00:00");
+insert into t1 values("2022-12-31","2011-01-31 12:00:00");
+select month(a),month(b) from t1;
+month(a)    month(b)
+6    7
+12    1
+select * from t1 where month(a)>month(b);
+a    b
+2022-12-31    2011-01-31 12:00:00
+select * from t1 where month(a) between 1 and 6;
+a    b
+2022-06-01    2022-07-01 00:00:00
+drop table if exists t1;
+create table t1(a varchar(12),c char(30));
+insert into t1 values('sdfad  ','2022-02-02 22:22:22');
+insert into t1 values('  sdfad  ','2022-02-02 22:22:22');
+insert into t1 values('adsf  sdfad','2022-02-02 22:22:22');
+insert into t1 values('    sdfad','2022-02-02 22:22:22');
+select reverse(a),reverse(c) from t1;
+reverse(a)	reverse(c)
+  dafds	22:22:22 20-20-2202
+  dafds  	22:22:22 20-20-2202
+dafds  fsda	22:22:22 20-20-2202
+dafds    	22:22:22 20-20-2202
+select a from t1 where reverse(a) like 'daf%';
+a
+adsf  sdfad
+    sdfad
+select reverse(a) reversea,reverse(reverse(a)) normala from t1;
+reversea	normala
+  dafds	sdfad  
+  dafds  	  sdfad  
+dafds  fsda	adsf  sdfad
+dafds    	    sdfad
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select acos(a*pi()/180) as acosa,acos(b*pi()/180) acosb from t1;
+acosa    acosb
+1.5707963267948966    1.5707963267948966
+1.8356824738191324    1.927370391646567
+1.9648910192076245    1.7907312931992256
+1.5707963267948966    null
+1.0197267436954502    null
+null    null
+null    null
+null    null
+select acos(a*pi()/180)*acos(b*pi()/180) as acosab,acos(acos(a*pi()/180)) as c from t1;
+acosab    c
+2.4674011002723395    null
+3.5380400485035204    null
+3.518591835821214    null
+null    null
+null    null
+null    null
+null    null
+null    null
+select b from t1 where acos(a*pi()/180)<=acos(b*pi()/180)  order by a;
+b
+-20.0
+0.0
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select atan(a*pi()/180) as atana,atan(b*pi()/180) atanb from t1;
+atana    atanb
+0.0    0.0
+-0.25605276998075555    -0.33584237256640787
+-0.3666136182932664    -0.2148004503403853
+0.0    1.4129651365067377
+0.48234790710102493    1.4249275378445119
+1.0038848218538872    1.4441537892065186
+1.2626272556789115    1.3616916829711634
+1.2626272556789115    1.2626272556789115
+select atan(a*pi()/180)*atan(b*pi()/180) as atanab,atan(atan(a*pi()/180)) as c from t1;
+atanab    c
+0.0    0.0
+0.08599336977253765    -0.25066722482387166
+0.07874877031031174    -0.3513980316581596
+0.0    0.0
+0.6873108156499168    0.44942647356532794
+1.449764069407202    0.7873368062499201
+1.7193090327506784    0.900952887864509
+1.5942275867832594    0.900952887864509
+select b from t1 where atan(a*pi()/180)<=atan(b*pi()/180)  order by a;
+b
+-12.5
+0.0
+360.0
+390.0
+450.0
+270.0
+180.0
+drop table if exists t1;
+CREATE TABLE t1(
+Employee_Name VARCHAR(100) NOT NULL,
+Working_At VARCHAR(20) NOT NULL,
+Work_Location  VARCHAR(20) NOT NULL,
+Joining_Date DATE NOT NULL,
+Annual_Income INT  NOT NULL);
+INSERT INTO t1
+VALUES
+('Amit Khan', 'XYZ Digital', 'Kolkata', '2019-10-06', 350000),
+('Shreetama Pal', 'ABC Corp.', 'Kolkata', '2018-12-16', 500000),
+('Aniket Sharma', 'PQR Soln.', 'Delhi', '2020-01-11', 300000),
+('Maitree Jana', 'XYZ Digital', 'Kolkata', '2019-05-01', 400000),
+('Priyanka Ojha', 'ABC Corp.', 'Delhi', '2019-02-13', 350000),
+('Sayani Mitra', 'XYZ Digital', 'Kolkata', '2019-09-15', 320000),
+('Nitin Dey', 'PQR Soln.', 'Delhi', '2019-10-06', 250000),
+('Sujata Samanta', 'PQR Soln.', 'Kolkata', '2020-10-06', 350000),
+('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
+('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
+SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
+working_at    bitorincome
+XYZ Digital    262144
+ABC Corp.    65792
+PQR Soln.    4096
+SELECT Work_Location, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
+work_location    bitorincome
+Kolkata    262144
+Delhi    0
+drop table if exists t1;
+CREATE TABLE t1(
+Employee_Name VARCHAR(100) NOT NULL,
+Working_At VARCHAR(20) NOT NULL,
+Work_Location  VARCHAR(20) NOT NULL,
+Joining_Date DATE NOT NULL,
+Annual_Income INT  NOT NULL);
+INSERT INTO t1
+VALUES
+('Amit Khan', 'XYZ Digital', 'Kolkata', '2019-10-06', 350000),
+('Shreetama Pal', 'ABC Corp.', 'Kolkata', '2018-12-16', 500000),
+('Aniket Sharma', 'PQR Soln.', 'Delhi', '2020-01-11', 300000),
+('Maitree Jana', 'XYZ Digital', 'Kolkata', '2019-05-01', 400000),
+('Priyanka Ojha', 'ABC Corp.', 'Delhi', '2019-02-13', 350000),
+('Sayani Mitra', 'XYZ Digital', 'Kolkata', '2019-09-15', 320000),
+('Nitin Dey', 'PQR Soln.', 'Delhi', '2019-10-06', 250000),
+('Sujata Samanta', 'PQR Soln.', 'Kolkata', '2020-10-06', 350000),
+('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
+('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
+SELECT Work_Location, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
+work_location    bitorincome
+Kolkata    262144
+Delhi    0
+SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
+working_at    bitorincome
+XYZ Digital    262144
+ABC Corp.    65792
+PQR Soln.    4096
+drop table if exists t1;
+CREATE TABLE t1(
+Employee_Name VARCHAR(100) NOT NULL,
+Working_At VARCHAR(20) NOT NULL,
+Work_Location  VARCHAR(20) NOT NULL,
+Joining_Date DATE NOT NULL,
+Annual_Income INT  NOT NULL);
+INSERT INTO t1
+VALUES
+('Amit Khan', 'XYZ Digital', 'Kolkata', '2019-10-06', 350000),
+('Shreetama Pal', 'ABC Corp.', 'Kolkata', '2018-12-16', 500000),
+('Aniket Sharma', 'PQR Soln.', 'Delhi', '2020-01-11', 300000),
+('Maitree Jana', 'XYZ Digital', 'Kolkata', '2019-05-01', 400000),
+('Priyanka Ojha', 'ABC Corp.', 'Delhi', '2019-02-13', 350000),
+('Sayani Mitra', 'XYZ Digital', 'Kolkata', '2019-09-15', 320000),
+('Nitin Dey', 'PQR Soln.', 'Delhi', '2019-10-06', 250000),
+('Sujata Samanta', 'PQR Soln.', 'Kolkata', '2020-10-06', 350000),
+('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
+('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
+SELECT Work_Location, BIT_XOR(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
+work_location    bitorincome
+Kolkata    350624
+Delhi    912976
+SELECT Working_At, BIT_XOR(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
+working_at    bitorincome
+XYZ Digital    94816
+ABC Corp.    774608
+PQR Soln.    136256
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select cos(a),cos(b) from t1;
+cos(a)    cos(b)
+1.0    1.0
+1.0    -0.2836910914865273
+0.15425144988758405    0.9036792973912307
+-0.4480736161291701    -0.7301529641805058
+-0.5984600690578581    0.9843819506325049
+-0.5984600690578581    -0.5984600690578581
+select cos(a)*cos(b),cos(cos(a)) as c from t1;
+cos(a) * cos(b)    c
+1.0    0.5403023058681398
+-0.2836910914865273    0.5403023058681398
+0.13939384185599057    0.9881268151992377
+0.32716227898779165    0.9012833416649748
+-0.5891132901548379    0.8262041463870422
+0.35815445425673625    0.8262041463870422
+select distinct a from t1 where cos(a)<=cos(b) order by a desc;
+a
+180
+30
+0
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1;
+invalid argument cot, bad value cot(0)
+select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1;
+invalid argument cot, bad value cot(0)
+select b from t1 where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
+invalid argument cot, bad value cot(0)
+drop table if exists t1;
+create table t1(a date, b datetime,c varchar(30));
+insert into t1 values('20220101','2022-01-01 01:01:01','2022-13-13 01:01:01');
+select * from t1;
+a    b    c
+2022-01-01    2022-01-01 01:01:01    2022-13-13 01:01:01
+drop table if exists t1;
+create table t1(a date, b datetime,c varchar(30));
+insert into t1 values('2022-01-01','2022-01-01 01:01:01','2022-01-01 01:01:01');
+insert into t1 values('2022-01-01','2022-01-01 01:01:01','2022-01-01 01:01:01');
+insert into t1 values('2022-01-02','2022-01-02 23:01:01','2022-01-01 23:01:01');
+insert into t1 values('2021-12-31','2021-12-30 23:59:59','2021-12-30 23:59:59');
+insert into t1 values('2022-06-30','2021-12-30 23:59:59','2021-12-30 23:59:59');
+select distinct dayofyear(a) as dya from t1;
+dya
+1
+2
+365
+181
+select * from t1 where dayofyear(a)>120;
+a    b    c
+2021-12-31    2021-12-30 23:59:59    2021-12-30 23:59:59
+2022-06-30    2021-12-30 23:59:59    2021-12-30 23:59:59
+select * from t1 where dayofyear(a) between 1 and 184;
+a    b    c
+2022-01-01    2022-01-01 01:01:01    2022-01-01 01:01:01
+2022-01-01    2022-01-01 01:01:01    2022-01-01 01:01:01
+2022-01-02    2022-01-02 23:01:01    2022-01-01 23:01:01
+2022-06-30    2021-12-30 23:59:59    2021-12-30 23:59:59
+drop table if exists t1;
+CREATE TABLE t1(a INT,b VARCHAR(100),c CHAR(20));
+INSERT INTO t1
+VALUES
+(1,'Ananya Majumdar', 'XI'),
+(2,'Anushka Samanta', 'X'),
+(3,'Aniket Sharma', 'XI'),
+(4,'Anik Das', 'X'),
+(5,'Riya Jain', 'IX'),
+(6,'Tapan Samanta', 'XI');
+select a,endswith(b,'a') from t1;
+a    endswith(b, a)
+1    0
+2    1
+3    1
+4    0
+5    0
+6    1
+select a,b,c from t1 where endswith(b,'a')=1 and endswith(c,'I')=1;
+a    b    c
+3    Aniket Sharma    XI
+6    Tapan Samanta    XI
+drop table if exists t1;
+CREATE TABLE t1(Student_id INT,Student_name VARCHAR(100),Student_Class CHAR(20));
+INSERT INTO t1
+VALUES
+(1,'Ananya Majumdar', 'IX'),
+(2,'Anushka Samanta', 'X'),
+(3,'Aniket Sharma', 'XI'),
+(4,'Anik Das', 'X'),
+(5,'Riya Jain', 'IX'),
+(6,'Tapan Samanta', 'X');
+SELECT Student_id, Student_name,LPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
+student_id    student_name    leftpaddedstring
+1    Ananya Majumdar     _ _ _ _IX
+2    Anushka Samanta     _ _ _ _ X
+3    Aniket Sharma     _ _ _ _XI
+4    Anik Das     _ _ _ _ X
+5    Riya Jain     _ _ _ _IX
+6    Tapan Samanta     _ _ _ _ X
+SELECT Student_id, lpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    Anan
+2    Anus
+3    Anik
+4    Anik
+5    Riya
+6    Tapa
+SELECT Student_id, lpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    null
+2    null
+3    null
+4    null
+5    null
+6    null
+SELECT Student_id, lpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    
+2    
+3    
+4    
+5    
+6    
+drop table if exists t1;
+CREATE TABLE t1(Student_id INT,Student_name VARCHAR(100),Student_Class CHAR(20));
+INSERT INTO t1
+VALUES
+(1,'Ananya Majumdar', 'IX'),
+(2,'Anushka Samanta', 'X'),
+(3,'Aniket Sharma', 'XI'),
+(4,'Anik Das', 'X'),
+(5,'Riya Jain', 'IX'),
+(6,'Tapan Samanta', 'X');
+SELECT Student_id, Student_name,RPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
+student_id    student_name    leftpaddedstring
+1    Ananya Majumdar    IX _ _ _ _
+2    Anushka Samanta    X _ _ _ _ 
+3    Aniket Sharma    XI _ _ _ _
+4    Anik Das    X _ _ _ _ 
+5    Riya Jain    IX _ _ _ _
+6    Tapan Samanta    X _ _ _ _ 
+SELECT Student_id, rpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    Anan
+2    Anus
+3    Anik
+4    Anik
+5    Riya
+6    Tapa
+SELECT Student_id, rpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    null
+2    null
+3    null
+4    null
+5    null
+6    null
+SELECT Student_id, rpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
+student_id    leftpaddedstring
+1    
+2    
+3    
+4    
+5    
+6    
+drop table if exists t1;
+CREATE TABLE t1
+(
+Employee_name VARCHAR(100) NOT NULL,
+Joining_Date DATE NOT NULL
+);
+INSERT INTO t1
+(Employee_name, Joining_Date )
+VALUES
+('     Ananya Majumdar', '2000-01-11'),
+('   Anushka Samanta', '2002-11-10' ),
+('   Aniket Sharma ', '2005-06-11' ),
+('   Anik Das', '2008-01-21'  ),
+('  Riya Jain', '2008-02-01' ),
+('    Tapan Samanta', '2010-01-11' ),
+('   Deepak Sharma', '2014-12-01'  ),
+('   Ankana Jana', '2018-08-17'),
+('  Shreya Ghosh', '2020-09-10') ;
+SELECT LTRIM( Employee_name) LTrimName,RTRIM(Employee_name) AS RTrimName FROM t1 order by  RTrimName desc;
+ltrimname	rtrimname
+Shreya Ghosh	  Shreya Ghosh
+Riya Jain	  Riya Jain
+Deepak Sharma	   Deepak Sharma
+Anushka Samanta	   Anushka Samanta
+Ankana Jana	   Ankana Jana
+Aniket Sharma 	   Aniket Sharma
+Anik Das	   Anik Das
+Tapan Samanta	    Tapan Samanta
+Ananya Majumdar	     Ananya Majumdar
+SELECT LTRIM(RTRIM(Employee_name)) as TrimName from t1 where Employee_name like '%Ani%' order by TrimName asc;
+trimname
+Anik Das
+Aniket Sharma
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select sin(a),sin(b) from t1;
+sin(a)    sin(b)
+0.0    0.0
+0.0    0.9589157234143065
+-0.9880316240928618    0.4282099105187685
+0.893996663600558    -0.6832837250355235
+-0.8011526357338306    -0.17604594647121138
+-0.8011526357338306    -0.8011526357338306
+select sin(a)*sin(b),sin(sin(a)) as c from t1;
+sin(a) * sin(b)    c
+0.0    0.0
+0.0    0.0
+-0.4230849333425179    -0.8349443318035336
+-0.610853370474319    0.77958108276669
+0.14103967402566783    -0.7181586632423703
+0.6418455457432638    -0.7181586632423703
+select distinct a from t1 where sin(a)<=sin(b) order by a desc;
+a
+180
+30
+0
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select sinh(a*pi()/180) as sinha,sinh(b*pi()/180) sinhb from t1;
+sinha    sinhb
+0.0    0.0
+-0.2648002276022707    -0.3561979324000117
+-0.3934773854637668    -0.219900936381245
+0.0    267.74489404101644
+0.5478534738880397    451.9789818592585
+2.3012989023072947    1287.985054197183
+11.548739357257748    55.65439759941754
+11.548739357257748    11.548739357257748
+select sinh(a*pi()/180)*sinh(b*pi()/180) as sinhab,sinh(sinh(a*pi()/180)) as c from t1;
+sinhab    c
+0.0    0.0
+0.09432129357098132    -0.26790569019819105
+0.0865260455083264    -0.40370959509281085
+0.0    0.0
+247.61825533597406    0.57567347843079
+2964.038591412179    4.943508829600678
+642.7381319608645    51823.146734897804
+133.37338074187412    51823.146734897804
+select b from t1 where sinh(a*pi()/180)<=sinh(b*pi()/180)  order by a;
+b
+-12.5
+0.0
+360.0
+390.0
+450.0
+270.0
+180.0
+drop table if exists t1;
+CREATE TABLE t1
+(
+Employee_name VARCHAR(100) NOT NULL,
+Joining_Date DATE NOT NULL
+);
+INSERT INTO t1
+(Employee_name, Joining_Date )
+VALUES
+('     Ananya Majumdar', '2000-01-11'),
+('   Anushka Samanta', '2002-11-10' ),
+('   Aniket Sharma ', '2005-06-11' ),
+('   Anik Das', '2008-01-21'  ),
+('  Riya Jain', '2008-02-01' ),
+('    Tapan Samanta', '2010-01-11' ),
+('   Deepak Sharma', '2014-12-01'  ),
+('   Ankana Jana', '2018-08-17'),
+('  Shreya Ghosh', '2020-09-10') ;
+INSERT INTO t1
+(Employee_name, Joining_Date ) values('     ','2014-12-01');
+select * from t1 where Employee_name=space(5);
+employee_name	joining_date
+     	2014-12-01
+drop table if exists t1;
+CREATE TABLE t1(a INT,b VARCHAR(100),c CHAR(20));
+INSERT INTO t1
+VALUES
+(1,'Ananya Majumdar', 'IX'),
+(2,'Anushka Samanta', 'X'),
+(3,'Aniket Sharma', 'XI'),
+(4,'Anik Das', 'X'),
+(5,'Riya Jain', 'IX'),
+(6,'Tapan Samanta', 'X');
+select a,startswith(b,'An') from t1;
+a    startswith(b, An)
+1    1
+2    1
+3    1
+4    1
+5    0
+6    0
+select a,b,c from t1 where startswith(b,'An')=1 and startswith(c,'I')=1;
+a    b    c
+1    Ananya Majumdar    IX
+drop table if exists t1;
+CREATE TABLE t1(PlayerName VARCHAR(100) NOT NULL,RunScored INT NOT NULL,WicketsTaken INT NOT NULL);
+INSERT INTO t1 VALUES('KL Rahul', 52, 0 ),('Hardik Pandya', 30, 1 ),('Ravindra Jadeja', 18, 2 ),('Washington Sundar', 10, 1),('D Chahar', 11, 2 ),  ('Mitchell Starc', 0, 3);
+SELECT STDDEV_POP(RunScored) as Pop_Standard_Deviation FROM t1;
+pop_standard_deviation
+16.876183086099637
+SELECT  STDDEV_POP(WicketsTaken) as Pop_Std_Dev_Wickets FROM t1;
+pop_std_dev_wickets
+0.957427107756338
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select tan(a*pi()/180) as tana,tan(b*pi()/180) tanb from t1;
+tana    tanb
+0.0    0.0
+-0.2679491924311227    -0.36397023426620234
+-0.4040262258351568    -0.22169466264293988
+0.0    -2.449293598294703E-16
+0.5773502691896257    0.5773502691896246
+1.6331239353195392E16    3.2662478706390785E15
+-1.2246467991473515E-16    5.443746451065131E15
+-1.2246467991473515E-16    -1.2246467991473515E-16
+select tan(a*pi()/180)*tan(b*pi()/180) as tanab,tan(a*pi()/180)+tan(b*pi()/180) as c from t1;
+tanab    c
+0.0    0.0
+0.09752553034059545    -0.631919426697325
+0.08957045783542533    -0.6257208884780967
+-0.0    -2.449293598294703E-16
+0.33333333333333265    1.1547005383792504
+5.334187576227157E31    1.9597487223834472E16
+-0.6666666666666667    5.443746451065131E15
+1.4997597826618535E-32    -2.449293598294703E-16
+select b from t1 where tan(a*pi()/180)<=tan(b*pi()/180)  order by a;
+b
+-12.5
+0.0
+270.0
+180.0
+drop table if exists t1;
+create table t1(a date,b datetime);
+insert into t1 values("2022-06-01","2022-07-01 00:00:00");
+insert into t1 values("2022-12-31","2011-01-31 12:00:00");
+insert into t1 values("2022-06-12","2022-07-01 00:00:00");
+select a,weekday(a),b,weekday(b) from t1;
+a    weekday(a)    b    weekday(b)
+2022-06-01    2    2022-07-01 00:00:00    4
+2022-12-31    5    2011-01-31 12:00:00    0
+2022-06-12    6    2022-07-01 00:00:00    4
+select * from t1 where weekday(a)>weekday(b);
+a    b
+2022-12-31    2011-01-31 12:00:00
+2022-06-12    2022-07-01 00:00:00
+select * from t1 where weekday(a) between 0 and 4;
+a    b
+2022-06-01    2022-07-01 00:00:00
+drop table if exists t1;
+create table t1(a date,b datetime);
+insert into t1 values("2022-06-01","2022-07-01 00:00:00");
+insert into t1 values("2022-12-31","2011-01-31 12:00:00");
+insert into t1 values("2022-06-12","2022-07-01 00:00:00");
+select a,weekday(a),b,weekday(b) from t1;
+a    weekday(a)    b    weekday(b)
+2022-06-01    2    2022-07-01 00:00:00    4
+2022-12-31    5    2011-01-31 12:00:00    0
+2022-06-12    6    2022-07-01 00:00:00    4
+select * from t1 where weekday(a)>weekday(b);
+a    b
+2022-12-31    2011-01-31 12:00:00
+2022-06-12    2022-07-01 00:00:00
+select * from t1 where weekday(a) between 0 and 4;
+a    b
+2022-06-01    2022-07-01 00:00:00
+drop table if exists t1;
+create table t1(a date, b datetime);
+insert into t1 values('2022-01-01','2022-01-01 01:01:01');
+insert into t1 values('2022-01-01','2022-01-01 01:01:01');
+insert into t1 values('2022-01-02','2022-01-02 23:01:01');
+insert into t1 values('2021-12-31','2021-12-30 23:59:59');
+insert into t1 values('2022-06-30','2021-12-30 23:59:59');
+select date(a),date(b) from t1;
+date(a)    date(b)
+2022-01-01    2022-01-01
+2022-01-01    2022-01-01
+2022-01-02    2022-01-02
+2021-12-31    2021-12-30
+2022-06-30    2021-12-30
+select date(a),date(date(a)) as dda from t1;
+date(a)    dda
+2022-01-01    2022-01-01
+2022-01-01    2022-01-01
+2022-01-02    2022-01-02
+2021-12-31    2021-12-31
+2022-06-30    2022-06-30
+drop table t1;
+drop table if exists t1;
+create table t1(a datetime, b timestamp);
+insert into t1 values("2022-07-01", "2011-01-31 12:00:00");
+insert into t1 values("2011-01-31 12:32:11", "1979-10-22");
+insert into t1 values(NULL, "2022-08-01 23:10:11");
+insert into t1 values("2011-01-31", NULL);
+insert into t1 values("2022-06-01 14:11:09","2022-07-01 00:00:00");
+insert into t1 values("2022-12-31","2011-01-31 12:00:00");
+insert into t1 values("2022-06-12","2022-07-01 00:00:00");
+select hour(a),hour(b) from t1;
+hour(a)    hour(b)
+0    12
+12    0
+null    23
+0    null
+14    0
+0    12
+0    0
+select * from t1 where hour(a)>hour(b);
+a    b
+2011-01-31 12:32:11    1979-10-22 00:00:00
+2022-06-01 14:11:09    2022-07-01 00:00:00
+select * from t1 where hour(a) between 10 and 16;
+a    b
+2011-01-31 12:32:11    1979-10-22 00:00:00
+2022-06-01 14:11:09    2022-07-01 00:00:00
+select minute(a),minute(b) from t1;
+minute(a)    minute(b)
+0    0
+32    0
+null    10
+0    null
+11    0
+0    0
+0    0
+select * from t1 where minute(a)<=minute(b);
+a    b
+2022-07-01 00:00:00    2011-01-31 12:00:00
+2022-12-31 00:00:00    2011-01-31 12:00:00
+2022-06-12 00:00:00    2022-07-01 00:00:00
+select * from t1 where minute(a) between 10 and 36;
+a    b
+2011-01-31 12:32:11    1979-10-22 00:00:00
+2022-06-01 14:11:09    2022-07-01 00:00:00
+select second(a),second(b) from t1;
+second(a)    second(b)
+0    0
+11    0
+null    11
+0    null
+9    0
+0    0
+0    0
+select * from t1 where second(a)>=second(b);
+a    b
+2022-07-01 00:00:00    2011-01-31 12:00:00
+2011-01-31 12:32:11    1979-10-22 00:00:00
+2022-06-01 14:11:09    2022-07-01 00:00:00
+2022-12-31 00:00:00    2011-01-31 12:00:00
+2022-06-12 00:00:00    2022-07-01 00:00:00
+select * from t1 where second(a) between 10 and 36;
+a    b
+2011-01-31 12:32:11    1979-10-22 00:00:00
+drop table if exists t1;

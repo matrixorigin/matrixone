@@ -54,7 +54,9 @@ func TestDragonboatFactory(t *testing.T) {
 			plog.SetLevel(logger.INFO)
 			plog.SetLevel(logger.WARNING)
 			plog.SetLevel(logger.ERROR)
+			plog.Errorf("ERROR level has stack: "+tt.args.formatter, tt.args.args...)
 			plog.SetLevel(logger.CRITICAL)
+			plog.Errorf("CRITICAL level no stack: "+tt.args.formatter, tt.args.args...)
 
 		})
 	}

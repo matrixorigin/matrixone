@@ -20,7 +20,7 @@ import (
 )
 
 func GetCronLogger(logInfo bool) cron.Logger {
-	logger := GetSkip1Logger().Sugar().Named("cron")
+	logger := GetErrorLogger().Sugar().Named("cron")
 	return &CronLogger{
 		SugaredLogger: logger,
 		logInfo:       logInfo,

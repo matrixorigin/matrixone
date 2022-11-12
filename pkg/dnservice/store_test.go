@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -55,16 +56,16 @@ func TestAddReplica(t *testing.T) {
 }
 
 func TestStartWithReplicas(t *testing.T) {
-	localFS, err := fileservice.NewMemoryFS(localFileServiceName)
+	localFS, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	assert.NoError(t, err)
 
 	factory := func(name string) (*fileservice.FileServices, error) {
-		s3fs, err := fileservice.NewMemoryFS(s3FileServiceName)
+		s3fs, err := fileservice.NewMemoryFS(defines.S3FileServiceName)
 		if err != nil {
 			return nil, err
 		}
 		return fileservice.NewFileServices(
-			localFileServiceName,
+			defines.LocalFileServiceName,
 			s3fs,
 			localFS,
 		)
@@ -98,7 +99,7 @@ func TestRemoveReplica(t *testing.T) {
 		thc.setCommandBatch(logservicepb.CommandBatch{
 			Commands: []logservicepb.ScheduleCommand{
 				{
-					ServiceType: logservicepb.DnService,
+					ServiceType: logservicepb.DNService,
 					ConfigChange: &logservicepb.ConfigChange{
 						ChangeType: logservicepb.RemoveReplica,
 						Replica: logservicepb.Replica{
@@ -140,19 +141,19 @@ func runDNStoreTest(
 	opts ...Option) {
 	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
-			localFileServiceName,
+			defines.LocalFileServiceName,
 		)
 		if err != nil {
 			return nil, err
 		}
 		s3, err := fileservice.NewMemoryFS(
-			s3FileServiceName,
+			defines.S3FileServiceName,
 		)
 		if err != nil {
 			return nil, err
 		}
 		etl, err := fileservice.NewMemoryFS(
-			etlFileServiceName,
+			defines.ETLFileServiceName,
 		)
 		if err != nil {
 			return nil, err
@@ -176,7 +177,7 @@ func runDNStoreTestWithFileServiceFactory(
 		}),
 		WithConfigAdjust(func(c *Config) {
 			c.HAKeeper.HeatbeatDuration.Duration = time.Millisecond * 10
-			c.Txn.Storage.Backend = memKVStorageBackend
+			c.Txn.Storage.Backend = StorageMEMKV
 		}))
 
 	if fsFactory == nil {
@@ -201,7 +202,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	thc.setCommandBatch(logservicepb.CommandBatch{
 		Commands: []logservicepb.ScheduleCommand{
 			{
-				ServiceType: logservicepb.DnService,
+				ServiceType: logservicepb.DNService,
 				ConfigChange: &logservicepb.ConfigChange{
 					ChangeType: logservicepb.AddReplica,
 					Replica: logservicepb.Replica{
@@ -237,7 +238,7 @@ func newTestStore(
 	}
 	options = append(options, WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() },
 		time.Duration(math.MaxInt64))))
-	fs, err := fsFactory(localFileServiceName)
+	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
 	s, err := NewService(c, fs, options...)
 	assert.NoError(t, err)
@@ -292,4 +293,11 @@ var nextID uint64
 
 func (thc *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return atomic.AddUint64(&nextID, 1), nil
+}
+
+func (thc *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservicepb.ClusterDetails, error) {
+	return logservicepb.ClusterDetails{}, nil
+}
+func (thc *testHAKeeperClient) GetClusterState(ctx context.Context) (logservicepb.CheckerState, error) {
+	return logservicepb.CheckerState{}, nil
 }

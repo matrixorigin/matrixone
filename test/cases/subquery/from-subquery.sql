@@ -98,3 +98,8 @@ insert into t1 values ('NYCLib','NewYork');
 -- @desc:test for from subquery with join
 -- @label:bvt
 select * from (select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1) sub ;
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values(1);
+select * from (select * from t1) tt, (select * from t1);
+select * from (select * from t1), (select * from t1);

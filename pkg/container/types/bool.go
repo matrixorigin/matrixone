@@ -16,6 +16,7 @@ package types
 
 import (
 	"go/constant"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,13 +48,21 @@ func AppendBoolToByteArray(b bool, arr []byte) []byte {
 
 func ParseBool(s string) (bool, error) {
 	s = strings.ToLower(s)
-	if s == "true" || s == "1" {
+	if s == "true" {
 		return true, nil
-	} else if s == "false" || s == "0" {
+	} else if s == "false" {
 		return false, nil
-	} else {
-		return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", s)
 	}
+	val, err := strconv.ParseFloat(s, 64)
+	if err == nil {
+		if val != 0 {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	}
+	return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", s)
+
 }
 
 // ToIntString print out 1 or 0 as true/false.

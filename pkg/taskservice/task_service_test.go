@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreate(t *testing.T) {
@@ -145,8 +146,14 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
+	defer func() {
+		if err := recover(); err != nil {
+			return
+		}
+		assert.FailNow(t, "must panic")
+	}()
 	err := s.Allocate(ctx, task.Task{ID: 1}, "r1")
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+	require.NoError(t, err)
 }
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {

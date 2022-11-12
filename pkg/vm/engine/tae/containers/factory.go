@@ -56,6 +56,8 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 		vec = NewVector[types.Timestamp](typ, nullable, opts...)
 	case types.T_datetime:
 		vec = NewVector[types.Datetime](typ, nullable, opts...)
+	case types.T_time:
+		vec = NewVector[types.Time](typ, nullable, opts...)
 	case types.T_TS:
 		vec = NewVector[types.TS](typ, nullable, opts...)
 	case types.T_Rowid:

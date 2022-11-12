@@ -22,7 +22,6 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -201,21 +200,7 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_HasExpr:
 			colData.Append(bool2i8(true)) // @imlinjunhong says always has Default
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			expr := &plan.Expr{}
-			if colDef.Default.Expr != nil {
-				if err := expr.Unmarshal(colDef.Default.Expr); err != nil {
-					logutil.Warnf("deserialze default expr err: %v", err)
-					expr = nil
-				}
-			} else {
-				expr = nil
-			}
-			pDefault := &plan.Default{
-				NullAbility:  colDef.Default.NullAbility,
-				OriginString: colDef.Default.OriginString,
-				Expr:         expr,
-			}
-			if val, err := types.Encode(pDefault); err == nil {
+			if val, err := colDef.Default.Marshal(); err == nil {
 				colData.Append(val)
 			} else {
 				logutil.Warnf("encode plan default expr err: %v", err)
@@ -237,22 +222,14 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Comment:
 			colData.Append([]byte(colDef.Comment))
 		case pkgcatalog.SystemColAttr_HasUpdate:
-			colData.Append(bool2i8(colDef.OnUpdate != nil))
+			colData.Append(bool2i8(colDef.OnUpdate.Expr != nil))
 		case pkgcatalog.SystemColAttr_Update:
-			if colDef.OnUpdate != nil {
-				update := &plan.Expr{}
-				var err error
-				// refer to pkg/vm/engine/tae/moengine/helper.go:89
-				// refer to pkg/txn/storage/memorystorage/catalog.go:288
-				if err = update.Unmarshal(colDef.OnUpdate); err == nil {
-					if val, err := types.Encode(update); err == nil {
-						colData.Append(val)
-						continue
-					}
-				}
-				logutil.Warnf("(de)serialize Update expr err: %v", err)
+			if val, err := colDef.OnUpdate.Marshal(); err == nil {
+				colData.Append(val)
+			} else {
+				logutil.Warnf("encode plan onUpdate expr err: %v", err)
+				colData.Append([]byte(""))
 			}
-			colData.Append([]byte(""))
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
@@ -341,7 +318,7 @@ func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	case pkgcatalog.SystemDBAttr_CatalogName:
 		colData.Append([]byte(pkgcatalog.SystemCatalogName))
 	case pkgcatalog.SystemDBAttr_CreateSQL:
-		colData.Append([]byte("todosql"))
+		colData.Append([]byte(db.GetCreateSql()))
 	case pkgcatalog.SystemDBAttr_Owner:
 		colData.Append(db.GetRoleID())
 	case pkgcatalog.SystemDBAttr_Creator:

@@ -35,6 +35,37 @@ func makePlan2DecimalExprWithType(v string, isBin ...bool) (*plan.Expr, error) {
 	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
+func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:       int32(t),
+			Nullable: true,
+		},
+	}
+}
+
+func makePlan2Decimal128ConstNullExpr() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:        int32(types.T_decimal128),
+			Width:     34,
+			Scale:     0,
+			Precision: 34,
+			Nullable:  false,
+		},
+	}
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
@@ -72,8 +103,8 @@ func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
 func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
-		Value: &plan.Const_Ival{
-			Ival: v,
+		Value: &plan.Const_I64Val{
+			I64Val: v,
 		},
 	}}
 }
@@ -94,8 +125,8 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
-		Value: &plan.Const_Uval{
-			Uval: v,
+		Value: &plan.Const_U64Val{
+			U64Val: v,
 		},
 	}}
 }
@@ -161,12 +192,12 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 }
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if types.T(expr.Typ.Id) == types.T_any {
-		expr.Typ = copyType(targetType)
+		expr.Typ = targetType
 		return expr, nil
 	}
 	id, _, _, err := function.GetFunctionByName("cast", []types.Type{t1, t2})
@@ -174,28 +205,17 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 		return nil, err
 	}
 	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
-		Typ: copyType(targetType),
+		Typ: targetType,
 	}}}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: id},
+				Func: &ObjectRef{Obj: id, ObjName: "cast"},
 				Args: []*Expr{expr, t},
 			},
 		},
 		Typ: targetType,
 	}, nil
-}
-
-func copyType(t *Type) *Type {
-	return &Type{
-		Id:        t.Id,
-		Nullable:  t.Nullable,
-		Width:     t.Width,
-		Precision: t.Precision,
-		Size:      t.Size,
-		Scale:     t.Scale,
-	}
 }
 
 // if typ is decimal128 and decimal64 without scalar and precision

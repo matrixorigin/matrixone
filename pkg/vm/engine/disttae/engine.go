@@ -26,13 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
 	ctx context.Context,
@@ -40,7 +40,7 @@ func New(
 	fs fileservice.FileService,
 	cli client.TxnClient,
 	idGen IDGenerator,
-	getClusterDetails GetClusterDetailsFunc,
+	getClusterDetails engine.GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
@@ -84,7 +84,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
 	return nil
@@ -104,6 +104,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		db := &database{
 			txn:          txn,
 			db:           e.db,
+			fs:           e.fs,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -117,6 +118,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	db := &database{
 		txn:          txn,
 		db:           e.db,
+		fs:           e.fs,
 		databaseId:   id,
 		databaseName: name,
 	}
@@ -133,23 +135,45 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+	var db *database
+
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
 	key := genDatabaseKey(ctx, name)
-	txn.databaseMap.Delete(key)
-	id, err := txn.getDatabaseId(ctx, name)
+	if v, ok := txn.databaseMap.Load(key); ok {
+		db = v.(*database)
+		txn.databaseMap.Delete(key)
+	} else {
+		id, err := txn.getDatabaseId(ctx, name)
+		if err != nil {
+			return err
+		}
+		db = &database{
+			txn:          txn,
+			db:           e.db,
+			fs:           e.fs,
+			databaseId:   id,
+			databaseName: name,
+		}
+	}
+	rels, err := db.Relations(ctx)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.mp)
+	for _, relName := range rels {
+		if err := db.Delete(ctx, relName); err != nil {
+			return err
+		}
+	}
+	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
 		return err
 	}
 	return nil
@@ -199,6 +223,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
+		e.getClusterDetails,
 	)
 	txn := &Transaction{
 		op:             op,
@@ -208,6 +233,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		meta:           op.Txn(),
 		idGen:          e.idGen,
 		rowId:          [2]uint64{math.MaxUint64, 0},
+		workspace:      memtable.NewTable[RowID, *workspaceRow, *workspaceRow](),
 		dnStores:       cluster.DNStores,
 		fileMap:        make(map[string]uint64),
 		tableMap:       new(sync.Map),
@@ -217,16 +243,31 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
 	// update catalog's cache
-	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+	table := &table{
+		db: &database{
+			fs:         e.fs,
+			databaseId: catalog.MO_CATALOG_ID,
+		},
+	}
+	table.tableId = catalog.MO_DATABASE_ID
+	table.tableName = catalog.MO_DATABASE
+	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+	table.tableId = catalog.MO_TABLES_ID
+	table.tableName = catalog.MO_TABLES
+	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
-	if err := e.db.Update(ctx, txn.dnStores[:1], nil, op, catalog.MO_TABLES_REL_ID_IDX,
+	table.tableId = catalog.MO_COLUMNS_ID
+	table.tableName = catalog.MO_COLUMNS
+	if err := e.db.Update(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
 		catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
 		return err
 	}
 	return nil
@@ -290,6 +331,60 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
+}
+
+func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
+	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
+	rds := make([]engine.Reader, num)
+	blks := make([]BlockMeta, len(ranges))
+	for i := range ranges {
+		blks[i] = blockUnmarshal(ranges[i])
+	}
+	if len(ranges) < num {
+		for i := range ranges {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       []BlockMeta{blks[i]},
+			}
+		}
+		for j := len(ranges); j < num; j++ {
+			rds[j] = &emptyReader{}
+		}
+		return rds, nil
+	}
+	step := len(ranges) / num
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < num; i++ {
+		if i == num-1 {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step:],
+			}
+		} else {
+			rds[i] = &blockReader{
+				fs:         e.fs,
+				tableDef:   tblDef,
+				primaryIdx: -1,
+				expr:       expr,
+				ts:         ts,
+				ctx:        ctx,
+				blks:       blks[i*step : (i+1)*step],
+			}
+		}
+	}
+	return rds, nil
 }
 
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {

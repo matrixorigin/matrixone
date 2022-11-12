@@ -329,10 +329,3 @@ func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 		c.nt.notify(status)
 	}
 }
-
-func newTxnError(code uint16, msg string) *txn.TxnError {
-	return &txn.TxnError{
-		Code:    int32(code),
-		Message: msg,
-	}
-}

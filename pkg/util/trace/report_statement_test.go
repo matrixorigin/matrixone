@@ -19,11 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
@@ -38,12 +38,12 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		Statement            string
 		StatementFingerprint string
 		StatementTag         string
-		RequestAt            util.TimeNano
+		RequestAt            time.Time
 		ExecPlan             any
 		Status               StatementInfoStatus
 		Error                error
-		ResponseAt           util.TimeNano
-		Duration             uint64
+		ResponseAt           time.Time
+		Duration             time.Duration
 
 		doReport bool
 		doExport bool

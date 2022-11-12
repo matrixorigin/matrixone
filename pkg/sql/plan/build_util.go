@@ -16,6 +16,8 @@ package plan
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +38,7 @@ func appendQueryNode(query *Query, node *Node) int32 {
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
-		switch uint8(n.InternalType.Oid) {
+		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Size: 1}, nil
@@ -83,6 +85,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_varchar), Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date), Size: 4}, nil
+		case defines.MYSQL_TYPE_TIME:
+			return &plan.Type{Id: int32(types.T_time), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
 			return &plan.Type{Id: int32(types.T_datetime), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
@@ -156,6 +160,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+			return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
+		}
+	}
+
 	defaultExpr, err := makePlan2CastExpr(planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -169,14 +179,16 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		return nil, err
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
-		OriginString: tree.String(expr, dialect.MYSQL),
+		OriginString: fmtCtx.String(),
 	}, nil
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -208,8 +220,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error)
 	if err != nil {
 		return nil, err
 	}
-
-	return onUpdateExpr, nil
+	ret := &plan.OnUpdate{
+		Expr:         onUpdateExpr,
+		OriginString: tree.String(expr, dialect.MYSQL),
+	}
+	return ret, nil
 }
 
 func isNullExpr(expr *plan.Expr) bool {
@@ -243,8 +258,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		switch ex := arg.Expr.(type) {
 		case *plan.Expr_C:
 			switch value := ex.C.Value.(type) {
-			case *plan.Const_Ival:
-				if value.Ival == 0 {
+			case *plan.Const_I64Val:
+				if value.I64Val == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
 				} else {
 					ex.C.Value = &plan.Const_Bval{Bval: true}
@@ -264,7 +279,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 }
 
 func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
-	if !d.Default.NullAbility && d.Default.Expr == nil && !d.AutoIncrement {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
 		return nil, moerr.NewInvalidInput("invalid default value")
 	}
 	if d.Default.Expr == nil {
@@ -281,4 +296,21 @@ func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
 		}, nil
 	}
 	return d.Default.Expr, nil
+}
+
+func judgeUnixTimestampReturnType(timestr string) types.T {
+	retDecimal := 0
+	if dotIdx := strings.LastIndex(timestr, "."); dotIdx >= 0 {
+		retDecimal = len(timestr) - dotIdx - 1
+	}
+
+	if retDecimal > 6 || retDecimal == -1 {
+		retDecimal = 6
+	}
+
+	if retDecimal == 0 {
+		return types.T_int64
+	} else {
+		return types.T_decimal128
+	}
 }

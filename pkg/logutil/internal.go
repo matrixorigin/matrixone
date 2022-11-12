@@ -33,7 +33,7 @@ func SetupMOLogger(conf *LogConfig) {
 		panic(err)
 	}
 	replaceGlobalLogger(logger)
-	Debugf("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
+	Infof("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
 }
 
 // initMOLogger initializes a zap Logger.
@@ -48,7 +48,7 @@ var _errorLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	SetLogReporter(&TraceReporter{noopReportLog, noopReportZap, noopLevelSignal, noopContextField})
+	SetLogReporter(&TraceReporter{noopReportZap, noopContextField})
 	conf := &LogConfig{Level: "info", Format: "console"}
 	setGlobalLogConfig(conf)
 	logger, _ := initMOLogger(conf)

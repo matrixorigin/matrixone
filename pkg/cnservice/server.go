@@ -17,54 +17,46 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"go.uber.org/zap"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
-
-type Options func(*service)
 
 func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
-	options ...Options,
+	options ...Option,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	// get metadata fs
-	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
 	srv := &service{
-		logger: logutil.GetGlobalLogger().Named("cnservice").With(zap.String("uuid", cfg.UUID)),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
@@ -72,8 +64,11 @@ func NewService(
 		cfg:         cfg,
 		metadataFS:  fs,
 		fileService: fileService,
-		taskService: taskService,
 	}
+	for _, opt := range options {
+		opt(srv)
+	}
+	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {
@@ -86,14 +81,31 @@ func NewService(
 		},
 	}
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil)
-	cfg.Frontend.SetDefaultValues()
-	if err = srv.initMOServer(ctx, pu); err != nil {
+	hakeeper, err := srv.getHAKeeperClient()
+	if err != nil {
 		return nil, err
 	}
 
+	pu := config.NewParameterUnit(
+		&cfg.Frontend,
+		nil,
+		nil,
+		nil,
+		memoryengine.GetClusterDetailsFromHAKeeper(ctx, hakeeper),
+	)
+	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
+	frontend.InitServerVersion(pu.SV.MoVersion)
+	if err = srv.initMOServer(ctx, pu); err != nil {
+		return nil, err
+	}
+	srv.pu = pu
+
+	compile.InitAddress(cfg.ServiceAddress)
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
+		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
@@ -110,23 +122,7 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
-		taskservice.WithOptions(
-			cfg.TaskRunner.QueryLimit,
-			cfg.TaskRunner.Parallelism,
-			cfg.TaskRunner.MaxWaitTasks,
-			cfg.TaskRunner.FetchInterval.Duration,
-			cfg.TaskRunner.FetchTimeout.Duration,
-			cfg.TaskRunner.RetryInterval.Duration,
-			cfg.TaskRunner.HeartbeatInterval.Duration,
-		),
-	)
-	if err != nil {
-		return nil, err
-	}
-	srv.taskRunner = runner
-
-	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error {
 		return nil
 	}
 	for _, opt := range options {
@@ -137,6 +133,8 @@ func NewService(
 }
 
 func (s *service) Start() error {
+	s.initTaskServiceHolder()
+
 	err := s.runMoServer()
 	if err != nil {
 		return err
@@ -144,27 +142,52 @@ func (s *service) Start() error {
 	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
-	if err := s.taskRunner.Start(); err != nil {
-		return err
-	}
 	return s.server.Start()
 }
 
 func (s *service) Close() error {
-	err := s.serverShutdown(true)
-	if err != nil {
-		return err
-	}
-	s.cancelMoServerFunc()
-	if err := s.taskRunner.Stop(); err != nil {
-		return err
-	}
+	defer logutil.LogClose(s.logger, "cnservice")()
+
 	s.stopper.Stop()
+	if err := s.stopFrontend(); err != nil {
+		return err
+	}
+	if err := s.stopTask(); err != nil {
+		return err
+	}
+	if err := s.stopRPCs(); err != nil {
+		return err
+	}
 	return s.server.Close()
 }
 
-func (s *service) GetTaskRunner() taskservice.TaskRunner {
-	return s.taskRunner
+func (s *service) stopFrontend() error {
+	defer logutil.LogClose(s.logger, "cnservice/frontend")()
+
+	if err := s.serverShutdown(true); err != nil {
+		return err
+	}
+	s.cancelMoServerFunc()
+	return nil
+}
+
+func (s *service) stopRPCs() error {
+	if s._txnClient != nil {
+		if err := s._txnClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._hakeeperClient != nil {
+		if err := s._hakeeperClient.Close(); err != nil {
+			return err
+		}
+	}
+	if s._txnSender != nil {
+		if err := s._txnSender.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) acquireMessage() morpc.Message {
@@ -183,7 +206,7 @@ func (s *service) releaseMessage(m *pipeline.Message) {
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage)
+	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage, s.pu.GetClusterDetails)
 	return nil
 }
 
@@ -247,24 +270,6 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
-
-	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu)
-	}
-	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-		panic(err)
-	}
-	frontend.InitServerVersion(pu.SV.MoVersion)
-	err := frontend.InitSysTenant(moServerCtx)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func (s *service) runMoServer() error {
@@ -311,16 +316,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender)
+		c = client.NewTxnClient(sender, client.WithLogger(s.logger))
 		s._txnClient = c
 	})
 	c = s._txnClient
 	return
-}
-
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message,
-	cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient, mAcquirer func() morpc.Message) error) Options {
-	return func(s *service) {
-		s.requestHandler = f
-	}
 }

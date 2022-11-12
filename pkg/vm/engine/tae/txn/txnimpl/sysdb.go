@@ -23,6 +23,7 @@ import (
 )
 
 var sysTableNames map[string]bool
+var sysTableIds map[uint64]bool
 
 // any tenant is able to see these db, but access them is required to be upgraded as Sys tenant in a tricky way.
 // this can be done in frontend
@@ -34,6 +35,11 @@ func init() {
 	sysTableNames[pkgcatalog.MO_TABLES] = true
 	sysTableNames[pkgcatalog.MO_DATABASE] = true
 
+	sysTableIds = make(map[uint64]bool)
+	sysTableIds[pkgcatalog.MO_TABLES_ID] = true
+	sysTableIds[pkgcatalog.MO_DATABASE_ID] = true
+	sysTableIds[pkgcatalog.MO_COLUMNS_ID] = true
+
 	sysSharedDBNames = make(map[string]bool)
 	sysSharedDBNames[pkgcatalog.MO_CATALOG] = true
 	sysSharedDBNames[metric.MetricDBConst] = true
@@ -42,6 +48,10 @@ func init() {
 
 func isSysTable(name string) bool {
 	return sysTableNames[name]
+}
+
+func isSysTableId(id uint64) bool {
+	return sysTableIds[id]
 }
 
 func isSysSharedDB(name string) bool {
@@ -74,6 +84,14 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 	return db.txnDatabase.DropRelationByName(name)
 }
 
+func (db *txnSysDB) DropRelationByID(id uint64) (rel handle.Relation, err error) {
+	if isSysTableId(id) {
+		err = moerr.NewInternalError("drop relation %d is not permitted", id)
+		return
+	}
+	return db.txnDatabase.DropRelationByID(id)
+}
+
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
 		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
@@ -88,4 +106,12 @@ func (db *txnSysDB) TruncateWithID(name string, newTableId uint64) (rel handle.R
 		return
 	}
 	return db.txnDatabase.TruncateWithID(name, newTableId)
+}
+
+func (db *txnSysDB) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
+	if isSysTableId(id) {
+		err = moerr.NewInternalError("truncate relation %d is not permitted", id)
+		return
+	}
+	return db.txnDatabase.TruncateByID(id, newTableId)
 }

@@ -64,9 +64,7 @@ func (chain *DeleteChain) StringLocked() string {
 	line := 1
 	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
-		n.chain.mvcc.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
-		n.chain.mvcc.RUnlock()
 		line++
 		return true
 	})
@@ -151,6 +149,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
+	chain.mvcc.IncChangeNodeCnt()
 }
 
 func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
@@ -211,6 +210,29 @@ func (chain *DeleteChain) CollectDeletesInRange(
 	mask2 := startNode.GetDeleteMaskLocked()
 	mask.AndNot(mask2)
 	indexes = endNode.logIndexes[len(startNode.logIndexes):]
+	return
+}
+
+// any uncommited node, return true
+// any committed node with prepare ts within [from, to], return true
+func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found bool) {
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
+		n := vn.(*DeleteNode)
+		if n.IsMerged() {
+			found, _ = n.PreparedIn(from, to)
+			return false
+		}
+
+		if n.IsActive() {
+			return true
+		}
+
+		found, _ = n.PreparedIn(from, to)
+		if n.IsAborted() {
+			found = false
+		}
+		return !found
+	})
 	return
 }
 

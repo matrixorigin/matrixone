@@ -18,44 +18,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	BoolShuffle  = FixedLengthShuffle[bool]
-	Int8Shuffle  = FixedLengthShuffle[int8]
-	Int16Shuffle = FixedLengthShuffle[int16]
-	Int32Shuffle = FixedLengthShuffle[int32]
-	Int64Shuffle = FixedLengthShuffle[int64]
-
-	Uint8Shuffle  = FixedLengthShuffle[uint8]
-	Uint16Shuffle = FixedLengthShuffle[uint16]
-	Uint32Shuffle = FixedLengthShuffle[uint32]
-	Uint64Shuffle = FixedLengthShuffle[uint64]
-
-	Float32Shuffle = FixedLengthShuffle[float32]
-	Float64Shuffle = FixedLengthShuffle[float64]
-
-	Decimal64Shuffle  = FixedLengthShuffle[types.Decimal64]
-	Decimal128Shuffle = FixedLengthShuffle[types.Decimal128]
-
-	DateShuffle      = FixedLengthShuffle[types.Date]
-	DatetimeShuffle  = FixedLengthShuffle[types.Datetime]
-	TimestampShuffle = FixedLengthShuffle[types.Timestamp]
-
-	UuidShuffle = FixedLengthShuffle[types.Uuid]
-
-	VarlenaShuffle = FixedLengthShuffle[types.Varlena]
-
-	TupleShuffle = tupleShuffle
-)
-
 func FixedLengthShuffle[T types.FixedSizeT](vs, ws []T, sels []int64) []T {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}
-	copy(vs, ws)
-	return vs[:len(sels)]
+	return ws[:len(sels)]
 }
 
-func tupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
+func TupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}

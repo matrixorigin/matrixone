@@ -24,12 +24,10 @@ import (
 )
 
 func TestNoop(t *testing.T) {
-	noopReportLog(context.Background(), zapcore.DebugLevel, 0, "msg")
 	require.Equal(t, zap.String("span", "{}"), noopContextField(context.Background()))
 	buf, err := noopReportZap(nil, zapcore.Entry{}, nil)
 	require.Equal(t, nil, err)
 	require.Equal(t, "", buf.String())
-	noopLevelSignal(zap.ErrorLevel)
 	require.Equal(t, zap.Bool(MOInternalFiledKeyNoopReport, true), NoReportFiled())
 }
 

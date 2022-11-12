@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -325,13 +326,13 @@ func (g *APP1Goods) String() string {
 
 func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	db, err := txn.GetDatabase(dbName)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-		if db, err = txn.CreateDatabase(dbName); err != nil {
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		if db, err = txn.CreateDatabase(dbName, ""); err != nil {
 			return
 		}
 	}
 	rel, err := db.GetRelationByName(wareHouse.Name)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+	if err == moerr.GetOkExpectedEOB() {
 		if rel, err = db.CreateRelation(wareHouse); err != nil {
 			return
 		}
@@ -350,8 +351,8 @@ func GetWarehouseRelation(dbName string, txn txnif.AsyncTxn) (rel handle.Relatio
 
 func GetOrCreateDatabase(name string, txn txnif.AsyncTxn) handle.Database {
 	db, err := txn.GetDatabase(name)
-	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-		if db, err = txn.CreateDatabase(name); err != nil {
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		if db, err = txn.CreateDatabase(name, ""); err != nil {
 			panic(err)
 		}
 	}
@@ -498,6 +499,7 @@ func (app1 *APP1) Init(factor int) {
 }
 
 func TestApp1(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	option := new(options.Options)
 	option.CacheCfg = new(options.CacheCfg)
@@ -513,6 +515,7 @@ func TestApp1(t *testing.T) {
 	app1.Init(1)
 
 	p, _ := ants.NewPool(100)
+	defer p.Release()
 
 	var wg sync.WaitGroup
 	buyTxn := func() {
@@ -551,6 +554,7 @@ func TestApp1(t *testing.T) {
 }
 
 func TestWarehouse(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -577,6 +581,7 @@ func TestWarehouse(t *testing.T) {
 }
 
 func TestTxn7(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -588,7 +593,7 @@ func TestTxn7(t *testing.T) {
 	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db")
+	db, err := txn.CreateDatabase("db", "")
 	assert.NoError(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -614,6 +619,7 @@ func TestTxn7(t *testing.T) {
 }
 
 func TestTxn8(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
@@ -659,6 +665,7 @@ func TestTxn8(t *testing.T) {
 
 // Test wait committing
 func TestTxn9(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -672,7 +679,7 @@ func TestTxn9(t *testing.T) {
 	bats := bat.Split(5)
 
 	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
+	db, _ := txn.CreateDatabase("db", "")
 	_, _ = db.CreateRelation(schema)
 	assert.NoError(t, txn.Commit())
 

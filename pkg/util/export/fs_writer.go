@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
-
-const etlFileServiceName = "ETL"
 
 var _ stringWriter = (*FSWriter)(nil)
 
@@ -70,14 +69,14 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		nodeUUID:    "0",
 		nodeType:    "standalone",
 
-		fileServiceName: etlFileServiceName,
+		fileServiceName: defines.ETLFileServiceName,
 	}
 	for _, o := range opts {
 		o.Apply(w)
 	}
 	if len(w.filepath) == 0 {
 		filename := w.pathBuilder.NewLogFilename(w.name, w.nodeUUID, w.nodeType, w.ts)
-		p := w.pathBuilder.Build(w.account, MergeLogTypeLog, w.ts, w.database, w.name)
+		p := w.pathBuilder.Build(w.account, MergeLogTypeLogs, w.ts, w.database, w.name)
 		w.filepath = path.Join(p, filename)
 	}
 	return w

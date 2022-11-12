@@ -19,6 +19,7 @@ import (
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
 type Handler interface {
@@ -61,10 +62,17 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) error
 
-	HandlePreCommit(
+	HandlePreCommitWrite(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req apipb.PrecommitWriteCmd,
+		resp *apipb.SyncLogTailResp,
+	) error
+
+	HandleFlushTable(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req db.FlushTable,
 		resp *apipb.SyncLogTailResp,
 	) error
 }

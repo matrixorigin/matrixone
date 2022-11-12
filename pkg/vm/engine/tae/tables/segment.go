@@ -15,6 +15,8 @@
 package tables
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -54,7 +56,7 @@ func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
 	// TODO: segment level index
-	return moerr.NewTAEPossibleDuplicate()
+	return moerr.GetOkExpectedPossibleDup()
 	// blkIt := segment.meta.MakeBlockIt(false)
 	// for blkIt.Valid() {
 	// 	block := blkIt.Get().GetPayload().(*catalog.BlockEntry)
@@ -68,14 +70,14 @@ func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector
 
 func (segment *dataSegment) MutationInfo() string { return "" }
 
-func (segment *dataSegment) RunCalibration() int              { return 0 }
-func (segment *dataSegment) EstimateScore(interval int64) int { return 0 }
+func (segment *dataSegment) RunCalibration() int                                  { return 0 }
+func (segment *dataSegment) EstimateScore(interval time.Duration, force bool) int { return 0 }
 
 func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
 	if segment.meta.IsAppendable() {
 		segment.meta.RLock()
 		dropped := segment.meta.HasDropCommittedLocked()
-		inTxn := segment.meta.IsCreating()
+		inTxn := segment.meta.IsCreatingOrAborted()
 		segment.meta.RUnlock()
 		if dropped || inTxn {
 			return

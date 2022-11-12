@@ -105,7 +105,17 @@ func (intervals *ClosedIntervals) Contains(o ClosedIntervals) bool {
 	}
 	return true
 }
-
+func (intervals *ClosedIntervals) ContainsInt(n uint64) bool {
+	for _, interval := range intervals.Intervals {
+		if interval.Start > interval.End {
+			return false
+		}
+		if interval.End >= n {
+			return true
+		}
+	}
+	return false
+}
 func (intervals *ClosedIntervals) ContainsInterval(oIntervals ClosedInterval) bool {
 	// sort.Slice(intervals.Intervals, func(i, j int) bool {
 	// 	return intervals.Intervals[i].Start < intervals.Intervals[j].Start

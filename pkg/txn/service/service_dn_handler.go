@@ -35,7 +35,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
-		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
 		return nil
 	}
 
@@ -44,7 +44,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
-		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
+		response.TxnError = txn.WrapError(moerr.NewTxnNotFound(), 0)
 		return nil
 	}
 	response.Txn = &newTxn
@@ -55,14 +55,14 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	case txn.TxnStatus_Prepared:
 		return nil
 	default:
-		response.TxnError = newTxnError(moerr.ErrTxnNotActive, "")
+		response.TxnError = txn.WrapError(moerr.NewTxnNotActive(""), 0)
 		return nil
 	}
 
 	newTxn.DNShards = request.Txn.DNShards
 	ts, err := s.storage.Prepare(ctx, newTxn)
 	if err != nil {
-		response.TxnError = newTxnError(moerr.ErrTAEPrepare, "")
+		response.TxnError = txn.WrapError(err, moerr.ErrTAEPrepare)
 		if err := s.storage.Rollback(ctx, newTxn); err != nil {
 			s.logger.Error("rollback failed",
 				util.TxnIDFieldWithID(newTxn.ID),
@@ -148,7 +148,7 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 
 	newTxn.CommitTS = request.Txn.CommitTS
 	if err := s.storage.Commit(ctx, newTxn); err != nil {
-		response.TxnError = newTxnError(moerr.ErrTAECommit, err.Error())
+		response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
 		return nil
 	}
 	txnCtx.updateTxnLocked(newTxn)
@@ -202,7 +202,7 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	}
 
 	if err := s.storage.Rollback(ctx, newTxn); err != nil {
-		response.TxnError = newTxnError(moerr.ErrTAERollback, err.Error())
+		response.TxnError = txn.WrapError(err, moerr.ErrTAERollback)
 	}
 
 	newTxn.Status = txn.TxnStatus_Aborted

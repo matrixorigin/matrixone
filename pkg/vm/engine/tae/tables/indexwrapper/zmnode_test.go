@@ -15,13 +15,16 @@
 package indexwrapper
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"testing"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -37,6 +40,7 @@ const (
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var err error
 	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -45,7 +49,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
 	c := fileservice.Config{
-		Name:    "LOCAL",
+		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}
@@ -56,7 +60,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	assert.Nil(t, err)
 	/*fd*/ _, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	blocks, err := objectWriter.WriteEnd()
+	blocks, err := objectWriter.WriteEnd(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	cType := common.Plain

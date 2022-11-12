@@ -1,0 +1,401 @@
+SELECT COUNT(NULL);
+COUNT(NULL)
+0
+create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+select count(a) from t1;
+count(a)
+4
+select count(b) from t1;
+count(b)
+4
+select count(c) from t1;
+count(c)
+4
+select count(d) from t1;
+count(d)
+4
+select count(e) from t1;
+count(e)
+4
+select count(f) from t1;
+count(f)
+4
+select count(g) from t1;
+count(g)
+4
+select count(h) from t1;
+count(h)
+4
+select count(i) from t1;
+count(i)
+4
+select count(k) from t1;
+count(k)
+4
+select count(l) from t1;
+count(l)
+4
+select count(m) from t1;
+count(m)
+4
+select count(n) from t1;
+count(n)
+4
+drop table t1;
+create table t1(a int);
+select count(*) from t1;
+count(*)
+0
+insert into t1 values(null),(null),(null),(null);
+select count(*) from t1;
+count(*)
+4
+drop table t1;
+CREATE TABLE t1 (
+bug_id bigint(9) NOT NULL,
+groupset bigint(20) DEFAULT 0 NOT NULL,
+assigned_to bigint(9) DEFAULT 0 NOT NULL,
+bug_file_loc varchar(255)
+);
+CREATE TABLE t2 (
+value varchar(255),
+program varchar(64),
+initialowner varchar(255) NOT NULL,
+initialqacontact varchar(255) NOT NULL,
+description varchar(255) NOT NULL
+);
+INSERT INTO t1 VALUES (1,0,0,'TestComponent');
+INSERT INTO t1 VALUES (2,0,0,'BBBBBBBBBBBBB');
+INSERT INTO t1 VALUES (3,0,0,'TestComponent2');
+INSERT INTO t1 VALUES (4,0,0,'TestComponent2');
+INSERT INTO t2 VALUES ('TestComponent','TestProduct','id0001','','');
+INSERT INTO t2 VALUES ('BBBBBBBBBBBBB - conversion','AAAAA','id0001','','');
+INSERT INTO t2 VALUES ('BBBBBBBBBBBBB - generic','AAAAA','id0001','','');
+INSERT INTO t2 VALUES ('TestComponent2','TestProduct','id0001','','');
+select any_value(value),any_value(description),COUNT(bug_id) from t2 left join t1 on t2.value=t1.bug_file_loc group by value having COUNT(bug_id) IN (0,2);
+any_value(value)	any_value(description)	COUNT(bug_id)
+BBBBBBBBBBBBB - conversion		0
+BBBBBBBBBBBBB - generic		0
+TestComponent2		2
+SELECT COUNT(t1.bug_id) >= COUNT(t2.value) from t1 join t2 on t1.bug_file_loc = t2.value;
+COUNT(t1.bug_id) >= COUNT(t2.value)
+true
+drop table t1;
+drop table t2;
+create table t1 (grp int, a bigint unsigned, c char(10) not null);
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+select sum(a) from t1 where a > 10;
+sum(a)
+null
+select count(distinct a),count(distinct grp) from t1;
+count(distinct a)	count(distinct grp)
+6	3
+insert into t1 values (null,null,'');
+select count(distinct a),count(distinct grp) from t1;
+count(distinct a)	count(distinct grp)
+6	3
+create table t2 (grp int, a bigint unsigned, c char(10));
+insert into t2 select grp,max(a)+max(grp),max(c) from t1 group by grp;
+drop table t1;
+drop table t2;
+create table t1 (a smallint(6) primary key, c char(10), b varchar(255));
+INSERT INTO t1 VALUES (1,'1','1');
+INSERT INTO t1 VALUES (2,'2','2');
+INSERT INTO t1 VALUES (4,'4','4');
+select count(*) from t1;
+count(*)
+3
+select count(*) from t1 where a = 1;
+count(*)
+1
+select count(*) from t1 where a = 100;
+count(*)
+0
+select count(*) from t1 where a >= 10;
+count(*)
+0
+select count(a) from t1 where a = 1;
+count(a)
+1
+select count(a) from t1 where a = 100;
+count(a)
+0
+select count(a) from t1 where a >= 10;
+count(a)
+0
+select count(b) from t1 where b >= 2;
+count(b)
+2
+select count(b) from t1 where b >= 10;
+count(b)
+0
+select count(c) from t1 where c = 10;
+count(c)
+0
+drop table t1;
+CREATE TABLE t1 (d DATETIME, i INT);
+INSERT INTO t1 SELECT "2021-10-23 10:01:01", 1;
+SELECT COUNT(i), i, COUNT(i)*i FROM t1 GROUP BY i;
+COUNT(i)	i	COUNT(i)*i
+1	1	1
+SELECT COUNT(i), (i+0), COUNT(i)*(i+0) FROM t1 GROUP BY i;
+COUNT(i)	(i+0)	COUNT(i)*(i+0)
+1	1	1
+DROP TABLE t1;
+CREATE TABLE t1 (a int, b int);
+select count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1;
+count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+0	null	null	null	null	null	null	null
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+insert into t1 values (1,null);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+insert into t1 values (1,null);
+insert into t1 values (2,null);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	0	null	null	null	null	null	null	null
+insert into t1 values (2,1);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	1	1	1.0	0.0	1	1	1	1
+insert into t1 values (3,1);
+select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+a	count(b)	sum(b)	avg(b)	std(b)	min(b)	max(b)	bit_and(b)	bit_or(b)
+1	0	null	null	null	null	null	null	null
+2	1	1	1.0	0.0	1	1	1	1
+3	1	1	1.0	0.0	1	1	1	1
+drop table t1;
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(1,2),(2,3);
+SELECT (SELECT COUNT(DISTINCT t1.b)) FROM t1 GROUP BY t1.a;
+correlated columns in aggregate function is not yet implemented
+SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
+(SELECT COUNT(DISTINCT 12))
+1
+1
+SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2), COUNT(*), COUNT(12),COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
+avg(2)	bit_and(2)	bit_or(2)	bit_xor(2)	count(*)	count(12)	count(distinct 12)	min(2)	max(2)	std(2)	variance(2)	sum(2)
+2.0	2	2	2	1	1	1	2	2	0.0	0.0	2
+DROP TABLE t1;
+CREATE TABLE t1 (col1 decimal(16,12));
+INSERT INTO t1 VALUES (-5.00000000001),(-5.00000000002),(-5.00000000003),(-5.00000000000),(-5.00000000001),(-5.00000000002);
+insert into t1 select * from t1;
+select col1,count(col1),sum(col1),avg(col1) from t1 group by col1;
+col1	count(col1)	sum(col1)	avg(col1)
+-5.000000000010	4	-20.000000000040	-5.0000000000100000
+-5.000000000020	4	-20.000000000080	-5.0000000000200000
+-5.000000000030	2	-10.000000000060	-5.0000000000300000
+-5.000000000000	2	-10.000000000000	-5.0000000000000000
+DROP TABLE t1;
+CREATE TABLE t1 (a VARCHAR(400));
+INSERT INTO t1 (a) VALUES ("A"), ("a"), ("a "), ("a   "),("B"), ("b"), ("b "), ("b   ");
+SELECT COUNT(DISTINCT a) FROM t1;
+COUNT(DISTINCT a)
+8
+DROP TABLE t1;
+create table bug22555 (i smallint, s1 smallint, s2 smallint, o1 double, o2 double, e1 decimal, e2 decimal);
+insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
+select i, count(*) from bug22555 group by i;
+i	count(*)
+1	1
+2	1
+3	1
+select std(s1/s2) from bug22555 where i=1;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 where i=2;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 where i=3;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 where i=1 group by i;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 where i=2 group by i;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 where i=3 group by i;
+std(s1/s2)
+0.0
+select std(s1/s2) from bug22555 group by i order by i;
+std(s1/s2)
+0.0
+0.0
+0.0
+select i, count(*), std(o1/o2) from bug22555 group by i order by i;
+i	count(*)	std(o1/o2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(e1/e2) from bug22555 group by i order by i;
+i	count(*)	std(e1/e2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
+i	count(*)	variance(s1/s2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
+i	count(*)	variance(o1/o2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
+i	count(*)	variance(e1/e2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(s1/s2) from bug22555 group by i order by i;
+i	count(*)	std(s1/s2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(o1/o2) from bug22555 group by i order by i;
+i	count(*)	std(o1/o2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(e1/e2) from bug22555 group by i order by i;
+i	count(*)	std(e1/e2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
+i	count(*)	variance(s1/s2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
+i	count(*)	variance(o1/o2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
+i	count(*)	variance(e1/e2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(s1/s2) from bug22555 group by i order by i;
+i	count(*)	std(s1/s2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(o1/o2) from bug22555 group by i order by i;
+i	count(*)	std(o1/o2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+select i, count(*), std(e1/e2) from bug22555 group by i order by i;
+i	count(*)	std(e1/e2)
+1	1	0.0
+2	1	0.0
+3	1	0.0
+insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
+insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
+insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
+select i, count(*), std(s1/s2) from bug22555 group by i order by i;
+i	count(*)	std(s1/s2)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
+i	count(*)	round(std(o1/o2), 16)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select i, count(*), std(e1/e2) from bug22555 group by i order by i;
+i	count(*)	std(e1/e2)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select std(s1/s2) from bug22555;
+std(s1/s2)
+0.21325763593256278
+select std(o1/o2) from bug22555;
+std(o1/o2)
+0.2132576358664934
+select std(e1/e2) from bug22555;
+std(e1/e2)
+0.21325763593256278
+select i, count(*), std(s1/s2) from bug22555 group by i order by i;
+i	count(*)	std(s1/s2)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
+i	count(*)	round(std(o1/o2), 16)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select i, count(*), std(e1/e2) from bug22555 group by i order by i;
+i	count(*)	std(e1/e2)
+1	4	0.0
+2	4	0.0
+3	4	0.0
+select round(std(s1/s2), 17) from bug22555;
+round(std(s1/s2), 17)
+0.21325763593256275
+select std(o1/o2) from bug22555;
+std(o1/o2)
+0.2132576358664934
+select round(std(e1/e2), 17) from bug22555;
+round(std(e1/e2), 17)
+0.21325763593256275
+drop table bug22555;
+create table t1 (a decimal(20));
+insert into t1 values (12345678901234567890);
+select count(a) from t1;
+count(a)
+1
+select count(distinct a) from t1;
+count(distinct a)
+1
+drop table t1;
+CREATE TABLE t1 (a INT, b INT);
+INSERT INTO t1 VALUES (1,1),(1,2),(1,3),(1,4),(1,5),(1,6),(1,7),(1,8);
+INSERT INTO t1 SELECT a, b+8       FROM t1;
+INSERT INTO t1 SELECT a, b+16      FROM t1;
+INSERT INTO t1 SELECT a, b+32      FROM t1;
+INSERT INTO t1 SELECT a, b+64      FROM t1;
+INSERT INTO t1 SELECT a, b+128     FROM t1;
+INSERT INTO t1 SELECT a, b+256     FROM t1;
+INSERT INTO t1 SELECT a, b+512     FROM t1;
+INSERT INTO t1 SELECT a, b+1024    FROM t1;
+INSERT INTO t1 SELECT a, b+2048    FROM t1;
+INSERT INTO t1 SELECT a, b+4096    FROM t1;
+INSERT INTO t1 SELECT a, b+8192    FROM t1;
+INSERT INTO t1 SELECT a, b+16384   FROM t1;
+INSERT INTO t1 SELECT a, b+32768   FROM t1;
+SELECT a,COUNT(DISTINCT b) AS cnt FROM t1 GROUP BY a HAVING cnt > 50;
+SQL syntax error: column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT a, SUM( b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
+SQL syntax error: column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
+SQL syntax error: column "average" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
+a	COUNT(DISTINCT b)
+1	65536
+SELECT DISTINCT a, SUM( b) FROM t1 GROUP BY a HAVING SUM( b) > 50;
+a	SUM( b)
+1	2147516416
+SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
+a	AVG( b)
+1	32768.5000
+DROP TABLE t1;

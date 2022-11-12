@@ -167,7 +167,7 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	defer entry.RUnlock()
 	node := entry.entries[id]
 	if node == nil {
-		return nil, moerr.NewNotFound()
+		return nil, moerr.GetOkExpectedEOB()
 	}
 	return node.GetPayload(), nil
 }
@@ -206,7 +206,7 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	if n, ok := entry.entries[segment.GetID()]; !ok {
-		return moerr.NewNotFound()
+		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
@@ -403,22 +403,6 @@ func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	sn, err = entry.schema.ReadFrom(r)
 	n += sn
 	return
-}
-
-func (entry *TableEntry) MakeLogEntry() *EntryCommand {
-	return newTableCmd(0, CmdLogTable, entry)
-}
-
-func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
-	ret := entry.CloneCommittedInRange(start, end)
-	if ret == nil {
-		return nil
-	}
-	return &TableEntry{
-		TableBaseEntry: ret.(*TableBaseEntry),
-		schema:         entry.schema,
-		db:             entry.db,
-	}
 }
 
 // IsActive is coarse API: no consistency check

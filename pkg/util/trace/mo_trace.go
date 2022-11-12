@@ -26,10 +26,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
+	"time"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 // TracerConfig is a group of options for a Tracer.
@@ -112,10 +112,10 @@ var _ CsvFields = (*MOSpan)(nil)
 
 type MOSpan struct {
 	SpanConfig
-	Name        bytes.Buffer  `json:"name"`
-	StartTimeNS util.TimeNano `json:"start_time"`
-	EndTimeNS   util.TimeNano `jons:"end_time"`
-	Duration    util.TimeNano `json:"duration"`
+	Name      bytes.Buffer `json:"name"`
+	StartTime time.Time    `json:"start_time"`
+	EndTime   time.Time    `jons:"end_time"`
+	Duration  uint64       `json:"duration"`
 
 	tracer *MOTracer `json:"-"`
 }
@@ -130,7 +130,7 @@ func newMOSpan() *MOSpan {
 
 func (s *MOSpan) init(name string, opts ...SpanOption) {
 	s.Name.WriteString(name)
-	s.StartTimeNS = util.NowNS()
+	s.StartTime = time.Now()
 	for _, opt := range opts {
 		opt.applySpanStart(&s.SpanConfig)
 	}
@@ -140,38 +140,47 @@ func (s *MOSpan) Size() int64 {
 	return int64(unsafe.Sizeof(*s)) + int64(s.Name.Cap())
 }
 
+var zeroTime = time.Time{}
+
 func (s *MOSpan) Free() {
+	s.SpanConfig.Reset()
+	s.parent = nil
 	s.Name.Reset()
-	s.Duration = 0
 	s.tracer = nil
-	s.StartTimeNS = 0
-	s.EndTimeNS = 0
+	s.StartTime = zeroTime
+	s.EndTime = zeroTime
 	spanPool.Put(s)
 }
 
 func (s *MOSpan) GetName() string {
-	return MOSpanType
+	return spanView.OriginTable.GetName()
 }
 
-func (s *MOSpan) CsvFields() []string {
-	var result []string
-	result = append(result, s.SpanID.String())
-	result = append(result, s.TraceID.String())
-	result = append(result, s.parent.SpanContext().SpanID.String())
-	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType)
-	result = append(result, s.Name.String())
-	result = append(result, nanoSec2DatetimeString(s.StartTimeNS))
-	result = append(result, nanoSec2DatetimeString(s.EndTimeNS))
-	result = append(result, fmt.Sprintf("%d", s.Duration)) // Duration
-	result = append(result, s.tracer.provider.resource.String())
-	return result
+func (s *MOSpan) GetRow() *export.Row { return spanView.OriginTable.GetRow() }
+
+func (s *MOSpan) CsvFields(row *export.Row) []string {
+	row.Reset()
+	row.SetColumnVal(rawItemCol, spanView.Table)
+	row.SetColumnVal(spanIDCol, s.SpanID.String())
+	row.SetColumnVal(stmtIDCol, s.TraceID.String())
+	row.SetColumnVal(parentSpanIDCol, s.parent.SpanContext().SpanID.String())
+	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
+	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
+	row.SetColumnVal(spanNameCol, s.Name.String())
+	row.SetColumnVal(startTimeCol, time2DatetimeString(s.StartTime))
+	row.SetColumnVal(endTimeCol, time2DatetimeString(s.EndTime))
+	row.SetColumnVal(durationCol, fmt.Sprintf("%d", s.EndTime.Sub(s.StartTime))) // Duration
+	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
+	return row.ToStrings()
 }
 
 func (s *MOSpan) End(options ...SpanEndOption) {
-	s.EndTimeNS = util.NowNS()
-	s.Duration = s.EndTimeNS - s.StartTimeNS
-
+	for _, opt := range options {
+		opt.applySpanEnd(&s.SpanConfig)
+	}
+	if s.EndTime.IsZero() {
+		s.EndTime = time.Now()
+	}
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}

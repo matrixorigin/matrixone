@@ -15,15 +15,15 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -31,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -48,25 +50,33 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexBufMgr base.INodeManager
-	MTBufMgr    base.INodeManager
-	TxnBufMgr   base.INodeManager
+	MTBufMgr  base.INodeManager
+	TxnBufMgr base.INodeManager
 
-	TxnMgr     *txnbase.TxnManager
+	TxnMgr        *txnbase.TxnManager
+	TransferTable *model.HashPageTable
+
 	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
-	CKPDriver checkpoint.Driver
-
 	Scheduler tasks.TaskScheduler
 
-	HeartBeatJobs *stopper.Stopper
+	BGScanner          wb.IHeartbeater
+	BGCheckpointRunner checkpoint.Runner
 
 	Fs *objectio.ObjectFS
 
 	DBLocker io.Closer
 
 	Closed *atomic.Value
+}
+
+func (db *DB) FlushTable(
+	tenantID uint32,
+	dbId, tableId uint64,
+	ts types.TS) (err error) {
+	err = db.BGCheckpointRunner.FlushTable(dbId, tableId, ts)
+	return
 }
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
@@ -105,9 +115,9 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback()
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory) {
-	maxTs := db.Catalog.GetCheckpointed().MaxTS
-	replayer := newReplayer(dataFactory, db)
+func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
+	// maxTs := db.Catalog.GetCheckpointed().MaxTS
+	replayer := newReplayer(dataFactory, db, maxTs)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
@@ -134,14 +144,13 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	// XXX PRINT
-	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
-	db.HeartBeatJobs.Stop()
-	db.CKPDriver.Stop()
+	db.BGScanner.Stop()
+	db.BGCheckpointRunner.Stop()
 	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
+	db.TransferTable.Close()
 	return db.DBLocker.Close()
 }

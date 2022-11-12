@@ -16,16 +16,21 @@ package compile
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
+	var span trace.Span
+	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
+	defer span.End()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
@@ -47,7 +52,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		return err
+		return moerr.NewErrDropNonExistsDB(dbName)
 	}
 	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
@@ -96,14 +101,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := dbSource.Relation(c.ctx, def.Name); err != nil {
-			if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-				return err
-			}
+		if _, err := dbSource.Relation(c.ctx, def.Name); err == nil {
+			return moerr.NewTableAlreadyExists(def.Name)
+		}
+		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			return err
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, tableCols, tblName)
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -119,11 +125,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		return err
 	}
+	id := rel.GetTableID(c.ctx)
 	err = dbSource.Truncate(c.ctx, tblName)
 	if err != nil {
 		return err
 	}
-	err = colexec.ResetAutoInsrCol(tblName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, id, dbName)
 	if err != nil {
 		return err
 	}
@@ -157,7 +164,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
-	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	return colexec.DeleteAutoIncrCol(c.e, c.ctx, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
@@ -169,10 +176,15 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 				Names: defVal.Pk.GetNames(),
 			}
 		case *plan.TableDef_DefType_Idx:
-			exeDefs[i] = &engine.IndexTableDef{
-				ColNames: defVal.Idx.GetColNames(),
-				Name:     defVal.Idx.GetName(),
+			indexDef := &engine.ComputeIndexDef{}
+			indexDef.IndexNames = defVal.Idx.IndexNames
+			indexDef.TableNames = defVal.Idx.TableNames
+			indexDef.Uniques = defVal.Idx.Uniques
+			indexDef.Fields = make([][]string, 0)
+			for _, field := range defVal.Idx.Fields {
+				indexDef.Fields = append(indexDef.Fields, field.ColNames)
 			}
+			exeDefs[i] = indexDef
 		case *plan.TableDef_DefType_Properties:
 			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
 			for i, p := range defVal.Properties.GetProperties() {
@@ -196,12 +208,6 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, er
 			exeDefs[i] = &engine.PartitionDef{
 				Partition: string(bytes),
 			}
-		case *plan.TableDef_DefType_ComputeIndex:
-			computeIndexDef := &engine.ComputeIndexDef{}
-			computeIndexDef.Names = defVal.ComputeIndex.Names
-			computeIndexDef.TableNames = defVal.ComputeIndex.TableNames
-			computeIndexDef.Uniques = defVal.ComputeIndex.Uniques
-			exeDefs[i] = computeIndexDef
 		}
 	}
 	return exeDefs, nil
@@ -233,7 +239,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
-				AutoIncrement: col.GetAutoIncrement(),
+				AutoIncrement: col.Typ.GetAutoIncr(),
 			},
 		}
 	}

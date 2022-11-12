@@ -29,7 +29,7 @@ import (
 func TestSingleSQL(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
+	//sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	//sql := "create view v1 as select * from nation"
 	//sql := "select n_name,N_REGIONKEY from NATION"
@@ -41,6 +41,7 @@ func TestSingleSQL(t *testing.T) {
 	// 	t.Fatalf("%+v", err)
 	// }
 	// t.Logf("%+v", string(getJSON(stmts[0], t)))
+	sql := "SELECT UNIX_TIMESTAMP('2000-01-01 12:00:00.159')"
 
 	mock := NewMockOptimizer()
 	logicPlan, err := runOneStmt(mock, t, sql)
@@ -670,7 +671,6 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY not in (select max(R_REGIONKEY) from REGION)",                            // unrelated
 		"SELECT * FROM NATION where exists (select max(R_REGIONKEY) from REGION)",                                        // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -696,6 +696,7 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 	}
 	runTestShouldError(mock, t, sqls)
 }

@@ -97,8 +97,7 @@ func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation
 }
 
 func (e *testEngine) checkpointCatalog() {
-	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatMaxCommitTS())
-	assert.NoError(e.t, err)
+	e.DB.BGCheckpointRunner.MockCheckpoint(e.DB.TxnMgr.StatMaxCommitTS())
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {
@@ -194,6 +193,7 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
+	defer pool.Release()
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10
@@ -258,7 +258,7 @@ func printCheckpointStats(t *testing.T, tae *DB) {
 func createDB(t *testing.T, e *DB, dbName string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
-	_, err = txn.CreateDatabase(dbName)
+	_, err = txn.CreateDatabase(dbName, "")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
@@ -291,7 +291,7 @@ func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName)
+		db, err = txn.CreateDatabase(dbName, "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)
@@ -314,7 +314,7 @@ func createRelationAndAppend(
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	if createDB {
-		db, err = txn.CreateDatabase(dbName)
+		db, err = txn.CreateDatabase(dbName, "")
 		assert.NoError(t, err)
 	} else {
 		db, err = txn.GetDatabase(dbName)

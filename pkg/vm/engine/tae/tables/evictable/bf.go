@@ -15,6 +15,7 @@
 package evictable
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -68,7 +69,7 @@ func (n *BfNode) onLoad() {
 	stat := metaNode.GetMeta()
 	compressTyp := stat.GetAlg()
 	// Do IO, fetch bloomfilter buf
-	fsData, err := metaNode.GetIndex(objectio.BloomFilterType, nil)
+	fsData, err := metaNode.GetIndex(context.Background(), objectio.BloomFilterType, nil)
 	if err != nil {
 		panic(err)
 	}

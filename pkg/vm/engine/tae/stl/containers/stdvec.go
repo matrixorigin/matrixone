@@ -313,7 +313,7 @@ func (vec *StdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	capacity := int(size) / stl.Sizeof[T]()
+	capacity := (int(size) + stl.Sizeof[T]() - 1) / stl.Sizeof[T]()
 	vec.tryExpand(capacity)
 	vec.buf = vec.node[:size]
 	if nr, err = r.Read(vec.buf); err != nil {

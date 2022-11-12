@@ -15,6 +15,7 @@
 package evictable
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
@@ -56,7 +57,7 @@ func (n *ColumnMetaNode) onLoad() {
 		return
 	}
 	// Do IO, fetch columnData
-	reader, err := blockio.NewReader(n.fs, n.metaloc)
+	reader, err := blockio.NewReader(context.Background(), n.fs, n.metaloc)
 	if err != nil {
 		panic(err)
 	}
@@ -64,7 +65,7 @@ func (n *ColumnMetaNode) onLoad() {
 	n.ColumnObject = meta
 
 	// deserialize zonemap
-	zmData, err := meta.GetIndex(objectio.ZoneMapType, nil)
+	zmData, err := meta.GetIndex(context.Background(), objectio.ZoneMapType, nil)
 
 	// TODOa: Error Handling?
 	if err != nil {

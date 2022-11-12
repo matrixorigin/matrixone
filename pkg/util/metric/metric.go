@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -204,11 +205,12 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	if !multiTable {
 		mustExec(SingleMetricTable.ToCreateSql(true))
 		for desc := range descChan {
-			sql := createView(desc)
+			view := getView(desc)
+			sql := view.ToCreateSql(true)
 			mustExec(sql)
 		}
 	} else {
-		optFactory := trace.GetOptionFactory(export.ExternalTableEngine)
+		optFactory := export.GetOptionFactory(export.ExternalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -219,13 +221,13 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	createCost = time.Since(instant)
 }
 
-type optionsFactory func(db, tbl string) export.TableOptions
+type optionsFactory func(db, tbl, account string) export.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
 func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
 	buf.Reset()
 	extra := newDescExtra(desc)
-	opts := optionsFactory(MetricDBConst, extra.fqName)
+	opts := optionsFactory(MetricDBConst, extra.fqName, export.AccountAll)
 	buf.WriteString("create ")
 	buf.WriteString(opts.GetCreateOptions())
 	buf.WriteString(fmt.Sprintf(
@@ -242,14 +244,13 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 	return buf.String()
 }
 
-func createView(desc *prom.Desc) string {
+func getView(desc *prom.Desc) *export.View {
 	extra := newDescExtra(desc)
 	var labelNames = make([]string, 0, len(extra.labels))
 	for _, lbl := range extra.labels {
 		labelNames = append(labelNames, lbl.GetName())
 	}
-	view := GetMetricViewWithLabels(extra.fqName, labelNames)
-	return view.ToCreateSql(true)
+	return GetMetricViewWithLabels(extra.fqName, labelNames)
 }
 
 type descExtra struct {
@@ -281,6 +282,24 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 	for _, v := range vars {
 		mustNotOccupied(v)
 	}
+}
+
+type SubSystem struct {
+	Name              string
+	Comment           string
+	SupportUserAccess bool
+}
+
+var SubSystemSql = &SubSystem{"sql", "base on query action", true}
+var SubSystemServer = &SubSystem{"server", "MO Server status, observe from inside", true}
+var SubSystemProcess = &SubSystem{"process", "MO process status", false}
+var SubSystemSys = &SubSystem{"sys", "OS status", false}
+
+var allSubSystem = map[string]*SubSystem{
+	SubSystemSql.Name:     SubSystemSql,
+	SubSystemServer.Name:  SubSystemServer,
+	SubSystemProcess.Name: SubSystemProcess,
+	SubSystemSys.Name:     SubSystemSys,
 }
 
 type InitOptions struct {
@@ -334,19 +353,17 @@ var (
 )
 
 var SingleMetricTable = &export.Table{
+	Account:          export.AccountAll,
 	Database:         MetricDBConst,
 	Table:            `metric`,
 	Columns:          []export.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []export.Column{},
 	Engine:           export.ExternalTableEngine,
 	Comment:          `metric data`,
-	TableOptions:     trace.GetOptionFactory(export.ExternalTableEngine)(MetricDBConst, `metric`),
-	PathBuilder:      export.NewDBTablePathBuilder(),
-	AccountColumn:    nil,
-}
-
-type ViewWhereCondition struct {
-	Table string
+	PathBuilder:      export.NewAccountDatePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
+	// SupportUserAccess
+	SupportUserAccess: true,
 }
 
 func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
@@ -355,7 +372,7 @@ func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
 		Table:       tbl,
 		OriginTable: SingleMetricTable,
 		Columns:     []export.Column{metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn},
-		Condition:   &ViewWhereCondition{Table: tbl},
+		Condition:   &export.ViewSingleCondition{Column: metricNameColumn, Table: tbl},
 	}
 	for _, opt := range opts {
 		opt.Apply(view)
@@ -365,6 +382,19 @@ func NewMetricView(tbl string, opts ...export.ViewOption) *export.View {
 
 func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 	var options []export.ViewOption
+	// check SubSystem
+	var subSystem *SubSystem = nil
+	for _, ss := range allSubSystem {
+		if strings.Index(tbl, ss.Name) == 0 {
+			subSystem = ss
+			break
+		}
+	}
+	if subSystem == nil {
+		panic(moerr.NewNotSupported("metric unknown SubSystem: %s", tbl))
+	}
+	options = append(options, export.SupportUserAccess(subSystem.SupportUserAccess))
+	// construct columns
 	for _, label := range lbls {
 		for _, col := range SingleMetricTable.Columns {
 			if strings.EqualFold(label, col.Name) {
@@ -373,10 +403,6 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *export.View {
 		}
 	}
 	return NewMetricView(tbl, options...)
-}
-
-func (tbl *ViewWhereCondition) String() string {
-	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
 }
 
 var gView struct {
@@ -396,4 +422,35 @@ func GetMetricViewWithLabels(tbl string, lbls []string) *export.View {
 		gView.content[tbl] = view
 	}
 	return view
+}
+
+// GetSchemaForAccount return account's table, and view's schema
+func GetSchemaForAccount(account string) []string {
+	var sqls = make([]string, 0, 1)
+	tbl := SingleMetricTable.Clone()
+	tbl.Account = account
+	sqls = append(sqls, tbl.ToCreateSql(true))
+
+	descChan := make(chan *prom.Desc, 10)
+	go func() {
+		for _, c := range initCollectors {
+			c.Describe(descChan)
+		}
+		close(descChan)
+	}()
+
+	for desc := range descChan {
+		view := getView(desc)
+
+		if view.SupportUserAccess && view.OriginTable.SupportUserAccess {
+			sqls = append(sqls, view.ToCreateSql(true))
+		}
+	}
+	return sqls
+}
+
+func init() {
+	if export.RegisterTableDefine(SingleMetricTable) != nil {
+		panic(moerr.NewInternalError("metric table already registered"))
+	}
 }

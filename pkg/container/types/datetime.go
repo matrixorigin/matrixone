@@ -32,12 +32,17 @@ const (
 	NanoSecsPerSec  = 1000000000 // 10^9
 	microSecsPerSec = 1000000    // 10^6
 	MillisecsPerSec = 1000       // 10^3
+	microSecsPerDay = secsPerDay * microSecsPerSec
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
+)
+
+var (
+	precisionVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
@@ -116,7 +121,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		}
 		day = uint8(unum)
 
-		if !validDate(year, month, day) {
+		if !ValidDate(year, month, day) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 
@@ -141,7 +146,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		second = uint8(unum)
-		if !validTimeInDay(hour, minute, second) {
+		if !ValidTimeInDay(hour, minute, second) {
 			return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 		}
 		// solve microsecond
@@ -172,19 +177,19 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			}
 		}
 	}
-	if !validDate(year, month, day) {
+	if !ValidDate(year, month, day) {
 		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 	}
 	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
-	if !validDate(y, m, d) {
+	if !ValidDate(y, m, d) {
 		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
 	}
 	return result, nil
 }
 
 // validTimeInDay return true if hour, minute and second can be a time during a day
-func validTimeInDay(h, m, s uint8) bool {
+func ValidTimeInDay(h, m, s uint8) bool {
 	if h < minHourInDay || h > maxHourInDay {
 		return false
 	}
@@ -226,6 +231,24 @@ func UTC() Datetime {
 
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
+}
+
+// We need to truncate the part after precision position when cast
+// between different precision.
+func (dt Datetime) ToTime(precision int32) Time {
+	if precision == 6 {
+		return Time(dt % microSecsPerDay)
+	}
+
+	// truncate the date part
+	ms := dt % microSecsPerDay
+
+	base := ms / precisionVal[precision]
+	if ms%precisionVal[precision]/precisionVal[precision+1] >= 5 { // check carry
+		base += 1
+	}
+
+	return Time(base * precisionVal[precision])
 }
 
 func (dt Datetime) Clock() (hour, minute, sec int8) {
@@ -290,11 +313,11 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 
 	switch timeType {
 	case DateType:
-		if !validDate(y, m, d) {
+		if !ValidDate(y, m, d) {
 			return 0, false
 		}
 	case DateTimeType, TimeStampType:
-		if !validDatetime(y, m, d) {
+		if !ValidDatetime(y, m, d) {
 			return 0, false
 		}
 	}
@@ -332,7 +355,7 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 
 	newDate := dt + Datetime(nums)
 	y, m, d, _ := newDate.ToDate().Calendar(true)
-	if !validDatetime(y, m, d) {
+	if !ValidDatetime(y, m, d) {
 		return 0, false
 	}
 	return newDate, true
@@ -479,7 +502,7 @@ func (dt Datetime) YearMonthStr() string {
 }
 
 // date[0001-01-01 00:00:00 to 9999-12-31 23:59:59]
-func validDatetime(year int32, month, day uint8) bool {
+func ValidDatetime(year int32, month, day uint8) bool {
 	if year >= MinDatetimeYear && year <= MaxDatetimeYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
 			if day > 0 {

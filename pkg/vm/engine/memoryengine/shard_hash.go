@@ -489,6 +489,21 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_time:
+		if vec.IsScalarNull() {
+			var zero types.Time
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Time)[i],
+		}
+		return
+
 	case types.T_datetime:
 		if vec.IsScalarNull() {
 			var zero types.Datetime

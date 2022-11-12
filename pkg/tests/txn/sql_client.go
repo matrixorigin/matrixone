@@ -15,7 +15,6 @@
 package txn
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/multierr"
+	"go.uber.org/zap"
 )
 
 var (
@@ -38,11 +38,7 @@ type sqlClient struct {
 	cn service.CNService
 }
 
-func newSQLClient(env service.Cluster) (Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
-	env.WaitCNStoreReportedIndexed(ctx, 0)
+func newSQLClient(logger *zap.Logger, env service.Cluster) (Client, error) {
 	cn, err := env.GetCNServiceIndexed(0)
 	if err != nil {
 		return nil, err
@@ -125,6 +121,7 @@ func (kop *sqlTxn) Rollback() error {
 		return nil
 	}
 
+	kop.mu.closed = true
 	err := kop.txn.Rollback()
 	if err != nil {
 		return multierr.Append(err, kop.db.Close())
@@ -184,6 +181,6 @@ func (kop *sqlTxn) insert(key, value string) error {
 }
 
 func (kop *sqlTxn) update(key, value string) error {
-	_, err := kop.txn.Exec(fmt.Sprintf("update txn_test_kv set kv_value = '%s' where kv_key = '%s'", key, value))
+	_, err := kop.txn.Exec(fmt.Sprintf("update txn_test_kv set kv_value = '%s' where kv_key = '%s'", value, key))
 	return err
 }

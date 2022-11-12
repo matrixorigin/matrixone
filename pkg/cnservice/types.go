@@ -20,9 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -32,10 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
+)
+
+var (
+	defaultListenAddress = "127.0.0.1:6002"
 )
 
 type Service interface {
@@ -43,6 +45,8 @@ type Service interface {
 	Close() error
 
 	GetTaskRunner() taskservice.TaskRunner
+	GetTaskService() (taskservice.TaskService, bool)
+	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string
@@ -63,11 +67,21 @@ type Config struct {
 
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
+	// ServiceAddress service address for communication, if this address is not set, use
+	// ListenAddress as the communication address.
+	ServiceAddress string `toml:"service-address"`
+	// SQLAddress service address for receiving external sql clientß
+	SQLAddress string `toml:"sql-address"`
 	// FileService file service configuration
 
 	Engine struct {
-		Type     EngineType           `toml:"type"`
-		Logstore options.LogstoreType `toml:"logstore"`
+		Type                EngineType           `toml:"type"`
+		Logstore            options.LogstoreType `toml:"logstore"`
+		FlushInterval       toml.Duration        `toml:"flush-interval"`
+		MinCount            int64                `toml:"min-count"`
+		ScanInterval        toml.Duration        `toml:"scan-interval"`
+		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
+		GlobalInterval      toml.Duration        `toml:"global-interval"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -122,6 +136,12 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	}
 	if c.Role == "" {
 		c.Role = metadata.CNRole_TP.String()
 	}
@@ -132,7 +152,7 @@ func (c *Config) Validate() error {
 		c.HAKeeper.HeatbeatDuration.Duration = time.Second
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond * 500
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
 	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
@@ -168,7 +188,7 @@ type service struct {
 	logger         *zap.Logger
 	server         morpc.RPCServer
 	requestHandler func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient,
-		messageAcquirer func() morpc.Message) error
+		messageAcquirer func() morpc.Message, getClusterDetails engine.GetClusterDetailsFunc) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -180,8 +200,14 @@ type service struct {
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
-	stopper                *stopper.Stopper
+	pu                     *config.ParameterUnit
 
-	taskService taskservice.TaskService
-	taskRunner  taskservice.TaskRunner
+	stopper *stopper.Stopper
+
+	task struct {
+		sync.RWMutex
+		holder         taskservice.TaskServiceHolder
+		runner         taskservice.TaskRunner
+		storageFactory taskservice.TaskStorageFactory
+	}
 }

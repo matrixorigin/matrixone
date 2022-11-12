@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	fetchInterval = time.Millisecond * 100
+	fetchInterval = time.Second * 3
 	retryInterval = time.Second * 10
 )
 

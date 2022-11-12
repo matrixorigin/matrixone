@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 // Cluster txn testing cluster
@@ -31,6 +32,8 @@ type Cluster interface {
 	Env() service.Cluster
 	// NewClient create a test txn client
 	NewClient() Client
+	// GetLogger returns the logger
+	GetLogger() *zap.Logger
 }
 
 // Client used to execute read and write.

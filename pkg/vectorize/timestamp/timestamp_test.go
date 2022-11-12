@@ -85,6 +85,12 @@ func TestDateStringToTimestamp(t *testing.T) {
 			want:    []types.Timestamp{types.FromClockUTC(2022, 3, 30, 0, 0, 0, 0)},
 			success: true,
 		},
+		{
+			name:    "normal test cases",
+			args:    []string{"1022-03-30 00:00:00"},
+			want:    []types.Timestamp{types.FromClockUTC(1022, 3, 30, 0, 0, 0, 0)},
+			success: true,
+		},
 	}
 
 	for _, v := range testCases {

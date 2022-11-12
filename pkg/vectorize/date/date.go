@@ -36,3 +36,10 @@ func DateStringToDate(xs []string, rs []types.Date) ([]types.Date, error) {
 	}
 	return rs, nil
 }
+
+func TimeToDate(xs []types.Time, rs []types.Date) []types.Date {
+	for i, x := range xs {
+		rs[i] = x.ToDate()
+	}
+	return rs
+}

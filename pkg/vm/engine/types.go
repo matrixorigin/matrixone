@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -50,7 +52,7 @@ type Attribute struct {
 	// DefaultExpr default value of this attribute
 	Default *plan.Default
 	// to update col when define in create table
-	OnUpdate *plan.Expr
+	OnUpdate *plan.OnUpdate
 	// Primary is primary key or not
 	Primary bool
 	// Comment of attribute
@@ -119,9 +121,10 @@ type ViewDef struct {
 }
 
 type ComputeIndexDef struct {
-	Names      []string
+	IndexNames []string
 	TableNames []string
 	Uniques    []bool
+	Fields     [][]string
 }
 
 type TableDef interface {
@@ -178,6 +181,7 @@ type Database interface {
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
 	Truncate(context.Context, string) error
+	GetDatabaseId(context.Context) string
 }
 
 type Engine interface {
@@ -205,8 +209,13 @@ type Engine interface {
 	// return value should not be cached
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
+
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
 }
 
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
 }
+
+type GetClusterDetailsFunc = func() (logservicepb.ClusterDetails, error)

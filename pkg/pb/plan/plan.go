@@ -14,6 +14,23 @@
 
 package plan
 
+// when autocommit is set to false, and no active txn is started
+// an implicit txn need to be started for statements , like insert/delete/update
+// and most select statement, like select * from t1.
+// but for statement like select 1 or SELECT @@session.autocommit , implicit txn is not needed
+// walk through the plan for select statement and check if there is an node_table_scan
+func (p *Plan) NeedImplicitTxn() bool {
+	if p.GetQuery().GetStmtType() != Query_SELECT {
+		return true
+	}
+	for _, n := range p.GetQuery().GetNodes() {
+		if n.GetNodeType() == Node_TABLE_SCAN {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Plan) MarshalBinary() ([]byte, error) {
 	data := make([]byte, p.ProtoSize())
 	_, err := p.MarshalTo(data)

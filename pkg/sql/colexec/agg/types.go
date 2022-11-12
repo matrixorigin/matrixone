@@ -16,7 +16,6 @@ package agg
 
 import (
 	"encoding"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -86,7 +85,7 @@ type Agg[T any] interface {
 	Free(*mpool.MPool)
 
 	// Grows allocates n groups for the agg.
-	Grows(n int, _ *mpool.MPool) error
+	Grows(n int, m *mpool.MPool) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
 	Eval(_ *mpool.MPool) (*vector.Vector, error)
@@ -129,6 +128,9 @@ type Agg[T any] interface {
 	GetOperatorId() int
 
 	IsDistinct() bool
+
+	// WildAggReAlloc reallocate for agg structure from memory pool.
+	WildAggReAlloc(m *mpool.MPool) error
 }
 
 type AggStruct interface {

@@ -1,0 +1,103 @@
+drop table if exists t1;
+create table t1 (id int,d int,fl float,de decimal);
+insert into t1 values(1,1,123.0213,1.001);
+insert into t1 values(2,2,1.0213,1.001);
+insert into t1 values(3,null,null,null);
+insert into t1 values(4,0,0,0);
+select sinh(d),sinh(fl)from t1;
+sinh(d)	sinh(fl)
+1.1752	1.3379574503777456E53
+3.6269	1.2083
+null	null
+0.0	0.0
+select atan(d),atan(fl)from t1;
+atan(d)	atan(fl)
+0.7853981633974483	1.5626678322541754
+1.1071487177940906	0.7959355256441749
+null	null
+0.0	0.0
+select acos(d),acos(fl)from t1;
+acos(d)	acos(fl)
+0.0	null
+null	null
+null	null
+1.5707963267948966	1.5707963267948966
+select cot(d),cot(fl) from t1;
+invalid argument cot, bad value cot(0)
+select cot(d),cot(fl) from t1 where d <> 0;
+cot(d)	cot(fl)
+0.6420926159343306	1.8340266997618755
+-0.4576575543602858	0.6124124816462909
+select tan(d),tan(fl) from t1;
+tan(d)	tan(fl)
+1.557407724654902	0.5452483326059671
+-2.185039863261519	1.632886379637126
+null	null
+0.0	0.0
+select sin(d),sin(fl) from t1;
+sin(d)	sin(fl)
+0.8414709848078965	-0.47871259002208294
+0.9092974268256817	0.8527876556479776
+null	null
+0.0	0.0
+drop table if exists abs;
+create table abs(id int,d int,dl double,fl float,de decimal);
+insert into abs values(1,-10,-10,-10.0321,-10.312);
+insert into abs values(2,-2,-2,-2.0321,-2.3765);
+insert into abs values(3,-10,-18446744073709551614,-10.0321,-10.312);
+insert into abs values(4,-31232,-9223372036854775808,-1312.0321,-973.3072);
+insert into abs values(1,-6,-432432.43,-8756.4321,-356.421);
+insert into abs values(1,null,null,null,null);
+select abs(d),abs(dl),abs(fl) from abs;
+abs(d)	abs(dl)	abs(fl)
+10	10.0	10.032099723815918
+2	2.0	2.032099962234497
+10	1.8446744073709552E19	10.032099723815918
+31232	9.223372036854776E18	1312.0321044921875
+6	432432.43	8756.431640625
+null	null	null
+select abs(d)-2 from t1;
+abs(d)-2
+-1
+0
+null
+-2
+select abs(d)*2 from t1;
+abs(d)*2
+2
+4
+null
+0
+select abs(tan(d))*2 from t1;
+abs(tan(d))*2
+3.114815449309804
+4.370079726523038
+null
+0.0
+drop table if exists ceil;
+create table ceil(id int,d int,dl double,fl float,de decimal);
+insert into ceil values(1,5,5,-5.5,-5.5);
+insert into ceil values(2,-2,18446744073709551614,-2.5,-5.2);
+insert into ceil values(2,-1,18446744073709551614,1.23,-1.23);
+insert into ceil values(2,-1,1844674407370955161,1.23,-1.23);
+insert into ceil values(2,-1,-9223372036854775808,1.23,-1.23);
+insert into ceil values(2,-1,-184467440737095516,1.23,-1.23);
+insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
+insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
+insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
+insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
+select ceil(d),ceil(dl),ceil(fl) from ceil;
+ceil(d)	ceil(dl)	ceil(fl)
+5	5.0	-5.0
+-2	1.8446744073709552E19	-2.0
+-1	1.8446744073709552E19	2.0
+-1	1.84467440737095526E18	2.0
+-1	-9.223372036854776E18	2.0
+-1	-1.8446744073709552E17	2.0
+-1	-9.2233720368547763E17	2.0
+-1	-9.2233720368547763E17	2.0
+-1	-1.0E17	2.0
+-1	-1.0E17	2.0
+drop table t1;
+drop table ceil;
+drop table abs;

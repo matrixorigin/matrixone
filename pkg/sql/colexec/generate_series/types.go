@@ -17,6 +17,7 @@ package generate_series
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Number interface {
@@ -24,32 +25,13 @@ type Number interface {
 }
 
 type Param struct {
-	Attrs []string
-	Cols  []*plan.ColDef
-	start string
-	end   string
-	step  string
+	Attrs    []string
+	ExprList []*plan.Expr
 }
 
 type Argument struct {
 	Es *Param
 }
 
-var (
-
-//	timeStampCol = &plan.ColDef{
-//		Name: "generate_series",
-//		Typ: &plan.Type{
-//			Id:       int32(types.T_timestamp),
-//			Nullable: false,
-//		},
-//	}
-//
-//	intCol = &plan.ColDef{
-//		Name: "generate_series",
-//		Typ: &plan.Type{
-//			Id:       int32(types.T_int64),
-//			Nullable: false,
-//		},
-//	}
-)
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+}

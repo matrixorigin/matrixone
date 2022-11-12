@@ -77,9 +77,12 @@ func NewS3FS(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFromURL(endpoint),
-		),
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				s3.EndpointResolverFromURL(endpoint),
+			),
+		},
 	)
 }
 
@@ -103,6 +106,23 @@ func NewS3FSOnMinio(
 	}
 	endpoint = u.String()
 
+	endpointResolver := s3.EndpointResolverFunc(
+		func(
+			region string,
+			options s3.EndpointResolverOptions,
+		) (
+			ep aws.Endpoint,
+			err error,
+		) {
+			_ = options
+			ep.URL = endpoint
+			ep.Source = aws.EndpointSourceCustom
+			ep.HostnameImmutable = true
+			ep.SigningRegion = region
+			return
+		},
+	)
+
 	return newS3FS(
 		sharedConfigProfile,
 		name,
@@ -110,23 +130,12 @@ func NewS3FSOnMinio(
 		bucket,
 		keyPrefix,
 		memCacheCapacity,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
+		nil,
+		[]func(*s3.Options){
+			s3.WithEndpointResolver(
+				endpointResolver,
 			),
-		),
+		},
 	)
 
 }
@@ -138,7 +147,8 @@ func newS3FS(
 	bucket string,
 	keyPrefix string,
 	memCacheCapacity int64,
-	options ...func(*s3.Options),
+	configOptions []func(*config.LoadOptions) error,
+	s3Options []func(*s3.Options),
 ) (*S3FS, error) {
 
 	if endpoint == "" {
@@ -151,9 +161,12 @@ func newS3FS(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
 	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx,
+	configOptions = append(configOptions,
 		config.WithSharedConfigProfile(sharedConfigProfile),
 		config.WithLogger(logutil.GetS3Logger()),
+	)
+	cfg, err := config.LoadDefaultConfig(ctx,
+		configOptions...,
 	)
 	if err != nil {
 		return nil, err
@@ -161,7 +174,7 @@ func newS3FS(
 
 	client := s3.NewFromConfig(
 		cfg,
-		options...,
+		s3Options...,
 	)
 
 	// head bucket to validate config
@@ -190,6 +203,9 @@ func (s *S3FS) Name() string {
 }
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -229,8 +245,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		for _, prefix := range output.CommonPrefixes {
 			filePath := s.keyToPath(*prefix.Prefix)
 			filePath = strings.TrimRight(filePath, "/")
+			_, name := pathpkg.Split(filePath)
 			entries = append(entries, DirEntry{
-				Name:  filePath,
+				Name:  name,
 				IsDir: true,
 			})
 		}
@@ -246,6 +263,9 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -321,6 +341,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVector()
@@ -343,7 +366,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	if err != nil {
 		return err
 	}
+	key := s.pathToKey(path.File)
 
+	// calculate object read range
 	min := int64(math.MaxInt)
 	max := int64(0)
 	readToEnd := false
@@ -363,33 +388,26 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 	}
 
-	var content []byte
-
-	if readToEnd {
-		rang := fmt.Sprintf("bytes=%d-", min)
-		key := s.pathToKey(path.File)
-		output, err := s.client.GetObject(
-			ctx,
-			&s3.GetObjectInput{
-				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(key),
-				Range:  ptrTo(rang),
-			},
-		)
-		err = s.mapError(err, key)
-		if err != nil {
-			return err
-		}
-		defer output.Body.Close()
-		content, err = io.ReadAll(output.Body)
-		err = s.mapError(err, key)
-		if err != nil {
-			return err
+	// a function to get an io.ReadCloser
+	getReader := func(readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
+		if readToEnd {
+			rang := fmt.Sprintf("bytes=%d-", min)
+			output, err := s.client.GetObject(
+				ctx,
+				&s3.GetObjectInput{
+					Bucket: ptrTo(s.bucket),
+					Key:    ptrTo(key),
+					Range:  ptrTo(rang),
+				},
+			)
+			err = s.mapError(err, key)
+			if err != nil {
+				return nil, err
+			}
+			return output.Body, nil
 		}
 
-	} else {
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
-		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
@@ -400,14 +418,40 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		)
 		err = s.mapError(err, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		defer output.Body.Close()
-		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
+		return &readCloser{
+			r:         io.LimitReader(output.Body, int64(max-min)),
+			closeFunc: output.Body.Close,
+		}, nil
+	}
+
+	// a function to get data lazily
+	var contentBytes []byte
+	var contentErr error
+	var getContentDone bool
+	getContent := func() (bs []byte, err error) {
+		if getContentDone {
+			return contentBytes, contentErr
+		}
+		defer func() {
+			contentBytes = bs
+			contentErr = err
+			getContentDone = true
+		}()
+
+		reader, err := getReader(readToEnd, min, max)
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+		bs, err = io.ReadAll(reader)
 		err = s.mapError(err, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
+
+		return
 	}
 
 	for i, entry := range vector.Entries {
@@ -416,41 +460,105 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		start := entry.Offset - min
-		if start >= int64(len(content)) {
+
+		if entry.Size == 0 {
 			return moerr.NewEmptyRange(path.File)
+		} else if entry.Size > 0 {
+			content, err := getContent()
+			if err != nil {
+				return err
+			}
+			if start >= int64(len(content)) {
+				return moerr.NewEmptyRange(path.File)
+			}
 		}
 
-		var data []byte
-		if entry.Size < 0 {
-			// read to end
-			data = content[start:]
-		} else {
+		// a function to get entry data lazily
+		getData := func() ([]byte, error) {
+			if entry.Size < 0 {
+				// read to end
+				content, err := getContent()
+				if err != nil {
+					return nil, err
+				}
+				if start >= int64(len(content)) {
+					return nil, moerr.NewEmptyRange(path.File)
+				}
+				return content[start:], nil
+			}
+			content, err := getContent()
+			if err != nil {
+				return nil, err
+			}
 			end := start + entry.Size
 			if end > int64(len(content)) {
-				return moerr.NewUnexpectedEOF(path.File)
+				return nil, moerr.NewUnexpectedEOF(path.File)
 			}
-			data = content[start:end]
-		}
-		if len(data) == 0 {
-			return moerr.NewEmptyRange(path.File)
+			if start == end {
+				return nil, moerr.NewEmptyRange(path.File)
+			}
+			return content[start:end], nil
 		}
 
 		setData := true
 
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
-			_, err := w.Write(data)
-			if err != nil {
-				return err
+			if getContentDone {
+				// data is ready
+				data, err := getData()
+				if err != nil {
+					return err
+				}
+				_, err = w.Write(data)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				// get a reader and copy
+				reader, err := getReader(entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				if err != nil {
+					return err
+				}
+				defer reader.Close()
+				_, err = io.Copy(w, reader)
+				err = s.mapError(err, key)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
 		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
 			setData = false
-			*ptr = io.NopCloser(bytes.NewReader(data))
+			if getContentDone {
+				// data is ready
+				data, err := getData()
+				if err != nil {
+					return err
+				}
+				*ptr = io.NopCloser(bytes.NewReader(data))
+
+			} else {
+				// get a new reader
+				reader, err := getReader(entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				if err != nil {
+					return err
+				}
+				*ptr = &readCloser{
+					r:         reader,
+					closeFunc: reader.Close,
+				}
+			}
 		}
 
+		// set Data field
 		if setData {
+			data, err := getData()
+			if err != nil {
+				return err
+			}
 			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
 			} else {
@@ -458,6 +566,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
+		// set Object field
 		if err := entry.setObjectFromData(); err != nil {
 			return err
 		}
@@ -469,6 +578,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if len(filePaths) == 0 {
 		return nil
 	}

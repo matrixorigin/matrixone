@@ -39,6 +39,7 @@ type LogEntry entry.Entry
 type Driver interface {
 	GetCheckpointed() uint64
 	Checkpoint(indexes []*Index) (LogEntry, error)
+	RangeCheckpoint(start, end uint64) (e LogEntry, err error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64

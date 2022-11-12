@@ -328,7 +328,7 @@ func TestCheck(t *testing.T) {
 			Adding:   c.adding,
 			Removing: c.removing,
 		}
-		operators := Check(alloc, cfg, c.cluster, c.infos, executing, c.currentTick)
+		operators := Check(alloc, cfg, c.cluster, c.infos, executing, pb.TaskTableUser{}, c.currentTick)
 
 		assert.Equal(t, len(c.expected), len(operators))
 		for j, op := range operators {

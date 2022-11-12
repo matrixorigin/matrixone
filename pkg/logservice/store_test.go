@@ -25,14 +25,13 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var (
@@ -85,7 +84,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 }
 
 func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
-	store, err := newLogStore(cfg, taskService, testLogger)
+	store, err := newLogStore(cfg, func() taskservice.TaskService { return taskService }, testLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +373,8 @@ func TestAddHeartbeat(t *testing.T) {
 		cnMsg := pb.CNStoreHeartbeat{
 			UUID: store.id(),
 		}
-		assert.NoError(t, store.addCNStoreHeartbeat(ctx, cnMsg))
+		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
+		assert.NoError(t, err)
 
 		dnMsg := pb.DNStoreHeartbeat{
 			UUID:   store.id(),

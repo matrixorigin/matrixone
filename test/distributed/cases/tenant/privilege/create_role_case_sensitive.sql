@@ -1,0 +1,13 @@
+drop role if exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+create role `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+create role `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+create role if not exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+create role if not exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+drop role `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+drop role `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+drop role if exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+drop role if exists `rrw`,`JOzSxk`,'88桢38鞨804譓905岏','291溥苧828孷9烙248','52殦6541驏696悵慕9';
+drop role if exists `AiaqE`;
+create role `AiaqE`;
+drop role `AiaqE`,`AiaqE`,`AiaqE`;
+drop role `AiaqE`;

@@ -138,7 +138,6 @@ func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
 	}
 	if scanner.segmask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
-		logutil.Infof("StopRecurScanSegment: %s", entry.String())
 	}
 	return
 }
@@ -165,7 +164,6 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 	}
 	if scanner.tablemask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
-		logutil.Infof("StopRecurScanTable: %s", entry.String())
 	}
 	return
 }
@@ -187,7 +185,6 @@ func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
 	}
 	if scanner.dbmask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
-		logutil.Infof("StopRecurScanDatabase: %s", entry.String())
 	}
 	return
 }

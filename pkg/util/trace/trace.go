@@ -43,7 +43,9 @@ var gSpanContext atomic.Value
 func init() {
 	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
-	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
+	tp := newMOTracerProvider(EnableTracer(false))
+	gTracer = tp.Tracer("default")
+	SetTracerProvider(tp)
 }
 
 var inited uint32
@@ -76,7 +78,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	}
 
 	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
 	export.SetDefaultContextFunc(DefaultContext)
@@ -102,14 +104,9 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// register buffer pipe implements
-		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker(defaultOptions...))
-		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		panic(moerr.NewNotSupported("not support process mode: %s", config.batchProcessMode))
 	case config.batchProcessMode == FileService:
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		export.Register(&MOLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))

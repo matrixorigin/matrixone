@@ -24,11 +24,14 @@ type Database interface {
 	CreateRelation(def any) (Relation, error)
 	CreateRelationWithID(def any, id uint64) (Relation, error)
 	DropRelationByName(name string) (Relation, error)
+	DropRelationByID(id uint64) (Relation, error)
 	TruncateByName(name string) (Relation, error)
 	TruncateWithID(name string, newTableId uint64) (Relation, error)
+	TruncateByID(id uint64, newTableId uint64) (Relation, error)
 
 	UnsafeGetRelation(id uint64) (Relation, error)
 	GetRelationByName(name string) (Relation, error)
+	GetRelationByID(id uint64) (Relation, error)
 	RelationCnt() int64
 	Relations() []Relation
 

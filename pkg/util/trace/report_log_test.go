@@ -25,56 +25,33 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func TestReportLog(t *testing.T) {
-	type args struct {
-		ctx       context.Context
-		level     zapcore.Level
-		depth     int
-		formatter string
-		args      []any
-	}
-	tests := []struct {
-		name         string
-		enableTracer bool
-		args         args
-	}{
-		{
-			name:         "close",
-			enableTracer: false,
-			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
-				level:     zapcore.InfoLevel,
-				depth:     3,
-				formatter: "info message",
-				args:      []any{},
-			},
-		},
-		{
-			name:         "collect",
-			enableTracer: true,
-			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
-				level:     zapcore.InfoLevel,
-				depth:     3,
-				formatter: "info message",
-				args:      []any{},
-			},
-		},
-	}
-	for _, tt := range tests {
-		GetTracerProvider().SetEnable(tt.enableTracer)
-		t.Run(tt.name, func(t *testing.T) {
-			ReportLog(tt.args.ctx, tt.args.level, tt.args.depth, tt.args.formatter, tt.args.args...)
-		})
-	}
-}
-
 func TestReportZap(t *testing.T) {
 	type args struct {
 		jsonEncoder zapcore.Encoder
 		entry       zapcore.Entry
 		fields      []zapcore.Field
 	}
+	spanField := ContextField(ContextWithSpanContext(context.Background(), SpanContext{}))
+	entry := zapcore.Entry{
+		Level:      zapcore.InfoLevel,
+		Time:       time.Unix(0, 0),
+		LoggerName: "test",
+		Message:    "info message",
+		Caller:     zapcore.NewEntryCaller(uintptr(stack.Caller(3)), "file", 123, true),
+	}
+	encoder := zapcore.NewJSONEncoder(
+		zapcore.EncoderConfig{
+			StacktraceKey:  "stacktrace",
+			SkipLineEnding: true,
+			LineEnding:     zapcore.DefaultLineEnding,
+			EncodeLevel:    zapcore.LowercaseLevelEncoder,
+			EncodeTime:     zapcore.EpochTimeEncoder,
+			EncodeDuration: zapcore.SecondsDurationEncoder,
+			EncodeCaller:   zapcore.ShortCallerEncoder,
+		})
+	intField := zap.Int("key", 1)
+	strField := zap.String("str", "1")
+	boolField := zap.Bool("bool", true)
 	tests := []struct {
 		name string
 		args args
@@ -83,25 +60,56 @@ func TestReportZap(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				jsonEncoder: zapcore.NewJSONEncoder(
-					zapcore.EncoderConfig{
-						StacktraceKey:  "stacktrace",
-						LineEnding:     zapcore.DefaultLineEnding,
-						EncodeLevel:    zapcore.LowercaseLevelEncoder,
-						EncodeTime:     zapcore.EpochTimeEncoder,
-						EncodeDuration: zapcore.SecondsDurationEncoder,
-						EncodeCaller:   zapcore.ShortCallerEncoder,
-					}),
-				entry: zapcore.Entry{
-					Level:      zapcore.InfoLevel,
-					Time:       time.Unix(0, 0),
-					LoggerName: "test",
-					Message:    "info message",
-					Caller:     zapcore.NewEntryCaller(uintptr(stack.Caller(3)), "file", 123, true),
-				},
-				fields: []zapcore.Field{zap.Int("key", 1)},
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{intField},
 			},
-			want: `{"key":1}` + "\n",
+			want: `{"key":1}`,
+		},
+		{
+			name: "remove first span",
+			args: args{
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{spanField, intField, strField},
+			},
+			want: `{"str":"1","key":1}`,
+		},
+		{
+			name: "remove middle span",
+			args: args{
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{intField, spanField, strField},
+			},
+			want: `{"key":1,"str":"1"}`,
+		},
+		{
+			name: "remove double middle span",
+			args: args{
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{intField, spanField, spanField, strField, boolField},
+			},
+			want: `{"key":1,"bool":true,"str":"1"}`,
+		},
+		{
+			name: "remove end span",
+			args: args{
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{intField, strField, spanField, spanField},
+			},
+			want: `{"key":1,"str":"1"}`,
+		},
+		{
+			name: "remove multi span",
+			args: args{
+				jsonEncoder: encoder,
+				entry:       entry,
+				fields:      []zapcore.Field{intField, strField, spanField, boolField, spanField, spanField},
+			},
+			want: `{"key":1,"str":"1","bool":true}`,
 		},
 	}
 	for _, tt := range tests {

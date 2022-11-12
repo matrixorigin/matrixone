@@ -4,9 +4,7 @@
 -- @desc:Test echo autocommit
 -- @label:bvt
 
--- @bvt:issue#4626
 SELECT @@session.autocommit;
--- @bvt:issue
 
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;
@@ -14,11 +12,9 @@ SELECT @@session.autocommit;
 SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 
--- echo internal error: Uncommitted transaction exists. Please commit or rollback first.
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 
@@ -415,7 +411,6 @@ select * from t6;
 create view view_t6 as select * from t6;
 select * from view_t6;
 
--- @bvt:issue#4598
 insert into view_t6 values (200, 300);
 insert into view_t6 values (10, 10);
 
@@ -425,7 +420,6 @@ update view_t6 set a=100000 where b=3000;
 select * from view_t6;
 delete from view_t6 where a=10;
 select * from view_t6;
--- @bvt:issue
 
 drop database db;
 

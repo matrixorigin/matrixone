@@ -27,6 +27,13 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
+func init() {
+	m1 := &SubSystem{"m1", "", false}
+	m2 := &SubSystem{"m2", "", false}
+	allSubSystem[m1.Name] = m1
+	allSubSystem[m2.Name] = m2
+}
+
 type dummySqlExecutor struct {
 	opts ie.SessionOverrideOptions
 	ch   chan<- string

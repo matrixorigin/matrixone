@@ -385,6 +385,10 @@ func (kv *KVTxnStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error
 	return nil
 }
 
+func (kv *KVTxnStorage) Debug(ctx context.Context, meta txn.TxnMeta, op uint32, data []byte) ([]byte, error) {
+	return data, nil
+}
+
 func (kv *KVTxnStorage) getLogWithDataLocked(txnMeta txn.TxnMeta) *KVLog {
 	log := &KVLog{Txn: txnMeta}
 	for k, v := range kv.uncommittedKeyTxnMap {

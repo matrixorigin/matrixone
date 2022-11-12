@@ -344,9 +344,10 @@ func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name str
 type IndexRow struct {
 	ID         ID
 	RelationID ID
-	Name       string
+	IndexName  string
 	Unique     bool
 	TableName  string
+	Field      []string
 }
 
 func (i *IndexRow) Key() ID {
@@ -360,13 +361,13 @@ func (i *IndexRow) Value() *IndexRow {
 func (i *IndexRow) Indexes() []Tuple {
 	return []Tuple{
 		{index_RelationID, i.RelationID},
-		{index_RelationID_Name, i.RelationID, Text(i.Name)},
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
 	}
 }
 
 func (i *IndexRow) UniqueIndexes() []Tuple {
 	return []Tuple{
-		{index_RelationID_Name, i.RelationID, Text(i.Name)},
+		{index_RelationID_Name, i.RelationID, Text(i.IndexName)},
 	}
 }
 

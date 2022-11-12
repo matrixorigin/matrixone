@@ -37,6 +37,11 @@ func newCheckpointInfo() *checkpointInfo {
 
 func (info *checkpointInfo) UpdateWtihRanges(intervals *common.ClosedIntervals) {
 	info.ranges.TryMerge(*intervals)
+	for lsn := range info.partial {
+		if intervals.ContainsInt(lsn) {
+			delete(info.partial, lsn)
+		}
+	}
 }
 
 func (info *checkpointInfo) UpdateWtihPartialCheckpoint(lsn uint64, ckps *partialCkpInfo) {

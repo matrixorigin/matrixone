@@ -1,0 +1,17 @@
+drop database if exists priv_db1;
+create database priv_db1;
+use priv_db1;
+show tables;
+create table A(a int);
+create table B(a int);
+show tables;
+insert into A values (1),(2),(3),(4);
+create view v1_on_A as select A.a from A order by A.a;
+select * from v1_on_A;
+insert into B select A.a + 1 from A;
+select A.a,B.a from A, B where A.a = B.a order by A.a;
+update B set a = a + 1;
+select A.a,B.a from A, B where A.a = B.a order by A.a;
+delete A from A,B where A.a = B.a;
+select A.a from A order by a;
+drop database if exists priv_db1;

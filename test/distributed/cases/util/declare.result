@@ -1,0 +1,4 @@
+DECLARE a, b INT;
+not supported: declare a b int default null
+DECLARE a, b INT DEFAULT 1;
+not supported: declare a b int default 1

@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -174,4 +175,8 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 	}
 
 	return resps[0].Names, nil
+}
+
+func (d *Database) GetDatabaseId(ctx context.Context) string {
+	return fmt.Sprintf("%d", d.id)
 }

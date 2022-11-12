@@ -16,6 +16,7 @@ package evictable
 
 import (
 	"bytes"
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -128,12 +129,12 @@ func (n *ColDataNode) fetchData() (containers.Vector, error) {
 	defer h.Close()
 
 	// Do IO, fetch data buf
-	fsVector, err := metaNode.GetData(nil)
+	fsVector, err := metaNode.GetData(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	srcBuf := fsVector.Entries[0].Data
+	srcBuf := fsVector.Entries[0].Object.([]byte)
 	v := vector.New(n.colDef.Type)
 	v.Read(srcBuf)
 	return containers.NewVectorWithSharedMemory(v, n.colDef.NullAbility), nil

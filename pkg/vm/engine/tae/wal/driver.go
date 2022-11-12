@@ -128,10 +128,10 @@ func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
 
 func (driver *walDriver) Close() error {
 	driver.cancelfn()
+	driver.logInfoQueue.Stop()
 	if driver.own {
 		return driver.impl.Close()
 	}
-	driver.logInfoQueue.Stop()
 	driver.wg.Wait()
 	return nil
 }

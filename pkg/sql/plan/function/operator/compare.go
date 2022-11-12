@@ -28,7 +28,7 @@ import (
 
 type compareT interface {
 	constraints.Integer | constraints.Float | bool |
-		types.Date | types.Datetime | types.Timestamp
+		types.Date | types.Time | types.Datetime | types.Timestamp
 }
 
 var boolType = types.T_bool.ToType()

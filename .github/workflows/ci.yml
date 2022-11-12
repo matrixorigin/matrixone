@@ -39,13 +39,13 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ut_linux_x86_reports
+          name: ut-linux-x86_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
@@ -67,7 +67,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -95,7 +95,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut
+          make ut UT_PARALLEL=6
 
       - uses: actions/upload-artifact@v2
         if: ${{ failure() }}
@@ -109,7 +109,7 @@ jobs:
   bvt-linux-x86:
     runs-on: x86-runner
     name: BVT Test on Linux/x64
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -125,13 +125,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -launch ./etc/launch-tae-logservice/launch.toml &>mo-service.log &
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -171,10 +171,9 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v2
-        if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: linux_x86_ci_reports
+          name: bvt-linux-x86_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7
@@ -182,7 +181,7 @@ jobs:
   bvt-linux-arm:
     runs-on: arm64-runner
     name: BVT Test on Linux/Arm
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -198,13 +197,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -launch ./etc/launch-tae-logservice/launch.toml &>mo-service.log &
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -247,7 +246,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ci_linux_arm_reports
+          name: bvt-linux-arm_reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
@@ -256,7 +255,7 @@ jobs:
   bvt-darwin-x86:
     runs-on: macos-12
     name: BVT Test on Darwin/x86
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: checkout head
@@ -272,13 +271,13 @@ jobs:
 
       - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
 
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./mo-service -launch ./etc/launch-tae-logservice/launch.toml &>mo-service.log &
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-logservice
 
       - name: Clone test-tool repository
         uses: actions/checkout@v2
@@ -319,7 +318,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: ci_darwin_x86_reports
+          name: bvt-darwin-x86_reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7

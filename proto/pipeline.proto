@@ -24,6 +24,7 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 import "plan.proto";
+import "timestamp.proto";
 
 message Message {
   uint64  sid = 1;
@@ -145,15 +146,11 @@ message Product {
   repeated plan.Type  types = 3;
 }
 
-message Unnest{
+message TableFunction {
   repeated string attrs = 1;
   repeated plan.ColDef cols = 2;
-  bytes extern = 3;
-}
-
-message GenerateSeries {
-  repeated string attrs = 1;
-  repeated plan.ColDef cols = 2;
+  repeated plan.Expr exprs = 3;
+  bytes param = 4;
 }
 
 message HashBuild {
@@ -175,6 +172,7 @@ message ExternalScan {
   repeated plan.ColDef cols = 2;
   repeated ExternalName2ColIndex name2_col_index = 3;
   string create_sql = 4;
+  repeated string file_list = 5;
 }
 
 message Instruction{
@@ -193,15 +191,14 @@ message Instruction{
   MarkJoin    mark_join = 11;
   Join    join = 12;
   Product    product = 13;
-  Unnest     unnest = 14;
-  GenerateSeries generate_series = 15;
-  HashBuild hash_build = 16;
-  ExternalScan external_scan = 17;
-  repeated plan.OrderBySpec order_by = 18;
-  repeated plan.Expr    project_list = 19;
-  plan.Expr    filter = 20;
-  uint64    limit = 21;
-  uint64    offset = 22;
+  TableFunction table_function = 14;
+  HashBuild hash_build = 15;
+  ExternalScan external_scan = 16;
+  repeated plan.OrderBySpec order_by = 17;
+  repeated plan.Expr    project_list = 18;
+  plan.Expr    filter = 19;
+  uint64    limit = 20;
+  uint64    offset = 21;
 }
 
 message AnalysisList {
@@ -215,6 +212,9 @@ message Source {
   string    block = 4;
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
+  plan.Expr  expr = 7;
+  plan.TableDef tableDef = 8;
+  timestamp.Timestamp timestamp = 9;
 }
 
 message NodeInfo {

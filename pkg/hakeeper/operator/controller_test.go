@@ -33,13 +33,13 @@ func TestDispatchAndRemoveOperator(t *testing.T) {
 	operator2 := &Operator{shardID: 1}
 	operator3 := &Operator{shardID: 2}
 
-	c.Dispatch([]*Operator{operator1}, pb.LogState{}, pb.DNState{})
+	c.Dispatch([]*Operator{operator1}, pb.LogState{}, pb.DNState{}, pb.CNState{})
 	assert.Equal(t, []*Operator{operator1}, c.operators[1])
 
-	c.Dispatch([]*Operator{operator2}, pb.LogState{}, pb.DNState{})
+	c.Dispatch([]*Operator{operator2}, pb.LogState{}, pb.DNState{}, pb.CNState{})
 	assert.Equal(t, []*Operator{operator1, operator2}, c.operators[1])
 
-	c.Dispatch([]*Operator{operator3}, pb.LogState{}, pb.DNState{})
+	c.Dispatch([]*Operator{operator3}, pb.LogState{}, pb.DNState{}, pb.CNState{})
 	assert.Equal(t, []*Operator{operator3}, c.operators[2])
 
 	c.RemoveOperator(operator1)
@@ -69,7 +69,7 @@ func TestRemoveFinishedOperator(t *testing.T) {
 		}},
 	}
 
-	c.Dispatch([]*Operator{op1}, logState, pb.DNState{})
+	c.Dispatch([]*Operator{op1}, logState, pb.DNState{}, pb.CNState{})
 	assert.Equal(t, []*Operator{op1}, c.GetOperators(1))
 
 	logState = pb.LogState{
@@ -79,6 +79,6 @@ func TestRemoveFinishedOperator(t *testing.T) {
 			Epoch:    0,
 		}},
 	}
-	c.RemoveFinishedOperator(logState, pb.DNState{})
+	c.RemoveFinishedOperator(logState, pb.DNState{}, pb.CNState{})
 	assert.Equal(t, []*Operator(nil), c.GetOperators(1))
 }

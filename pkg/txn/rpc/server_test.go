@@ -49,6 +49,34 @@ func TestHandleMessageWithSender(t *testing.T) {
 	})
 }
 
+func TestHandleLargeMessageWithSender(t *testing.T) {
+	size := 1024 * 1024 * 15
+	runTestTxnServer(t, testDN1Addr, func(s *server) {
+		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
+			tr2.CNOpResponse = &txn.CNOpResponse{Payload: make([]byte, size)}
+			return nil
+		})
+
+		cli, err := NewSender(newTestClock(), s.logger, WithSenderMaxMessageSize(size+1024))
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cli.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+
+		v, err := cli.Send(ctx, []txn.TxnRequest{{
+			CNRequest: &txn.CNOpRequest{
+				Target:  metadata.DNShard{Address: testDN1Addr},
+				Payload: make([]byte, size),
+			},
+		}})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(v.Responses))
+	}, WithServerMaxMessageSize(size+1024))
+}
+
 func TestHandleMessage(t *testing.T) {
 	runTestTxnServer(t, testDN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
@@ -74,16 +102,15 @@ func TestHandleMessageWithFilter(t *testing.T) {
 			n++
 			return nil
 		})
-		s.SetFilter(func(tr *txn.TxnRequest) bool {
-			return false
-		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1},
 			0, nil))
 		assert.Equal(t, 0, n)
-	})
+	}, WithServerMessageFilter(func(tr *txn.TxnRequest) bool {
+		return false
+	}))
 }
 
 func TestHandleInvalidMessageWillPanic(t *testing.T) {
@@ -129,11 +156,12 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 	})
 }
 
-func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server)) {
+func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
 	s, err := NewTxnServer(addr,
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		logutil.GetPanicLogger())
+		logutil.GetPanicLogger(),
+		opts...)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, s.Close())

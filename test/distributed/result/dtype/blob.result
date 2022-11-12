@@ -1,0 +1,103 @@
+drop table if exists t1;
+create table t1 (a blob);
+insert into t1 values('abcdef');
+insert into t1 values('_bcdef');
+insert into t1 values('a_cdef');
+insert into t1 values('ab_def');
+insert into t1 values('abc_ef');
+insert into t1 values('abcd_f');
+insert into t1 values('abcde_');
+select * from t1 where a like 'ab\_def' order by 1 asc;
+a
+ab_def
+select * from t1 where a not like 'a%' order by a desc;
+a
+_bcdef
+select * from t1 where a like "\__cdef" order by 1 desc;
+a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
+abcdef
+_bcdef
+a_cdef
+ab_def
+abc_ef
+abcd_f
+drop table if exists t1;
+create table t1 (i int,a blob);
+insert into t1 values(1,'123456');
+insert into t1 values(2,'234567');
+insert into t1 values(3,'345678');
+SELECT * FROM t1;
+i    a
+1    123456
+2    234567
+3    345678
+select a from t1 where i > 1;
+a
+234567
+345678
+insert into t1 values(2,'123456');
+insert into t1 values(6,'234567');
+insert into t1 values(7,'123456');
+select sum(i),a from t1 group by a;
+sum(i)    a
+10    123456
+8    234567
+3    345678
+create table t2 (j int,b blob);
+insert into t2 values(10,'123456');
+insert into t2 values(11,'000001');
+insert into t2 values(12,'000000');
+select i,a from t1 inner join t2 on t1.a = t2.b order by i;
+i    a
+1    123456
+2    123456
+7    123456
+select i,a from t1 right join t2 on t1.a = t2.b order by i;
+i    a
+null    null
+null    null
+1    123456
+2    123456
+7    123456
+select i,a from t1 left join t2 on t1.a = t2.b order by i;
+i    a
+1    123456
+2    234567
+2    123456
+3    345678
+6    234567
+7    123456
+SELECT load_file('$resources/file_test/normal.txt');
+load_file(/home/yjw/blob/matrixone/test/resources/file_test/normal.txt)
+Hello world!
+insert into t2 values(66,load_file("$resources/file_test/normal.txt"));
+select * from t2;
+j    b
+10    123456
+11    000001
+12    000000
+66    Hello world!
+SELECT LENGTH(a) FROM t1;
+length(a)
+6
+6
+6
+6
+6
+6
+SELECT LENGTH(load_file("$resources/file_test/normal.txt"));
+length(load_file(/home/yjw/blob/matrixone/test/resources/file_test/normal.txt))
+12
+SELECT LENGTH(load_file("$resources/file_test/empty.txt"));
+length(load_file(/home/yjw/blob/matrixone/test/resources/file_test/empty.txt))
+null
+SELECT SUBSTRING(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
+substring(a, 1, 4)    length(a)
+1234    6
+2345    6
+3456    6
+drop table t1;
+drop table t2;

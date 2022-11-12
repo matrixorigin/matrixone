@@ -39,33 +39,38 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
+	var tableID string
 	if arg.DeleteCtxs[0].CanTruncate {
 		dbSource, err := c.e.Database(c.ctx, arg.DeleteCtxs[0].DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
 
-		for _, info := range arg.DeleteCtxs[0].ComputeIndexInfos {
+		var rel engine.Relation
+		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
+			return 0, err
+		}
+		tableID = rel.GetTableID(c.ctx)
+
+		for _, info := range arg.DeleteCtxs[0].IndexInfos {
 			err = dbSource.Truncate(c.ctx, info.TableName)
 			if err != nil {
 				return 0, err
 			}
 		}
 
-		var rel engine.Relation
-		if rel, err = dbSource.Relation(c.ctx, arg.DeleteCtxs[0].TableName); err != nil {
-			return 0, err
-		}
 		err = dbSource.Truncate(c.ctx, arg.DeleteCtxs[0].TableName)
 		if err != nil {
 			return 0, err
 		}
 
-		err = colexec.MoveAutoIncrCol(arg.DeleteCtxs[0].TableName, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+		err = colexec.MoveAutoIncrCol(c.e, c.ctx, arg.DeleteCtxs[0].TableName, dbSource, c.proc, tableID, arg.DeleteCtxs[0].DbName)
 		if err != nil {
 			return 0, err
 		}
-		return 0, nil
+
+		affectRows, err := rel.Rows(s.Proc.Ctx)
+		return uint64(affectRows), err
 	}
 
 	if err := s.MergeRun(c); err != nil {
@@ -105,6 +110,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 
 	bat := makeInsertBatch(p)
+	defer bat.Clean(c.proc.Mp())
 
 	if p.OtherCols != nil {
 		p.ExplicitCols = append(p.ExplicitCols, p.OtherCols...)
@@ -124,7 +130,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	*/
 	for i := range bat.Vecs {
 		// check for case 1 and case 2
-		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].AutoIncrement) {
+		if (p.ExplicitCols[i].Primary && !p.ExplicitCols[i].Typ.AutoIncr) || (p.ExplicitCols[i].Default != nil && !p.ExplicitCols[i].Default.NullAbility && !p.ExplicitCols[i].Typ.AutoIncr) {
 			if nulls.Any(bat.Vecs[i].Nsp) {
 				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
 			}
@@ -132,7 +138,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
+	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat, p.DbName, p.TblName); err != nil {
 		return 0, err
 	}
 	if p.CompositePkey != nil {
@@ -150,18 +156,18 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 			}
 		}
 	}
-	for _, computeIndexInfo := range p.ComputeIndexInfos {
-		computeRelation, err := dbSource.Relation(c.ctx, computeIndexInfo.TableName)
+	for _, indexInfo := range p.IndexInfos {
+		indexRelation, err := dbSource.Relation(c.ctx, indexInfo.TableName)
 		if err != nil {
 			return 0, err
 		}
-		computeBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, computeIndexInfo.Cols, c.proc)
+		indexBatch, rowNum := util.BuildUniqueKeyBatch(bat.Vecs, bat.Attrs, indexInfo.Cols, c.proc)
 		if rowNum != 0 {
-			if err := computeRelation.Write(c.ctx, computeBatch); err != nil {
+			if err := indexRelation.Write(c.ctx, indexBatch); err != nil {
 				return 0, err
 			}
 		}
-		computeBatch.Clean(c.proc.Mp())
+		indexBatch.Clean(c.proc.Mp())
 	}
 
 	if err := relation.Write(c.ctx, bat); err != nil {
@@ -426,6 +432,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
 						vs[j] = vector.GetValueAt[types.Date](vec, 0)
+					}
+				}
+			}
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+				return err
+			}
+		case types.T_time:
+			vs := make([]types.Time, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vector.GetValueAt[types.Time](vec, 0)
 					}
 				}
 			}

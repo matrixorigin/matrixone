@@ -200,8 +200,7 @@ func runTaskRunnerTest(t *testing.T,
 	}()
 
 	opts = append(opts, WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)))
-	r, err := NewTaskRunner("r1", s, opts...)
-	require.NoError(t, err)
+	r := NewTaskRunner("r1", s, opts...)
 
 	require.NoError(t, r.Start())
 	defer func() {

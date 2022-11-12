@@ -197,7 +197,7 @@ func TestBootstrap(t *testing.T) {
 		}
 
 		for _, command := range output {
-			if command.ServiceType == pb.DnService {
+			if command.ServiceType == pb.DNService {
 				assert.Equal(t, c.expectedDNLogShardID, command.ConfigChange.Replica.LogShardID)
 			}
 		}

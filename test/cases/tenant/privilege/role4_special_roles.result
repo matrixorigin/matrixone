@@ -48,5 +48,31 @@ grant drop account on account * to rolex;
 internal error: the privilege drop account can not be granted
 grant alter account on account * to rolex;
 internal error: the privilege alter account can not be granted
+drop user root;
+internal error: can not delete the user root
+drop user dump;
+internal error: can not delete the user dump
+drop user root,dump;
+internal error: can not delete the user root
+drop role moadmin;
+internal error: can not delete the role moadmin
+drop role public;
+internal error: can not delete the role public
+drop role moadmin,public;
+internal error: can not delete the role moadmin
+drop role accountadmin;
+internal error: there is no role accountadmin
+drop role if exists accountadmin;
+drop account if exists acc1;
+create account acc1 admin_name 'admin' identified by '111';
+drop user admin;
+internal error: can not delete the user admin
+drop role accountadmin;
+internal error: can not delete the role accountadmin
+drop role public;
+internal error: can not delete the role public
+drop account acc1;
+drop account sys;
+internal error: can not delete the account sys
 drop role rolex;
 drop user userx;

@@ -62,8 +62,8 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		} else if tblRef.TableType == catalog.SystemViewRel {
 			return nil, moerr.NewInternalError("view is not support update operation")
 		}
-		computeIndexInfo := BuildComputeIndexInfos(ctx, tf.dbNames[i], tblRef.Defs)
-		tblRef.ComputeIndexInfos = computeIndexInfo
+		indexInfos := BuildIndexInfos(ctx, tf.dbNames[i], tblRef.Defs)
+		tblRef.IndexInfos = indexInfos
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)
 	}
@@ -124,7 +124,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 				if c.GetUpdateVal() {
-					lastNode.ProjectList[idx] = col.OnUpdate
+					lastNode.ProjectList[idx] = col.OnUpdate.Expr
 					idx++
 					continue
 				}
@@ -260,7 +260,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var onUpdateCols []updateCol
 		// make true we can get all the index col data before update, so we can delete index info.
 		indexColNameMap := make(map[string]bool)
-		for _, info := range tblRefs[k].ComputeIndexInfos {
+		for _, info := range tblRefs[k].IndexInfos {
 			if info.Cols[0].IsCPkey {
 				colNames := util.SplitCompositePrimaryKeyColumnName(info.Cols[0].Name)
 				for _, colName := range colNames {
@@ -284,7 +284,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 				}
 			}
 			if !isUpdateCol {
-				if col.OnUpdate != nil {
+				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
 				} else {
 					otherAttrs = append(otherAttrs, col.Name)

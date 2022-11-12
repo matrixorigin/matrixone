@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -123,6 +124,22 @@ var (
 			ds[i] = d
 		}
 		return vector.NewWithFixed(types.T_date.ToType(), ds, ns, TestUtilMp)
+	}
+
+	MakeTimeVector = func(values []string, nsp []uint64) *vector.Vector {
+		ds := make([]types.Time, len(values))
+		ns := nulls.Build(len(values), nsp...)
+		for i, s := range values {
+			if nulls.Contains(ns, uint64(i)) {
+				continue
+			}
+			d, err := types.ParseTime(s, 6)
+			if err != nil {
+				panic(err)
+			}
+			ds[i] = d
+		}
+		return vector.NewWithFixed(types.T_time.ToType(), ds, ns, TestUtilMp)
 	}
 
 	MakeDateTimeVector = func(values []string, nsp []uint64) *vector.Vector {
@@ -250,6 +267,14 @@ var (
 		return vector.NewConstFixed(dateType, length, d, TestUtilMp)
 	}
 
+	MakeScalarTime = func(value string, length int) *vector.Vector {
+		d, err := types.ParseTime(value, 6)
+		if err != nil {
+			panic(err)
+		}
+		return vector.NewConstFixed(timeType, length, d, TestUtilMp)
+	}
+
 	MakeScalarDateTime = func(value string, length int) *vector.Vector {
 		d, err := types.ParseDatetime(value, 6)
 		if err != nil {
@@ -350,4 +375,33 @@ func MakeDecimal128ArrByFloat64Arr(input []float64) []types.Decimal128 {
 	}
 
 	return ret
+}
+
+func MakeRandomStrings(cardinality, targetRows int) []string {
+	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
+	charsLen := len(chars)
+
+	// mock random strings
+	dataset := make([][]byte, cardinality)
+	for i := range dataset {
+		randLen := rand.Intn(charsLen) + 1
+		dataset[i] = make([]byte, randLen)
+		for j := range dataset[i] {
+			dataset[i][j] = chars[rand.Intn(charsLen)]
+		}
+	}
+
+	data := make([]string, 0)
+	for {
+		for i := range dataset {
+			n := rand.Intn(10) + 1
+			for j := 0; j < n; j++ {
+				data = append(data, string(append([]byte{}, dataset[i]...)))
+			}
+		}
+		if len(data) >= targetRows {
+			break
+		}
+	}
+	return data
 }

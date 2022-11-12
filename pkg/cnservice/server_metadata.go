@@ -15,6 +15,8 @@
 package cnservice
 
 import (
+	"path/filepath"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
@@ -22,11 +24,15 @@ import (
 )
 
 const (
-	metadataFile = "cnstore/metadata.data"
+	metadataDir = "cnservice"
 )
 
+func getMetadataFile(uuid string) string {
+	return filepath.Join(metadataDir, uuid)
+}
+
 func (s *service) initMetadata() error {
-	data, err := file.ReadFile(s.metadataFS, metadataFile)
+	data, err := file.ReadFile(s.metadataFS, getMetadataFile(s.cfg.UUID))
 	if err != nil {
 		return err
 	}
@@ -49,7 +55,9 @@ func (s *service) initMetadata() error {
 }
 
 func (s *service) mustUpdateMetadata() {
-	if err := file.WriteFile(s.metadataFS, metadataFile, protoc.MustMarshal(&s.metadata)); err != nil {
+	if err := file.WriteFile(s.metadataFS,
+		getMetadataFile(s.cfg.UUID),
+		protoc.MustMarshal(&s.metadata)); err != nil {
 		s.logger.Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}

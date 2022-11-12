@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -26,10 +27,11 @@ import (
 )
 
 func TestInitMetadata(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(localFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	assert.NoError(t, err)
 
 	s := &store{logger: logutil.GetPanicLogger(), metadataFileService: fs}
+	s.cfg = &Config{UUID: "1"}
 	s.mu.metadata.UUID = "1"
 	s.mu.metadata.Shards = append(s.mu.metadata.Shards, metadata.DNShard{ReplicaID: 1})
 	assert.NoError(t, s.initMetadata())
@@ -41,7 +43,7 @@ func TestInitMetadata(t *testing.T) {
 }
 
 func TestInitMetadataWithExistData(t *testing.T) {
-	fs, err := fileservice.NewMemoryFS(localFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	assert.NoError(t, err)
 	value := metadata.DNStore{
 		UUID: "dn1",
@@ -55,7 +57,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 		},
 	}
 	assert.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
-		FilePath: metadataFile,
+		FilePath: getMetadataFile(value.UUID),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -66,6 +68,7 @@ func TestInitMetadataWithExistData(t *testing.T) {
 	}))
 
 	s := &store{logger: logutil.GetPanicLogger(), metadataFileService: fs}
+	s.cfg = &Config{UUID: "dn1"}
 	s.mu.metadata.UUID = "dn1"
 	assert.NoError(t, s.initMetadata())
 	assert.Equal(t, value, s.mu.metadata)
@@ -79,13 +82,13 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 
-	fs, err := fileservice.NewMemoryFS(localFileServiceName)
+	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName)
 	assert.NoError(t, err)
 	value := metadata.DNStore{
 		UUID: "dn1",
 	}
 	assert.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
-		FilePath: metadataFile,
+		FilePath: getMetadataFile(value.UUID),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,

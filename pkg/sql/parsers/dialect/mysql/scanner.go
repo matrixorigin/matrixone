@@ -179,14 +179,15 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			nextChar := s.peek(1)
 			if nextChar == ' ' || nextChar == '\n' || nextChar == '\t' || nextChar == '\r' || nextChar == eofChar {
 				s.inc()
-				return s.scanCommentTypeLine(2)
+				id, str := s.scanCommentTypeLine(2)
+				if id == LEX_ERROR {
+					return id, str
+				}
+				return s.Scan()
 			}
 		case '>':
 			s.inc()
-			// TODO:
-			// JSON_UNQUOTE_EXTRACT_OP
-			// JSON_EXTRACT_OP
-			return 0, ""
+			return ARROW, ""
 		}
 		return int(ch), ""
 	case '<':
@@ -565,7 +566,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			break
 		}
 		if ch == '@' {
-			isVariable = true
+			break
 		}
 		s.inc()
 	}

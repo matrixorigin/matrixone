@@ -16,8 +16,8 @@ package disttae
 
 import (
 	"context"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,7 +89,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0], -1); err != nil {
 		return err
 	}
 	metaName := genMetaTableName(id)
@@ -98,14 +98,25 @@ func (db *database) Delete(ctx context.Context, name string) error {
 }
 
 func (db *database) Truncate(ctx context.Context, name string) error {
+	var tbl *table
+	var oldId uint64
+
 	newId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	key := genTableKey(ctx, name, db.databaseId)
+	if v, ok := db.txn.tableMap.Load(key); ok {
+		tbl = v.(*table)
+	}
 
-	oldId, err := db.txn.getTableId(ctx, db.databaseId, name)
-	if err != nil {
-		return err
+	if tbl != nil {
+		oldId = tbl.tableId
+		tbl.tableId = newId
+	} else {
+		if oldId, err = db.txn.getTableId(ctx, db.databaseId, name); err != nil {
+			return err
+		}
 	}
 
 	bat, err := genTruncateTableTuple(newId, db.databaseId,
@@ -115,18 +126,20 @@ func (db *database) Truncate(ctx context.Context, name string) error {
 	}
 	for i := range db.txn.dnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i]); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[i], -1); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func (db *database) GetDatabaseId(ctx context.Context) string {
+	return strconv.FormatUint(db.databaseId, 10)
+}
+
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
-	defer cancel()
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err
@@ -166,7 +179,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0], -1); err != nil {
 			return err
 		}
 	}
@@ -176,7 +189,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0]); err != nil {
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0], -1); err != nil {
 			return err
 		}
 	}

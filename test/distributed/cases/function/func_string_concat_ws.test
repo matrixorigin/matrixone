@@ -1,0 +1,129 @@
+#SELECT, 嵌套
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 ( number INT NOT NULL, alpha CHAR(6) NOT NULL );
+INSERT INTO t1 VALUES (1413006,'idlfmv'),
+(1413065,'smpsfz'),(1413127,'sljrhx'),(1413304,'qerfnd');
+
+SELECT number, any_value(alpha), CONCAT_WS('<---->',number,any_value(alpha)) AS new
+FROM t1 GROUP BY number;
+SELECT CONCAT_WS('<---->',number,alpha) AS new
+FROM t1 GROUP BY CONCAT_WS('<---->',number,alpha) LIMIT 1;
+
+SELECT any_value(number), any_value(alpha), CONCAT_WS('<->',any_value(number),any_value(alpha)) AS new
+FROM t1 GROUP BY new LIMIT 1;
+SELECT any_value(number), any_value(alpha), CONCAT_WS('-',any_value(number),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha)) AS new
+FROM t1 GROUP BY new LIMIT 1;
+SELECT any_value(number), any_value(alpha), CONCAT_WS('<------------------>',any_value(number),any_value(alpha))
+FROM t1 GROUP BY CONCAT_WS('<------------------>',any_value(number),any_value(alpha)) LIMIT 1;
+drop table t1;
+
+#SELECT, 嵌套，NULL
+select concat_ws(', ','monty','was here','again');
+select concat_ws(',','',NULL,'a');
+-- @separator:table
+SELECT CONCAT_WS('"',CONCAT_WS('";"',space(60),space(60),space(60),space(100)), '"');
+
+
+#WHERE 
+CREATE TABLE t1(id int(11) NOT NULL,pc int(11) NOT NULL default 0,title varchar(20) default NULL,PRIMARY KEY (id));
+INSERT INTO t1 VALUES(1, 0, 'Main'),(2, 1, 'Toys'),(3, 1, 'Games');
+SELECT t1.id, CONCAT_WS('->', t3.title, t2.title, t1.title) as col1 FROM t1 LEFT JOIN t1 AS t2 ON t1.pc=t2.id LEFT JOIN t1 AS t3 ON t2.pc=t3.id;
+SELECT t1.id, CONCAT_WS('->', t3.title, t2.title, t1.title) as col1 FROM t1 LEFT JOIN t1 AS t2 ON t1.pc=t2.id LEFT JOIN t1 AS t3 ON t2.pc=t3.id WHERE CONCAT_WS('->', t3.title, t2.title, t1.title) LIKE '%Toys%';
+DROP TABLE t1;
+
+#WHERE
+CREATE TABLE t1(trackid     int(10) unsigned NOT NULL,trackname   varchar(100) NOT NULL default '',PRIMARY KEY (trackid));
+CREATE TABLE t2(artistid    int(10) unsigned NOT NULL,artistname  varchar(100) NOT NULL default '',PRIMARY KEY (artistid));
+CREATE TABLE t3(trackid     int(10) unsigned NOT NULL,artistid    int(10) unsigned NOT NULL,PRIMARY KEY (trackid));
+INSERT INTO t1 VALUES (1, 'April In Paris'), (2, 'Autumn In New York');
+INSERT INTO t2 VALUES (1, 'Vernon Duke');
+INSERT INTO t3 VALUES (1,1);
+SELECT CONCAT_WS(' ', trackname, artistname) trackname, artistname FROM t1 LEFT JOIN t3 ON t1.trackid=t3.trackid LEFT JOIN t2 ON t2.artistid=t3.artistid WHERE CONCAT_WS(' ', trackname, artistname) LIKE '%In%';
+drop table t1;
+drop table t2;
+drop table t3;
+
+
+
+#子查询
+CREATE TABLE t1 (f2 VARCHAR(20));
+CREATE TABLE t2 (f2 VARCHAR(20));
+INSERT INTO t1 VALUES ('MIN'),('MAX');
+INSERT INTO t2 VALUES ('LOAD');
+SELECT CONCAT_WS('_', (SELECT t2.f2 FROM t2), t1.f2) AS concat_name FROM t1;
+drop table t1;
+drop table t2;
+
+#嵌套
+
+create table t1 (a int, b int);
+insert into t1 values (1, 4),(10, 40),(1, 4),(10, 43),(1, 4),(10, 41),(1, 4),(10, 43),(1, 4);
+select a, MAX(b), CONCAT_WS(MAX(b), '43', '4', '5') from t1 group by a;
+drop table t1;
+
+
+
+#INSERT, DISTINCT
+#0.5 MO不支持CREATE TABLE SELECT写法
+#CREATE TABLE t1 (a MEDIUMINT NULL);
+#INSERT INTO t1 VALUES (1234567);
+#CREATE TABLE t2 AS SELECT CONCAT_WS(1,2,3) FROM t1;
+#INSERT INTO t2 VALUES(CONCAT_WS(2,3,4)),(CONCAT_WS(2,3,4)), (CONCAT_WS(5,6,7));
+#SELECT DISTINCT * from t2;
+#DROP TABLE t1;
+#DROP TABLE t2;
+
+
+#WHERE， EXTREME VALUES，嵌套
+#SET timestamp=UNIX_TIMESTAMP('2011-07-31 10:00:00');
+-- @bvt:issue#4573
+CREATE TABLE t1 (
+col_datetime_2_not_null_key datetime(2) NOT NULL,
+col_datetime_5 datetime(5) DEFAULT NULL,
+pk datetime(5) NOT NULL,
+PRIMARY KEY (pk));
+INSERT INTO t1 VALUES
+('2001-10-20 00:00:00.00','2001-09-20 11:18:18.03630','2011-07-19 17:37:06.26725'),
+('0001-01-01 00:00:00.00','0001-01-01 00:00:00.00000','2011-07-19 17:37:07.26725'),
+('0001-01-01 00:00:00.00','0001-01-01 00:00:00.00000','2011-07-19 17:37:08.26725'),
+('2000-01-14 17:55:57.03','0001-01-01 00:00:00.00000','2011-07-19 17:37:09.26725'),
+('2006-12-27 07:25:14.04',NULL,'2011-07-19 17:37:10.26725'),
+('2000-10-17 22:03:12.01','0001-01-01 00:00:00.00000','2011-07-19 17:37:11.26725'),
+('0001-01-01 00:00:00.00','0001-01-01 00:00:00.00000','2011-07-19 17:37:12.26725'),
+('0001-01-01 00:00:00.00','0001-01-01 00:00:00.00000','2011-07-19 17:37:13.26725'),
+('0001-01-01 00:00:00.00','2008-06-04 23:05:50.03642','2011-07-19 17:37:14.26725'),
+('2000-10-22 23:52:09.01',NULL,'2011-07-19 17:37:15.26725');
+SELECT col_datetime_2_not_null_key AS c1, col_datetime_5 AS c2
+FROM t1
+WHERE
+pk <> CONCAT_WS( ':','%I','%m' )+CONCAT_WS('-','%y','%H','%V','%k','%k' )
+OR
+year(col_datetime_5) < year(utc_timestamp())
+ORDER BY 1;
+DROP TABLE t1;
+#SET timestamp=DEFAULT;
+-- @bvt:issue
+
+#EXTREME VALUES, 多语言
+
+SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, "a", "b");
+
+SELECT CONCAT_WS("147129094810294812983120", "@^%#&*@^$@(*&#()!@*", "a", "b");
+SELECT CONCAT_WS("123", "你好", "français", "にほんご");
+
+#DATA TYPES
+
+SELECT CONCAT_WS(1, 0.213, 213.4131, "abc", "2012-03-21 03:03:02", NULL);
+
+
+
+#ON CONDITION, HAVING, 比较操作
+create table t1(a INT,  b date);
+create table t2(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+insert into t2 values(1, "2012-10-12"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
+SELECT t1.a,t1.b, t2.a,t2.b FROM t1 JOIN t2 ON (concat_ws(t1.a, t1.b) = concat_ws(t2.a, t2.b)) HAVING substring(concat_ws(t1.a, t1.b),1,1)='2';
+drop table t1;
+drop table t2;
+
+

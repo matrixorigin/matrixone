@@ -76,7 +76,7 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 		if err != nil {
 			return relPos, nil
 		}
-		if f.Flag == plan.Function_AGG {
+		if f.GetFlag() == plan.Function_AGG {
 			return relPos, nil
 		}
 		args := make([]*plan.Expr, len(e.F.Args))

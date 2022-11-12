@@ -68,6 +68,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		return 0, nil, moerr.NewNYI("aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+	}
+
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
@@ -308,11 +312,22 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 
 			return leftExpr, nil
 
-		case "<", "<=":
-			return builder.generateRecursiveComparison("<", op, childList, ctx, 0)
+		case "<", "<=", ">", ">=":
+			projList := make([]*plan.Expr, len(childList))
+			for i := range projList {
+				projList[i] = &plan.Expr{
+					Typ: ctx.results[i].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ctx.rootTag(),
+							ColPos: int32(i),
+						},
+					},
+				}
+			}
 
-		case ">", ">=":
-			return builder.generateRecursiveComparison(">", op, childList, ctx, 0)
+			nonEqOp := op[:1] // <= -> <, >= -> >
+			return unwindTupleComparison(nonEqOp, op, childList, projList, 0)
 
 		default:
 			return nil, moerr.NewNotSupported("row constructor only support comparison operators")
@@ -334,65 +349,16 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 	}
 }
 
-func (builder *QueryBuilder) generateRecursiveComparison(op, tailOp string, childList []*plan.Expr, ctx *BindContext, idx int) (*plan.Expr, error) {
-	if idx == len(childList)-1 {
-		return bindFuncExprImplByPlanExpr(tailOp, []*plan.Expr{
-			childList[idx],
-			{
-				Typ: ctx.results[idx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: ctx.rootTag(),
-						ColPos: int32(idx),
-					},
-				},
-			},
-		})
+func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
+	for _, pred := range preds {
+		switch exprImpl := pred.Expr.(type) {
+		case *plan.Expr_F:
+			if exprImpl.F.Func.ObjName != "=" {
+				return true
+			}
+		}
 	}
-
-	expr, err := bindFuncExprImplByPlanExpr(op, []*plan.Expr{
-		childList[idx],
-		{
-			Typ: ctx.results[idx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.rootTag(),
-					ColPos: int32(idx),
-				},
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	eqExpr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
-		childList[idx],
-		{
-			Typ: ctx.results[idx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.rootTag(),
-					ColPos: int32(idx),
-				},
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	tailExpr, err := builder.generateRecursiveComparison(op, tailOp, childList, ctx, idx+1)
-	if err != nil {
-		return nil, err
-	}
-
-	tailExpr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{eqExpr, tailExpr})
-	if err != nil {
-		return nil, err
-	}
-
-	return bindFuncExprImplByPlanExpr("or", []*plan.Expr{expr, tailExpr})
+	return false
 }
 
 func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {

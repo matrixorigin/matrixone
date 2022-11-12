@@ -1,0 +1,137 @@
+drop user if exists yellowcar,test_user,user123456,123user,`1234@fff`,`1234`,`user1234.aaaa`,`123user中文`,user_role,user123456,c_user_01,c_user_02,c_user_03,customername,customer,custom,finley,jason,`neil@192.168.1.10`;
+drop user if exists test_user,test_user0,test_user1,test_user2,user1,user2,user3,user4,user5,user6,user7,user8,user9,user10,tester1,tester2,tester001,tester002,tester003,`daisy@192.168.1.10`,daisy;
+drop user if exists user1,tester1,tester2,jason,finley,custom,customer,customname,c_user_01,c_user_02,c_user_03;
+drop account if exists test5555;
+drop role if exists low_level,mid_level,high_level,u_role;
+drop table if exists testdb.aaa;
+create role if not exists u_role;
+create user yellowcar identified by 'oldmaster';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='yellowcar';
+user_name    authentication_string
+yellowcar    oldmaster
+create user  user123456 identified by 'TYUJI_123@126.cn' comment '这是创建用户测试aaaa11111';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='user123456';
+user_name    authentication_string
+user123456    TYUJI_123@126.cn
+create user  123user  identified by 'eeeeee' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name='123user';
+user_name    authentication_string
+123user    eeeeee
+create user Test_user identified by '12345678';
+create user Test_User identified by '12345678';
+internal error: the user test_user exists
+create user `1234@fff` identified by '#¥%……&' comment 'this is test@fefffff' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name='1234@fff';
+user_name    authentication_string
+1234@fff    #¥%……&
+create user  `1234`  identified by '#¥%……&' comment 'this is test@fefffff' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name='1234';
+user_name    authentication_string
+1234    #¥%……&
+create user `user1234.aaaa`  identified by '#¥%……&' comment 'this is test@fefffff' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name='user1234.aaaa';
+user_name    authentication_string
+user1234.aaaa    #¥%……&
+create user  `123user中文`  identified by 'eee中文' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name='123user中文';
+user_name    authentication_string
+123user中文    eee中文
+create user  "test_user0" identified by '12345678';
+create user  ` c_user_01 `  identified by ' 1111 ' ;
+create user  " c_user_02 "  identified by '1111' ;
+create user  ' c_user_03 '  identified by '1111' ;
+select user_name, authentication_string from mo_catalog.mo_user where user_name in('c_user_01','c_user_02','c_user_03');
+user_name    authentication_string
+c_user_01     1111 
+c_user_02    1111
+c_user_03    1111
+create user if not exists test_user1 identified by '12345678';
+create user  test_user1 identified by '12345678';
+internal error: the user test_user1 exists
+create user if not exists test_user1 identified by '12345678';
+create user user1 identified by '12345678',user2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678',user5 identified by '12345678',user6 identified by '12345678',user7 identified by '12345678',user8 identified by '12345678',user9 identified by '12345678',user10 identified by '12345678' default role u_role;
+select count(*) from mo_catalog.mo_user where user_name like 'user%';
+count(*)
+24
+create user tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';
+internal error: the user user3 exists
+select count(*) from mo_catalog.mo_user where user_name like 'tester%';
+count(*)
+0
+create user if not exists tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';
+select count(*) from mo_catalog.mo_user where user_name like 'tester%';
+count(*)
+2
+create user tester001 identified by '12345678',tester002  identified by '12345678',tester:003 identified by '12345678';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 90 near ":003 identified by '12345678';";
+create user if not exists tester001 identified by '12345678',tester002  identified by '12345678',tester:003 identified by '12345678';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 104 near ":003 identified by '12345678';";
+select count(*) from mo_catalog.mo_user where user_name like 'tester00%';
+count(*)
+0
+CREATE USER daisy@192.168.1.10 IDENTIFIED BY '123456';
+select user_name, user_host from mo_catalog.mo_user where user_name='daisy';
+user_name    user_host
+daisy    192.168.1.10
+CREATE USER 'neil@192.168.1.10' IDENTIFIED BY '123456';
+select user_name, user_host from mo_catalog.mo_user where user_name='neil';
+user_name    user_host
+CREATE USER 'jason'@'192.168.1.10' IDENTIFIED BY '123456';
+select user_name, user_host from mo_catalog.mo_user where user_name='jason';
+user_name    user_host
+jason    192.168.1.10
+create user 'finley'@'%.example.com' IDENTIFIED BY '123456';
+select user_name, user_host from mo_catalog.mo_user where user_name='finley';
+user_name    user_host
+finley    %.example.com
+CREATE USER 'custom'@'localhost' IDENTIFIED BY '11111';
+select user_name, user_host from mo_catalog.mo_user where user_name='custom';
+user_name    user_host
+custom    localhost
+CREATE USER 'customer'@'host47.example.com' IDENTIFIED BY '1111';
+select user_name, user_host from mo_catalog.mo_user where user_name='customer';
+user_name    user_host
+customer    host47.example.com
+CREATE USER 'customername'@'%' IDENTIFIED BY '1111';
+select user_name, user_host from mo_catalog.mo_user where user_name='customername';
+user_name    user_host
+customername    localhost
+CREATE USER ''@'localhost' IDENTIFIED BY '1111';
+internal error: the name "" is invalid
+create user if not exists user1 ,user2 ,user3 identified by '12345678';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " ,user2 ,user3 identified by '12345678';";
+create user if not exists all identified by '111' ;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " all identified by '111' ;";
+create user user:1 identified by '111' ;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near ":1 identified by '111' ;";
+create user 'user:1' identified by '111' ;
+internal error: the name "user:1" is invalid
+create user "user:1" identified by '111' ;
+internal error: the name "user:1" is invalid
+create user `user:1` identified by '111' ;
+internal error: the name "user:1" is invalid
+create user user_aaa identified by '12345678' default role aaa ;
+internal error: there is no role aaa
+create user '' identified by '111' ;
+internal error: the name "" is invalid
+create user c_user_4 identified by '' ;
+internal error: password is empty string
+create user if not exists test_user2 identified by '12345678';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
+user_name    authentication_string
+test_user2    12345678
+drop user test_user2;
+select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
+user_name    authentication_string
+create user if not exists test_user2 identified by '12345678';
+select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';
+user_name    authentication_string
+test_user2    12345678
+create user if not exists user1 identified by '12345678' default role moadmin;
+internal error: the role moadmin can not be granted to non administration user user1
+drop user if exists yellowcar,test_user,user123456,123user,`1234@fff`,`1234`,`user1234.aaaa`,`123user中文`,user_role,user123456,c_user_01,c_user_02,c_user_03,customername,customer,custom,finley,jason,`neil@192.168.1.10`;
+drop user if exists test_user,test_user0,test_user1,test_user2,user1,user2,user3,user4,user5,user6,user7,user8,user9,user10,tester1,tester2,tester001,tester002,tester003,`daisy@192.168.1.10`,daisy;
+drop user if exists user1,tester1,tester2,jason,finley,custom,customer,customname,c_user_01,c_user_02,c_user_03;
+drop account if exists test5555;
+drop role if exists low_level,mid_level,high_level,u_role;
+drop table if exists testdb.aaa;

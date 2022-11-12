@@ -1,0 +1,51 @@
+use tpch;
+select
+c_count,
+count(*) as custdist
+from
+(
+select
+c_custkey,
+count(o_orderkey)
+from
+customer left outer join orders on
+c_custkey = o_custkey
+and o_comment not like '%pending%accounts%'
+group by
+c_custkey
+) as c_orders (c_custkey, c_count)
+group by
+c_count
+order by
+custdist desc,
+c_count desc
+;
+c_count	custdist
+0	50
+17	8
+16	7
+22	6
+14	6
+11	6
+20	5
+12	5
+10	5
+9	5
+7	5
+23	4
+21	4
+15	4
+13	4
+4	4
+26	3
+19	3
+8	3
+6	3
+18	2
+5	2
+30	1
+29	1
+28	1
+25	1
+24	1
+3	1
