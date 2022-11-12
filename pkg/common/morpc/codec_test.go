@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,13 +187,16 @@ func TestNewWithMaxBodySize(t *testing.T) {
 }
 
 func TestBufferScale(t *testing.T) {
+	stopper := stopper.NewStopper("")
+	defer stopper.Stop()
+
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 	c1 := newTestCodec(WithCodecEnableChecksum(),
-		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClock(ctx, 0)),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClockWithStopper(stopper, 0)),
 		WithCodecPayloadCopyBufferSize(16*1024))
 	c2 := newTestCodec(WithCodecEnableChecksum(),
-		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClock(ctx, 0)),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClockWithStopper(stopper, 0)),
 		WithCodecPayloadCopyBufferSize(16*1024))
 	out := buf.NewByteBuf(32)
 	conn := buf.NewByteBuf(32)
