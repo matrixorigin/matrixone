@@ -32,17 +32,17 @@ endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [hakeeper-client]
-service-addresses = ["logservice:32001"]
+service-addresses = ["logservice-0:32001"]
 
 [observability]
 disableTrace = true
 disableMetric = true
 
 [cn]
-uuid = "dd1dccb8-4d3c-41f9-b482-5251dc7a41bf"
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
-service-address = "cn-0:6002"
-sql-address = "cn-0:6001"
+service-address = "cn-1:6002"
+sql-address = "cn-1:6001"
 
 [cn.Engine]
 type = "distributed-tae"

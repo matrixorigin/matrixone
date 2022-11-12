@@ -9,30 +9,20 @@ max-size = 512
 max-message-size = "100mb"
 
 [[fileservice]]
-backend = "DISK"
-data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
+backend = "DISK"
 
 [[fileservice]]
-backend = "MINIO"
 name = "S3"
-
-[fileservice.s3]
-bucket = "mo-test"
-endpoint = "http://minio:9000"
-key-prefix = "server/data"
+backend = "DISK"
+data-dir = "mo-data/s3"
 
 [[fileservice]]
-backend = "MINIO"
 name = "ETL"
-
-[fileservice.s3]
-bucket = "mo-test"
-endpoint = "http://minio:9000"
-key-prefix = "server/etl"
+backend = "DISK-ETL"
 
 [hakeeper-client]
-service-addresses = ["logservice:32001"]
+service-addresses = ["logservice-0:32001"]
 
 [observability]
 disableTrace = true

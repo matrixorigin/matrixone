@@ -1,9 +1,12 @@
-service-type = "DN"
+service-type = "CN"
 
 [log]
 level = "debug"
 format = "console"
 max-size = 512
+
+[cn.rpc]
+max-message-size = "100mb"
 
 [[fileservice]]
 backend = "DISK"
@@ -29,23 +32,20 @@ endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [hakeeper-client]
-service-addresses = ["logservice:32001"]
+service-addresses = ["logservice-0:32001"]
 
-[dn]
-uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
-service-address = "dn:41010"
-listen-address = "0.0.0.0:41010"
+[observability]
+disableTrace = true
+disableMetric = true
 
-[dn.Txn]
+[cn]
+uuid = "dd1dccb8-4d3c-41f9-b482-5251dc7a41bf"
+listen-address = "0.0.0.0:6002"
+service-address = "cn-0:6002"
+sql-address = "cn-0:6001"
 
-[dn.Txn.Storage]
-backend = "TAE"
-fileservice = "S3"
-log-backend = "logservice"
+[cn.Engine]
+type = "distributed-tae"
 
-[dn.Ckp]
-flush-interval = "60s"
-min-count = 100
-scan-interval = "5s"
-incremental-interval = "180s"
-global-interval = "100000s"
+[cn.frontend]
+port = 6001

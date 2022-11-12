@@ -1,5 +1,12 @@
 version: '3.9'
 
+x-build: &build
+  build:
+      context: ../../
+      dockerfile: ./optools/images/Dockerfile
+      args:
+        GOPROXY: "https://proxy.golang.com.cn,direct"
+
 services:
   cn-0:
     container_name: cn-0
@@ -8,9 +15,11 @@ services:
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
-    entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
+    image: matrixorigin/matrixone:nightly-b9c225f4
+    entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/cn-0.toml"]
     profiles:
+      - launch-tae-CN-tae-DN-minio
+      - launch-tae-multi-CN-tae-DN-minio
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
     depends_on:
@@ -20,11 +29,12 @@ services:
       - "6002"
     restart: on-failure
     volumes:
-      - ../../etc/launch-mo-compose-minio/config:/config
+      - ../../etc/launch-mo-compose/config:/config
     environment:
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - LAUNCH=${LAUNCH}
     tty: true
     networks:
       monet:
@@ -36,8 +46,8 @@ services:
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
-    entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
+    image: matrixorigin/matrixone:nightly-b9c225f4
+    entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/cn-1.toml"]
     depends_on:
       - dn
     ports:
@@ -45,27 +55,31 @@ services:
       - "6002"
     restart: on-failure
     profiles:
+      - launch-tae-multi-CN-tae-DN-minio
       - launch-tae-multi-CN-tae-DN
     volumes:
-      - ../../etc/launch-mo-compose-minio/config:/config
+      - ../../etc/launch-mo-compose/config:/config
     environment:
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=minio123
-        # - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - LAUNCH=${LAUNCH}
     tty: true
     networks:
       monet:
 
-  dn:
-    container_name: dn
+  dn-0:
+    container_name: dn-0
     build:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
-    entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
+    image: matrixorigin/matrixone:nightly-b9c225f4
+    entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/dn-0.toml"]
     profiles:
+      - launch-tae-CN-tae-DN-minio
+      - launch-tae-multi-CN-tae-DN-minio
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
     depends_on:
@@ -75,26 +89,29 @@ services:
     restart: on-failure
     tty: true
     volumes:
-      - ../../etc/launch-mo-compose-minio/config:/config
+      - ../../etc/launch-mo-compose/config:/config
     environment:
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - LAUNCH=${LAUNCH}
     networks:
       monet:
 
-  logservice:
-    container_name: logservice
+  logservice-0:
+    container_name: logservice-0
     build:
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.com.cn,direct"
-    image: matrixorigin/matrixone:nightly-2af3bb11
+    image: matrixorigin/matrixone:nightly-b9c225f4
     profiles:
+      - launch-tae-CN-tae-DN-minio
+      - launch-tae-multi-CN-tae-DN-minio
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
-    entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
+    entrypoint: ["/mo-service", "-cfg", "/config/$LAUNCH/log-0.toml"]
     depends_on:
       - createbuckets
     ports:
@@ -102,15 +119,17 @@ services:
       - "32001"
       - "32002"
     environment:
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=minio123
-      # - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - LAUNCH=${LAUNCH}
     restart: on-failure
     volumes:
-      - ../../etc/launch-mo-compose-minio/config:/config
+      - ../../etc/launch-mo-compose/config:/config
     tty: true    
     networks:
       monet:
+        ipv4_address: 179.19.0.19
 
   minio:
     image: minio/minio
@@ -124,8 +143,8 @@ services:
       MINIO_ROOT_PASSWORD: minio123
     command: server --console-address ":9001" /data
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch-tae-CN-tae-DN-minio
+      - launch-tae-multi-CN-tae-DN-minio
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 1s
@@ -140,8 +159,8 @@ services:
        minio:
         condition: service_healthy
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch-tae-CN-tae-DN-minio
+      - launch-tae-multi-CN-tae-DN-minio
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;

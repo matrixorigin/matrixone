@@ -12,28 +12,28 @@ data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
 
 [[fileservice]]
-backend = "MINIO"
+backend = "S3"
 name = "S3"
 
 [fileservice.s3]
-bucket = "mo-test"
-endpoint = "http://minio:9000"
+bucket = "matrixorigin-docker-compose-test"
+endpoint = "https://s3.us-west-2.amazonaws.com"
 key-prefix = "server/data"
 
 [[fileservice]]
-backend = "MINIO"
+backend = "S3"
 name = "ETL"
 
 [fileservice.s3]
-bucket = "mo-test"
-endpoint = "http://minio:9000"
+bucket = "matrixorigin-docker-compose-test"
+endpoint = "https://s3.us-west-2.amazonaws.com"
 key-prefix = "server/etl"
 
 [observability]
 statusPort = 7001
 
 [hakeeper-client]
-discovery-address = "logservice:32001"
+discovery-address = "logservice-0:32001"
 
 [logservice]
 deployment-id = 1

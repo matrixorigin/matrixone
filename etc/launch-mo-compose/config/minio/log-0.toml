@@ -12,21 +12,21 @@ data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
 
 [[fileservice]]
-backend = "S3"
+backend = "MINIO"
 name = "S3"
 
 [fileservice.s3]
-bucket = "matrixorigin-docker-compose-test"
-endpoint = "https://s3.us-west-2.amazonaws.com"
+bucket = "mo-test"
+endpoint = "http://minio:9000"
 key-prefix = "server/data"
 
 [[fileservice]]
-backend = "S3"
+backend = "MINIO"
 name = "ETL"
 
 [fileservice.s3]
-bucket = "matrixorigin-docker-compose-test"
-endpoint = "https://s3.us-west-2.amazonaws.com"
+bucket = "mo-test"
+endpoint = "http://minio:9000"
 key-prefix = "server/etl"
 
 [observability]
@@ -38,12 +38,12 @@ discovery-address = "logservice:32001"
 [logservice]
 deployment-id = 1
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-raft-address = "logservice:32000"
-logservice-address = "logservice:32001"
-gossip-address = "179.19.0.4:32002"
+raft-address = "logservice-0:32000"
+logservice-address = "logservice-0:32001"
+gossip-address = "179.19.0.19:32002"
 logservice-listen-address = "0.0.0.0:32001"
 gossip-seed-addresses = [
-  "logservice:32002",
+  "logservice-0:32002",
 ]
 gossip-allow-self-as-seed = true
 
