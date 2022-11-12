@@ -30,9 +30,6 @@ uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "127.0.0.1:3307"
 role = "TP"
 
-[cn.Frontend]
-comQueryInProgress = true
-
 [cn.Engine]
 type = "tae"
 logstore = "logservice"
@@ -44,6 +41,7 @@ global-interval = "100000s"
 
 [cn.frontend]
 port = 6001
+comQueryInProgress = true
 
 [observability]
 statusPort = 9001

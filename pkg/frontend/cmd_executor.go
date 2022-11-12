@@ -16,13 +16,14 @@ package frontend
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
-	"time"
 )
 
 // CmdExecutor handle the command from the client
@@ -52,98 +53,180 @@ const (
 // it is also independent of the protocol
 type StmtExecutor interface {
 	ComputationWrapper
+
 	// GetStatus returns the execution status
 	GetStatus() stmtExecStatus
 
 	// SetStatus sets the execution status
-	SetStatus(status stmtExecStatus)
+	SetStatus(err error)
 
-	// Prepare setups something
-	Prepare(ctx context.Context, ses *Session, proc *process.Process, beginInstant time.Time) error
-
-	// Close cleans the side effect
-	Close(ctx context.Context, ses *Session) error
+	// Setup does preparation
+	Setup(ctx context.Context, ses *Session) error
 
 	// VerifyPrivilege ensures the user can execute this statement
 	VerifyPrivilege(ctx context.Context, ses *Session) error
 
-	// VerifyTxnRestriction checks the restriction due to the transaction semantic
-	VerifyTxnRestriction(ctx context.Context, ses *Session) error
+	// VerifyTxn checks the restriction of the transaction
+	VerifyTxn(ctx context.Context, ses *Session) error
 
-	// ResponseBefore responses the client before the execution starts
-	ResponseBefore(ctx context.Context, ses *Session) error
-
-	// ResponseAfter responses the client after the execution ends
-	ResponseAfter(ctx context.Context, ses *Session) error
+	// ResponseBeforeExec responses the client before the execution starts
+	ResponseBeforeExec(ctx context.Context, ses *Session) error
 
 	// ExecuteImpl runs concrete logic. every statement has its implementation
 	ExecuteImpl(ctx context.Context, ses *Session) error
 
-	// RecordPlan saves the plan into the log
-	RecordPlan(ctx context.Context, ses *Session) error
+	// ResponseAfterExec responses the client after the execution ends
+	ResponseAfterExec(ctx context.Context, ses *Session) error
 
 	// CommitOrRollbackTxn commits or rollbacks the transaction based on the status
 	CommitOrRollbackTxn(ctx context.Context, ses *Session) error
+
+	// Close does clean
+	Close(ctx context.Context, ses *Session) error
 }
 
 var _ StmtExecutor = &baseStmtExecutor{}
 var _ StmtExecutor = &statusStmtExecutor{}
 var _ StmtExecutor = &resultSetStmtExecutor{}
 
+// Execute runs the execution framework
+func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt string, useEnv bool) error {
+	var err, err2 error
+	var cmpBegin, runBegin time.Time
+	pu := ses.GetParameterUnit()
+	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, useEnv)
+	err = stmtExec.Setup(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	err = stmtExec.VerifyPrivilege(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	err = stmtExec.VerifyTxn(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+
+	if err = stmtExec.SetDatabaseName(ses.GetDatabaseName()); err != nil {
+		goto handleRet
+	}
+
+	cmpBegin = time.Now()
+
+	//TODO: selfhandle statements do not need to compile
+	if _, err = stmtExec.Compile(ctx, ses, ses.GetOutputCallback()); err != nil {
+		goto handleRet
+	}
+
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
+	}
+
+	err = stmtExec.ResponseBeforeExec(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	runBegin = time.Now()
+
+	err = stmtExec.ExecuteImpl(ctx, ses)
+	if err != nil {
+		goto handleRet
+	}
+
+	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
+	}
+
+	_ = stmtExec.RecordExecPlan(ctx)
+
+handleRet:
+	stmtExec.SetStatus(err)
+	err2 = stmtExec.CommitOrRollbackTxn(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+
+	err2 = stmtExec.ResponseAfterExec(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+
+	err2 = stmtExec.Close(ctx, ses)
+	if err2 != nil {
+		return err2
+	}
+	return err
+}
+
 // baseStmtExecutor the base class for the statement execution
 type baseStmtExecutor struct {
 	*TxnComputationWrapper
 	mu sync.Mutex
-	// the ctx will be updated in Prepare
-	updatedCtx context.Context
 
 	tenantName string
 
 	status stmtExecStatus
 	err    error
-	proc   *process.Process
 }
 
 func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
 	return bse.status
 }
 
-func (bse *baseStmtExecutor) SetStatus(status stmtExecStatus) {
-	bse.status = status
-}
+func (bse *baseStmtExecutor) SetStatus(err error) {
+	bse.err = err
+	bse.status = stmtExecSuccess
+	if err != nil {
+		bse.status = stmtExecFail
+	}
 
-func (bse *baseStmtExecutor) RecordPlan(ctx context.Context, ses *Session) error {
-	_ = bse.RecordExecPlan(bse.updatedCtx)
-	return nil
 }
 
 func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
 	var txnErr error
 	stmt := bse.stmt
-	requestCtx := bse.updatedCtx
 	tenant := bse.tenantName
 	incStatementCounter(tenant, stmt)
 	if bse.GetStatus() == stmtExecSuccess {
 		txnErr = ses.TxnCommitSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
-			trace.EndStatement(requestCtx, txnErr)
-			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			trace.EndStatement(ctx, txnErr)
+			logStatementStatus(ctx, ses, stmt, fail, txnErr)
 			return txnErr
 		}
-		trace.EndStatement(requestCtx, nil)
-		logStatementStatus(requestCtx, ses, stmt, success, nil)
+		trace.EndStatement(ctx, nil)
+		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {
 		incStatementErrorsCounter(tenant, stmt)
-		trace.EndStatement(requestCtx, bse.err)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
+		trace.EndStatement(ctx, bse.err)
 		logutil.Error(bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
-			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			logStatementStatus(ctx, ses, stmt, fail, txnErr)
 			return txnErr
 		}
-		logStatementStatus(requestCtx, ses, stmt, fail, bse.err)
+		logStatementStatus(ctx, ses, stmt, fail, bse.err)
 	}
 	return nil
 }
@@ -157,10 +240,8 @@ func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) erro
 	return nil
 }
 
-func (bse *baseStmtExecutor) Prepare(ctx context.Context, ses *Session, proc *process.Process, beginInstant time.Time) error {
+func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	bse.proc = proc
-	bse.updatedCtx = RecordStatement(ctx, ses, proc, bse, beginInstant)
 	return nil
 }
 
@@ -175,7 +256,7 @@ func (bse *baseStmtExecutor) VerifyPrivilege(ctx context.Context, ses *Session) 
 	//skip PREPARE statement here
 	if ses.GetTenantInfo() != nil && !IsPrepareStatement(bse.stmt) {
 		bse.tenantName = ses.GetTenantInfo().GetTenant()
-		err = authenticatePrivilegeOfStatement(bse.updatedCtx, ses, bse.stmt)
+		err = authenticateUserCanExecuteStatement(ctx, ses, bse.stmt)
 		if err != nil {
 			return err
 		}
@@ -183,7 +264,7 @@ func (bse *baseStmtExecutor) VerifyPrivilege(ctx context.Context, ses *Session) 
 	return err
 }
 
-func (bse *baseStmtExecutor) VerifyTxnRestriction(ctx context.Context, ses *Session) error {
+func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error {
 	var err error
 	var can bool
 	/*
@@ -221,168 +302,20 @@ func (bse *baseStmtExecutor) VerifyTxnRestriction(ctx context.Context, ses *Sess
 	return err
 }
 
-func (bse *baseStmtExecutor) ResponseBefore(ctx context.Context, ses *Session) error {
+func (bse *baseStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
 	return nil
 }
 
-func (bse *baseStmtExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
 		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
 		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
-			trace.EndStatement(bse.updatedCtx, err)
+			trace.EndStatement(ctx, err)
 			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
-			logStatementStatus(bse.updatedCtx, ses, bse.stmt, fail, retErr)
+			logStatementStatus(ctx, ses, bse.stmt, fail, retErr)
 			return retErr
 		}
 	}
 	return nil
-}
-
-// Execute runs the execution framework
-func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time) error {
-	var err error
-	var cmpBegin, runBegin time.Time
-	pu := ses.GetParameterUnit()
-	err = stmtExec.Prepare(ctx, ses, proc, beginInstant)
-	if err != nil {
-		goto handleRet
-	}
-
-	err = stmtExec.VerifyPrivilege(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	err = stmtExec.VerifyTxnRestriction(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-
-	if err = stmtExec.SetDatabaseName(ses.GetDatabaseName()); err != nil {
-		goto handleRet
-	}
-
-	cmpBegin = time.Now()
-
-	if _, err = stmtExec.Compile(ctx, ses, ses.GetOutputCallback()); err != nil {
-		goto handleRet
-	}
-
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
-	}
-
-	err = stmtExec.ResponseBefore(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	runBegin = time.Now()
-
-	err = stmtExec.ExecuteImpl(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	err = stmtExec.CommitOrRollbackTxn(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	err = stmtExec.ResponseAfter(ctx, ses)
-	if err != nil {
-		goto handleRet
-	}
-
-	if !pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-		logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
-	}
-
-	_ = stmtExec.RecordExecPlan(ctx)
-
-handleRet:
-	stmtExec.SetStatus(stmtExecSuccess)
-	if err != nil {
-		stmtExec.SetStatus(stmtExecFail)
-	}
-
-	err = stmtExec.Close(ctx, ses)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// statusStmtExecutor represents the execution without outputting result set to the client
-type statusStmtExecutor struct {
-	*baseStmtExecutor
-}
-
-// resultSetStmtExecutor represents the execution outputting result set to the client
-type resultSetStmtExecutor struct {
-	*baseStmtExecutor
-}
-
-func (rsse *resultSetStmtExecutor) ResponseBefore(ctx context.Context, ses *Session) error {
-	var err error
-	var columns []interface{}
-	proto := ses.GetMysqlProtocol()
-	err = rsse.baseStmtExecutor.ResponseBefore(ctx, ses)
-	if err != nil {
-		return err
-	}
-
-	columns, err = rsse.GetColumns()
-	if err != nil {
-		logutil.Errorf("GetColumns from Computation handler failed. error: %v", err)
-		return err
-	}
-	/*
-		Step 1 : send column count and column definition.
-	*/
-	//send column count
-	colCnt := uint64(len(columns))
-	err = proto.SendColumnCountPacket(colCnt)
-	if err != nil {
-		return err
-	}
-	//send columns
-	//column_count * Protocol::ColumnDefinition packets
-	cmd := ses.GetCmd()
-	mrs := ses.GetMysqlResultSet()
-	for _, c := range columns {
-		mysqlc := c.(Column)
-		mrs.AddColumn(mysqlc)
-
-		/*
-			mysql COM_QUERY response: send the column definition per column
-		*/
-		err = proto.SendColumnDefinitionPacket(mysqlc, cmd)
-		if err != nil {
-			return err
-		}
-	}
-
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
-	err = proto.SendEOFPacketIf(0, 0)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (rsse *resultSetStmtExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
-	/*
-		Step 3: Say goodbye
-		mysql COM_QUERY response: End after the data row has been sent.
-		After all row data has been sent, it sends the EOF or OK packet.
-	*/
-	proto := ses.GetMysqlProtocol()
-	return proto.sendEOFOrOkPacket(0, 0)
 }

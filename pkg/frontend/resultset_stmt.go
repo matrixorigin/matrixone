@@ -2,8 +2,77 @@ package frontend
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// resultSetStmtExecutor represents the execution outputting result set to the client
+type resultSetStmtExecutor struct {
+	*baseStmtExecutor
+}
+
+func (rsse *resultSetStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
+	var err error
+	var columns []interface{}
+	proto := ses.GetMysqlProtocol()
+	err = rsse.baseStmtExecutor.ResponseBeforeExec(ctx, ses)
+	if err != nil {
+		return err
+	}
+
+	columns, err = rsse.GetColumns()
+	if err != nil {
+		logutil.Errorf("GetColumns from Computation handler failed. error: %v", err)
+		return err
+	}
+	/*
+		Step 1 : send column count and column definition.
+	*/
+	//send column count
+	colCnt := uint64(len(columns))
+	err = proto.SendColumnCountPacket(colCnt)
+	if err != nil {
+		return err
+	}
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := ses.GetCmd()
+	mrs := ses.GetMysqlResultSet()
+	for _, c := range columns {
+		mysqlc := c.(Column)
+		mrs.AddColumn(mysqlc)
+
+		/*
+			mysql COM_QUERY response: send the column definition per column
+		*/
+		err = proto.SendColumnDefinitionPacket(mysqlc, int(cmd))
+		if err != nil {
+			return err
+		}
+	}
+
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = proto.SendEOFPacketIf(0, 0)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rsse *resultSetStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	/*
+		Step 3: Say goodbye
+		mysql COM_QUERY response: End after the data row has been sent.
+		After all row data has been sent, it sends the EOF or OK packet.
+	*/
+	proto := ses.GetMysqlProtocol()
+	return proto.sendEOFOrOkPacket(0, 0)
+}
 
 // TODO: special handle for export
 type SelectExecutor struct {
@@ -36,6 +105,16 @@ type ShowColumnsExecutor struct {
 	sc *tree.ShowColumns
 }
 
+func (sec *ShowColumnsExecutor) Setup(ctx context.Context, ses *Session) error {
+	err := sec.baseStmtExecutor.Setup(ctx, ses)
+	if err != nil {
+		return err
+	}
+	ses.SetShowStmtType(ShowColumns)
+	ses.SetData(nil)
+	return err
+}
+
 type ShowProcessListExecutor struct {
 	*resultSetStmtExecutor
 	spl *tree.ShowProcessList
@@ -49,6 +128,16 @@ type ShowStatusExecutor struct {
 type ShowTableStatusExecutor struct {
 	*resultSetStmtExecutor
 	sts *tree.ShowTableStatus
+}
+
+func (sec *ShowTableStatusExecutor) Setup(ctx context.Context, ses *Session) error {
+	err := sec.baseStmtExecutor.Setup(ctx, ses)
+	if err != nil {
+		return err
+	}
+	ses.showStmtType = ShowTableStatus
+	ses.SetData(nil)
+	return nil
 }
 
 type ShowGrantsExecutor struct {
@@ -81,14 +170,26 @@ type ExplainStmtExecutor struct {
 	es *tree.ExplainStmt
 }
 
+func (ese *ExplainStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (ese *ExplainStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	//TODO
+	return nil
+}
+
 type ShowVariablesExecutor struct {
 	*resultSetStmtExecutor
 	sv *tree.ShowVariables
 }
 
+func (sve *ShowVariablesExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (sve *ShowVariablesExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	//TODO
-	return nil
+	return doShowVariables(ses, sve.proc, sve.sv)
 }
 
 type ShowErrorsExecutor struct {
@@ -96,9 +197,25 @@ type ShowErrorsExecutor struct {
 	se *tree.ShowErrors
 }
 
+func (see *ShowErrorsExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (see *ShowErrorsExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doShowErrors(ses)
+}
+
 type ShowWarningsExecutor struct {
 	*resultSetStmtExecutor
 	sw *tree.ShowWarnings
+}
+
+func (swe *ShowWarningsExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (swe *ShowWarningsExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doShowErrors(ses)
 }
 
 type AnalyzeStmtExecutor struct {
@@ -106,12 +223,71 @@ type AnalyzeStmtExecutor struct {
 	as *tree.AnalyzeStmt
 }
 
+func (ase *AnalyzeStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (ase *AnalyzeStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	//TODO:
+	return nil
+}
+
 type ExplainAnalyzeExecutor struct {
 	*resultSetStmtExecutor
 	ea *tree.ExplainAnalyze
 }
 
+func (eae *ExplainAnalyzeExecutor) Setup(ctx context.Context, ses *Session) error {
+	err := eae.baseStmtExecutor.Setup(ctx, ses)
+	if err != nil {
+		return err
+	}
+	ses.SetData(nil)
+	switch eae.ea.Statement.(type) {
+	case *tree.Delete:
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	case *tree.Update:
+		ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	default:
+		ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+	}
+	return err
+}
+
+func (eae *ExplainAnalyzeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	//TODO:
+	return nil
+}
+
 type InternalCmdFieldListExecutor struct {
 	*resultSetStmtExecutor
 	icfl *InternalCmdFieldList
+}
+
+func (icfle *InternalCmdFieldListExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (icfle *InternalCmdFieldListExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
+	return nil
+}
+
+func (icfle *InternalCmdFieldListExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doCmdFieldList(ctx, ses, icfle.icfl)
+}
+
+func (icfle *InternalCmdFieldListExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	var err error
+	if icfle.GetStatus() == stmtExecSuccess {
+		proto := ses.GetMysqlProtocol()
+		/*
+			mysql CMD_FIELD_LIST response: End after the column has been sent.
+			send EOF packet
+		*/
+		err = proto.sendEOFOrOkPacket(0, 0)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

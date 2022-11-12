@@ -2,18 +2,33 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
+
+// statusStmtExecutor represents the execution without outputting result set to the client
+type statusStmtExecutor struct {
+	*baseStmtExecutor
+}
 
 type BeginTxnExecutor struct {
 	*statusStmtExecutor
 	bt *tree.BeginTransaction
 }
 
+func (bte *BeginTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (bte *BeginTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	err := ses.TxnBegin()
+	if err != nil {
+		return err
+	}
 	RecordStatementTxnID(ctx, ses)
 	return err
 }
@@ -21,6 +36,10 @@ func (bte *BeginTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) erro
 type CommitTxnExecutor struct {
 	*statusStmtExecutor
 	ct *tree.CommitTransaction
+}
+
+func (cte *CommitTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
 }
 
 func (cte *CommitTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -32,6 +51,10 @@ type RollbackTxnExecutor struct {
 	rt *tree.RollbackTransaction
 }
 
+func (rte *RollbackTxnExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (rte *RollbackTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return ses.TxnRollback()
 }
@@ -41,6 +64,10 @@ type SetRoleExecutor struct {
 	sr *tree.SetRole
 }
 
+func (sre *SetRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (sre *SetRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doSwitchRole(ctx, ses, sre.sr)
 }
@@ -48,6 +75,10 @@ func (sre *SetRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error
 type UseExecutor struct {
 	*statusStmtExecutor
 	u *tree.Use
+}
+
+func (ue *UseExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
 }
 
 func (ue *UseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -62,7 +93,7 @@ type DropDatabaseExecutor struct {
 func (dde *DropDatabaseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	// if the droped database is the same as the one in use, database must be reseted to empty.
 	if string(dde.dd.Name) == ses.GetDatabaseName() {
-		ses.SetUserName("")
+		ses.SetDatabaseName("")
 	}
 	return dde.statusStmtExecutor.ExecuteImpl(ctx, ses)
 }
@@ -71,6 +102,10 @@ type ImportExecutor struct {
 	*statusStmtExecutor
 	i      *tree.Import
 	result *LoadResult
+}
+
+func (ie *ImportExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
 }
 
 func (ie *ImportExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -90,19 +125,62 @@ func (ie *ImportExecutor) ResponseAfter(ctx context.Context, ses *Session) error
 	return nil
 }
 
+func (ie *ImportExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	stmt := ie.stmt
+	tenant := ie.tenantName
+	incStatementCounter(tenant, stmt)
+	if ie.GetStatus() == stmtExecSuccess {
+		trace.EndStatement(ctx, nil)
+		logStatementStatus(ctx, ses, stmt, success, nil)
+	} else {
+		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
+		trace.EndStatement(ctx, ie.err)
+		logutil.Error(ie.err.Error())
+		logStatementStatus(ctx, ses, stmt, fail, ie.err)
+	}
+	return nil
+}
+
 type PrepareStmtExecutor struct {
 	*statusStmtExecutor
 	ps          *tree.PrepareStmt
 	prepareStmt *PrepareStmt
 }
 
+func (pse *PrepareStmtExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (pse *PrepareStmtExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
 	var err2, retErr error
-	if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
-		trace.EndStatement(ctx, err2)
-		retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
-		logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
-		return retErr
+	if ses.GetCmd() == COM_STMT_PREPARE {
+		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
+			trace.EndStatement(ctx, err2)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+			logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
+			return retErr
+		}
+	} else {
+		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
+			trace.EndStatement(ctx, err2)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+			logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
+			return retErr
+		}
 	}
 	return nil
 }
@@ -113,7 +191,7 @@ func (pse *PrepareStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) e
 	if err != nil {
 		return err
 	}
-	return authenticatePrivilegeOfPrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+	return authenticateUserCanExecutePrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 }
 
 type PrepareStringExecutor struct {
@@ -122,13 +200,27 @@ type PrepareStringExecutor struct {
 	prepareStmt *PrepareStmt
 }
 
+func (pse *PrepareStringExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (pse *PrepareStringExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
 	var err2, retErr error
-	if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
-		trace.EndStatement(ctx, err2)
-		retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
-		logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
-		return retErr
+	if ses.GetCmd() == COM_STMT_PREPARE {
+		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(pse.prepareStmt); err2 != nil {
+			trace.EndStatement(ctx, err2)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+			logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
+			return retErr
+		}
+	} else {
+		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
+			trace.EndStatement(ctx, err2)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+			logStatementStatus(ctx, ses, pse.stmt, fail, retErr)
+			return retErr
+		}
 	}
 	return nil
 }
@@ -139,13 +231,32 @@ func (pse *PrepareStringExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 	if err != nil {
 		return err
 	}
-	return authenticatePrivilegeOfPrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+	return authenticateUserCanExecutePrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 }
 
 // TODO: DeallocateExecutor has no response like QUIT COMMAND ?
 type DeallocateExecutor struct {
 	*statusStmtExecutor
 	d *tree.Deallocate
+}
+
+func (de *DeallocateExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (de *DeallocateExecutor) ResponseAfter(ctx context.Context, ses *Session) error {
+	var err2, retErr error
+	//we will not send response in COM_STMT_CLOSE command
+	if ses.GetCmd() != COM_STMT_CLOSE {
+		resp := NewOkResponse(de.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		if err2 = ses.GetMysqlProtocol().SendResponse(resp); err2 != nil {
+			trace.EndStatement(ctx, err2)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
+			logStatementStatus(ctx, ses, de.stmt, fail, retErr)
+			return retErr
+		}
+	}
+	return nil
 }
 
 func (de *DeallocateExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
@@ -157,6 +268,10 @@ type SetVarExecutor struct {
 	sv *tree.SetVar
 }
 
+func (sve *SetVarExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
 func (sve *SetVarExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	return doSetVar(ctx, ses, sve.sv)
 }
@@ -166,9 +281,27 @@ type DeleteExecutor struct {
 	d *tree.Delete
 }
 
+func (de *DeleteExecutor) Setup(ctx context.Context, ses *Session) error {
+	err := de.baseStmtExecutor.Setup(ctx, ses)
+	if err != nil {
+		return err
+	}
+	ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+	return nil
+}
+
 type UpdateExecutor struct {
 	*statusStmtExecutor
 	u *tree.Update
+}
+
+func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
+	err := de.baseStmtExecutor.Setup(ctx, ses)
+	if err != nil {
+		return err
+	}
+	ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+	return nil
 }
 
 type CreateAccountExecutor struct {
@@ -176,9 +309,25 @@ type CreateAccountExecutor struct {
 	ca *tree.CreateAccount
 }
 
+func (cae *CreateAccountExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return InitGeneralTenant(ctx, ses, cae.ca)
+}
+
 type DropAccountExecutor struct {
 	*statusStmtExecutor
 	da *tree.DropAccount
+}
+
+func (dae *DropAccountExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (dae *DropAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doDropAccount(ctx, ses, dae.da)
 }
 
 type AlterAccountExecutor struct {
@@ -191,9 +340,26 @@ type CreateUserExecutor struct {
 	cu *tree.CreateUser
 }
 
+func (cue *CreateUserExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	tenant := ses.GetTenantInfo()
+	return InitUser(ctx, tenant, cue.cu)
+}
+
 type DropUserExecutor struct {
 	*statusStmtExecutor
 	du *tree.DropUser
+}
+
+func (due *DropUserExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (due *DropUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doDropUser(ctx, ses, due.du)
 }
 
 type AlterUserExecutor struct {
@@ -206,9 +372,28 @@ type CreateRoleExecutor struct {
 	cr *tree.CreateRole
 }
 
+func (cre *CreateRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (cre *CreateRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the role
+	return InitRole(ctx, tenant, cre.cr)
+}
+
 type DropRoleExecutor struct {
 	*statusStmtExecutor
 	dr *tree.DropRole
+}
+
+func (dre *DropRoleExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (dre *DropRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	return doDropRole(ctx, ses, dre.dr)
 }
 
 type GrantExecutor struct {
@@ -216,9 +401,37 @@ type GrantExecutor struct {
 	g *tree.Grant
 }
 
+func (ge *GrantExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	switch ge.g.Typ {
+	case tree.GrantTypeRole:
+		return doGrantRole(ctx, ses, &ge.g.GrantRole)
+	case tree.GrantTypePrivilege:
+		return doGrantPrivilege(ctx, ses, &ge.g.GrantPrivilege)
+	}
+	return moerr.NewInternalError("no such grant type %v", ge.g.Typ)
+}
+
 type RevokeExecutor struct {
 	*statusStmtExecutor
 	r *tree.Revoke
+}
+
+func (re *RevokeExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return nil, nil
+}
+
+func (re *RevokeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
+	switch re.r.Typ {
+	case tree.RevokeTypeRole:
+		return doRevokeRole(ctx, ses, &re.r.RevokeRole)
+	case tree.RevokeTypePrivilege:
+		return doRevokePrivilege(ctx, ses, &re.r.RevokePrivilege)
+	}
+	return moerr.NewInternalError("no such revoke type %v", re.r.Typ)
 }
 
 type CreateTableExecutor struct {
@@ -261,9 +474,53 @@ type InsertExecutor struct {
 	i *tree.Insert
 }
 
+func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	var err, retErr error
+	if ie.GetStatus() == stmtExecSuccess {
+		resp := NewOkResponse(ie.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp.lastInsertId = 1
+		if err = ses.GetMysqlProtocol().SendResponse(resp); err != nil {
+			trace.EndStatement(ctx, err)
+			retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+			logStatementStatus(ctx, ses, ie.stmt, fail, retErr)
+			return retErr
+		}
+	}
+	return nil
+}
+
 type LoadExecutor struct {
 	*statusStmtExecutor
 	l *tree.Load
+}
+
+func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
+	stmt := le.stmt
+	tenant := le.tenantName
+	incStatementCounter(tenant, stmt)
+	if le.GetStatus() == stmtExecSuccess {
+		trace.EndStatement(ctx, nil)
+		logStatementStatus(ctx, ses, stmt, success, nil)
+	} else {
+		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
+		trace.EndStatement(ctx, le.err)
+		logutil.Error(le.err.Error())
+		logStatementStatus(ctx, ses, stmt, fail, le.err)
+	}
+	return nil
 }
 
 type SetDefaultRoleExecutor struct {

@@ -17,12 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 
@@ -4451,6 +4452,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
 func InitSysTenant(ctx context.Context) error {
+	fmt.Println("---init system tenant---")
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)

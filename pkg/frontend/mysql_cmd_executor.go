@@ -992,7 +992,7 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 		return err
 	}
 	//TODO: check meta data
-	if _, err = ses.GetParameterUnit().StorageEngine.Database(requestCtx, db, txn); err != nil {
+	if _, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(db)
 	}
@@ -1265,7 +1265,6 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process, load *tree.Import) (*LoadResult, error) {
 	var err error
 	var txn TxnOperator
-	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
 	logInfof(ses.GetConciseProfile(), "+++++load data")
@@ -1315,7 +1314,7 @@ func doLoadData(requestCtx context.Context, ses *Session, proc *process.Process,
 	}
 	txn, err = txnHandler.GetTxn()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txn)
 	if err != nil {
@@ -1365,14 +1364,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, proc *pr
 	return nil
 }
 
-/*
-handle cmd CMD_FIELD_LIST
-*/
-func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl *InternalCmdFieldList) error {
-	var err error
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-
+func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
 		return moerr.NewNoDB()
@@ -1447,6 +1439,21 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	//		return err
 	//	}
 	//}
+	return nil
+}
+
+/*
+handle cmd CMD_FIELD_LIST
+*/
+func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl *InternalCmdFieldList) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	err = doCmdFieldList(requestCtx, ses, icfl)
+	if err != nil {
+		return err
+	}
 
 	/*
 		mysql CMD_FIELD_LIST response: End after the column has been sent.
@@ -1544,10 +1551,8 @@ func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) 
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleShowErrors() error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := mce.GetSession().GetMysqlProtocol()
+func doShowErrors(ses *Session) error {
+	var err error
 
 	levelCol := new(MysqlColumn)
 	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1577,7 +1582,19 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 		mrs.AddRow(row)
 	}
 
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowErrors() error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowErrors(ses)
+	if err != nil {
+		return err
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 	if err := proto.SendResponse(resp); err != nil {
@@ -1586,22 +1603,12 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 	return err
 }
 
-func doShowVariables(sv *tree.ShowVariables, ses *Session, proc *process.Process) error {
-	//TODO:
-	return nil
-}
-
-/*
-handle show variables
-*/
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables) error {
 	if sv.Like != nil && sv.Where != nil {
 		return moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
 	var err error = nil
-	ses := mce.GetSession()
-	proto := mce.GetSession().GetMysqlProtocol()
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1658,7 +1665,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 	}
 
 	if sv.Where != nil {
-		bat, err := mce.constructVarBatch(rows)
+		bat, err := constructVarBatch(ses, rows)
 		if err != nil {
 			return err
 		}
@@ -1700,7 +1707,20 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		mrs.AddRow(row)
 	}
 
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
+	return err
+}
+
+/*
+handle show variables
+*/
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *process.Process) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err := doShowVariables(ses, proc, sv)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 	if err := proto.SendResponse(resp); err != nil {
@@ -1709,7 +1729,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 	return err
 }
 
-func (mce *MysqlCmdExecutor) constructVarBatch(rows [][]interface{}) (*batch.Batch, error) {
+func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"Variable_name", "Value"})
 	typ := types.New(types.T_varchar, 0, 0, 0)
 	cnt := len(rows)
@@ -1723,7 +1743,6 @@ func (mce *MysqlCmdExecutor) constructVarBatch(rows [][]interface{}) (*batch.Bat
 		v0[i] = row[0].(string)
 		v1[i] = fmt.Sprintf("%v", row[1])
 	}
-	ses := mce.GetSession()
 	bat.Vecs[0] = vector.NewWithStrings(typ, v0, nil, ses.GetMemPool())
 	bat.Vecs[1] = vector.NewWithStrings(typ, v1, nil, ses.GetMemPool())
 	return bat, nil
@@ -2342,6 +2361,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		base := &baseStmtExecutor{}
 		base.TxnComputationWrapper = cw
 		switch st := stmt.(type) {
+		//PART 1: the statements with the result set
 		case *tree.Select:
 			appendStmtExec(&SelectExecutor{
 				resultSetStmtExecutor: &resultSetStmtExecutor{
@@ -2489,6 +2509,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				},
 				icfl: st,
 			})
+		//PART 2: the statement with the status only
 		case *tree.BeginTransaction:
 			appendStmtExec(&BeginTxnExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
@@ -2524,6 +2545,8 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 				},
 				u: st,
 			})
+		case *tree.MoDump:
+			//TODO:
 		case *tree.DropDatabase:
 			appendStmtExec(&DropDatabaseExecutor{
 				statusStmtExecutor: &statusStmtExecutor{
@@ -3550,18 +3573,30 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		ses.GetTxnHandler().GetTxnOperator(),
 		pu.FileService,
+		pu.GetClusterDetails,
 	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:         ses.GetUserName(),
-		Host:         pu.SV.Host,
-		ConnectionID: uint64(proto.ConnectionID()),
-		Database:     ses.GetDatabaseName(),
-		Version:      serverVersion,
-		TimeZone:     ses.GetTimeZone(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(proto.ConnectionID()),
+		Database:      ses.GetDatabaseName(),
+		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+	}
+
+	if ses.GetTenantInfo() != nil {
+		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+	} else {
+		proc.SessionInfo.AccountId = sysAccountID
+		proc.SessionInfo.RoleId = moAdminRoleID
+		proc.SessionInfo.UserId = rootID
 	}
 
 	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
@@ -3575,8 +3610,9 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		return retErr
 	}
 
+	singleStatement := len(stmtExecs) == 1
 	for _, exec := range stmtExecs {
-		err = Execute(requestCtx, ses, proc, exec, beginInstant)
+		err = Execute(requestCtx, ses, proc, exec, beginInstant, sql, singleStatement)
 		if err != nil {
 			return err
 		}

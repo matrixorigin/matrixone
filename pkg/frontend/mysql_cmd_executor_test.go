@@ -17,15 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
-	"os"
-	"strconv"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
@@ -441,7 +442,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		setVar, err := parsers.ParseOne(dialect.MYSQL, set)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = mce.handleSetVar(setVar.(*tree.SetVar))
+		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
 		convey.So(err, convey.ShouldBeNil)
 
 		req := &Request{
@@ -886,7 +887,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 	}
 	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		_, err := mce.handlePrepareStmt(stmt)
+		_, err := mce.handlePrepareStmt(context.TODO(), stmt)
 		return err
 	})
 }
@@ -898,7 +899,7 @@ func Test_HandleDeallocate(t *testing.T) {
 	}
 	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.Deallocate)
-		return mce.handleDeallocate(stmt)
+		return mce.handleDeallocate(context.TODO(), stmt)
 	})
 }
 
