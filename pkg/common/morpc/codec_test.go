@@ -23,6 +23,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncodeAndDecode(t *testing.T) {
@@ -182,4 +183,40 @@ func TestNewWithMaxBodySize(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
 	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestBufferScale(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+	c1 := newTestCodec(WithCodecEnableChecksum(),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClock(ctx, 0)),
+		WithCodecPayloadCopyBufferSize(16*1024))
+	c2 := newTestCodec(WithCodecEnableChecksum(),
+		WithCodecIntegrationHLC(clock.NewUnixNanoHLCClock(ctx, 0)),
+		WithCodecPayloadCopyBufferSize(16*1024))
+	out := buf.NewByteBuf(32)
+	conn := buf.NewByteBuf(32)
+
+	n := 100
+	var messages []RPCMessage
+	for i := 0; i < n; i++ {
+		msg := RPCMessage{Ctx: ctx, Message: newTestMessage(uint64(i))}
+		payload := make([]byte, 1024*1024)
+		payload[len(payload)-1] = byte(i)
+		msg.Message.(*testMessage).payload = payload
+		messages = append(messages, msg)
+
+		require.NoError(t, c1.Encode(msg, out, conn))
+	}
+	_, err := out.WriteTo(conn)
+	if err != nil {
+		require.Equal(t, io.EOF, err)
+	}
+
+	for i := 0; i < n; i++ {
+		msg, ok, err := c2.Decode(conn)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, messages[i].Message, msg.(RPCMessage).Message)
+	}
 }
