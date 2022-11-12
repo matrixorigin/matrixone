@@ -48,17 +48,18 @@ func NewCompactBlockEntry(
 	deletes *roaring.Bitmap) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
-	toId := to.Fingerprint()
-	prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
-	for i, idx := range sortIdx {
-		sortIdx[i] = compute.ShuffleOffset(idx, deletes)
+	if to != nil {
+		toId := to.Fingerprint()
+		prefix := model.EncodeBlockKeyPrefix(toId.SegmentID, toId.BlockID)
+		for i, idx := range sortIdx {
+			sortIdx[i] = compute.ShuffleOffset(idx, deletes)
+		}
+		for i, idx := range sortIdx {
+			rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+			page.Train(idx, rowid)
+		}
+		_ = scheduler.AddTransferPage(page)
 	}
-	for i, idx := range sortIdx {
-		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		page.Train(idx, rowid)
-	}
-	_ = scheduler.AddTransferPage(page)
-
 	return &compactBlockEntry{
 		txn:       txn,
 		from:      from,
@@ -87,7 +88,11 @@ func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()), entry.txn, csn)
+	to := &common.ID{}
+	if entry.to != nil {
+		to = entry.to.Fingerprint()
+	}
+	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), to, entry.txn, csn)
 	return
 }
 
